@@ -6,7 +6,7 @@ use data::{
     Id, Participant,
 };
 use std::{
-    net::{Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket},
     time::Duration,
 };
 use tracing::info;
@@ -163,6 +163,17 @@ impl Network {
 
     pub fn register_participant(&self, participant: &Participant) {
         info!(ip = %participant.ip, "registering participant placeholder");
+    }
+
+    /// Legacy shim used by task/main: broadcast a simple sync request over multicast or bound port.
+    pub fn send_sync_request(&self, since: Id) -> Result<usize> {
+        let target = if let Some(group) = self.config.multicast_v4 {
+            SocketAddr::V4(SocketAddrV4::new(group, self.config.bind_addr.port()))
+        } else {
+            self.config.bind_addr
+        };
+        let msg = Message::RequestUserTaskSynch(netmsg::UserTaskSynch { since });
+        self.send_message(target, msg, MessageType::RequestUserTaskSynch, false)
     }
 }
 
