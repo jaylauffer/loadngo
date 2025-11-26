@@ -1,0 +1,12 @@
+[package]
+name = "gui"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+ui-core = { path = "../ui-core" }
+
+[target.'cfg(windows)'.dependencies]
+gui-win32 = { path = "../gui-win32" }

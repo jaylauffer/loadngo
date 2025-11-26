@@ -1,0 +1,11 @@
+[package]
+name = "loadngo-host-core"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+ui-core = { path = "../ui-core" }
+serde.workspace = true
+image.workspace = true

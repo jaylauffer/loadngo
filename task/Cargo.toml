@@ -1,0 +1,21 @@
+[package]
+name = "task"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender = "0.2"
+windows.workspace = true
+windows-core.workspace = true
+data = { path = "../data" }
+network = { path = "../network" }
+gui = { path = "../gui" }
+chrono.workspace = true
+
+[build-dependencies]
+embed-resource = "2.4"

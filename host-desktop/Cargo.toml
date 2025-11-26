@@ -1,0 +1,49 @@
+[package]
+name = "loadngo-host-desktop"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+futures = "0.3"
+loadngo-host-core = { path = "../host-core" }
+loadngo-renderer = { path = "../renderer" }
+rodio = { version = "0.17", features = ["vorbis"] }
+ui-core = { path = "../ui-core" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+loadngo-gfx-metal = { path = "../gfx-metal" }
+loadngo-proactor = { path = "../proactor" }
+objc2 = "0.6.4"
+
+[target.'cfg(target_os = "android")'.dependencies]
+fontdue = "0.9.3"
+jni = "0.21.1"
+libc = "0.2"
+lewton = "0.10"
+loadngo-gfx-gles = { path = "../gfx-gles" }
+ndk = { version = "0.8", default-features = false }
+ndk-context = "0.1"
+ndk-sys = "0.5"
+
+[target.'cfg(target_os = "ios")'.dependencies]
+loadngo-gfx-metal = { path = "../gfx-metal" }
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", features = ["NSGeometry"] }
+objc2-ui-kit = { version = "0.3.2", features = ["UIGestureRecognizer", "UILongPressGestureRecognizer", "UIView", "UIWindow"] }
+winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+fontdue = "0.9.3"
+loadngo-gfx-gles = { path = "../gfx-gles" }
+softbuffer = "0.4"
+winit = { version = "0.30", default-features = false, features = ["wayland", "x11", "rwh_06"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+arboard = "3"
+fontdue = "0.9.3"
+loadngo-gfx-dx12 = { path = "../gfx-dx12" }
+softbuffer = "0.4"
+winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
