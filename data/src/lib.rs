@@ -326,63 +326,6 @@ pub mod netmsg {
     use serde::{Deserialize, Serialize};
     use super::types::Id;
 
-    pub const PACKET_HDR: u32 = 0x6c6e6774;
-    pub const HDR_LEN: usize = 16;
-
-    #[repr(u32)]
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-    pub enum MessageType {
-        Empty = 0,
-        UserIntroduction,
-        UserDeparture,
-        RequestGroupTaskSynch,
-        RequestUserTaskSynch,
-        RequestSyncParticipants,
-        RequestProperties,
-        RequestTask,
-        RequestMoveChain,
-        ReportDiscrepancies,
-        EntityInfo,
-        EntityMove,
-        EntityDelete,
-        PropertyInfo,
-        SuggestConsolidation,
-        ConcludeSync,
-        Chat,
-        PrivateChat,
-        TransferFileStart,
-        TransferFileEnd,
-        TransferFileData,
-        TransferFileMissed,
-        TransferBlobStart,
-        TransferBlobEnd,
-        TransferBlobData,
-        TransferBlobMissed,
-        TransferBlobComplete,
-        RequestHashes,
-        RequestTasks,
-        MessageCount,
-    }
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct Header {
-        pub tag: u32,
-        pub msg_type: MessageType,
-        pub is_response: bool,
-        pub length: u32,
-    }
-
-    impl Header {
-        pub fn new(msg_type: MessageType, is_response: bool, length: u32) -> Self {
-            Self {
-                tag: PACKET_HDR,
-                msg_type,
-                is_response,
-                length,
-            }
-        }
-    }
-
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct SyncRequest {
         pub sync_id: Id,
@@ -418,45 +361,122 @@ pub mod netmsg {
 /// Minimal task comparison helpers (placeholder until full logic is ported).
 pub mod task_compare {
     use super::entity::Entity;
-    use super::value::Value;
-    use std::collections::HashMap;
+    use super::hash::fnv1a;
+    use super::task::Task;
+    use std::cmp::Ordering;
 
-    #[derive(Debug, Default)]
-    pub struct Diff {
-        pub added: Vec<String>,
-        pub removed: Vec<String>,
-        pub changed: HashMap<String, (Value, Value)>,
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum SortField {
+        TaskId,
+        DueDate,
+        Priority,
+        CreateDate,
+        EstimatedDuration,
+        StartDate,
+        TaskTitle,
     }
 
-    pub fn compare_properties(lhs: &Entity, rhs: &Entity) -> Diff {
-        let mut diff = Diff::default();
-        for (k, v) in lhs.properties.iter() {
-            match rhs.properties.get(k) {
-                None => diff.removed.push(k.clone()),
-                Some(rv) if rv != v => {
-                    diff.changed.insert(k.clone(), (v.clone(), rv.clone()));
+    impl Default for SortField {
+        fn default() -> Self {
+            SortField::DueDate
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct TaskComparator {
+        fields: [SortField; 3],
+    }
+
+    impl Default for TaskComparator {
+        fn default() -> Self {
+            Self {
+                fields: [SortField::DueDate, SortField::Priority, SortField::StartDate],
+            }
+        }
+    }
+
+    impl TaskComparator {
+        pub fn set_sort_field(&mut self, pos: usize, field: SortField) {
+            if pos < self.fields.len() {
+                self.fields[pos] = field;
+            }
+        }
+
+        pub fn compare(&self, lhs: &Task, rhs: &Task) -> Ordering {
+            for field in self.fields.iter() {
+                let ord = match field {
+                    SortField::TaskId => compare_u64(lhs.entity.id, rhs.entity.id),
+                    SortField::DueDate => compare_u64(lhs.entity.created, rhs.entity.created),
+                    SortField::Priority => Ordering::Equal, // placeholder, add when priority exists
+                    SortField::CreateDate => compare_u64(lhs.entity.created, rhs.entity.created),
+                    SortField::EstimatedDuration => Ordering::Equal, // placeholder
+                    SortField::StartDate => Ordering::Equal,        // placeholder
+                    SortField::TaskTitle => compare_str(
+                        lhs.properties
+                            .get("title")
+                            .and_then(as_str)
+                            .unwrap_or(""),
+                        rhs.properties
+                            .get("title")
+                            .and_then(as_str)
+                            .unwrap_or(""),
+                    ),
+                };
+                if ord != Ordering::Equal {
+                    return ord;
                 }
-                _ => {}
             }
+            // fallback to hash to avoid equality
+            compare_u64(task_hash(lhs), task_hash(rhs))
         }
-        for k in rhs.properties.keys() {
-            if !lhs.properties.contains_key(k) {
-                diff.added.push(k.clone());
-            }
+    }
+
+    fn compare_u64(a: u64, b: u64) -> Ordering {
+        if a == b {
+            Ordering::Equal
+        } else if a == 0 {
+            Ordering::Greater
+        } else if b == 0 {
+            Ordering::Less
+        } else if a > b {
+            Ordering::Greater
+        } else {
+            Ordering::Less
         }
-        diff
+    }
+
+    fn compare_str(a: &str, b: &str) -> Ordering {
+        a.cmp(b)
+    }
+
+    fn as_str(v: &super::value::Value) -> Option<&str> {
+        if let super::value::Value::Str(s) = v {
+            Some(s.as_str())
+        } else {
+            None
+        }
+    }
+
+    fn task_hash(task: &Task) -> u64 {
+        let mut acc = fnv1a(&task.entity.id.to_le_bytes(), 0xcbf29ce484222325);
+        acc ^= task.entity.hash();
+        acc
     }
 }
 
 /// Minimal undo/redo scaffolding; extend as commands are ported.
 pub mod undo {
+    use crate::task::Task;
+    use crate::value::Value;
+    use crate::entity::Entity;
     use serde::{Deserialize, Serialize};
+    use std::collections::HashMap;
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub enum Command {
-        AddEntity { id: u64 },
+        AddEntity { entity: Entity },
         RemoveEntity { id: u64 },
-        UpdateProperty { id: u64, key: String },
+        UpdateProperty { id: u64, key: String, old: Value, new: Value },
     }
 
     #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -471,8 +491,22 @@ pub mod undo {
             self.future.clear();
         }
 
-        pub fn undo(&mut self) -> Option<Command> {
+        pub fn undo(&mut self, tasks: &mut HashMap<u64, Task>) -> Option<Command> {
             if let Some(cmd) = self.past.pop() {
+                match &cmd {
+                    Command::AddEntity { entity } => {
+                        tasks.remove(&entity.id);
+                    }
+                    Command::RemoveEntity { id } => {
+                        // cannot restore without stored entity; in practice store the entity
+                        let _ = id;
+                    }
+                    Command::UpdateProperty { id, key, old, .. } => {
+                        if let Some(task) = tasks.get_mut(id) {
+                            task.properties.insert(key.clone(), old.clone());
+                        }
+                    }
+                }
                 self.future.push(cmd.clone());
                 Some(cmd)
             } else {
@@ -480,8 +514,27 @@ pub mod undo {
             }
         }
 
-        pub fn redo(&mut self) -> Option<Command> {
+        pub fn redo(&mut self, tasks: &mut HashMap<u64, Task>) -> Option<Command> {
             if let Some(cmd) = self.future.pop() {
+                match &cmd {
+                    Command::AddEntity { entity } => {
+                        tasks.insert(entity.id, Task {
+                            entity: entity.clone(),
+                            name: String::new(),
+                            description: None,
+                            parent: None,
+                            properties: HashMap::new(),
+                        });
+                    }
+                    Command::RemoveEntity { id } => {
+                        tasks.remove(id);
+                    }
+                    Command::UpdateProperty { id, key, new, .. } => {
+                        if let Some(task) = tasks.get_mut(id) {
+                            task.properties.insert(key.clone(), new.clone());
+                        }
+                    }
+                }
                 self.past.push(cmd.clone());
                 Some(cmd)
             } else {
