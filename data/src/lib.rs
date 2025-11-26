@@ -10,6 +10,12 @@ pub use hash::fnv1a;
 pub use model_utils::generate_id;
 pub use types::{Atom, Duration, Id, Ip, TimeStamp};
 pub use sync::{Discrepancy, Participant, Sync};
+pub mod clipboard;
+pub mod crypto;
+pub mod config;
+pub mod file_manager;
+pub mod listener;
+pub mod service;
 
 pub mod types {
     use serde::{Deserialize, Serialize};
@@ -478,6 +484,11 @@ pub mod netmsg {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct HashesRequest {
+        pub ids: Vec<Id>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub enum Message {
         Sync(SyncRequest),
         Entity(EntityRequest),
@@ -485,6 +496,8 @@ pub mod netmsg {
         Move(EntityRequest),
         Delete(EntityRequest),
         Suggest(SuggestConsolidation),
+        RequestHashes(HashesRequest),
+        RequestTasks(HashesRequest),
     }
 
     impl Message {
@@ -509,8 +522,43 @@ pub mod netmsg {
                     payload.extend_from_slice(&s.consolidated_id.to_le_bytes());
                     payload.push(if s.is_response { 1 } else { 0 });
                 }
+                Message::RequestHashes(h) | Message::RequestTasks(h) => {
+                    for id in &h.ids {
+                        payload.extend_from_slice(&id.to_le_bytes());
+                    }
+                }
             }
-            let header = Header::new(msg_type, matches!(self, Message::Sync(SyncRequest { is_response: true, .. }) | Message::Entity(EntityRequest { is_response: true, .. }) | Message::Properties(EntityRequest { is_response: true, .. }) | Message::Move(EntityRequest { is_response: true, .. }) | Message::Delete(EntityRequest { is_response: true, .. }) | Message::Suggest(SuggestConsolidation { is_response: true, .. })), (HDR_LEN + payload.len()) as u32);
+            let header = Header::new(
+                msg_type,
+                matches!(
+                    self,
+                    Message::Sync(SyncRequest {
+                        is_response: true,
+                        ..
+                    })
+                        | Message::Entity(EntityRequest {
+                            is_response: true,
+                            ..
+                        })
+                        | Message::Properties(EntityRequest {
+                            is_response: true,
+                            ..
+                        })
+                        | Message::Move(EntityRequest {
+                            is_response: true,
+                            ..
+                        })
+                        | Message::Delete(EntityRequest {
+                            is_response: true,
+                            ..
+                        })
+                        | Message::Suggest(SuggestConsolidation {
+                            is_response: true,
+                            ..
+                        })
+                ),
+                (HDR_LEN + payload.len()) as u32,
+            );
             let mut buf = header.to_bytes().to_vec();
             buf.extend_from_slice(&payload);
             buf
@@ -554,12 +602,25 @@ pub mod netmsg {
                     }
                     let sync_id = Id::from_le_bytes(body[0..8].try_into().ok()?);
                     let consolidated_id = Id::from_le_bytes(body[8..16].try_into().ok()?);
-                    let is_response = body[16] != 0;
+                    let is_response = body.get(16).copied().unwrap_or(0) != 0;
                     Some(Message::Suggest(SuggestConsolidation {
                         sync_id,
                         consolidated_id,
                         is_response,
                     }))
+                }
+                MessageType::RequestHashes | MessageType::RequestTasks => {
+                    if body.len() % 8 != 0 {
+                        return None;
+                    }
+                    let mut ids = Vec::new();
+                    for chunk in body.chunks(8) {
+                        ids.push(Id::from_le_bytes(chunk.try_into().ok()?));
+                    }
+                    match msg_type {
+                        MessageType::RequestHashes => Some(Message::RequestHashes(HashesRequest { ids })),
+                        _ => Some(Message::RequestTasks(HashesRequest { ids })),
+                    }
                 }
                 _ => None,
             }
@@ -902,23 +963,42 @@ pub mod persistence {
 
     /// Write tasks to a deterministic JSON file (sorted by id/name, properties sorted by key).
     pub fn write_task_file(path: impl AsRef<Path>, tasks: &[Task]) -> Result<()> {
-        let mut ordered: Vec<SerdeTask> = tasks.iter().map(SerdeTask::from).collect();
-        ordered.sort_by(|a, b| a.entity.id.cmp(&b.entity.id).then(a.name.cmp(&b.name)));
-        let file = TaskFile {
-            version: 1,
-            generated_at: now_timestamp(),
-            tasks: ordered,
-        };
+        let json = tasks_to_json(tasks)?;
         let writer = File::create(path)?;
-        serde_json::to_writer_pretty(writer, &file)?;
+        serde_json::to_writer_pretty(writer, &json)?;
         Ok(())
     }
 
     /// Read tasks from a JSON file written by `write_task_file`.
     pub fn read_task_file(path: impl AsRef<Path>) -> Result<Vec<Task>> {
         let reader = File::open(path)?;
-        let file: TaskFile = serde_json::from_reader(reader)?;
-        let mut tasks: Vec<Task> = file.tasks.into_iter().map(Task::from).collect();
+        let json: TaskFile = serde_json::from_reader(reader)?;
+        let mut tasks: Vec<Task> = json.tasks.into_iter().map(Task::from).collect();
+        tasks.sort_by(|a, b| a.entity.id.cmp(&b.entity.id).then(a.name.cmp(&b.name)));
+        Ok(tasks)
+    }
+
+    /// Convert tasks into deterministic JSON payload (sorted by id/name/properties).
+    pub fn tasks_to_json(tasks: &[Task]) -> Result<TaskFile> {
+        let mut ordered: Vec<SerdeTask> = tasks.iter().map(SerdeTask::from).collect();
+        ordered.sort_by(|a, b| a.entity.id.cmp(&b.entity.id).then(a.name.cmp(&b.name)));
+        Ok(TaskFile {
+            version: 1,
+            generated_at: now_timestamp(),
+            tasks: ordered,
+        })
+    }
+
+    /// Convenience: produce a pretty JSON string for clipboard/export.
+    pub fn tasks_to_json_string(tasks: &[Task]) -> Result<String> {
+        let json = tasks_to_json(tasks)?;
+        Ok(serde_json::to_string_pretty(&json)?)
+    }
+
+    /// Parse tasks from a JSON string.
+    pub fn tasks_from_json_str(s: &str) -> Result<Vec<Task>> {
+        let json: TaskFile = serde_json::from_str(s)?;
+        let mut tasks: Vec<Task> = json.tasks.into_iter().map(Task::from).collect();
         tasks.sort_by(|a, b| a.entity.id.cmp(&b.entity.id).then(a.name.cmp(&b.name)));
         Ok(tasks)
     }
