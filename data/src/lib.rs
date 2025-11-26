@@ -81,6 +81,40 @@ pub mod value {
     }
 }
 
+/// Helpers that mirror bits of ModelUtils and util usage in the C++ code.
+pub mod model_utils {
+    use super::types::{Id, TimeStamp};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+    /// Simple, process-local id generator. Replace with deterministic hashing if needed.
+    pub fn generate_id() -> Id {
+        NEXT_ID.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub fn now_timestamp() -> TimeStamp {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or_default()
+    }
+}
+
+/// FNV-1a 64-bit hash, matching the usage in the C++ codebase.
+pub mod hash {
+    pub fn fnv1a(bytes: &[u8], seed: u64) -> u64 {
+        const FNV_PRIME: u64 = 1099511628211;
+        let mut hash = seed;
+        for b in bytes {
+            hash ^= *b as u64;
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+        hash
+    }
+}
+
 pub mod entity {
     use super::hash::fnv1a;
     use super::types::{Id, TimeStamp};
@@ -287,6 +321,176 @@ pub mod sync {
     }
 }
 
+/// Network message shapes (serde-serializable) that align with NetUtil.h.
+pub mod netmsg {
+    use serde::{Deserialize, Serialize};
+    use super::types::Id;
+
+    pub const PACKET_HDR: u32 = 0x6c6e6774;
+    pub const HDR_LEN: usize = 16;
+
+    #[repr(u32)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum MessageType {
+        Empty = 0,
+        UserIntroduction,
+        UserDeparture,
+        RequestGroupTaskSynch,
+        RequestUserTaskSynch,
+        RequestSyncParticipants,
+        RequestProperties,
+        RequestTask,
+        RequestMoveChain,
+        ReportDiscrepancies,
+        EntityInfo,
+        EntityMove,
+        EntityDelete,
+        PropertyInfo,
+        SuggestConsolidation,
+        ConcludeSync,
+        Chat,
+        PrivateChat,
+        TransferFileStart,
+        TransferFileEnd,
+        TransferFileData,
+        TransferFileMissed,
+        TransferBlobStart,
+        TransferBlobEnd,
+        TransferBlobData,
+        TransferBlobMissed,
+        TransferBlobComplete,
+        RequestHashes,
+        RequestTasks,
+        MessageCount,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Header {
+        pub tag: u32,
+        pub msg_type: MessageType,
+        pub is_response: bool,
+        pub length: u32,
+    }
+
+    impl Header {
+        pub fn new(msg_type: MessageType, is_response: bool, length: u32) -> Self {
+            Self {
+                tag: PACKET_HDR,
+                msg_type,
+                is_response,
+                length,
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct SyncRequest {
+        pub sync_id: Id,
+        pub is_response: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct EntityRequest {
+        pub origin_id: Id,
+        pub sync_id: Id,
+        pub doid: Id,
+        pub is_response: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct SuggestConsolidation {
+        pub sync_id: Id,
+        pub consolidated_id: Id,
+        pub is_response: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub enum Message {
+        Sync(SyncRequest),
+        Entity(EntityRequest),
+        Properties(EntityRequest),
+        Move(EntityRequest),
+        Delete(EntityRequest),
+        Suggest(SuggestConsolidation),
+    }
+}
+
+/// Minimal task comparison helpers (placeholder until full logic is ported).
+pub mod task_compare {
+    use super::entity::Entity;
+    use super::value::Value;
+    use std::collections::HashMap;
+
+    #[derive(Debug, Default)]
+    pub struct Diff {
+        pub added: Vec<String>,
+        pub removed: Vec<String>,
+        pub changed: HashMap<String, (Value, Value)>,
+    }
+
+    pub fn compare_properties(lhs: &Entity, rhs: &Entity) -> Diff {
+        let mut diff = Diff::default();
+        for (k, v) in lhs.properties.iter() {
+            match rhs.properties.get(k) {
+                None => diff.removed.push(k.clone()),
+                Some(rv) if rv != v => {
+                    diff.changed.insert(k.clone(), (v.clone(), rv.clone()));
+                }
+                _ => {}
+            }
+        }
+        for k in rhs.properties.keys() {
+            if !lhs.properties.contains_key(k) {
+                diff.added.push(k.clone());
+            }
+        }
+        diff
+    }
+}
+
+/// Minimal undo/redo scaffolding; extend as commands are ported.
+pub mod undo {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub enum Command {
+        AddEntity { id: u64 },
+        RemoveEntity { id: u64 },
+        UpdateProperty { id: u64, key: String },
+    }
+
+    #[derive(Debug, Default, Clone, Serialize, Deserialize)]
+    pub struct UndoStack {
+        pub past: Vec<Command>,
+        pub future: Vec<Command>,
+    }
+
+    impl UndoStack {
+        pub fn push(&mut self, cmd: Command) {
+            self.past.push(cmd);
+            self.future.clear();
+        }
+
+        pub fn undo(&mut self) -> Option<Command> {
+            if let Some(cmd) = self.past.pop() {
+                self.future.push(cmd.clone());
+                Some(cmd)
+            } else {
+                None
+            }
+        }
+
+        pub fn redo(&mut self) -> Option<Command> {
+            if let Some(cmd) = self.future.pop() {
+                self.past.push(cmd.clone());
+                Some(cmd)
+            } else {
+                None
+            }
+        }
+    }
+}
+
 pub mod user {
     use super::entity::Entity;
     use super::types::Id;
@@ -359,82 +563,6 @@ pub mod annotation {
     pub struct Annotation {
         pub entity: Entity,
         pub text: String,
-    }
-}
-
-pub mod model_utils {
-    //! Helpers that mirror bits of ModelUtils and util usage in the C++ code.
-    use super::types::Id;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-
-    /// Simple, process-local id generator. Replace with deterministic hashing if needed.
-    pub fn generate_id() -> Id {
-        NEXT_ID.fetch_add(1, Ordering::Relaxed)
-    }
-}
-
-pub mod hash {
-    /// FNV-1a 64-bit hash, matching the usage in the C++ codebase.
-    pub fn fnv1a(bytes: &[u8], seed: u64) -> u64 {
-        const FNV_PRIME: u64 = 1099511628211;
-        let mut hash = seed;
-        for b in bytes {
-            hash ^= *b as u64;
-            hash = hash.wrapping_mul(FNV_PRIME);
-        }
-        hash
-    }
-}
-
-pub mod netmsg {
-    //! Message shapes for network synchronization (serde-serializable).
-    //! These are placeholders; flesh out exact fields to match the C++ wire format.
-    use serde::{Deserialize, Serialize};
-    use super::types::Id;
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct SyncRequest {
-        pub sync_id: Id,
-        pub is_response: bool,
-    }
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct EntityRequest {
-        pub origin_id: Id,
-        pub sync_id: Id,
-    }
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub enum Message {
-        Sync(SyncRequest),
-        Entity(EntityRequest),
-    }
-}
-
-pub mod undo {
-    //! Minimal undo/redo scaffolding; extend as commands are ported.
-    use serde::{Deserialize, Serialize};
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub enum Command {
-        AddEntity { id: u64 },
-        RemoveEntity { id: u64 },
-        UpdateProperty { id: u64, key: String },
-    }
-
-    #[derive(Debug, Default, Clone, Serialize, Deserialize)]
-    pub struct UndoStack {
-        pub past: Vec<Command>,
-        pub future: Vec<Command>,
-    }
-
-    impl UndoStack {
-        pub fn push(&mut self, cmd: Command) {
-            self.past.push(cmd);
-            self.future.clear();
-        }
     }
 }
 
