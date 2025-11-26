@@ -65,28 +65,28 @@ fn netmsg_header_roundtrip() {
     let parsed = Header::from_bytes(&bytes).expect("header parse");
     assert_eq!(parsed.tag, data::netmsg::PACKET_HDR);
     assert_eq!(parsed.msg_type, MessageType::EntityInfo);
-    assert_eq!(parsed.is_response, 1);
+    assert!(parsed.is_response);
     assert_eq!(parsed.length, 42);
 }
 
 #[test]
 fn netmsg_entity_roundtrip() {
-    let msg = Message::Entity(data::netmsg::EntityRequest {
+    let msg = Message::EntityInfo(data::netmsg::EntityPayload {
         origin_id: 11,
         sync_id: 22,
         doid: 33,
-        is_response: true,
+        data: b"payload".to_vec(),
     });
-    let buf = msg.to_bytes(MessageType::EntityInfo);
-    let header = Header::from_bytes(&buf).unwrap();
+    let buf = msg.to_bytes(MessageType::EntityInfo, true);
+    let (header, parsed) = Message::from_bytes(&buf).unwrap();
     assert_eq!(header.msg_type, MessageType::EntityInfo);
-    let parsed = Message::from_bytes(&buf, header.msg_type).unwrap();
+    assert!(header.is_response);
     match parsed {
-        Message::Entity(e) => {
+        Message::EntityInfo(e) => {
             assert_eq!(e.origin_id, 11);
             assert_eq!(e.sync_id, 22);
             assert_eq!(e.doid, 33);
-            assert!(e.is_response);
+            assert_eq!(e.data, b"payload".to_vec());
         }
         _ => panic!("unexpected message variant"),
     }

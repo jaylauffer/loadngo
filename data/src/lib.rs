@@ -377,14 +377,13 @@ pub mod sync {
 
 /// Network message shapes (serde-serializable) that align with NetUtil.h.
 pub mod netmsg {
-    use serde::{Deserialize, Serialize};
     use super::types::Id;
 
     pub const PACKET_HDR: u32 = 0x6c6e6774;
     pub const HDR_LEN: usize = 16;
 
     #[repr(u32)]
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum MessageType {
         Empty = 0,
         UserIntroduction,
@@ -422,7 +421,7 @@ pub mod netmsg {
     pub struct Header {
         pub tag: u32,
         pub msg_type: MessageType,
-        pub is_response: u32,
+        pub is_response: bool,
         pub length: u32,
     }
 
@@ -431,7 +430,7 @@ pub mod netmsg {
             Self {
                 tag: PACKET_HDR,
                 msg_type,
-                is_response: if is_response { 1 } else { 0 },
+                is_response,
                 length,
             }
         }
@@ -440,7 +439,7 @@ pub mod netmsg {
             let mut buf = [0u8; HDR_LEN];
             buf[0..4].copy_from_slice(&self.tag.to_le_bytes());
             buf[4..8].copy_from_slice(&(self.msg_type as u32).to_le_bytes());
-            buf[8..12].copy_from_slice(&self.is_response.to_le_bytes());
+            buf[8..12].copy_from_slice(&(if self.is_response { 1u32 } else { 0u32 }).to_le_bytes());
             buf[12..16].copy_from_slice(&self.length.to_le_bytes());
             buf
         }
@@ -451,7 +450,7 @@ pub mod netmsg {
             }
             let tag = u32::from_le_bytes(buf[0..4].try_into().ok()?);
             let msg_type_val = u32::from_le_bytes(buf[4..8].try_into().ok()?);
-            let is_response = u32::from_le_bytes(buf[8..12].try_into().ok()?);
+            let is_response = u32::from_le_bytes(buf[8..12].try_into().ok()?) != 0;
             let length = u32::from_le_bytes(buf[12..16].try_into().ok()?);
             let msg_type = match msg_type_val {
                 0 => MessageType::Empty,
@@ -495,372 +494,668 @@ pub mod netmsg {
         }
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct SyncRequest {
-        pub sync_id: Id,
-        pub is_response: bool,
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct UserIntroduction {
+        pub machine_id: Id,
+        pub user_key: [u8; 64],
+        pub name: String,
+        pub device: String,
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct EntityRequest {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct UserDeparture {
+        pub machine_id: Id,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct SyncParticipants {
+        pub sync_time: Id,
+        pub user_id: Id,
+        pub machine_id: Id,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct GroupTaskSynch {
+        pub task_ids: Vec<Id>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct UserTaskSynch {
+        pub since: Id,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct EntityPayload {
         pub origin_id: Id,
         pub sync_id: Id,
         pub doid: Id,
-        pub is_response: bool,
+        pub data: Vec<u8>,
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct SuggestConsolidation {
         pub sync_id: Id,
         pub consolidated_id: Id,
-        pub is_response: bool,
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Discrepancy {
+        pub sync_id: Id,
+        pub origin_id: Id,
+        pub foreign_id: Id,
+        pub local_id: Id,
+        pub discrepancy: Id,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct DiscrepanciesReport {
+        pub sync_id: Id,
+        pub discrepancies: Vec<Discrepancy>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct FileStart {
         pub time: u64,
         pub filesize: u64,
         pub filename: String,
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct FileEnd {
         pub time: u64,
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct FileData {
         pub time: u64,
         pub seq: u32,
         pub data: Vec<u8>,
-        pub is_response: bool,
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct FileMissed {
         pub time: u64,
         pub seq: u32,
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct BlobStart {
         pub time: u64,
-        pub len: u32,
+        pub len: i32,
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct BlobEnd {
         pub time: u64,
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct BlobData {
         pub time: u64,
         pub seq: u32,
         pub data: Vec<u8>,
-        pub is_response: bool,
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct BlobMissed {
         pub time: u64,
         pub seq: u32,
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct BlobComplete {
         pub time: u64,
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct HashesRequest {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct BulkIds {
         pub ids: Vec<Id>,
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum Message {
-        Sync(SyncRequest),
-        Entity(EntityRequest),
-        Properties(EntityRequest),
-        Move(EntityRequest),
-        Delete(EntityRequest),
-        Suggest(SuggestConsolidation),
-        RequestHashes(HashesRequest),
-        RequestTasks(HashesRequest),
-        FileStart(FileStart),
-        FileEnd(FileEnd),
-        FileData(FileData),
-        FileMissed(FileMissed),
-        BlobStart(BlobStart),
-        BlobEnd(BlobEnd),
-        BlobData(BlobData),
-        BlobMissed(BlobMissed),
-        BlobComplete(BlobComplete),
+        Empty,
+        UserIntroduction(UserIntroduction),
+        UserDeparture(UserDeparture),
+        RequestGroupTaskSynch(GroupTaskSynch),
+        RequestUserTaskSynch(UserTaskSynch),
+        RequestSyncParticipants(SyncParticipants),
+        RequestProperties(BulkIds),
+        RequestTask(BulkIds),
+        RequestMoveChain(EntityPayload),
+        ReportDiscrepancies(DiscrepanciesReport),
+        EntityInfo(EntityPayload),
+        EntityMove(EntityPayload),
+        EntityDelete(EntityPayload),
+        PropertyInfo(EntityPayload),
+        SuggestConsolidation(SuggestConsolidation),
+        ConcludeSync { sync_id: Id, consolidated_id: Id },
+        Chat(Vec<u8>),
+        PrivateChat(Vec<u8>),
+        TransferFileStart(FileStart),
+        TransferFileEnd(FileEnd),
+        TransferFileData(FileData),
+        TransferFileMissed(FileMissed),
+        TransferBlobStart(BlobStart),
+        TransferBlobEnd(BlobEnd),
+        TransferBlobData(BlobData),
+        TransferBlobMissed(BlobMissed),
+        TransferBlobComplete(BlobComplete),
+        RequestHashes(BulkIds),
+        RequestTasks(BulkIds),
     }
 
     impl Message {
-        pub fn to_bytes(&self, msg_type: MessageType) -> Vec<u8> {
-            let mut payload = Vec::new();
-            match self {
-                Message::Sync(s) => {
-                    payload.extend_from_slice(&s.sync_id.to_le_bytes());
-                    payload.push(if s.is_response { 1 } else { 0 });
-                }
-                Message::Entity(e)
-                | Message::Properties(e)
-                | Message::Move(e)
-                | Message::Delete(e) => {
-                    payload.extend_from_slice(&e.origin_id.to_le_bytes());
-                    payload.extend_from_slice(&e.sync_id.to_le_bytes());
-                    payload.extend_from_slice(&e.doid.to_le_bytes());
-                    payload.push(if e.is_response { 1 } else { 0 });
-                }
-                Message::Suggest(s) => {
-                    payload.extend_from_slice(&s.sync_id.to_le_bytes());
-                    payload.extend_from_slice(&s.consolidated_id.to_le_bytes());
-                    payload.push(if s.is_response { 1 } else { 0 });
-                }
-                Message::RequestHashes(h) | Message::RequestTasks(h) => {
-                    for id in &h.ids {
-                        payload.extend_from_slice(&id.to_le_bytes());
+        pub fn to_bytes(&self, msg_type: MessageType, is_response: bool) -> Vec<u8> {
+            let payload: Vec<u8> = match msg_type {
+                MessageType::Empty => Vec::new(),
+                MessageType::UserIntroduction => {
+                    if let Message::UserIntroduction(body) = self {
+                        let mut buf = Vec::with_capacity(8 + 64 + body.name.len() + 1 + body.device.len());
+                        buf.extend_from_slice(&body.machine_id.to_le_bytes());
+                        buf.extend_from_slice(&body.user_key);
+                        buf.extend_from_slice(body.name.as_bytes());
+                        buf.push(0);
+                        buf.extend_from_slice(body.device.as_bytes());
+                        buf
+                    } else {
+                        Vec::new()
                     }
                 }
-                Message::FileStart(f) => {
-                    payload.extend_from_slice(&f.time.to_le_bytes());
-                    payload.extend_from_slice(&f.filesize.to_le_bytes());
-                    let name = f.filename.as_bytes();
-                    payload.extend_from_slice(&(name.len() as u32).to_le_bytes());
-                    payload.extend_from_slice(name);
+                MessageType::UserDeparture => {
+                    if let Message::UserDeparture(body) = self {
+                        body.machine_id.to_le_bytes().to_vec()
+                    } else {
+                        Vec::new()
+                    }
                 }
-                Message::FileEnd(f) => {
-                    payload.extend_from_slice(&f.time.to_le_bytes());
+                MessageType::RequestGroupTaskSynch => {
+                    if let Message::RequestGroupTaskSynch(body) = self {
+                        let mut buf = Vec::with_capacity(body.task_ids.len() * 8);
+                        for id in &body.task_ids {
+                            buf.extend_from_slice(&id.to_le_bytes());
+                        }
+                        buf
+                    } else {
+                        Vec::new()
+                    }
                 }
-                Message::FileData(f) => {
-                    payload.extend_from_slice(&f.time.to_le_bytes());
-                    payload.extend_from_slice(&f.seq.to_le_bytes());
-                    payload.extend_from_slice(&(f.data.len() as u32).to_le_bytes());
-                    payload.extend_from_slice(&f.data);
-                    payload.push(if f.is_response { 1 } else { 0 });
+                MessageType::RequestUserTaskSynch => {
+                    if let Message::RequestUserTaskSynch(body) = self {
+                        body.since.to_le_bytes().to_vec()
+                    } else {
+                        Vec::new()
+                    }
                 }
-                Message::FileMissed(f) => {
-                    payload.extend_from_slice(&f.time.to_le_bytes());
-                    payload.extend_from_slice(&f.seq.to_le_bytes());
+                MessageType::RequestSyncParticipants => {
+                    if let Message::RequestSyncParticipants(body) = self {
+                        let mut buf = Vec::with_capacity(24);
+                        buf.extend_from_slice(&body.sync_time.to_le_bytes());
+                        buf.extend_from_slice(&body.user_id.to_le_bytes());
+                        buf.extend_from_slice(&body.machine_id.to_le_bytes());
+                        buf
+                    } else {
+                        Vec::new()
+                    }
                 }
-                Message::BlobStart(b) => {
-                    payload.extend_from_slice(&b.time.to_le_bytes());
-                    payload.extend_from_slice(&b.len.to_le_bytes());
+                MessageType::RequestProperties => {
+                    if let Message::RequestProperties(ids) = self {
+                        pack_ids(&ids.ids)
+                    } else {
+                        Vec::new()
+                    }
                 }
-                Message::BlobEnd(b) => {
-                    payload.extend_from_slice(&b.time.to_le_bytes());
+                MessageType::RequestTask => {
+                    if let Message::RequestTask(ids) = self {
+                        pack_ids(&ids.ids)
+                    } else {
+                        Vec::new()
+                    }
                 }
-                Message::BlobData(b) => {
-                    payload.extend_from_slice(&b.time.to_le_bytes());
-                    payload.extend_from_slice(&b.seq.to_le_bytes());
-                    payload.extend_from_slice(&(b.data.len() as u32).to_le_bytes());
-                    payload.extend_from_slice(&b.data);
-                    payload.push(if b.is_response { 1 } else { 0 });
+                MessageType::RequestMoveChain => {
+                    if let Message::RequestMoveChain(body) = self {
+                        pack_entity(body)
+                    } else {
+                        Vec::new()
+                    }
                 }
-                Message::BlobMissed(b) => {
-                    payload.extend_from_slice(&b.time.to_le_bytes());
-                    payload.extend_from_slice(&b.seq.to_le_bytes());
+                MessageType::ReportDiscrepancies => {
+                    if let Message::ReportDiscrepancies(report) = self {
+                        let mut buf = Vec::with_capacity(8 + report.discrepancies.len() * 40);
+                        buf.extend_from_slice(&report.sync_id.to_le_bytes());
+                        for d in &report.discrepancies {
+                            buf.extend_from_slice(&d.sync_id.to_le_bytes());
+                            buf.extend_from_slice(&d.origin_id.to_le_bytes());
+                            buf.extend_from_slice(&d.foreign_id.to_le_bytes());
+                            buf.extend_from_slice(&d.local_id.to_le_bytes());
+                            buf.extend_from_slice(&d.discrepancy.to_le_bytes());
+                        }
+                        buf
+                    } else {
+                        Vec::new()
+                    }
                 }
-                Message::BlobComplete(b) => {
-                    payload.extend_from_slice(&b.time.to_le_bytes());
+                MessageType::EntityInfo => {
+                    if let Message::EntityInfo(body) = self {
+                        pack_entity(body)
+                    } else {
+                        Vec::new()
+                    }
                 }
-            }
-            let header = Header::new(
-                msg_type,
-                matches!(
-                    self,
-                    Message::Sync(SyncRequest {
-                        is_response: true,
-                        ..
-                    })
-                        | Message::Entity(EntityRequest {
-                            is_response: true,
-                            ..
-                        })
-                        | Message::Properties(EntityRequest {
-                            is_response: true,
-                            ..
-                        })
-                        | Message::Move(EntityRequest {
-                            is_response: true,
-                            ..
-                        })
-                        | Message::Delete(EntityRequest {
-                            is_response: true,
-                            ..
-                        })
-                        | Message::Suggest(SuggestConsolidation {
-                            is_response: true,
-                            ..
-                        }) | Message::FileData(FileData { is_response: true, .. }) | Message::BlobData(BlobData { is_response: true, .. })
-                ),
-                (HDR_LEN + payload.len()) as u32,
-            );
+                MessageType::EntityMove => {
+                    if let Message::EntityMove(body) = self {
+                        pack_entity(body)
+                    } else {
+                        Vec::new()
+                    }
+                }
+                MessageType::EntityDelete => {
+                    if let Message::EntityDelete(body) = self {
+                        pack_entity(body)
+                    } else {
+                        Vec::new()
+                    }
+                }
+                MessageType::PropertyInfo => {
+                    if let Message::PropertyInfo(body) = self {
+                        pack_entity(body)
+                    } else {
+                        Vec::new()
+                    }
+                }
+                MessageType::SuggestConsolidation => {
+                    if let Message::SuggestConsolidation(body) = self {
+                        let mut buf = Vec::with_capacity(16);
+                        buf.extend_from_slice(&body.sync_id.to_le_bytes());
+                        buf.extend_from_slice(&body.consolidated_id.to_le_bytes());
+                        buf
+                    } else {
+                        Vec::new()
+                    }
+                }
+                MessageType::ConcludeSync => {
+                    if let Message::ConcludeSync { sync_id, consolidated_id } = self {
+                        let mut buf = Vec::with_capacity(16);
+                        buf.extend_from_slice(&sync_id.to_le_bytes());
+                        buf.extend_from_slice(&consolidated_id.to_le_bytes());
+                        buf
+                    } else {
+                        Vec::new()
+                    }
+                }
+                MessageType::Chat => {
+                    if let Message::Chat(text) = self {
+                        text.clone()
+                    } else {
+                        Vec::new()
+                    }
+                }
+                MessageType::PrivateChat => {
+                    if let Message::PrivateChat(text) = self {
+                        text.clone()
+                    } else {
+                        Vec::new()
+                    }
+                }
+                MessageType::TransferFileStart => {
+                    if let Message::TransferFileStart(body) = self {
+                        let mut buf = Vec::with_capacity(16 + body.filename.len());
+                        buf.extend_from_slice(&body.time.to_le_bytes());
+                        buf.extend_from_slice(&body.filesize.to_le_bytes());
+                        buf.extend_from_slice(body.filename.as_bytes());
+                        buf
+                    } else {
+                        Vec::new()
+                    }
+                }
+                MessageType::TransferFileEnd => {
+                    if let Message::TransferFileEnd(body) = self {
+                        body.time.to_le_bytes().to_vec()
+                    } else {
+                        Vec::new()
+                    }
+                }
+                MessageType::TransferFileData => {
+                    if let Message::TransferFileData(body) = self {
+                        let mut buf = Vec::with_capacity(12 + body.data.len());
+                        buf.extend_from_slice(&body.time.to_le_bytes());
+                        buf.extend_from_slice(&body.seq.to_le_bytes());
+                        buf.extend_from_slice(&body.data);
+                        buf
+                    } else {
+                        Vec::new()
+                    }
+                }
+                MessageType::TransferFileMissed => {
+                    if let Message::TransferFileMissed(body) = self {
+                        let mut buf = Vec::with_capacity(12);
+                        buf.extend_from_slice(&body.time.to_le_bytes());
+                        buf.extend_from_slice(&body.seq.to_le_bytes());
+                        buf
+                    } else {
+                        Vec::new()
+                    }
+                }
+                MessageType::TransferBlobStart => {
+                    if let Message::TransferBlobStart(body) = self {
+                        let mut buf = Vec::with_capacity(12);
+                        buf.extend_from_slice(&body.time.to_le_bytes());
+                        buf.extend_from_slice(&body.len.to_le_bytes());
+                        buf
+                    } else {
+                        Vec::new()
+                    }
+                }
+                MessageType::TransferBlobEnd => {
+                    if let Message::TransferBlobEnd(body) = self {
+                        body.time.to_le_bytes().to_vec()
+                    } else {
+                        Vec::new()
+                    }
+                }
+                MessageType::TransferBlobData => {
+                    if let Message::TransferBlobData(body) = self {
+                        let mut buf = Vec::with_capacity(12 + body.data.len());
+                        buf.extend_from_slice(&body.time.to_le_bytes());
+                        buf.extend_from_slice(&body.seq.to_le_bytes());
+                        buf.extend_from_slice(&body.data);
+                        buf
+                    } else {
+                        Vec::new()
+                    }
+                }
+                MessageType::TransferBlobMissed => {
+                    if let Message::TransferBlobMissed(body) = self {
+                        let mut buf = Vec::with_capacity(12);
+                        buf.extend_from_slice(&body.time.to_le_bytes());
+                        buf.extend_from_slice(&body.seq.to_le_bytes());
+                        buf
+                    } else {
+                        Vec::new()
+                    }
+                }
+                MessageType::TransferBlobComplete => {
+                    if let Message::TransferBlobComplete(body) = self {
+                        body.time.to_le_bytes().to_vec()
+                    } else {
+                        Vec::new()
+                    }
+                }
+                MessageType::RequestHashes => {
+                    if let Message::RequestHashes(ids) = self {
+                        pack_ids(&ids.ids)
+                    } else {
+                        Vec::new()
+                    }
+                }
+                MessageType::RequestTasks => {
+                    if let Message::RequestTasks(ids) = self {
+                        pack_ids(&ids.ids)
+                    } else {
+                        Vec::new()
+                    }
+                }
+                MessageType::MessageCount => Vec::new(),
+            };
+            let header = Header::new(msg_type, is_response, payload.len() as u32);
             let mut buf = header.to_bytes().to_vec();
             buf.extend_from_slice(&payload);
             buf
         }
 
-        pub fn from_bytes(buf: &[u8], msg_type: MessageType) -> Option<Self> {
-            if buf.len() < HDR_LEN {
+        pub fn from_bytes(buf: &[u8]) -> Option<(Header, Message)> {
+            let header = Header::from_bytes(buf)?;
+            let body_len = header.length as usize;
+            if buf.len() < HDR_LEN + body_len {
                 return None;
             }
-            let body = &buf[HDR_LEN..];
-            match msg_type {
+            let body = &buf[HDR_LEN..HDR_LEN + body_len];
+            let message = match header.msg_type {
+                MessageType::Empty => Message::Empty,
+                MessageType::UserIntroduction => {
+                    if body_len < 8 + 64 + 1 {
+                        return None;
+                    }
+                    let machine_id = Id::from_le_bytes(body[0..8].try_into().ok()?);
+                    let mut key = [0u8; 64];
+                    key.copy_from_slice(&body[8..72]);
+                    let rest = &body[72..];
+                    let split = rest.iter().position(|b| *b == 0)?;
+                    let name = String::from_utf8_lossy(&rest[..split]).into_owned();
+                    let device = String::from_utf8_lossy(&rest[split + 1..]).into_owned();
+                    Message::UserIntroduction(UserIntroduction {
+                        machine_id,
+                        user_key: key,
+                        name,
+                        device,
+                    })
+                }
+                MessageType::UserDeparture => {
+                    if body_len < 8 {
+                        return None;
+                    }
+                    let machine_id = Id::from_le_bytes(body[0..8].try_into().ok()?);
+                    Message::UserDeparture(UserDeparture { machine_id })
+                }
+                MessageType::RequestGroupTaskSynch => {
+                    let ids = parse_bulk_ids(body)?;
+                    Message::RequestGroupTaskSynch(GroupTaskSynch { task_ids: ids })
+                }
+                MessageType::RequestUserTaskSynch => {
+                    if body_len < 8 {
+                        return None;
+                    }
+                    let since = Id::from_le_bytes(body[0..8].try_into().ok()?);
+                    Message::RequestUserTaskSynch(UserTaskSynch { since })
+                }
                 MessageType::RequestSyncParticipants => {
-                    if body.len() < 9 {
+                    if body_len < 24 {
+                        return None;
+                    }
+                    let sync_time = Id::from_le_bytes(body[0..8].try_into().ok()?);
+                    let user_id = Id::from_le_bytes(body[8..16].try_into().ok()?);
+                    let machine_id = Id::from_le_bytes(body[16..24].try_into().ok()?);
+                    Message::RequestSyncParticipants(SyncParticipants {
+                        sync_time,
+                        user_id,
+                        machine_id,
+                    })
+                }
+                MessageType::RequestProperties => {
+                    let ids = parse_bulk_ids(body)?;
+                    Message::RequestProperties(BulkIds { ids })
+                }
+                MessageType::RequestTask => {
+                    let ids = parse_bulk_ids(body)?;
+                    Message::RequestTask(BulkIds { ids })
+                }
+                MessageType::RequestMoveChain => {
+                    let payload = parse_entity(body)?;
+                    Message::RequestMoveChain(payload)
+                }
+                MessageType::ReportDiscrepancies => {
+                    if body_len < 8 {
                         return None;
                     }
                     let sync_id = Id::from_le_bytes(body[0..8].try_into().ok()?);
-                    let is_response = body[8] != 0;
-                    Some(Message::Sync(SyncRequest { sync_id, is_response }))
-                }
-                MessageType::EntityInfo
-                | MessageType::EntityMove
-                | MessageType::EntityDelete
-                | MessageType::PropertyInfo => {
-                    if body.len() < 25 {
+                    let rest = &body[8..];
+                    if rest.len() % 40 != 0 {
                         return None;
                     }
-                    let origin_id = Id::from_le_bytes(body[0..8].try_into().ok()?);
-                    let sync_id = Id::from_le_bytes(body[8..16].try_into().ok()?);
-                    let doid = Id::from_le_bytes(body[16..24].try_into().ok()?);
-                    let is_response = body[24] != 0;
-                    Some(Message::Entity(EntityRequest {
-                        origin_id,
-                        sync_id,
-                        doid,
-                        is_response,
-                    }))
+                    let mut discrepancies = Vec::new();
+                    for chunk in rest.chunks(40) {
+                        let syncid = Id::from_le_bytes(chunk[0..8].try_into().ok()?);
+                        let origin_id = Id::from_le_bytes(chunk[8..16].try_into().ok()?);
+                        let foreign_id = Id::from_le_bytes(chunk[16..24].try_into().ok()?);
+                        let local_id = Id::from_le_bytes(chunk[24..32].try_into().ok()?);
+                        let discrepancy = Id::from_le_bytes(chunk[32..40].try_into().ok()?);
+                        discrepancies.push(Discrepancy {
+                            sync_id: syncid,
+                            origin_id,
+                            foreign_id,
+                            local_id,
+                            discrepancy,
+                        });
+                    }
+                    Message::ReportDiscrepancies(DiscrepanciesReport { sync_id, discrepancies })
                 }
+                MessageType::EntityInfo => Message::EntityInfo(parse_entity(body)?),
+                MessageType::EntityMove => Message::EntityMove(parse_entity(body)?),
+                MessageType::EntityDelete => Message::EntityDelete(parse_entity(body)?),
+                MessageType::PropertyInfo => Message::PropertyInfo(parse_entity(body)?),
                 MessageType::SuggestConsolidation => {
-                    if body.len() < 17 {
+                    if body_len < 16 {
                         return None;
                     }
                     let sync_id = Id::from_le_bytes(body[0..8].try_into().ok()?);
                     let consolidated_id = Id::from_le_bytes(body[8..16].try_into().ok()?);
-                    let is_response = body.get(16).copied().unwrap_or(0) != 0;
-                    Some(Message::Suggest(SuggestConsolidation {
+                    Message::SuggestConsolidation(SuggestConsolidation {
                         sync_id,
                         consolidated_id,
-                        is_response,
-                    }))
+                    })
                 }
-                MessageType::RequestHashes | MessageType::RequestTasks => {
-                    if body.len() % 8 != 0 {
+                MessageType::ConcludeSync => {
+                    if body_len < 16 {
                         return None;
                     }
-                    let mut ids = Vec::new();
-                    for chunk in body.chunks(8) {
-                        ids.push(Id::from_le_bytes(chunk.try_into().ok()?));
-                    }
-                    match msg_type {
-                        MessageType::RequestHashes => Some(Message::RequestHashes(HashesRequest { ids })),
-                        _ => Some(Message::RequestTasks(HashesRequest { ids })),
-                    }
+                    let sync_id = Id::from_le_bytes(body[0..8].try_into().ok()?);
+                    let consolidated_id = Id::from_le_bytes(body[8..16].try_into().ok()?);
+                    Message::ConcludeSync { sync_id, consolidated_id }
                 }
+                MessageType::Chat => Message::Chat(body.to_vec()),
+                MessageType::PrivateChat => Message::PrivateChat(body.to_vec()),
                 MessageType::TransferFileStart => {
-                    if body.len() < 8 + 8 + 4 {
+                    if body_len < 16 {
                         return None;
                     }
                     let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
                     let filesize = u64::from_le_bytes(body[8..16].try_into().ok()?);
-                    let name_len = u32::from_le_bytes(body[16..20].try_into().ok()?) as usize;
-                    if body.len() < 20 + name_len {
-                        return None;
-                    }
-                    let filename = String::from_utf8(body[20..20 + name_len].to_vec()).ok()?;
-                    Some(Message::FileStart(FileStart { time, filesize, filename }))
+                    let filename = String::from_utf8_lossy(&body[16..]).into_owned();
+                    Message::TransferFileStart(FileStart {
+                        time,
+                        filesize,
+                        filename,
+                    })
                 }
                 MessageType::TransferFileEnd => {
-                    if body.len() < 8 {
+                    if body_len < 8 {
                         return None;
                     }
                     let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
-                    Some(Message::FileEnd(FileEnd { time }))
+                    Message::TransferFileEnd(FileEnd { time })
                 }
                 MessageType::TransferFileData => {
-                    if body.len() < 8 + 4 + 4 + 1 {
+                    if body_len < 12 {
                         return None;
                     }
                     let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
                     let seq = u32::from_le_bytes(body[8..12].try_into().ok()?);
-                    let len = u32::from_le_bytes(body[12..16].try_into().ok()?) as usize;
-                    if body.len() < 16 + len + 1 {
-                        return None;
-                    }
-                    let data = body[16..16 + len].to_vec();
-                    let is_response = body[16 + len] != 0;
-                    Some(Message::FileData(FileData {
-                        time,
-                        seq,
-                        data,
-                        is_response,
-                    }))
+                    let data = body[12..].to_vec();
+                    Message::TransferFileData(FileData { time, seq, data })
                 }
                 MessageType::TransferFileMissed => {
-                    if body.len() < 8 + 4 {
+                    if body_len < 12 {
                         return None;
                     }
                     let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
                     let seq = u32::from_le_bytes(body[8..12].try_into().ok()?);
-                    Some(Message::FileMissed(FileMissed { time, seq }))
+                    Message::TransferFileMissed(FileMissed { time, seq })
                 }
                 MessageType::TransferBlobStart => {
-                    if body.len() < 8 + 4 {
+                    if body_len < 12 {
                         return None;
                     }
                     let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
-                    let len = u32::from_le_bytes(body[8..12].try_into().ok()?);
-                    Some(Message::BlobStart(BlobStart { time, len }))
+                    let len = i32::from_le_bytes(body[8..12].try_into().ok()?);
+                    Message::TransferBlobStart(BlobStart { time, len })
                 }
                 MessageType::TransferBlobEnd => {
-                    if body.len() < 8 {
+                    if body_len < 8 {
                         return None;
                     }
                     let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
-                    Some(Message::BlobEnd(BlobEnd { time }))
+                    Message::TransferBlobEnd(BlobEnd { time })
                 }
                 MessageType::TransferBlobData => {
-                    if body.len() < 8 + 4 + 4 + 1 {
+                    if body_len < 12 {
                         return None;
                     }
                     let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
                     let seq = u32::from_le_bytes(body[8..12].try_into().ok()?);
-                    let len = u32::from_le_bytes(body[12..16].try_into().ok()?) as usize;
-                    if body.len() < 16 + len + 1 {
-                        return None;
-                    }
-                    let data = body[16..16 + len].to_vec();
-                    let is_response = body[16 + len] != 0;
-                    Some(Message::BlobData(BlobData {
-                        time,
-                        seq,
-                        data,
-                        is_response,
-                    }))
+                    let data = body[12..].to_vec();
+                    Message::TransferBlobData(BlobData { time, seq, data })
                 }
                 MessageType::TransferBlobMissed => {
-                    if body.len() < 8 + 4 {
+                    if body_len < 12 {
                         return None;
                     }
                     let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
                     let seq = u32::from_le_bytes(body[8..12].try_into().ok()?);
-                    Some(Message::BlobMissed(BlobMissed { time, seq }))
+                    Message::TransferBlobMissed(BlobMissed { time, seq })
                 }
                 MessageType::TransferBlobComplete => {
-                    if body.len() < 8 {
+                    if body_len < 8 {
                         return None;
                     }
                     let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
-                    Some(Message::BlobComplete(BlobComplete { time }))
+                    Message::TransferBlobComplete(BlobComplete { time })
                 }
-                _ => None,
-            }
+                MessageType::RequestHashes => {
+                    let ids = parse_bulk_ids(body)?;
+                    Message::RequestHashes(BulkIds { ids })
+                }
+                MessageType::RequestTasks => {
+                    let ids = parse_bulk_ids(body)?;
+                    Message::RequestTasks(BulkIds { ids })
+                }
+                MessageType::MessageCount => return None,
+            };
+            Some((header, message))
         }
+    }
+
+    fn pack_ids(ids: &[Id]) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(ids.len() * 8);
+        for id in ids {
+            buf.extend_from_slice(&id.to_le_bytes());
+        }
+        buf
+    }
+
+    fn parse_bulk_ids(body: &[u8]) -> Option<Vec<Id>> {
+        if body.len() % 8 != 0 {
+            return None;
+        }
+        let mut ids = Vec::with_capacity(body.len() / 8);
+        for chunk in body.chunks(8) {
+            ids.push(Id::from_le_bytes(chunk.try_into().ok()?));
+        }
+        Some(ids)
+    }
+
+    fn pack_entity(body: &EntityPayload) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(24 + body.data.len());
+        buf.extend_from_slice(&body.origin_id.to_le_bytes());
+        buf.extend_from_slice(&body.sync_id.to_le_bytes());
+        buf.extend_from_slice(&body.doid.to_le_bytes());
+        buf.extend_from_slice(&body.data);
+        buf
+    }
+
+    fn parse_entity(body: &[u8]) -> Option<EntityPayload> {
+        if body.len() < 24 {
+            return None;
+        }
+        let origin_id = Id::from_le_bytes(body[0..8].try_into().ok()?);
+        let sync_id = Id::from_le_bytes(body[8..16].try_into().ok()?);
+        let doid = Id::from_le_bytes(body[16..24].try_into().ok()?);
+        let data = body[24..].to_vec();
+        Some(EntityPayload {
+            origin_id,
+            sync_id,
+            doid,
+            data,
+        })
     }
 }
 
