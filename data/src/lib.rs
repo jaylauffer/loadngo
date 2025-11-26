@@ -693,7 +693,24 @@ pub mod undo {
     }
 
     impl UndoStack {
-        pub fn push(&mut self, cmd: Command) {
+        fn apply_cmd(cmd: &Command, tasks: &mut HashMap<u64, Task>) {
+            match cmd {
+                Command::AddTask { task } => {
+                    tasks.insert(task.entity.id, task.clone());
+                }
+                Command::RemoveTask { task } => {
+                    tasks.remove(&task.entity.id);
+                }
+                Command::UpdateProperty { id, key, new, .. } => {
+                    if let Some(task) = tasks.get_mut(id) {
+                        task.properties.insert(key.clone(), new.clone());
+                    }
+                }
+            }
+        }
+
+        pub fn apply(&mut self, cmd: Command, tasks: &mut HashMap<u64, Task>) {
+            Self::apply_cmd(&cmd, tasks);
             self.past.push(cmd);
             self.future.clear();
         }
@@ -722,19 +739,7 @@ pub mod undo {
 
         pub fn redo(&mut self, tasks: &mut HashMap<u64, Task>) -> Option<Command> {
             if let Some(cmd) = self.future.pop() {
-                match &cmd {
-                    Command::AddTask { task } => {
-                        tasks.insert(task.entity.id, task.clone());
-                    }
-                    Command::RemoveTask { task } => {
-                        tasks.remove(&task.entity.id);
-                    }
-                    Command::UpdateProperty { id, key, new, .. } => {
-                        if let Some(task) = tasks.get_mut(id) {
-                            task.properties.insert(key.clone(), new.clone());
-                        }
-                    }
-                }
+                Self::apply_cmd(&cmd, tasks);
                 self.past.push(cmd.clone());
                 Some(cmd)
             } else {
@@ -775,6 +780,7 @@ pub mod task {
     use super::entity::Entity;
     use super::types::Id;
     use super::value::Value;
+    use super::model_utils::generate_id;
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
 
@@ -805,6 +811,12 @@ pub mod task {
                 properties: HashMap::new(),
             }
         }
+
+        /// Convenience helper for creating a bare task with generated ids.
+        pub fn spawn(name: impl Into<String>, owner: impl Into<String>, machine_id: Id, user_id: Id, created: u64) -> Self {
+            let entity = Entity::with_machine_user(generate_id(), generate_id(), owner, created, machine_id, user_id);
+            Task::new(entity, name)
+        }
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -813,6 +825,102 @@ pub mod task {
         pub task_id: Id,
         pub duration: u64,
         pub notes: Option<String>,
+    }
+}
+
+/// JSON persistence helpers for task files (deterministic ordering).
+pub mod persistence {
+    use super::model_utils::now_timestamp;
+    use super::task::Task;
+    use super::types::{Id, TimeStamp};
+    use super::value::Value;
+    use anyhow::Result;
+    use serde::{Deserialize, Serialize};
+    use std::collections::{BTreeMap, HashMap};
+    use std::fs::File;
+    use std::path::Path;
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct TaskFile {
+        pub version: u32,
+        pub generated_at: TimeStamp,
+        pub tasks: Vec<SerdeTask>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct SerdeTask {
+        pub entity: super::entity::Entity,
+        pub name: String,
+        pub description: Option<String>,
+        pub parent: Option<Id>,
+        pub priority: i32,
+        pub due_date: u64,
+        pub scheduled_start: u64,
+        pub estimated_duration: u64,
+        pub properties: BTreeMap<String, Value>,
+    }
+
+    impl From<&Task> for SerdeTask {
+        fn from(t: &Task) -> Self {
+            let mut props = BTreeMap::new();
+            for (k, v) in t.properties.iter() {
+                props.insert(k.clone(), v.clone());
+            }
+            SerdeTask {
+                entity: t.entity.clone(),
+                name: t.name.clone(),
+                description: t.description.clone(),
+                parent: t.parent,
+                priority: t.priority,
+                due_date: t.due_date,
+                scheduled_start: t.scheduled_start,
+                estimated_duration: t.estimated_duration,
+                properties: props,
+            }
+        }
+    }
+
+    impl From<SerdeTask> for Task {
+        fn from(t: SerdeTask) -> Self {
+            let mut props = HashMap::new();
+            for (k, v) in t.properties.into_iter() {
+                props.insert(k, v);
+            }
+            Task {
+                entity: t.entity,
+                name: t.name,
+                description: t.description,
+                parent: t.parent,
+                priority: t.priority,
+                due_date: t.due_date,
+                scheduled_start: t.scheduled_start,
+                estimated_duration: t.estimated_duration,
+                properties: props,
+            }
+        }
+    }
+
+    /// Write tasks to a deterministic JSON file (sorted by id/name, properties sorted by key).
+    pub fn write_task_file(path: impl AsRef<Path>, tasks: &[Task]) -> Result<()> {
+        let mut ordered: Vec<SerdeTask> = tasks.iter().map(SerdeTask::from).collect();
+        ordered.sort_by(|a, b| a.entity.id.cmp(&b.entity.id).then(a.name.cmp(&b.name)));
+        let file = TaskFile {
+            version: 1,
+            generated_at: now_timestamp(),
+            tasks: ordered,
+        };
+        let writer = File::create(path)?;
+        serde_json::to_writer_pretty(writer, &file)?;
+        Ok(())
+    }
+
+    /// Read tasks from a JSON file written by `write_task_file`.
+    pub fn read_task_file(path: impl AsRef<Path>) -> Result<Vec<Task>> {
+        let reader = File::open(path)?;
+        let file: TaskFile = serde_json::from_reader(reader)?;
+        let mut tasks: Vec<Task> = file.tasks.into_iter().map(Task::from).collect();
+        tasks.sort_by(|a, b| a.entity.id.cmp(&b.entity.id).then(a.name.cmp(&b.name)));
+        Ok(tasks)
     }
 }
 
