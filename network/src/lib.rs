@@ -5,7 +5,10 @@ use data::{
     netmsg::{self, Header, Message, MessageType},
     Id, Participant,
 };
-use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
+use std::{
+    net::{Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket},
+    time::Duration,
+};
 use tracing::info;
 use windows::Win32::Networking::WinSock::{WSAStartup, WSADATA};
 
@@ -13,9 +16,31 @@ const fn make_word(low: u8, high: u8) -> u16 {
     (low as u16) | ((high as u16) << 8)
 }
 
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub bind_addr: SocketAddr,
+    pub multicast_v4: Option<Ipv4Addr>,
+    pub multicast_iface_v4: Ipv4Addr,
+    pub timeout: Duration,
+    pub retries: usize,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            bind_addr: "0.0.0.0:0".parse().unwrap(),
+            multicast_v4: None,
+            multicast_iface_v4: Ipv4Addr::UNSPECIFIED,
+            timeout: Duration::from_millis(500),
+            retries: 3,
+        }
+    }
+}
+
 pub struct Network {
     initialized: bool,
     socket: Option<UdpSocket>,
+    config: Config,
 }
 
 impl Network {
@@ -23,7 +48,20 @@ impl Network {
         Self {
             initialized: false,
             socket: None,
+            config: Config::default(),
         }
+    }
+
+    pub fn with_config(config: Config) -> Self {
+        Self {
+            initialized: false,
+            socket: None,
+            config,
+        }
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
     pub fn init(&mut self) -> Result<()> {
@@ -36,6 +74,15 @@ impl Network {
         }
         self.initialized = true;
         info!("network initialized");
+        if self.socket.is_none() {
+            self.bind(self.config.bind_addr)?;
+        }
+        if let Some(group) = self.config.multicast_v4 {
+            if let Some(sock) = &self.socket {
+                sock.join_multicast_v4(&group, &self.config.multicast_iface_v4)?;
+                info!(%group, iface=%self.config.multicast_iface_v4, "joined multicast group");
+            }
+        }
         Ok(())
     }
 
@@ -46,6 +93,8 @@ impl Network {
         }
         let sock = UdpSocket::bind(addr)?;
         sock.set_nonblocking(false)?;
+        sock.set_read_timeout(Some(self.config.timeout))?;
+        sock.set_write_timeout(Some(self.config.timeout))?;
         self.socket = Some(sock);
         Ok(())
     }
@@ -56,10 +105,48 @@ impl Network {
         Ok(sock.send_to(frame, target)?)
     }
 
+    /// Send with simple retry semantics.
+    pub fn send_frame_with_retries<A: ToSocketAddrs>(
+        &self,
+        target: A,
+        frame: &[u8],
+    ) -> Result<usize> {
+        let mut last_err = None;
+        for _ in 0..self.config.retries {
+            match self.send_frame(&target, frame) {
+                Ok(n) => return Ok(n),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("send failed")))
+    }
+
     /// Receive a raw frame into the provided buffer.
     pub fn recv_frame(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
         let sock = self.socket.as_ref().ok_or_else(|| anyhow::anyhow!("socket not bound"))?;
         Ok(sock.recv_from(buf)?)
+    }
+
+    /// Receive once and dispatch to a handler; returns Ok(false) on timeout.
+    pub fn recv_and_dispatch<F>(&self, handler: &mut F) -> Result<bool>
+    where
+        F: FnMut(SocketAddr, Header, Message),
+    {
+        use std::io::ErrorKind;
+        let sock = self.socket.as_ref().ok_or_else(|| anyhow::anyhow!("socket not bound"))?;
+        let mut buf = [0u8; 64 * 1024];
+        match sock.recv_from(&mut buf) {
+            Ok((len, addr)) => {
+                if let Some((hdr, msg)) = Message::from_bytes(&buf[..len]) {
+                    handler(addr, hdr, msg);
+                }
+                Ok(true)
+            }
+            Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
+                Ok(false)
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Convenience: build and send a Message using the shared netmsg module.
@@ -71,7 +158,7 @@ impl Network {
         is_response: bool,
     ) -> Result<usize> {
         let frame = msg.to_bytes(msg_type, is_response);
-        self.send_frame(target, &frame)
+        self.send_frame_with_retries(target, &frame)
     }
 
     pub fn register_participant(&self, participant: &Participant) {
