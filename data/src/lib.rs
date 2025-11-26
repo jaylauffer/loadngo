@@ -281,6 +281,7 @@ pub mod sync {
         pub foreign_id: Id,
         pub local_id: Id,
         pub discrepancy: Id,
+        pub description: Option<String>,
     }
 
     #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -332,6 +333,7 @@ pub mod sync {
                 foreign_id: foreign,
                 local_id: local,
                 discrepancy: code,
+                description: None,
             }
         }
 
