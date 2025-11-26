@@ -16,6 +16,8 @@ pub mod config;
 pub mod file_manager;
 pub mod listener;
 pub mod service;
+pub mod action;
+pub mod data_object;
 
 pub mod types {
     use serde::{Deserialize, Serialize};
@@ -281,6 +283,17 @@ pub mod sync {
         pub discrepancy: Id,
     }
 
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    pub struct MoveChain {
+        pub moves: Vec<Id>,
+    }
+
+    impl MoveChain {
+        pub fn add_move(&mut self, id: Id) {
+            self.moves.push(id);
+        }
+    }
+
     #[derive(Debug, Default, Clone, Serialize, Deserialize)]
     pub struct Sync {
         pub sync_id: Id,
@@ -310,6 +323,24 @@ pub mod sync {
 
         pub fn set_property(&mut self, key: impl Into<String>, value: Value) {
             self.properties.insert(key.into(), value);
+        }
+
+        pub fn record_discrepancy(&mut self, origin: Id, foreign: Id, local: Id, code: Id) -> Discrepancy {
+            Discrepancy {
+                sync_id: self.sync_id,
+                entity_origin_id: origin,
+                foreign_id: foreign,
+                local_id: local,
+                discrepancy: code,
+            }
+        }
+
+        pub fn build_move_chain(&self, ids: &[Id]) -> MoveChain {
+            let mut chain = MoveChain::default();
+            for id in ids {
+                chain.add_move(*id);
+            }
+            chain
         }
 
         pub fn hash(&self) -> u64 {
@@ -484,6 +515,62 @@ pub mod netmsg {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct FileStart {
+        pub time: u64,
+        pub filesize: u64,
+        pub filename: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct FileEnd {
+        pub time: u64,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct FileData {
+        pub time: u64,
+        pub seq: u32,
+        pub data: Vec<u8>,
+        pub is_response: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct FileMissed {
+        pub time: u64,
+        pub seq: u32,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct BlobStart {
+        pub time: u64,
+        pub len: u32,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct BlobEnd {
+        pub time: u64,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct BlobData {
+        pub time: u64,
+        pub seq: u32,
+        pub data: Vec<u8>,
+        pub is_response: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct BlobMissed {
+        pub time: u64,
+        pub seq: u32,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct BlobComplete {
+        pub time: u64,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct HashesRequest {
         pub ids: Vec<Id>,
     }
@@ -498,6 +585,15 @@ pub mod netmsg {
         Suggest(SuggestConsolidation),
         RequestHashes(HashesRequest),
         RequestTasks(HashesRequest),
+        FileStart(FileStart),
+        FileEnd(FileEnd),
+        FileData(FileData),
+        FileMissed(FileMissed),
+        BlobStart(BlobStart),
+        BlobEnd(BlobEnd),
+        BlobData(BlobData),
+        BlobMissed(BlobMissed),
+        BlobComplete(BlobComplete),
     }
 
     impl Message {
@@ -527,6 +623,48 @@ pub mod netmsg {
                         payload.extend_from_slice(&id.to_le_bytes());
                     }
                 }
+                Message::FileStart(f) => {
+                    payload.extend_from_slice(&f.time.to_le_bytes());
+                    payload.extend_from_slice(&f.filesize.to_le_bytes());
+                    let name = f.filename.as_bytes();
+                    payload.extend_from_slice(&(name.len() as u32).to_le_bytes());
+                    payload.extend_from_slice(name);
+                }
+                Message::FileEnd(f) => {
+                    payload.extend_from_slice(&f.time.to_le_bytes());
+                }
+                Message::FileData(f) => {
+                    payload.extend_from_slice(&f.time.to_le_bytes());
+                    payload.extend_from_slice(&f.seq.to_le_bytes());
+                    payload.extend_from_slice(&(f.data.len() as u32).to_le_bytes());
+                    payload.extend_from_slice(&f.data);
+                    payload.push(if f.is_response { 1 } else { 0 });
+                }
+                Message::FileMissed(f) => {
+                    payload.extend_from_slice(&f.time.to_le_bytes());
+                    payload.extend_from_slice(&f.seq.to_le_bytes());
+                }
+                Message::BlobStart(b) => {
+                    payload.extend_from_slice(&b.time.to_le_bytes());
+                    payload.extend_from_slice(&b.len.to_le_bytes());
+                }
+                Message::BlobEnd(b) => {
+                    payload.extend_from_slice(&b.time.to_le_bytes());
+                }
+                Message::BlobData(b) => {
+                    payload.extend_from_slice(&b.time.to_le_bytes());
+                    payload.extend_from_slice(&b.seq.to_le_bytes());
+                    payload.extend_from_slice(&(b.data.len() as u32).to_le_bytes());
+                    payload.extend_from_slice(&b.data);
+                    payload.push(if b.is_response { 1 } else { 0 });
+                }
+                Message::BlobMissed(b) => {
+                    payload.extend_from_slice(&b.time.to_le_bytes());
+                    payload.extend_from_slice(&b.seq.to_le_bytes());
+                }
+                Message::BlobComplete(b) => {
+                    payload.extend_from_slice(&b.time.to_le_bytes());
+                }
             }
             let header = Header::new(
                 msg_type,
@@ -555,7 +693,7 @@ pub mod netmsg {
                         | Message::Suggest(SuggestConsolidation {
                             is_response: true,
                             ..
-                        })
+                        }) | Message::FileData(FileData { is_response: true, .. }) | Message::BlobData(BlobData { is_response: true, .. })
                 ),
                 (HDR_LEN + payload.len()) as u32,
             );
@@ -621,6 +759,102 @@ pub mod netmsg {
                         MessageType::RequestHashes => Some(Message::RequestHashes(HashesRequest { ids })),
                         _ => Some(Message::RequestTasks(HashesRequest { ids })),
                     }
+                }
+                MessageType::TransferFileStart => {
+                    if body.len() < 8 + 8 + 4 {
+                        return None;
+                    }
+                    let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
+                    let filesize = u64::from_le_bytes(body[8..16].try_into().ok()?);
+                    let name_len = u32::from_le_bytes(body[16..20].try_into().ok()?) as usize;
+                    if body.len() < 20 + name_len {
+                        return None;
+                    }
+                    let filename = String::from_utf8(body[20..20 + name_len].to_vec()).ok()?;
+                    Some(Message::FileStart(FileStart { time, filesize, filename }))
+                }
+                MessageType::TransferFileEnd => {
+                    if body.len() < 8 {
+                        return None;
+                    }
+                    let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
+                    Some(Message::FileEnd(FileEnd { time }))
+                }
+                MessageType::TransferFileData => {
+                    if body.len() < 8 + 4 + 4 + 1 {
+                        return None;
+                    }
+                    let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
+                    let seq = u32::from_le_bytes(body[8..12].try_into().ok()?);
+                    let len = u32::from_le_bytes(body[12..16].try_into().ok()?) as usize;
+                    if body.len() < 16 + len + 1 {
+                        return None;
+                    }
+                    let data = body[16..16 + len].to_vec();
+                    let is_response = body[16 + len] != 0;
+                    Some(Message::FileData(FileData {
+                        time,
+                        seq,
+                        data,
+                        is_response,
+                    }))
+                }
+                MessageType::TransferFileMissed => {
+                    if body.len() < 8 + 4 {
+                        return None;
+                    }
+                    let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
+                    let seq = u32::from_le_bytes(body[8..12].try_into().ok()?);
+                    Some(Message::FileMissed(FileMissed { time, seq }))
+                }
+                MessageType::TransferBlobStart => {
+                    if body.len() < 8 + 4 {
+                        return None;
+                    }
+                    let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
+                    let len = u32::from_le_bytes(body[8..12].try_into().ok()?);
+                    Some(Message::BlobStart(BlobStart { time, len }))
+                }
+                MessageType::TransferBlobEnd => {
+                    if body.len() < 8 {
+                        return None;
+                    }
+                    let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
+                    Some(Message::BlobEnd(BlobEnd { time }))
+                }
+                MessageType::TransferBlobData => {
+                    if body.len() < 8 + 4 + 4 + 1 {
+                        return None;
+                    }
+                    let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
+                    let seq = u32::from_le_bytes(body[8..12].try_into().ok()?);
+                    let len = u32::from_le_bytes(body[12..16].try_into().ok()?) as usize;
+                    if body.len() < 16 + len + 1 {
+                        return None;
+                    }
+                    let data = body[16..16 + len].to_vec();
+                    let is_response = body[16 + len] != 0;
+                    Some(Message::BlobData(BlobData {
+                        time,
+                        seq,
+                        data,
+                        is_response,
+                    }))
+                }
+                MessageType::TransferBlobMissed => {
+                    if body.len() < 8 + 4 {
+                        return None;
+                    }
+                    let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
+                    let seq = u32::from_le_bytes(body[8..12].try_into().ok()?);
+                    Some(Message::BlobMissed(BlobMissed { time, seq }))
+                }
+                MessageType::TransferBlobComplete => {
+                    if body.len() < 8 {
+                        return None;
+                    }
+                    let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
+                    Some(Message::BlobComplete(BlobComplete { time }))
                 }
                 _ => None,
             }
