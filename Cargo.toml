@@ -1,0 +1,22 @@
+[workspace]
+members = [
+    "task",
+    "data",
+    "network",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+authors = ["loadngo maintainers"]
+license = "MIT"
+
+[workspace.dependencies]
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_Networking_WinSock"] }
+anyhow = "1"
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
