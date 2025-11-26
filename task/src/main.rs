@@ -5,14 +5,15 @@
 
 #![windows_subsystem = "windows"]
 
+mod toolbar;
+mod winutil;
+
 use anyhow::Result;
-use std::{
-    mem::size_of,
-    os::windows::ffi::OsStrExt,
-    ptr::null_mut,
-};
+use std::{mem::size_of, ptr::null_mut};
+use toolbar::{create_toolbar, toggle_keyboard_mode, TOOLBAR_CLASS};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+use winutil::to_wstring;
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::{
     Foundation::{
@@ -30,18 +31,17 @@ use windows::Win32::{
             CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
             GetWindowLongPtrW, LoadCursorW, MoveWindow, PostQuitMessage, RegisterClassExW,
             SendMessageW, SetWindowLongPtrW, ShowWindow, TranslateMessage, CREATESTRUCTW,
-            CW_USEDEFAULT, GWLP_USERDATA, HMENU, HCURSOR, HICON, IDC_ARROW, MSG,
-            SHOW_WINDOW_CMD, SW_HIDE, SW_SHOW, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NCCREATE,
-            WM_NOTIFY, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WNDCLASS_STYLES, WINDOW_EX_STYLE,
-            WINDOW_STYLE, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_OVERLAPPEDWINDOW,
-            WS_TABSTOP, WS_VISIBLE, WS_EX_CLIENTEDGE,
+            CW_USEDEFAULT, GWLP_USERDATA, HMENU, HICON, IDC_ARROW, MSG, SHOW_WINDOW_CMD, SW_HIDE,
+            SW_SHOW, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NCCREATE, WM_NOTIFY, WM_SETFONT,
+            WM_SIZE, WNDCLASSEXW, WNDCLASS_STYLES, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD,
+            WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
+            WS_EX_CLIENTEDGE,
         },
     },
 };
 
 const APP_CLASS: &str = "LoadNgoTaskMainWnd";
 const ID_TAB: isize = 1001;
-const ID_TOOLBAR: isize = 1002;
 const TAB_DAY_PLAN: usize = 0;
 const TAB_PROJECT_PLAN: usize = 1;
 
@@ -153,6 +153,15 @@ unsafe extern "system" fn wndproc(
             }
             LRESULT(0)
         }
+        windows::Win32::UI::WindowsAndMessaging::WM_SYSCOMMAND => {
+            if wparam.0 == windows::Win32::UI::WindowsAndMessaging::SC_KEYMENU.0 as usize {
+                if let Some(state) = get_state(hwnd) {
+                    toggle_keyboard_mode(state.toolbar);
+                }
+                return LRESULT(0);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_NOTIFY => {
             // Tab change
             let nmhdr = &*(lparam.0 as *const NMHDR);
@@ -167,7 +176,15 @@ unsafe extern "system" fn wndproc(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_COMMAND => {
-            // Toolbar button clicks would arrive here; hook as needed.
+            let cmd_id = lparam.0 as i32;
+            match cmd_id {
+                toolbar::TBCREATETASK => info!("Toolbar: New Task"),
+                toolbar::TBSAVEPLAN => info!("Toolbar: Save All"),
+                toolbar::TBMAKEREPORT => info!("Toolbar: Generate Report"),
+                toolbar::TBSYNCHRONIZE => info!("Toolbar: Network Sync"),
+                toolbar::TBPRINT => info!("Toolbar: Print"),
+                _ => {}
+            }
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -227,26 +244,11 @@ unsafe fn create_children(parent: HWND, state: &mut UiState) {
     add_tab(tab, TAB_DAY_PLAN as i32, "Day Plan");
     add_tab(tab, TAB_PROJECT_PLAN as i32, "Project Plan");
 
-    // Placeholder toolbar (static text).
-    let static_class = to_wstring("STATIC");
-    let toolbar_text = to_wstring("Toolbar");
-    state.toolbar = CreateWindowExW(
-        WINDOW_EX_STYLE(0),
-        PCWSTR(static_class.as_ptr()),
-        PCWSTR(toolbar_text.as_ptr()),
-        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0),
-        0,
-        0,
-        100,
-        24,
-        parent,
-        HMENU(ID_TOOLBAR as usize as *mut _),
-        None,
-        None,
-    )
-    .expect("create toolbar placeholder");
+    // Custom, hand-crafted toolbar (legacy look).
+    state.toolbar = create_toolbar(parent, true);
 
     // Placeholder tab children (static controls for now).
+    let static_class = to_wstring("STATIC");
     let day_text = to_wstring("Day Plan View");
     state.tab_children[TAB_DAY_PLAN] = CreateWindowExW(
         WINDOW_EX_STYLE(WS_EX_CLIENTEDGE.0),
@@ -299,9 +301,9 @@ unsafe fn add_tab(tab: HWND, index: i32, label: &str) {
 
 unsafe fn layout_children(state: &UiState) {
     let mut rc: RECT = RECT::default();
-    GetClientRect(state.hwnd, &mut rc);
+    let _ = GetClientRect(state.hwnd, &mut rc);
     let toolbar_height = 32;
-    MoveWindow(
+    let _ = MoveWindow(
         state.toolbar,
         0,
         0,
@@ -309,7 +311,7 @@ unsafe fn layout_children(state: &UiState) {
         toolbar_height,
         true,
     );
-    MoveWindow(
+    let _ = MoveWindow(
         state.tab,
         0,
         toolbar_height,
@@ -319,10 +321,10 @@ unsafe fn layout_children(state: &UiState) {
     );
     // Fit tab children within tab client area.
     let mut tab_rc: RECT = RECT::default();
-    GetClientRect(state.tab, &mut tab_rc);
+    let _ = GetClientRect(state.tab, &mut tab_rc);
     tab_rc.top += 24; // account for tab headers
     for child in state.tab_children.iter() {
-        MoveWindow(
+        let _ = MoveWindow(
             *child,
             4,
             tab_rc.top,
@@ -337,21 +339,14 @@ unsafe fn switch_tab(state: &UiState) {
     let selected = SendMessageW(state.tab, TCM_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i32;
     for (idx, child) in state.tab_children.iter().enumerate() {
         let cmd = if idx as i32 == selected { SW_SHOW } else { SW_HIDE };
-        ShowWindow(*child, SHOW_WINDOW_CMD(cmd.0 as i32));
+        let _ = ShowWindow(*child, SHOW_WINDOW_CMD(cmd.0 as i32));
     }
 }
 
 unsafe fn message_loop() {
     let mut msg = MSG::default();
     while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-        TranslateMessage(&msg);
+        let _ = TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
-}
-
-fn to_wstring(value: &str) -> Vec<u16> {
-    std::ffi::OsStr::new(value)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
 }

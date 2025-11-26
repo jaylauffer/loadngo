@@ -12,3 +12,6 @@ tracing-subscriber.workspace = true
 windows.workspace = true
 data = { path = "../data" }
 network = { path = "../network" }
+
+[build-dependencies]
+embed-resource = "2.4"

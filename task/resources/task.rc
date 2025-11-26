@@ -1,0 +1,16 @@
+#include <windows.h>
+
+#define IDB_TBNEWTASK    218
+#define IDB_TBSAVEPLAN   221
+#define IDB_TBMAKEREPORT 222
+#define IDB_TBTASKSYNCH  223
+#define IDB_TBTRASHCAN   224
+#define IDB_TBPRINT      235
+
+IDB_TBNEWTASK    BITMAP "resources/new_task.bmp"
+IDB_TBSAVEPLAN   BITMAP "resources/save_plan.bmp"
+IDB_TBMAKEREPORT BITMAP "resources/make_report.bmp"
+IDB_TBTASKSYNCH  BITMAP "resources/task_synch.bmp"
+IDB_TBTRASHCAN   BITMAP "resources/trashcan.bmp"
+IDB_TBPRINT      BITMAP "resources/print.bmp"
+
