@@ -84,14 +84,29 @@ pub mod value {
 /// Helpers that mirror bits of ModelUtils and util usage in the C++ code.
 pub mod model_utils {
     use super::types::{Id, TimeStamp};
+    use crate::hash::fnv1a;
+    use std::env;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-    /// Simple, process-local id generator. Replace with deterministic hashing if needed.
+    /// Generate an id using hostname, username, process-local counter, and timestamp.
     pub fn generate_id() -> Id {
-        NEXT_ID.fetch_add(1, Ordering::Relaxed)
+        let counter = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let host = env::var("COMPUTERNAME")
+            .or_else(|_| env::var("HOSTNAME"))
+            .unwrap_or_else(|_| "unknown-host".to_string());
+        let user = env::var("USERNAME")
+            .or_else(|_| env::var("USER"))
+            .unwrap_or_else(|_| "unknown-user".to_string());
+        let now = now_timestamp();
+
+        let mut acc = fnv1a(host.as_bytes(), 0xcbf29ce484222325);
+        acc = fnv1a(user.as_bytes(), acc);
+        acc = fnv1a(&now.to_le_bytes(), acc);
+        acc = fnv1a(&counter.to_le_bytes(), acc);
+        acc
     }
 
     pub fn now_timestamp() -> TimeStamp {
@@ -326,6 +341,121 @@ pub mod netmsg {
     use serde::{Deserialize, Serialize};
     use super::types::Id;
 
+    pub const PACKET_HDR: u32 = 0x6c6e6774;
+    pub const HDR_LEN: usize = 16;
+
+    #[repr(u32)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum MessageType {
+        Empty = 0,
+        UserIntroduction,
+        UserDeparture,
+        RequestGroupTaskSynch,
+        RequestUserTaskSynch,
+        RequestSyncParticipants,
+        RequestProperties,
+        RequestTask,
+        RequestMoveChain,
+        ReportDiscrepancies,
+        EntityInfo,
+        EntityMove,
+        EntityDelete,
+        PropertyInfo,
+        SuggestConsolidation,
+        ConcludeSync,
+        Chat,
+        PrivateChat,
+        TransferFileStart,
+        TransferFileEnd,
+        TransferFileData,
+        TransferFileMissed,
+        TransferBlobStart,
+        TransferBlobEnd,
+        TransferBlobData,
+        TransferBlobMissed,
+        TransferBlobComplete,
+        RequestHashes,
+        RequestTasks,
+        MessageCount,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Header {
+        pub tag: u32,
+        pub msg_type: MessageType,
+        pub is_response: u32,
+        pub length: u32,
+    }
+
+    impl Header {
+        pub fn new(msg_type: MessageType, is_response: bool, length: u32) -> Self {
+            Self {
+                tag: PACKET_HDR,
+                msg_type,
+                is_response: if is_response { 1 } else { 0 },
+                length,
+            }
+        }
+
+        pub fn to_bytes(self) -> [u8; HDR_LEN] {
+            let mut buf = [0u8; HDR_LEN];
+            buf[0..4].copy_from_slice(&self.tag.to_le_bytes());
+            buf[4..8].copy_from_slice(&(self.msg_type as u32).to_le_bytes());
+            buf[8..12].copy_from_slice(&self.is_response.to_le_bytes());
+            buf[12..16].copy_from_slice(&self.length.to_le_bytes());
+            buf
+        }
+
+        pub fn from_bytes(buf: &[u8]) -> Option<Self> {
+            if buf.len() < HDR_LEN {
+                return None;
+            }
+            let tag = u32::from_le_bytes(buf[0..4].try_into().ok()?);
+            let msg_type_val = u32::from_le_bytes(buf[4..8].try_into().ok()?);
+            let is_response = u32::from_le_bytes(buf[8..12].try_into().ok()?);
+            let length = u32::from_le_bytes(buf[12..16].try_into().ok()?);
+            let msg_type = match msg_type_val {
+                0 => MessageType::Empty,
+                1 => MessageType::UserIntroduction,
+                2 => MessageType::UserDeparture,
+                3 => MessageType::RequestGroupTaskSynch,
+                4 => MessageType::RequestUserTaskSynch,
+                5 => MessageType::RequestSyncParticipants,
+                6 => MessageType::RequestProperties,
+                7 => MessageType::RequestTask,
+                8 => MessageType::RequestMoveChain,
+                9 => MessageType::ReportDiscrepancies,
+                10 => MessageType::EntityInfo,
+                11 => MessageType::EntityMove,
+                12 => MessageType::EntityDelete,
+                13 => MessageType::PropertyInfo,
+                14 => MessageType::SuggestConsolidation,
+                15 => MessageType::ConcludeSync,
+                16 => MessageType::Chat,
+                17 => MessageType::PrivateChat,
+                18 => MessageType::TransferFileStart,
+                19 => MessageType::TransferFileEnd,
+                20 => MessageType::TransferFileData,
+                21 => MessageType::TransferFileMissed,
+                22 => MessageType::TransferBlobStart,
+                23 => MessageType::TransferBlobEnd,
+                24 => MessageType::TransferBlobData,
+                25 => MessageType::TransferBlobMissed,
+                26 => MessageType::TransferBlobComplete,
+                27 => MessageType::RequestHashes,
+                28 => MessageType::RequestTasks,
+                29 => MessageType::MessageCount,
+                _ => return None,
+            };
+            Some(Self {
+                tag,
+                msg_type,
+                is_response,
+                length,
+            })
+        }
+    }
+
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct SyncRequest {
         pub sync_id: Id,
@@ -356,11 +486,89 @@ pub mod netmsg {
         Delete(EntityRequest),
         Suggest(SuggestConsolidation),
     }
+
+    impl Message {
+        pub fn to_bytes(&self, msg_type: MessageType) -> Vec<u8> {
+            let mut payload = Vec::new();
+            match self {
+                Message::Sync(s) => {
+                    payload.extend_from_slice(&s.sync_id.to_le_bytes());
+                    payload.push(if s.is_response { 1 } else { 0 });
+                }
+                Message::Entity(e)
+                | Message::Properties(e)
+                | Message::Move(e)
+                | Message::Delete(e) => {
+                    payload.extend_from_slice(&e.origin_id.to_le_bytes());
+                    payload.extend_from_slice(&e.sync_id.to_le_bytes());
+                    payload.extend_from_slice(&e.doid.to_le_bytes());
+                    payload.push(if e.is_response { 1 } else { 0 });
+                }
+                Message::Suggest(s) => {
+                    payload.extend_from_slice(&s.sync_id.to_le_bytes());
+                    payload.extend_from_slice(&s.consolidated_id.to_le_bytes());
+                    payload.push(if s.is_response { 1 } else { 0 });
+                }
+            }
+            let header = Header::new(msg_type, matches!(self, Message::Sync(SyncRequest { is_response: true, .. }) | Message::Entity(EntityRequest { is_response: true, .. }) | Message::Properties(EntityRequest { is_response: true, .. }) | Message::Move(EntityRequest { is_response: true, .. }) | Message::Delete(EntityRequest { is_response: true, .. }) | Message::Suggest(SuggestConsolidation { is_response: true, .. })), (HDR_LEN + payload.len()) as u32);
+            let mut buf = header.to_bytes().to_vec();
+            buf.extend_from_slice(&payload);
+            buf
+        }
+
+        pub fn from_bytes(buf: &[u8], msg_type: MessageType) -> Option<Self> {
+            if buf.len() < HDR_LEN {
+                return None;
+            }
+            let body = &buf[HDR_LEN..];
+            match msg_type {
+                MessageType::RequestSyncParticipants => {
+                    if body.len() < 9 {
+                        return None;
+                    }
+                    let sync_id = Id::from_le_bytes(body[0..8].try_into().ok()?);
+                    let is_response = body[8] != 0;
+                    Some(Message::Sync(SyncRequest { sync_id, is_response }))
+                }
+                MessageType::EntityInfo
+                | MessageType::EntityMove
+                | MessageType::EntityDelete
+                | MessageType::PropertyInfo => {
+                    if body.len() < 25 {
+                        return None;
+                    }
+                    let origin_id = Id::from_le_bytes(body[0..8].try_into().ok()?);
+                    let sync_id = Id::from_le_bytes(body[8..16].try_into().ok()?);
+                    let doid = Id::from_le_bytes(body[16..24].try_into().ok()?);
+                    let is_response = body[24] != 0;
+                    Some(Message::Entity(EntityRequest {
+                        origin_id,
+                        sync_id,
+                        doid,
+                        is_response,
+                    }))
+                }
+                MessageType::SuggestConsolidation => {
+                    if body.len() < 17 {
+                        return None;
+                    }
+                    let sync_id = Id::from_le_bytes(body[0..8].try_into().ok()?);
+                    let consolidated_id = Id::from_le_bytes(body[8..16].try_into().ok()?);
+                    let is_response = body[16] != 0;
+                    Some(Message::Suggest(SuggestConsolidation {
+                        sync_id,
+                        consolidated_id,
+                        is_response,
+                    }))
+                }
+                _ => None,
+            }
+        }
+    }
 }
 
 /// Minimal task comparison helpers (placeholder until full logic is ported).
 pub mod task_compare {
-    use super::entity::Entity;
     use super::hash::fnv1a;
     use super::task::Task;
     use std::cmp::Ordering;
@@ -406,20 +614,20 @@ pub mod task_compare {
             for field in self.fields.iter() {
                 let ord = match field {
                     SortField::TaskId => compare_u64(lhs.entity.id, rhs.entity.id),
-                    SortField::DueDate => compare_u64(lhs.entity.created, rhs.entity.created),
-                    SortField::Priority => Ordering::Equal, // placeholder, add when priority exists
+                    SortField::DueDate => compare_u64(lhs.due_date, rhs.due_date),
+                    SortField::Priority => lhs.priority.cmp(&rhs.priority),
                     SortField::CreateDate => compare_u64(lhs.entity.created, rhs.entity.created),
-                    SortField::EstimatedDuration => Ordering::Equal, // placeholder
-                    SortField::StartDate => Ordering::Equal,        // placeholder
+                    SortField::EstimatedDuration => compare_u64(lhs.estimated_duration, rhs.estimated_duration),
+                    SortField::StartDate => compare_u64(lhs.scheduled_start, rhs.scheduled_start),
                     SortField::TaskTitle => compare_str(
                         lhs.properties
                             .get("title")
                             .and_then(as_str)
-                            .unwrap_or(""),
+                            .unwrap_or(&lhs.name),
                         rhs.properties
                             .get("title")
                             .and_then(as_str)
-                            .unwrap_or(""),
+                            .unwrap_or(&rhs.name),
                     ),
                 };
                 if ord != Ordering::Equal {
@@ -468,14 +676,13 @@ pub mod task_compare {
 pub mod undo {
     use crate::task::Task;
     use crate::value::Value;
-    use crate::entity::Entity;
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub enum Command {
-        AddEntity { entity: Entity },
-        RemoveEntity { id: u64 },
+        AddTask { task: Task },
+        RemoveTask { task: Task },
         UpdateProperty { id: u64, key: String, old: Value, new: Value },
     }
 
@@ -494,12 +701,11 @@ pub mod undo {
         pub fn undo(&mut self, tasks: &mut HashMap<u64, Task>) -> Option<Command> {
             if let Some(cmd) = self.past.pop() {
                 match &cmd {
-                    Command::AddEntity { entity } => {
-                        tasks.remove(&entity.id);
+                    Command::AddTask { task } => {
+                        tasks.remove(&task.entity.id);
                     }
-                    Command::RemoveEntity { id } => {
-                        // cannot restore without stored entity; in practice store the entity
-                        let _ = id;
+                    Command::RemoveTask { task } => {
+                        tasks.insert(task.entity.id, task.clone());
                     }
                     Command::UpdateProperty { id, key, old, .. } => {
                         if let Some(task) = tasks.get_mut(id) {
@@ -517,17 +723,11 @@ pub mod undo {
         pub fn redo(&mut self, tasks: &mut HashMap<u64, Task>) -> Option<Command> {
             if let Some(cmd) = self.future.pop() {
                 match &cmd {
-                    Command::AddEntity { entity } => {
-                        tasks.insert(entity.id, Task {
-                            entity: entity.clone(),
-                            name: String::new(),
-                            description: None,
-                            parent: None,
-                            properties: HashMap::new(),
-                        });
+                    Command::AddTask { task } => {
+                        tasks.insert(task.entity.id, task.clone());
                     }
-                    Command::RemoveEntity { id } => {
-                        tasks.remove(id);
+                    Command::RemoveTask { task } => {
+                        tasks.remove(&task.entity.id);
                     }
                     Command::UpdateProperty { id, key, new, .. } => {
                         if let Some(task) = tasks.get_mut(id) {
@@ -584,6 +784,10 @@ pub mod task {
         pub name: String,
         pub description: Option<String>,
         pub parent: Option<Id>,
+        pub priority: i32,
+        pub due_date: u64,
+        pub scheduled_start: u64,
+        pub estimated_duration: u64,
         pub properties: HashMap<String, Value>,
     }
 
@@ -594,6 +798,10 @@ pub mod task {
                 name: name.into(),
                 description: None,
                 parent: None,
+                priority: 0,
+                due_date: 0,
+                scheduled_start: 0,
+                estimated_duration: 0,
                 properties: HashMap::new(),
             }
         }
