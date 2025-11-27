@@ -1,4 +1,4 @@
-use windows::Win32::UI::WindowsAndMessaging::MAKELONG as WM_MAKELONG;
+use std::os::windows::ffi::OsStrExt;
 
 pub fn to_wstring(value: &str) -> Vec<u16> {
     std::ffi::OsStr::new(value)
@@ -8,5 +8,5 @@ pub fn to_wstring(value: &str) -> Vec<u16> {
 }
 
 pub fn MAKELONG(lo: i32, hi: i32) -> i32 {
-    WM_MAKELONG(lo as u16, hi as u16) as i32
+    ((hi & 0xffff) << 16) | (lo & 0xffff)
 }

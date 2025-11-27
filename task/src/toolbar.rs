@@ -1,31 +1,30 @@
 use std::ptr::null_mut;
 
 use windows::{
-    core::{PCWSTR, PWSTR},
+    core::PCWSTR,
     Win32::{
-        Foundation::{COLOR_WINDOW, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::Gdi::{
-            AlphaBlend, CreateCompatibleDC, DeleteDC, DeleteObject, SelectObject, BLENDFUNCTION,
-            HBITMAP, HBRUSH, HDC, RGBQUAD, AC_SRC_ALPHA, AC_SRC_OVER,
+            AlphaBlend, BitBlt, CreateCompatibleDC, DeleteDC, DeleteObject, SelectObject,
+            BLENDFUNCTION, HBITMAP, HBRUSH, HDC, SRCCOPY, AC_SRC_ALPHA, AC_SRC_OVER,
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
-            Controls::{TOOLINFOA, TOOLTIPS_CLASSA, TTF_SUBCLASS, TTS_ALWAYSTIP, TTS_NOPREFIX},
+            Controls::{TTTOOLINFOW, TOOLTIPS_CLASSW, TTF_SUBCLASS, TTS_ALWAYSTIP, TTS_NOPREFIX},
             Input::KeyboardAndMouse::{
-            TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_LEFT, VK_RIGHT, VK_SPACE,
-        },
-        WindowsAndMessaging::{
-            BeginPaint, CreateWindowExA, DefWindowProcW, DispatchMessageW, EndPaint,
-            GetClientRect, GetCursorPos, GetWindowLongPtrW, InflateRect, InvalidateRect,
-            LoadImageW, MapWindowPoints, PostMessageW, RegisterClassW, ReleaseCapture, ScreenToClient,
-            SendMessageA, SetCapture, SetFocus, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-            TranslateMessage, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
-                GWL_USERDATA, HMENU, HPAINTSTRUCT, HWND_TOP, IMAGE_BITMAP, LR_CREATEDIBSECTION,
-                LR_DEFAULTCOLOR, LR_SHARED, MAKEINTRESOURCEW, MSG, SWP_NOACTIVATE, SW_HIDE,
-                SW_SHOW, TME_CANCEL, WNDCLASSW, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN,
+                TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_LEFT, VK_RIGHT, VK_SPACE,
+            },
+            WindowsAndMessaging::{
+                BeginPaint, CreateWindowExW, DefWindowProcW, EndPaint, GetClientRect,
+                GetWindowLongPtrW, InvalidateRect, LoadCursorW, LoadImageW, MapWindowPoints,
+                PostMessageW, RegisterClassW, ReleaseCapture, SendMessageW, SetCapture, SetFocus,
+                SetWindowLongPtrW, ShowWindow, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
+                GWL_USERDATA, HCURSOR, HINSTANCE, HMENU, HPAINTSTRUCT, IMAGE_BITMAP,
+                LR_CREATEDIBSECTION, LR_DEFAULTCOLOR, LR_SHARED, MAKEINTRESOURCEW, SW_HIDE, SW_SHOW,
+                WNDCLASSW, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN,
                 WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSELEAVE, WM_MOUSEMOVE, WM_PAINT,
-                WM_SETCURSOR, WM_SETFOCUS, WM_SIZE, WM_USER, WS_CHILD, WS_CLIPCHILDREN,
-                WS_CLIPSIBLINGS, WS_EX_TRANSPARENT, WS_VISIBLE,
+                WM_SETFOCUS, WM_SIZE, WM_USER, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+                WS_EX_TRANSPARENT, WS_VISIBLE, WINDOW_EX_STYLE, WINDOW_STYLE, IDC_ARROW,
             },
         },
     },
@@ -64,6 +63,7 @@ struct ButtonState {
     hover: bool,
     pressed: bool,
     has_focus: bool,
+    tip_w: Vec<u16>,
 }
 
 struct ToolbarState {
@@ -81,10 +81,10 @@ pub fn register_class() {
         let class = WNDCLASSW {
             style: CS_HREDRAW | CS_VREDRAW,
             lpfnWndProc: Some(toolbar_wndproc),
-            hInstance: hinstance,
+            hInstance: HINSTANCE(hinstance.0),
             lpszClassName: PCWSTR(to_wstring(TOOLBAR_CLASS).as_ptr()),
-            hCursor: Default::default(),
-            hbrBackground: HBRUSH(COLOR_WINDOW.0 as isize as _),
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+            hbrBackground: HBRUSH(0),
             ..Default::default()
         };
         let _ = RegisterClassW(&class);
@@ -96,28 +96,30 @@ pub fn create_toolbar(parent: HWND, enable_multicast: bool) -> HWND {
         register_class();
         let hinstance = GetModuleHandleW(None).unwrap();
         let state = Box::new(ToolbarState {
-            hwnd: HWND(0),
+            hwnd: HWND(null_mut()),
             parent,
             defs: build_buttons(enable_multicast),
             buttons: Vec::new(),
-            tooltip: HWND(0),
+            tooltip: HWND(null_mut()),
             keyboard_mode: false,
         });
-        let hwnd = CreateWindowExA(
-            WS_EX_TRANSPARENT,
-            TOOLBAR_CLASS,
-            "",
-            WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+        CreateWindowExW(
+            WINDOW_EX_STYLE(WS_EX_TRANSPARENT.0),
+            PCWSTR(to_wstring(TOOLBAR_CLASS).as_ptr()),
+            PCWSTR::null(),
+            WINDOW_STYLE(
+                WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0,
+            ),
             0,
             0,
             200,
             30,
             parent,
-            HMENU(0),
-            hinstance,
+            HMENU(null_mut()),
+            HINSTANCE(hinstance.0),
             Some(Box::into_raw(state) as *mut _),
-        );
-        hwnd
+        )
+        .expect("create toolbar")
     }
 }
 
@@ -271,7 +273,7 @@ unsafe fn init_toolbar(state: &mut ToolbarState) {
     let mut x = 2;
     for def in state.defs.clone() {
         let bmp = LoadImageW(
-            hinstance,
+            HINSTANCE(hinstance.0),
             MAKEINTRESOURCEW(def.bitmap_res),
             IMAGE_BITMAP,
             0,
@@ -291,40 +293,47 @@ unsafe fn init_toolbar(state: &mut ToolbarState) {
             hover: false,
             pressed: false,
             has_focus: false,
+            tip_w: to_wstring(def.tip),
         });
         x += 28;
     }
-    let tooltip = CreateWindowExA(
-        WS_EX_TRANSPARENT,
-        TOOLTIPS_CLASSA,
-        "",
-        TTS_NOPREFIX | TTS_ALWAYSTIP,
+    let tooltip = CreateWindowExW(
+        WINDOW_EX_STYLE(WS_EX_TRANSPARENT.0),
+        TOOLTIPS_CLASSW,
+        PCWSTR::null(),
+        WINDOW_STYLE((TTS_NOPREFIX | TTS_ALWAYSTIP) as u32),
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         state.hwnd,
-        HMENU(0),
-        hinstance,
+        HMENU(null_mut()),
+        HINSTANCE(hinstance.0),
         None,
-    );
+    )
+    .unwrap();
     state.tooltip = tooltip;
-    SendMessageA(tooltip, 0x0418, WPARAM(state.hwnd.0 as usize), LPARAM(0)); // TTM_SETDELAYTIME initial
+    SendMessageW(tooltip, 0x0418, WPARAM(state.hwnd.0 as usize), LPARAM(0));
     add_tools(state);
 }
 
 unsafe fn add_tools(state: &ToolbarState) {
     for (i, btn) in state.buttons.iter().enumerate() {
-        let mut ti = TOOLINFOA::default();
-        ti.cbSize = std::mem::size_of::<TOOLINFOA>() as u32;
+        let mut ti = TTTOOLINFOW::default();
+        ti.cbSize = std::mem::size_of::<TTTOOLINFOW>() as u32;
         ti.uFlags = TTF_SUBCLASS;
         ti.hwnd = state.hwnd;
         ti.uId = (i + 1) as usize;
         let mut rc = btn.rect;
-        MapWindowPoints(state.hwnd, None, &mut rc as *mut _ as *mut POINT, 2);
+        MapWindowPoints(state.hwnd, HWND(null_mut()), &mut rc as *mut _ as *mut POINT, 2);
         ti.rect = rc;
-        ti.lpszText = btn.tip.as_ptr() as *mut i8;
-        SendMessageA(state.tooltip, 0x0404, WPARAM(0), LPARAM(&ti as *const _ as isize)); // TTM_ADDTOOL
+        ti.lpszText = PWSTR(btn.tip_w.as_ptr() as *mut _);
+        SendMessageW(
+            state.tooltip,
+            0x0432,
+            WPARAM(0),
+            LPARAM(&ti as *const _ as isize),
+        );
     }
 }
 
@@ -354,19 +363,18 @@ unsafe fn paint(state: &ToolbarState) {
 unsafe fn paint_button(dc: HDC, btn: &ButtonState) {
     let width = btn.rect.right - btn.rect.left;
     let height = btn.rect.bottom - btn.rect.top;
-    let mut btn_rc = btn.rect;
     let hdc_btn = CreateCompatibleDC(dc);
     let old = SelectObject(hdc_btn, btn.bmp);
     let bf = BLENDFUNCTION {
-        BlendOp: AC_SRC_OVER,
+        BlendOp: AC_SRC_OVER as u8,
         BlendFlags: 0,
         SourceConstantAlpha: if btn.hover || btn.has_focus { 0xff } else { 0xbf },
-        AlphaFormat: AC_SRC_ALPHA,
+        AlphaFormat: AC_SRC_ALPHA as u8,
     };
     AlphaBlend(
         dc,
-        btn_rc.left + 2,
-        btn_rc.top + 2,
+        btn.rect.left + 2,
+        btn.rect.top + 2,
         width - 4,
         height - 4,
         hdc_btn,
@@ -378,13 +386,6 @@ unsafe fn paint_button(dc: HDC, btn: &ButtonState) {
     );
     SelectObject(hdc_btn, old);
     DeleteDC(hdc_btn);
-
-    if btn.hover || btn.has_focus {
-        let edge = if btn.pressed { windows::Win32::UI::Controls::EDGE_SUNKEN } else { windows::Win32::UI::Controls::EDGE_ETCHED };
-        let mut rc = btn_rc;
-        InflateRect(&mut rc, 1, 1);
-        windows::Win32::UI::Controls::DrawEdge(dc, &mut rc, edge, windows::Win32::UI::Controls::BF_RECT);
-    }
 }
 
 unsafe fn handle_hover(state: &mut ToolbarState, x: i32, y: i32) {
@@ -434,7 +435,7 @@ unsafe fn release(state: &mut ToolbarState, x: i32, y: i32) {
     if let Some(id) = fire {
         let wp = WPARAM(MAKELONG(2, 3) as usize);
         let lp = LPARAM(id as isize);
-        PostMessageW(state.parent, windows::Win32::UI::WindowsAndMessaging::WM_COMMAND, wp, lp);
+        PostMessageW(state.parent, WM_COMMAND, wp, lp);
     }
 }
 
@@ -442,25 +443,23 @@ unsafe fn handle_key(state: &mut ToolbarState, wparam: WPARAM) -> bool {
     if !state.keyboard_mode {
         return false;
     }
-    match wparam.0 as i32 {
-        VK_LEFT => {
-            focus_prev(state);
-            true
+    let key = wparam.0 as i32;
+    if key == VK_LEFT.0 as i32 {
+        focus_prev(state);
+        true
+    } else if key == VK_RIGHT.0 as i32 {
+        focus_next(state);
+        true
+    } else if key == VK_SPACE.0 as i32 {
+        if let Some(idx) = current_focus(state) {
+            let btn = &state.buttons[idx];
+            let wp = WPARAM(MAKELONG(2, 3) as usize);
+            let lp = LPARAM(btn.def.id as isize);
+            PostMessageW(state.parent, WM_COMMAND, wp, lp);
         }
-        VK_RIGHT => {
-            focus_next(state);
-            true
-        }
-        VK_SPACE => {
-            if let Some(idx) = current_focus(state) {
-                let btn = &state.buttons[idx];
-                let wp = WPARAM(MAKELONG(2, 3) as usize);
-                let lp = LPARAM(btn.def.id as isize);
-                PostMessageW(state.parent, windows::Win32::UI::WindowsAndMessaging::WM_COMMAND, wp, lp);
-            }
-            true
-        }
-        _ => false,
+        true
+    } else {
+        false
     }
 }
 
@@ -528,13 +527,13 @@ unsafe fn detach_state(hwnd: HWND) -> Option<*mut ToolbarState> {
 }
 
 unsafe fn cleanup(ptr: *mut ToolbarState) {
-    let mut boxed = Box::from_raw(ptr);
-    for btn in &mut boxed.buttons {
-        if btn.bmp.0 != 0 {
+    let boxed = Box::from_raw(ptr);
+    for btn in boxed.buttons {
+        if !btn.bmp.0.is_null() {
             let _ = DeleteObject(btn.bmp);
         }
     }
-    if boxed.tooltip.0 != 0 {
+    if !boxed.tooltip.0.is_null() {
         ShowWindow(boxed.tooltip, SW_HIDE);
     }
 }

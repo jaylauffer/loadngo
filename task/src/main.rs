@@ -154,7 +154,7 @@ unsafe extern "system" fn wndproc(
             LRESULT(0)
         }
         windows::Win32::UI::WindowsAndMessaging::WM_SYSCOMMAND => {
-            if wparam.0 == windows::Win32::UI::WindowsAndMessaging::SC_KEYMENU.0 as usize {
+            if wparam.0 == windows::Win32::UI::WindowsAndMessaging::SC_KEYMENU as usize {
                 if let Some(state) = get_state(hwnd) {
                     toggle_keyboard_mode(state.toolbar);
                 }
