@@ -6,51 +6,41 @@
 #![windows_subsystem = "windows"]
 
 mod toolbar;
+mod tabs;
 mod winutil;
 
 use anyhow::Result;
 use std::{mem::size_of, ptr::null_mut};
-use toolbar::{create_toolbar, toggle_keyboard_mode};
+use tabs::{add_tab, create_tab_host, toggle_toolbar_keyboard_mode};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use winutil::to_wstring;
-use windows::core::{PCWSTR, PWSTR};
+use windows::core::PCWSTR;
 use windows::Win32::{
-    Foundation::{
-        GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM,
-    },
-    Graphics::Gdi::{GetStockObject, HBRUSH, DEFAULT_GUI_FONT},
+    Foundation::{GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
+    Graphics::Gdi::HBRUSH,
     System::LibraryLoader::GetModuleHandleW,
     UI::{
-        Controls::{
-            InitCommonControlsEx, ICC_STANDARD_CLASSES, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX,
-            NMHDR, TCITEMW, TCN_SELCHANGE, TCIF_TEXT, TCM_GETCURSEL, TCM_INSERTITEMW,
-            WC_TABCONTROLW,
-        },
+        Controls::{InitCommonControlsEx, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX},
         WindowsAndMessaging::{
             CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
             GetWindowLongPtrW, LoadCursorW, MoveWindow, PostQuitMessage, RegisterClassExW,
-            SendMessageW, SetWindowLongPtrW, ShowWindow, TranslateMessage, CREATESTRUCTW,
-            CW_USEDEFAULT, GWLP_USERDATA, HMENU, HICON, IDC_ARROW, MSG, SHOW_WINDOW_CMD, SW_HIDE,
-            SW_SHOW, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NCCREATE, WM_NOTIFY, WM_SETFONT,
-            WM_SIZE, WNDCLASSEXW, WNDCLASS_STYLES, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD,
-            WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
-            WS_EX_CLIENTEDGE,
+            SetWindowLongPtrW, ShowWindow, TranslateMessage, CREATESTRUCTW, CW_USEDEFAULT,
+            GWLP_USERDATA, HMENU, HICON, IDC_ARROW, MSG, SW_SHOW, WM_COMMAND, WM_CREATE,
+            WM_DESTROY, WM_NCCREATE, WM_SIZE, WNDCLASSEXW, WNDCLASS_STYLES, WINDOW_EX_STYLE,
+            WINDOW_STYLE, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_OVERLAPPEDWINDOW,
+            WS_VISIBLE, WS_EX_CLIENTEDGE,
         },
     },
 };
 
 const APP_CLASS: &str = "LoadNgoTaskMainWnd";
-const ID_TAB: isize = 1001;
-const TAB_DAY_PLAN: usize = 0;
-const TAB_PROJECT_PLAN: usize = 1;
 
 #[derive(Default)]
 struct UiState {
     hwnd: HWND,
-    tab: HWND,
-    toolbar: HWND,
-    tab_children: [HWND; 2],
+    tab_host: HWND,
+    tab_children: Vec<HWND>,
 }
 
 fn main() -> Result<()> {
@@ -74,7 +64,7 @@ fn main() -> Result<()> {
 unsafe fn init_common_controls() {
     let icc = INITCOMMONCONTROLSEX {
         dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
-        dwICC: ICC_TAB_CLASSES | ICC_STANDARD_CLASSES,
+        dwICC: ICC_STANDARD_CLASSES,
     };
     let _ = InitCommonControlsEx(&icc);
 }
@@ -156,20 +146,7 @@ unsafe extern "system" fn wndproc(
         windows::Win32::UI::WindowsAndMessaging::WM_SYSCOMMAND => {
             if wparam.0 == windows::Win32::UI::WindowsAndMessaging::SC_KEYMENU as usize {
                 if let Some(state) = get_state(hwnd) {
-                    toggle_keyboard_mode(state.toolbar);
-                }
-                return LRESULT(0);
-            }
-            DefWindowProcW(hwnd, msg, wparam, lparam)
-        }
-        WM_NOTIFY => {
-            // Tab change
-            let nmhdr = &*(lparam.0 as *const NMHDR);
-            if nmhdr.hwndFrom == get_state(hwnd).map(|s| s.tab).unwrap_or_default()
-                && nmhdr.code as u32 == TCN_SELCHANGE
-            {
-                if let Some(state) = get_state(hwnd) {
-                    switch_tab(state);
+                    toggle_toolbar_keyboard_mode(state.tab_host);
                 }
                 return LRESULT(0);
             }
@@ -214,43 +191,12 @@ unsafe fn detach_state(hwnd: HWND) -> Option<*mut UiState> {
 }
 
 unsafe fn create_children(parent: HWND, state: &mut UiState) {
-    let font = GetStockObject(DEFAULT_GUI_FONT);
-    let tab_class = WC_TABCONTROLW;
-    let tab = CreateWindowExW(
-        WINDOW_EX_STYLE(WS_EX_CLIENTEDGE.0),
-        tab_class,
-        PWSTR::null(),
-        WINDOW_STYLE(
-            WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPSIBLINGS.0 | WS_CLIPCHILDREN.0 | WS_TABSTOP.0,
-        ),
-        0,
-        0,
-        100,
-        100,
-        parent,
-        HMENU(ID_TAB as usize as *mut _),
-        None,
-        None,
-    )
-    .expect("create tab control");
-    state.tab = tab;
-    SendMessageW(
-        tab,
-        WM_SETFONT,
-        WPARAM(font.0 as usize),
-        LPARAM(1),
-    );
-
-    add_tab(tab, TAB_DAY_PLAN as i32, "Day Plan");
-    add_tab(tab, TAB_PROJECT_PLAN as i32, "Project Plan");
-
-    // Custom, hand-crafted toolbar (legacy look).
-    state.toolbar = create_toolbar(parent, true);
+    state.tab_host = create_tab_host(parent, true);
 
     // Placeholder tab children (static controls for now).
     let static_class = to_wstring("STATIC");
     let day_text = to_wstring("Day Plan View");
-    state.tab_children[TAB_DAY_PLAN] = CreateWindowExW(
+    let day = CreateWindowExW(
         WINDOW_EX_STYLE(WS_EX_CLIENTEDGE.0),
         PCWSTR(static_class.as_ptr()),
         PCWSTR(day_text.as_ptr()),
@@ -259,14 +205,14 @@ unsafe fn create_children(parent: HWND, state: &mut UiState) {
         0,
         100,
         100,
-        tab,
+        state.tab_host,
         HMENU(null_mut()),
         None,
         None,
     )
     .expect("create day plan view");
     let proj_text = to_wstring("Project Plan View");
-    state.tab_children[TAB_PROJECT_PLAN] = CreateWindowExW(
+    let proj = CreateWindowExW(
         WINDOW_EX_STYLE(WS_EX_CLIENTEDGE.0),
         PCWSTR(static_class.as_ptr()),
         PCWSTR(proj_text.as_ptr()),
@@ -275,72 +221,31 @@ unsafe fn create_children(parent: HWND, state: &mut UiState) {
         0,
         100,
         100,
-        tab,
+        state.tab_host,
         HMENU(null_mut()),
         None,
         None,
     )
     .expect("create project plan view");
 
-    layout_children(state);
-    switch_tab(state);
-}
+    state.tab_children = vec![day, proj];
+    add_tab(state.tab_host, "Day Plan", day);
+    add_tab(state.tab_host, "Project Plan", proj);
 
-unsafe fn add_tab(tab: HWND, index: i32, label: &str) {
-    let mut tci = TCITEMW::default();
-    tci.mask = TCIF_TEXT;
-    let txt = to_wstring(label);
-    tci.pszText = PWSTR(txt.as_ptr() as _);
-    let _ = SendMessageW(
-        tab,
-        TCM_INSERTITEMW,
-        WPARAM(index as usize),
-        LPARAM(&tci as *const _ as isize),
-    );
+    layout_children(state);
 }
 
 unsafe fn layout_children(state: &UiState) {
     let mut rc: RECT = RECT::default();
     let _ = GetClientRect(state.hwnd, &mut rc);
-    let toolbar_height = 32;
     let _ = MoveWindow(
-        state.toolbar,
+        state.tab_host,
         0,
         0,
         rc.right,
-        toolbar_height,
+        rc.bottom,
         true,
     );
-    let _ = MoveWindow(
-        state.tab,
-        0,
-        toolbar_height,
-        rc.right,
-        rc.bottom - toolbar_height,
-        true,
-    );
-    // Fit tab children within tab client area.
-    let mut tab_rc: RECT = RECT::default();
-    let _ = GetClientRect(state.tab, &mut tab_rc);
-    tab_rc.top += 24; // account for tab headers
-    for child in state.tab_children.iter() {
-        let _ = MoveWindow(
-            *child,
-            4,
-            tab_rc.top,
-            tab_rc.right - 8,
-            tab_rc.bottom - tab_rc.top - 4,
-            true,
-        );
-    }
-}
-
-unsafe fn switch_tab(state: &UiState) {
-    let selected = SendMessageW(state.tab, TCM_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i32;
-    for (idx, child) in state.tab_children.iter().enumerate() {
-        let cmd = if idx as i32 == selected { SW_SHOW } else { SW_HIDE };
-        let _ = ShowWindow(*child, SHOW_WINDOW_CMD(cmd.0 as i32));
-    }
 }
 
 unsafe fn message_loop() {
