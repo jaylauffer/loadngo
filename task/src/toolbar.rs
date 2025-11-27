@@ -6,25 +6,26 @@ use windows::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::Gdi::{
             AlphaBlend, BeginPaint, CreateCompatibleDC, DeleteDC, DeleteObject, EndPaint,
-            InvalidateRect, MapWindowPoints, SelectObject, BLENDFUNCTION, HBITMAP, HBRUSH, HDC,
-            PAINTSTRUCT, AC_SRC_ALPHA, AC_SRC_OVER,
+            FillRect, GetStockObject, InvalidateRect, MapWindowPoints, SelectObject,
+            BLENDFUNCTION, HBITMAP, HBRUSH, HDC, PAINTSTRUCT, WHITE_BRUSH, AC_SRC_ALPHA,
+            AC_SRC_OVER,
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
             Controls::{TTTOOLINFOW, TOOLTIPS_CLASSW, TTF_SUBCLASS, TTS_ALWAYSTIP, TTS_NOPREFIX},
             Input::KeyboardAndMouse::{
-                TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_LEFT, VK_RIGHT, VK_SPACE, SetCapture, ReleaseCapture, SetFocus
+                TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_LEFT, VK_RIGHT, VK_SPACE,
+                ReleaseCapture, SetCapture, SetFocus,
             },
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW, LoadCursorW,
-                LoadImageW, PostMessageW, RegisterClassW, SendMessageW,
-                SetWindowLongPtrW, ShowWindow, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
-                CW_USEDEFAULT, GWL_USERDATA, HCURSOR, HMENU, IMAGE_BITMAP, LR_CREATEDIBSECTION,
-                LR_DEFAULTCOLOR, LR_SHARED, SW_HIDE, SW_SHOW, WNDCLASSW, WM_COMMAND, WM_CREATE,
-                WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN,
-                WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_SETFOCUS, WM_SIZE, WM_USER, WS_CHILD,
-                WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_TRANSPARENT, WS_VISIBLE, WINDOW_EX_STYLE,
-                WINDOW_STYLE, IDC_ARROW,
+                LoadImageW, PostMessageW, RegisterClassW, SendMessageW, SetWindowLongPtrW,
+                ShowWindow, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWL_USERDATA,
+                HCURSOR, HMENU, IMAGE_BITMAP, LR_CREATEDIBSECTION, LR_DEFAULTCOLOR, LR_SHARED,
+                SW_HIDE, WNDCLASSW, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN,
+                WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_SETFOCUS,
+                WM_SIZE, WM_USER, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_TRANSPARENT,
+                WS_VISIBLE, WINDOW_EX_STYLE, WINDOW_STYLE, IDC_ARROW,
             },
         },
     },
@@ -209,8 +210,8 @@ unsafe extern "system" fn toolbar_wndproc(
         }
         WM_LBUTTONDOWN => {
             if let Some(state) = state(hwnd) {
-        SetCapture(hwnd);
-        press(state, GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
+                SetCapture(hwnd);
+                press(state, GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
             }
             LRESULT(0)
         }
@@ -368,6 +369,11 @@ unsafe fn layout(state: &mut ToolbarState) {
 unsafe fn paint(state: &ToolbarState) {
     let mut ps = PAINTSTRUCT::default();
     let dc = BeginPaint(state.hwnd, &mut ps);
+    // Clear the toolbar area so alpha-blended icons don't accumulate on top of
+    // previous frames (otherwise every repaint makes all buttons look hovered).
+    let mut rc = RECT::default();
+    GetClientRect(state.hwnd, &mut rc);
+    FillRect(dc, &rc, HBRUSH(GetStockObject(WHITE_BRUSH).0));
     for btn in &state.buttons {
         paint_button(dc, btn);
     }
