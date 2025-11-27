@@ -10,7 +10,7 @@ mod winutil;
 
 use anyhow::Result;
 use std::{mem::size_of, ptr::null_mut};
-use toolbar::{create_toolbar, toggle_keyboard_mode, TOOLBAR_CLASS};
+use toolbar::{create_toolbar, toggle_keyboard_mode};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use winutil::to_wstring;
