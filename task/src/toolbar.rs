@@ -6,14 +6,15 @@ use windows::{
         Foundation::{
             COLORREF, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, POINT, POINTL, RECT, WPARAM,
         },
-        Graphics::Gdi::{
+    Graphics::Gdi::{
             AlphaBlend, BeginPaint, BeginPath, CloseFigure, CreateCompatibleDC, DeleteDC,
             DeleteObject, EndPaint, EndPath, FillRect, GetRgnBox, GetStockObject, GradientFill,
             InvalidateRect, MapWindowPoints, OffsetWindowOrgEx, PathToRegion, PolyBezierTo,
             ScreenToClient, SelectClipRgn, SelectObject, SetDCBrushColor, SetDCPenColor,
-            SetWindowOrgEx, MoveToEx, LineTo,
+            SetWindowOrgEx, MoveToEx, LineTo, DrawEdge,
             BLENDFUNCTION, GRADIENT_FILL_RECT_H, GRADIENT_RECT, HBITMAP, HBRUSH, HDC, HRGN,
             PAINTSTRUCT, TRIVERTEX, WHITE_BRUSH, DC_BRUSH, DC_PEN, AC_SRC_ALPHA, AC_SRC_OVER,
+            EDGE_ETCHED, EDGE_SUNKEN, BF_RECT,
         },
         System::{
             Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, STGMEDIUM, TYMED_HGLOBAL},
@@ -29,8 +30,8 @@ use windows::{
         UI::{
             Controls::{TTTOOLINFOW, TOOLTIPS_CLASSW, TTF_SUBCLASS, TTS_ALWAYSTIP, TTS_NOPREFIX},
             Input::KeyboardAndMouse::{
-                TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_LEFT, VK_RIGHT, VK_SPACE,
-                ReleaseCapture, SetCapture, SetFocus,
+                TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, VK_LEFT, VK_RIGHT,
+                VK_SPACE, ReleaseCapture, SetCapture, SetFocus,
             },
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW, LoadCursorW,
@@ -228,6 +229,15 @@ unsafe extern "system" fn toolbar_wndproc(
         WM_MOUSELEAVE => {
             if let Some(state) = state(hwnd) {
                 clear_hover(state);
+                let _ = InvalidateRect(hwnd, None, true);
+            }
+            LRESULT(0)
+        }
+        windows::Win32::UI::WindowsAndMessaging::WM_CAPTURECHANGED
+        | windows::Win32::UI::WindowsAndMessaging::WM_CANCELMODE => {
+            if let Some(state) = state(hwnd) {
+                clear_hover(state);
+                let _ = InvalidateRect(hwnd, None, true);
             }
             LRESULT(0)
         }
@@ -416,13 +426,22 @@ unsafe fn layout(state: &mut ToolbarState) {
     InvalidateRect(state.hwnd, None, false);
 }
 
-unsafe fn paint(state: &ToolbarState) {
+unsafe fn paint(state: &mut ToolbarState) {
     let mut ps = PAINTSTRUCT::default();
     let dc = BeginPaint(state.hwnd, &mut ps);
+    // Sync hover state based on the current cursor position in case a leave
+    // event was missed (keeps highlights accurate).
+    let mut pt = POINT { x: 0, y: 0 };
+    if windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt).is_ok() {
+        let mut local = pt;
+        let _ = ScreenToClient(state.hwnd, &mut local);
+        handle_hover(state, local.x, local.y);
+    }
     // Let the parent paint show through (transparent background).
     let mut pt = POINT { x: 0, y: 0 };
     let mut pts = [pt];
     MapWindowPoints(state.hwnd, state.parent, &mut pts);
+    pt = pts[0];
     let mut old = POINT { x: 0, y: 0 };
     OffsetWindowOrgEx(dc, pt.x, pt.y, Some(&mut old));
     let _ = SendMessageW(state.parent, WM_ERASEBKGND, WPARAM(dc.0 as usize), LPARAM(0));
@@ -438,24 +457,16 @@ unsafe fn paint(state: &ToolbarState) {
 unsafe fn paint_button(dc: HDC, btn: &ButtonState) {
     let width = btn.rect.right - btn.rect.left;
     let height = btn.rect.bottom - btn.rect.top;
-    let highlighted = btn.hover || btn.has_focus || btn.pressed;
-    if highlighted {
-        // Light glassy background on hover/focus/press.
-        let bg = RECT {
-            left: btn.rect.left + 1,
-            top: btn.rect.top + 1,
-            right: btn.rect.right - 1,
-            bottom: btn.rect.bottom - 1,
-        };
-        let _ = SetDCBrushColor(dc, COLORREF(0x00ffffff));
-        let _ = FillRect(dc, &bg, HBRUSH(GetStockObject(DC_BRUSH).0));
-    }
     let hdc_btn = CreateCompatibleDC(dc);
     let old = SelectObject(hdc_btn, btn.bmp);
     let bf = BLENDFUNCTION {
         BlendOp: AC_SRC_OVER as u8,
         BlendFlags: 0,
-        SourceConstantAlpha: if highlighted { 0xff } else { 0x70 },
+        SourceConstantAlpha: if btn.hover || btn.has_focus || btn.pressed {
+            0xff
+        } else {
+            0xbf
+        },
         AlphaFormat: AC_SRC_ALPHA as u8,
     };
     AlphaBlend(
@@ -473,6 +484,13 @@ unsafe fn paint_button(dc: HDC, btn: &ButtonState) {
     );
     SelectObject(hdc_btn, old);
     DeleteDC(hdc_btn);
+
+    // Simple etched/sunken edge on hover/focus/press (mirrors original C++ behavior).
+    if btn.hover || btn.has_focus || btn.pressed {
+        let mut rc = btn.rect;
+        let edge = if btn.pressed { EDGE_SUNKEN } else { EDGE_ETCHED };
+        let _ = DrawEdge(dc, &mut rc, edge, BF_RECT);
+    }
 }
 
 unsafe fn paint_trash(dc: HDC, state: &ToolbarState) {
@@ -631,11 +649,71 @@ unsafe fn point_in_rect(x: i32, y: i32, rc: &RECT) -> bool {
 unsafe fn track_mouse(hwnd: HWND) {
     let mut tme = TRACKMOUSEEVENT {
         cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
-        dwFlags: TME_LEAVE,
+        dwFlags: TME_LEAVE | TME_NONCLIENT,
         hwndTrack: hwnd,
         dwHoverTime: 0,
     };
     let _ = TrackMouseEvent(&mut tme);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_state_with_buttons() -> ToolbarState {
+        ToolbarState {
+            hwnd: HWND::default(),
+            parent: HWND::default(),
+            defs: Vec::new(),
+            buttons: vec![
+                ButtonState {
+                    def: ButtonDef { id: 1, bitmap_res: 0, tip: "" },
+                    bmp: HBITMAP::default(),
+                    rect: RECT { left: 0, top: 0, right: 20, bottom: 20 },
+                    hover: false,
+                    pressed: false,
+                    has_focus: false,
+                    tip_w: Vec::new(),
+                },
+                ButtonState {
+                    def: ButtonDef { id: 2, bitmap_res: 0, tip: "" },
+                    bmp: HBITMAP::default(),
+                    rect: RECT { left: 30, top: 0, right: 50, bottom: 20 },
+                    hover: false,
+                    pressed: false,
+                    has_focus: false,
+                    tip_w: Vec::new(),
+                },
+            ],
+            tooltip: HWND::default(),
+            keyboard_mode: false,
+            trash_bmp: HBITMAP::default(),
+            trash_rect: RECT::default(),
+            drop_target: None,
+        }
+    }
+
+    #[test]
+    fn hover_sets_single_button() {
+        let mut state = make_state_with_buttons();
+        unsafe { handle_hover(&mut state, 5, 5) };
+        assert!(state.buttons[0].hover);
+        assert!(!state.buttons[1].hover);
+
+        unsafe { handle_hover(&mut state, 35, 5) };
+        assert!(!state.buttons[0].hover);
+        assert!(state.buttons[1].hover);
+    }
+
+    #[test]
+    fn clear_hover_resets_all() {
+        let mut state = make_state_with_buttons();
+        state.buttons[0].hover = true;
+        state.buttons[1].hover = true;
+        unsafe { clear_hover(&mut state) };
+        assert!(!state.buttons[0].hover);
+        assert!(!state.buttons[1].hover);
+    }
 }
 
 unsafe fn state(hwnd: HWND) -> Option<&'static mut ToolbarState> {
