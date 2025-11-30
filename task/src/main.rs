@@ -10,7 +10,15 @@ mod tabs;
 mod winutil;
 
 use anyhow::Result;
-use std::{mem::size_of, ptr::null_mut};
+use data::{
+    config::Configuration,
+    file_manager::FileManager,
+    model_utils::now_timestamp,
+    service::Service,
+    task::Task,
+};
+use network::Network;
+use std::{mem::size_of, path::PathBuf, ptr::null_mut};
 use tabs::{add_tab, create_tab_host, toggle_toolbar_keyboard_mode};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -19,7 +27,7 @@ use windows::core::PCWSTR;
 use windows::Win32::{
     Foundation::{GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
     Graphics::Gdi::HBRUSH,
-    System::LibraryLoader::GetModuleHandleW,
+    System::{Com::CoInitializeEx, LibraryLoader::GetModuleHandleW},
     UI::{
         Controls::{InitCommonControlsEx, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX},
         WindowsAndMessaging::{
@@ -36,11 +44,13 @@ use windows::Win32::{
 
 const APP_CLASS: &str = "LoadNgoTaskMainWnd";
 
-#[derive(Default)]
 struct UiState {
     hwnd: HWND,
     tab_host: HWND,
     tab_children: Vec<HWND>,
+    service: Service,
+    network: Network,
+    plan_name: String,
 }
 
 fn main() -> Result<()> {
@@ -49,10 +59,20 @@ fn main() -> Result<()> {
         .init();
 
     unsafe {
+        CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED).ok()?;
         init_common_controls();
         let hinstance = GetModuleHandleW(None)?.into();
+        let (service, mut network) = build_services()?;
+        network.init()?;
         register_window_class(hinstance)?;
-        let state = Box::new(UiState::default());
+        let state = Box::new(UiState {
+            hwnd: HWND::default(),
+            tab_host: HWND::default(),
+            tab_children: Vec::new(),
+            service,
+            network,
+            plan_name: "user_plan".to_string(),
+        });
         let hwnd = create_main_window(hinstance, state)?;
         ShowWindow(hwnd, SW_SHOW);
         info!("TaskMainWnd started");
@@ -153,14 +173,17 @@ unsafe extern "system" fn wndproc(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_COMMAND => {
-            let cmd_id = lparam.0 as i32;
-            match cmd_id {
-                toolbar::TBCREATETASK => info!("Toolbar: New Task"),
-                toolbar::TBSAVEPLAN => info!("Toolbar: Save All"),
-                toolbar::TBMAKEREPORT => info!("Toolbar: Generate Report"),
-                toolbar::TBSYNCHRONIZE => info!("Toolbar: Network Sync"),
-                toolbar::TBPRINT => info!("Toolbar: Print"),
-                _ => {}
+            if let Some(state) = get_state(hwnd) {
+                let cmd_id = lparam.0 as i32;
+                handle_toolbar_command(state, cmd_id);
+            }
+            LRESULT(0)
+        }
+        toolbar::WM_DELETE_TASK => {
+            if let Some(state) = get_state(hwnd) {
+                let id = wparam.0 as u64;
+                state.service.remove_task(id);
+                info!("Deleted task {id} via trash drop");
             }
             LRESULT(0)
         }
@@ -253,5 +276,48 @@ unsafe fn message_loop() {
     while GetMessageW(&mut msg, None, 0, 0).as_bool() {
         let _ = TranslateMessage(&msg);
         DispatchMessageW(&msg);
+    }
+}
+
+unsafe fn build_services() -> Result<(Service, Network)> {
+    let mut config = Configuration::new();
+    config.set("enableMulticast", "0");
+    let base_dir = PathBuf::from("taskdata");
+    let files = FileManager::new(base_dir);
+    let service = Service::new(config, files);
+    let network = Network::new();
+    Ok((service, network))
+}
+
+unsafe fn handle_toolbar_command(state: &mut UiState, cmd_id: i32) {
+    match cmd_id {
+        toolbar::TBCREATETASK => {
+            let task = Task::spawn(
+                "New Task",
+                "local-user",
+                1,
+                1,
+                now_timestamp(),
+            );
+            state.service.add_task(task);
+            info!("Created task ({} total)", state.service.tasks.len());
+        }
+        toolbar::TBSAVEPLAN => {
+            match state.service.save(&state.plan_name) {
+                Ok(_) => info!("Plan saved to {}", state.plan_name),
+                Err(err) => info!("Save failed: {err:?}"),
+            }
+        }
+        toolbar::TBMAKEREPORT => {
+            info!("Report generation not yet ported");
+        }
+        toolbar::TBSYNCHRONIZE => {
+            match state.network.send_sync_request(0) {
+                Ok(_) => info!("Sent sync request"),
+                Err(err) => info!("Sync request failed: {err:?}"),
+            }
+        }
+        toolbar::TBPRINT => info!("Print not yet implemented"),
+        _ => {}
     }
 }

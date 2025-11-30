@@ -29,7 +29,7 @@ use windows::{
 };
 
 use crate::{
-    toolbar::{create_toolbar, toggle_keyboard_mode},
+    toolbar::{create_toolbar, toggle_keyboard_mode, WM_DELETE_TASK},
     winutil::to_wstring,
 };
 
@@ -220,6 +220,13 @@ unsafe extern "system" fn tab_host_wndproc(
                 cleanup(state_ptr);
             }
             LRESULT(0)
+        }
+        WM_DELETE_TASK => {
+            if let Some(state) = state(hwnd) {
+                let _ = PostMessageW(state.parent, msg, wparam, lparam);
+                return LRESULT(0);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         // Forward toolbar commands up to the main window.
         windows::Win32::UI::WindowsAndMessaging::WM_COMMAND => {

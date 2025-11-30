@@ -5,10 +5,9 @@ use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::Gdi::{
-            AlphaBlend, BeginPaint, CreateCompatibleDC, DeleteDC, DeleteObject, EndPaint,
-            FillRect, GetStockObject, InvalidateRect, MapWindowPoints, SelectObject,
-            BLENDFUNCTION, HBITMAP, HBRUSH, HDC, PAINTSTRUCT, WHITE_BRUSH, AC_SRC_ALPHA,
-            AC_SRC_OVER,
+            AlphaBlend, BeginPaint, CreateCompatibleDC, DeleteDC, DeleteObject, EndPaint, FillRect,
+            GetStockObject, InvalidateRect, MapWindowPoints, SelectObject, BLENDFUNCTION, HBITMAP,
+            HBRUSH, HDC, PAINTSTRUCT, WHITE_BRUSH, AC_SRC_ALPHA, AC_SRC_OVER,
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
@@ -49,6 +48,7 @@ pub const TBSYNCHRONIZE: i32 = 5;
 pub const TBPRINT: i32 = 6;
 
 const WM_TOGGLE_KEYBOARD: u32 = WM_USER + 1;
+pub const WM_DELETE_TASK: u32 = WM_USER + 0x200;
 
 #[derive(Clone)]
 struct ButtonDef {
@@ -74,9 +74,12 @@ struct ToolbarState {
     buttons: Vec<ButtonState>,
     tooltip: HWND,
     keyboard_mode: bool,
+    trash_bmp: HBITMAP,
+    trash_rect: RECT,
 }
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
+const TRASH_SIZE: i32 = 26;
 
 pub fn register_class() {
     unsafe {
@@ -103,9 +106,11 @@ pub fn create_toolbar(parent: HWND, enable_multicast: bool) -> HWND {
             parent,
             defs: build_buttons(enable_multicast),
             buttons: Vec::new(),
-            tooltip: HWND(null_mut()),
-            keyboard_mode: false,
-        });
+        tooltip: HWND(null_mut()),
+        keyboard_mode: false,
+        trash_bmp: HBITMAP(null_mut()),
+        trash_rect: RECT::default(),
+    });
         CreateWindowExW(
             WINDOW_EX_STYLE(WS_EX_TRANSPARENT.0),
             PCWSTR(to_wstring(TOOLBAR_CLASS).as_ptr()),
@@ -300,6 +305,17 @@ unsafe fn init_toolbar(state: &mut ToolbarState) {
         });
         x += 28;
     }
+    let trash_bmp = LoadImageW(
+        HINSTANCE(hinstance.0),
+        PCWSTR(IDB_TBTRASHCAN as usize as *const u16),
+        IMAGE_BITMAP,
+        0,
+        0,
+        LR_CREATEDIBSECTION | LR_DEFAULTCOLOR | LR_SHARED,
+    )
+    .unwrap_or_default();
+    state.trash_bmp = HBITMAP(trash_bmp.0);
+
     let tooltip = CreateWindowExW(
         WINDOW_EX_STYLE(WS_EX_TRANSPARENT.0),
         TOOLTIPS_CLASSW,
@@ -318,6 +334,8 @@ unsafe fn init_toolbar(state: &mut ToolbarState) {
     state.tooltip = tooltip;
     SendMessageW(tooltip, 0x0418, WPARAM(state.hwnd.0 as usize), LPARAM(0));
     add_tools(state);
+
+    // Enable OLE drop for the toolbar (used by the trash can).
 }
 
 unsafe fn add_tools(state: &ToolbarState) {
@@ -363,6 +381,12 @@ unsafe fn layout(state: &mut ToolbarState) {
         btn.rect.bottom = btn.rect.top + 26;
         x += 28;
     }
+    let toolbar_width = rc.right - rc.left;
+    let trash_left = (toolbar_width - 2 - TRASH_SIZE).max(x);
+    state.trash_rect.left = trash_left;
+    state.trash_rect.top = 2;
+    state.trash_rect.right = trash_left + TRASH_SIZE;
+    state.trash_rect.bottom = state.trash_rect.top + TRASH_SIZE;
     InvalidateRect(state.hwnd, None, false);
 }
 
@@ -377,6 +401,7 @@ unsafe fn paint(state: &ToolbarState) {
     for btn in &state.buttons {
         paint_button(dc, btn);
     }
+    paint_trash(dc, state);
     EndPaint(state.hwnd, &ps);
 }
 
@@ -406,6 +431,37 @@ unsafe fn paint_button(dc: HDC, btn: &ButtonState) {
     );
     SelectObject(hdc_btn, old);
     DeleteDC(hdc_btn);
+}
+
+unsafe fn paint_trash(dc: HDC, state: &ToolbarState) {
+    if state.trash_bmp.0.is_null() {
+        return;
+    }
+    let width = state.trash_rect.right - state.trash_rect.left;
+    let height = state.trash_rect.bottom - state.trash_rect.top;
+    let hdc_trash = CreateCompatibleDC(dc);
+    let old = SelectObject(hdc_trash, state.trash_bmp);
+    let bf = BLENDFUNCTION {
+        BlendOp: AC_SRC_OVER as u8,
+        BlendFlags: 0,
+        SourceConstantAlpha: 0xbf,
+        AlphaFormat: AC_SRC_ALPHA as u8,
+    };
+    AlphaBlend(
+        dc,
+        state.trash_rect.left + 2,
+        state.trash_rect.top + 2,
+        width - 4,
+        height - 4,
+        hdc_trash,
+        0,
+        0,
+        width - 4,
+        height - 4,
+        bf,
+    );
+    SelectObject(hdc_trash, old);
+    DeleteDC(hdc_trash);
 }
 
 unsafe fn handle_hover(state: &mut ToolbarState, x: i32, y: i32) {
@@ -555,6 +611,9 @@ unsafe fn cleanup(ptr: *mut ToolbarState) {
     }
     if !boxed.tooltip.0.is_null() {
         ShowWindow(boxed.tooltip, SW_HIDE);
+    }
+    if !boxed.trash_bmp.0.is_null() {
+        let _ = DeleteObject(boxed.trash_bmp);
     }
 }
 
