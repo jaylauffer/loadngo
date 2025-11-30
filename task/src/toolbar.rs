@@ -3,7 +3,9 @@ use std::{ptr::null_mut, sync::OnceLock};
 use windows::{
     core::{implement, PCWSTR, PWSTR},
     Win32::{
-        Foundation::{HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, POINT, POINTL, RECT, WPARAM},
+        Foundation::{
+            COLORREF, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, POINT, POINTL, RECT, WPARAM,
+        },
         Graphics::Gdi::{
             AlphaBlend, BeginPaint, BeginPath, CloseFigure, CreateCompatibleDC, DeleteDC,
             DeleteObject, EndPaint, EndPath, FillRect, GetRgnBox, GetStockObject, GradientFill,
@@ -416,11 +418,53 @@ unsafe fn layout(state: &mut ToolbarState) {
 unsafe fn paint(state: &ToolbarState) {
     let mut ps = PAINTSTRUCT::default();
     let dc = BeginPaint(state.hwnd, &mut ps);
-    // Clear the toolbar area so alpha-blended icons don't accumulate on top of
-    // previous frames (otherwise every repaint makes all buttons look hovered).
     let mut rc = RECT::default();
     GetClientRect(state.hwnd, &mut rc);
+
+    // Gradient swoosh background (reuse the tab strip look).
+    SelectObject(dc, GetStockObject(DC_BRUSH));
+    SelectObject(dc, GetStockObject(DC_PEN));
+    SetDCBrushColor(dc, COLORREF(0x00efefef));
+    SetDCPenColor(dc, COLORREF(0x00efefef));
     FillRect(dc, &rc, HBRUSH(GetStockObject(WHITE_BRUSH).0));
+
+    render_toolbar_path(dc, rc.right - rc.left);
+    let swoosh_rgn: HRGN = PathToRegion(dc);
+    let mut bounds = RECT::default();
+    GetRgnBox(swoosh_rgn, &mut bounds);
+    SelectClipRgn(dc, swoosh_rgn);
+    let verts = [
+        TRIVERTEX {
+            x: bounds.left,
+            y: bounds.top,
+            Red: 0xaa00,
+            Green: 0xaa00,
+            Blue: 0xc000,
+            Alpha: 0x0000,
+        },
+        TRIVERTEX {
+            x: bounds.right,
+            y: bounds.bottom,
+            Red: 0xef00,
+            Green: 0xef00,
+            Blue: 0xef00,
+            Alpha: 0x0000,
+        },
+    ];
+    let g_rect = [GRADIENT_RECT {
+        UpperLeft: 0,
+        LowerRight: 1,
+    }];
+    let _ = GradientFill(
+        dc,
+        &verts,
+        g_rect.as_ptr() as *const _,
+        g_rect.len() as u32,
+        GRADIENT_FILL_RECT_H,
+    );
+    SelectClipRgn(dc, HRGN::default());
+    let _ = DeleteObject(swoosh_rgn);
+
     for btn in &state.buttons {
         paint_button(dc, btn);
     }
@@ -855,4 +899,36 @@ fn GET_X_LPARAM(lp: LPARAM) -> i32 {
 #[inline]
 fn GET_Y_LPARAM(lp: LPARAM) -> i32 {
     ((lp.0 as u32 >> 16) & 0xFFFF) as i16 as i32
+}
+
+// Helper to draw the toolbar background swoosh.
+unsafe fn render_toolbar_path(dc: HDC, width: i32) {
+    let mut last_x = (width / 2) + 10;
+    BeginPath(dc);
+    MoveToEx(dc, 0, 36, None);
+    LineTo(dc, last_x, 36);
+
+    let pf1 = [
+        windows::Win32::Foundation::POINT {
+            x: last_x + 30,
+            y: 26,
+        },
+        windows::Win32::Foundation::POINT {
+            x: last_x,
+            y: 12,
+        },
+        windows::Win32::Foundation::POINT {
+            x: last_x + 40,
+            y: 8,
+        },
+    ];
+    PolyBezierTo(dc, &pf1);
+
+    last_x += 120;
+    LineTo(dc, last_x + 40, 8);
+    last_x += 40;
+    LineTo(dc, last_x, 0);
+    LineTo(dc, 0, 0);
+    CloseFigure(dc);
+    EndPath(dc);
 }
