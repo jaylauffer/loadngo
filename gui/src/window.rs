@@ -58,14 +58,14 @@ impl HostWindow {
                 hinstance,
                 Some(lp),
             )?;
-            ShowWindow(hwnd, SW_SHOW);
+            let _ = ShowWindow(hwnd, SW_SHOW);
             Ok(Self { hwnd })
         }
     }
 
     pub fn client_rect(&self) -> RECT {
         let mut rc = RECT::default();
-        unsafe { GetClientRect(self.hwnd, &mut rc); }
+        unsafe { let _ = GetClientRect(self.hwnd, &mut rc); }
         rc
     }
 
