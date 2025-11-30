@@ -438,12 +438,24 @@ unsafe fn paint(state: &ToolbarState) {
 unsafe fn paint_button(dc: HDC, btn: &ButtonState) {
     let width = btn.rect.right - btn.rect.left;
     let height = btn.rect.bottom - btn.rect.top;
+    let highlighted = btn.hover || btn.has_focus || btn.pressed;
+    if highlighted {
+        // Light glassy background on hover/focus/press.
+        let bg = RECT {
+            left: btn.rect.left + 1,
+            top: btn.rect.top + 1,
+            right: btn.rect.right - 1,
+            bottom: btn.rect.bottom - 1,
+        };
+        let _ = SetDCBrushColor(dc, COLORREF(0x00ffffff));
+        let _ = FillRect(dc, &bg, HBRUSH(GetStockObject(DC_BRUSH).0));
+    }
     let hdc_btn = CreateCompatibleDC(dc);
     let old = SelectObject(hdc_btn, btn.bmp);
     let bf = BLENDFUNCTION {
         BlendOp: AC_SRC_OVER as u8,
         BlendFlags: 0,
-        SourceConstantAlpha: if btn.hover || btn.has_focus { 0xff } else { 0xbf },
+        SourceConstantAlpha: if highlighted { 0xff } else { 0x70 },
         AlphaFormat: AC_SRC_ALPHA as u8,
     };
     AlphaBlend(
