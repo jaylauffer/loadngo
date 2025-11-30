@@ -486,6 +486,9 @@ unsafe fn select_tab(state: &mut TabHostState, idx: usize) {
         let _ = ShowWindow(new_tab.hwnd, SW_SHOW);
         let _ = SetFocus(new_tab.hwnd);
     }
+    // Force the toolbar strip to repaint immediately; otherwise parts of it can
+    // remain unpainted until a hover invalidates the window.
+    let _ = windows::Win32::Graphics::Gdi::InvalidateRect(state.toolbar, None, true);
     let _ = windows::Win32::Graphics::Gdi::InvalidateRect(state.hwnd, None, true);
 }
 

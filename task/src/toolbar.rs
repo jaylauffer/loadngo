@@ -496,8 +496,17 @@ unsafe fn paint_trash(dc: HDC, state: &ToolbarState) {
 
 unsafe fn handle_hover(state: &mut ToolbarState, x: i32, y: i32) {
     let mut changed = false;
-    for btn in &mut state.buttons {
-        let inside = point_in_rect(x, y, &btn.rect);
+    // Determine the single button under the pointer (if any), then update
+    // hover state so only that button is highlighted.
+    let mut hit: Option<usize> = None;
+    for (idx, btn) in state.buttons.iter().enumerate() {
+        if point_in_rect(x, y, &btn.rect) {
+            hit = Some(idx);
+            break;
+        }
+    }
+    for (idx, btn) in state.buttons.iter_mut().enumerate() {
+        let inside = hit == Some(idx);
         if btn.hover != inside {
             btn.hover = inside;
             changed = true;
