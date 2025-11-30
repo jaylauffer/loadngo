@@ -1,15 +1,28 @@
-use std::ptr::null_mut;
+use std::{ptr::null_mut, sync::OnceLock};
 
 use windows::{
-    core::{PCWSTR, PWSTR},
+    core::{implement, PCWSTR, PWSTR},
     Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Foundation::{HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, POINT, POINTL, RECT, WPARAM},
         Graphics::Gdi::{
-            AlphaBlend, BeginPaint, CreateCompatibleDC, DeleteDC, DeleteObject, EndPaint, FillRect,
-            GetStockObject, InvalidateRect, MapWindowPoints, SelectObject, BLENDFUNCTION, HBITMAP,
-            HBRUSH, HDC, PAINTSTRUCT, WHITE_BRUSH, AC_SRC_ALPHA, AC_SRC_OVER,
+            AlphaBlend, BeginPaint, BeginPath, CloseFigure, CreateCompatibleDC, DeleteDC,
+            DeleteObject, EndPaint, EndPath, FillRect, GetRgnBox, GetStockObject, GradientFill,
+            InvalidateRect, MapWindowPoints, PathToRegion, PolyBezierTo, ScreenToClient,
+            SelectClipRgn, SelectObject, SetDCBrushColor, SetDCPenColor, MoveToEx, LineTo,
+            BLENDFUNCTION, GRADIENT_FILL_RECT_H, GRADIENT_RECT, HBITMAP, HBRUSH, HDC, HRGN,
+            PAINTSTRUCT, TRIVERTEX, WHITE_BRUSH, DC_BRUSH, DC_PEN, AC_SRC_ALPHA, AC_SRC_OVER,
         },
-        System::LibraryLoader::GetModuleHandleW,
+        System::{
+            Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, STGMEDIUM, TYMED_HGLOBAL},
+            DataExchange::RegisterClipboardFormatW,
+            LibraryLoader::GetModuleHandleW,
+            Memory::{GlobalLock, GlobalUnlock},
+            Ole::{
+                RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop, CF_UNICODETEXT, IDropTarget,
+                IDropTarget_Impl, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
+            },
+            SystemServices::MODIFIERKEYS_FLAGS,
+        },
         UI::{
             Controls::{TTTOOLINFOW, TOOLTIPS_CLASSW, TTF_SUBCLASS, TTS_ALWAYSTIP, TTS_NOPREFIX},
             Input::KeyboardAndMouse::{
@@ -76,6 +89,7 @@ struct ToolbarState {
     keyboard_mode: bool,
     trash_bmp: HBITMAP,
     trash_rect: RECT,
+    drop_target: Option<IDropTarget>,
 }
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -110,6 +124,7 @@ pub fn create_toolbar(parent: HWND, enable_multicast: bool) -> HWND {
         keyboard_mode: false,
         trash_bmp: HBITMAP(null_mut()),
         trash_rect: RECT::default(),
+        drop_target: None,
     });
         CreateWindowExW(
             WINDOW_EX_STYLE(WS_EX_TRANSPARENT.0),
@@ -336,6 +351,14 @@ unsafe fn init_toolbar(state: &mut ToolbarState) {
     add_tools(state);
 
     // Enable OLE drop for the toolbar (used by the trash can).
+    let target: IDropTarget = ToolbarDropTarget {
+        hwnd: state.hwnd,
+        state: state as *mut ToolbarState,
+    }
+    .into();
+    if RegisterDragDrop(state.hwnd, &target).is_ok() {
+        state.drop_target = Some(target);
+    }
 }
 
 unsafe fn add_tools(state: &ToolbarState) {
@@ -602,6 +625,211 @@ unsafe fn detach_state(hwnd: HWND) -> Option<*mut ToolbarState> {
     }
 }
 
+// --- Drag/drop + trash can support ---
+
+fn format_task() -> u16 {
+    static CF: OnceLock<u16> = OnceLock::new();
+    *CF.get_or_init(|| unsafe {
+        RegisterClipboardFormatW(PCWSTR(to_wstring("loadngo::data::task").as_ptr())) as u16
+    })
+}
+
+fn format_spec_entry() -> u16 {
+    static CF: OnceLock<u16> = OnceLock::new();
+    *CF.get_or_init(|| unsafe {
+        RegisterClipboardFormatW(PCWSTR(
+            to_wstring("SpecTimeEntry ID Format").as_ptr(),
+        )) as u16
+    })
+}
+
+fn format_actual_entry() -> u16 {
+    static CF: OnceLock<u16> = OnceLock::new();
+    *CF.get_or_init(|| unsafe {
+        RegisterClipboardFormatW(PCWSTR(
+            to_wstring("ActualTimeEntry ID Format").as_ptr(),
+        )) as u16
+    })
+}
+
+fn format_annotation() -> u16 {
+    static CF: OnceLock<u16> = OnceLock::new();
+    *CF.get_or_init(|| unsafe {
+        RegisterClipboardFormatW(PCWSTR(
+            to_wstring("Annotation ID Format").as_ptr(),
+        )) as u16
+    })
+}
+
+fn supported_formats() -> &'static [u16; 5] {
+    // Include text as a fallback so manual drops still work during development.
+    static FORMATS: OnceLock<[u16; 5]> = OnceLock::new();
+    FORMATS.get_or_init(|| {
+        [
+            format_task(),
+            format_spec_entry(),
+            format_actual_entry(),
+            format_annotation(),
+            CF_UNICODETEXT.0 as u16,
+        ]
+    })
+}
+
+#[implement(windows::Win32::System::Ole::IDropTarget)]
+struct ToolbarDropTarget {
+    hwnd: HWND,
+    state: *mut ToolbarState,
+}
+
+impl ToolbarDropTarget_Impl {
+    fn state(&self) -> Option<&mut ToolbarState> {
+        unsafe { self.state.as_mut() }
+    }
+
+    fn point_in_trash(&self, pt: &POINTL) -> bool {
+        if let Some(state) = self.state() {
+            let mut p = windows::Win32::Foundation::POINT {
+                x: pt.x,
+                y: pt.y,
+            };
+            unsafe {
+                ScreenToClient(self.hwnd, &mut p);
+            }
+            unsafe { point_in_rect(p.x, p.y, &state.trash_rect) }
+        } else {
+            false
+        }
+    }
+
+    fn choose_effect(&self, data_obj: &IDataObject, pt: &POINTL) -> DROPEFFECT {
+        if self.point_in_trash(pt) && has_supported_format(data_obj) {
+            DROPEFFECT_COPY
+        } else {
+            DROPEFFECT_NONE
+        }
+    }
+}
+
+#[allow(non_snake_case)]
+impl IDropTarget_Impl for ToolbarDropTarget_Impl {
+    fn DragEnter(
+        &self,
+        p_data_obj: Option<&IDataObject>,
+        _grf_key_state: MODIFIERKEYS_FLAGS,
+        pt: &POINTL,
+        pdw_effect: *mut DROPEFFECT,
+    ) -> windows::core::Result<()> {
+        if let Some(eff) = unsafe { pdw_effect.as_mut() } {
+            *eff = DROPEFFECT_NONE;
+            if let Some(data_obj) = p_data_obj {
+                *eff = self.choose_effect(data_obj, pt);
+            }
+        }
+        Ok(())
+    }
+
+    fn DragOver(
+        &self,
+        _grf_key_state: MODIFIERKEYS_FLAGS,
+        pt: &POINTL,
+        pdw_effect: *mut DROPEFFECT,
+    ) -> windows::core::Result<()> {
+        if let Some(eff) = unsafe { pdw_effect.as_mut() } {
+            *eff = if self.point_in_trash(pt) {
+                DROPEFFECT_COPY
+            } else {
+                DROPEFFECT_NONE
+            };
+        }
+        Ok(())
+    }
+
+    fn DragLeave(&self) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn Drop(
+        &self,
+        p_data_obj: Option<&IDataObject>,
+        _grf_key_state: MODIFIERKEYS_FLAGS,
+        pt: &POINTL,
+        pdw_effect: *mut DROPEFFECT,
+    ) -> windows::core::Result<()> {
+        if let Some(eff) = unsafe { pdw_effect.as_mut() } {
+            *eff = DROPEFFECT_NONE;
+        }
+        if !self.point_in_trash(pt) {
+            return Ok(());
+        }
+        if let Some(data_obj) = p_data_obj {
+            if let Some(id) = extract_drop_id(data_obj) {
+                if let Some(state) = self.state() {
+                    unsafe {
+                        let _ = PostMessageW(
+                            state.parent,
+                            WM_DELETE_TASK,
+                            WPARAM(id as usize),
+                            LPARAM(0),
+                        );
+                    }
+                    if let Some(eff) = unsafe { pdw_effect.as_mut() } {
+                        *eff = DROPEFFECT_COPY;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn has_supported_format(data_obj: &IDataObject) -> bool {
+    supported_formats().iter().any(|cf| can_get(data_obj, *cf))
+}
+
+fn can_get(data_obj: &IDataObject, cf: u16) -> bool {
+    let mut format = FORMATETC::default();
+    format.cfFormat = cf;
+    format.ptd = std::ptr::null_mut();
+    format.dwAspect = DVASPECT_CONTENT.0 as u32;
+    format.lindex = -1;
+    format.tymed = TYMED_HGLOBAL.0 as u32;
+    unsafe { data_obj.QueryGetData(&format).is_ok() }
+}
+
+fn extract_drop_id(data_obj: &IDataObject) -> Option<u64> {
+    for cf in supported_formats() {
+        if let Some(id) = extract_id_with_format(data_obj, *cf) {
+            return Some(id);
+        }
+    }
+    None
+}
+
+fn extract_id_with_format(data_obj: &IDataObject, cf: u16) -> Option<u64> {
+    let mut format = FORMATETC::default();
+    format.cfFormat = cf;
+    format.ptd = std::ptr::null_mut();
+    format.dwAspect = DVASPECT_CONTENT.0 as u32;
+    format.lindex = -1;
+    format.tymed = TYMED_HGLOBAL.0 as u32;
+    let mut medium = unsafe { data_obj.GetData(&format).ok()? };
+    let handle: HGLOBAL = unsafe { medium.u.hGlobal };
+    if handle.0.is_null() {
+        return None;
+    }
+    let id = unsafe {
+        let locked = GlobalLock(handle);
+        if locked.is_null() {
+            return None;
+        }
+        let value = *(locked as *const u64);
+        GlobalUnlock(handle);
+        value
+    };
+    unsafe { ReleaseStgMedium(&mut medium) };
+    Some(id)
+}
+
 unsafe fn cleanup(ptr: *mut ToolbarState) {
     let boxed = Box::from_raw(ptr);
     for btn in boxed.buttons {
@@ -611,6 +839,9 @@ unsafe fn cleanup(ptr: *mut ToolbarState) {
     }
     if !boxed.tooltip.0.is_null() {
         ShowWindow(boxed.tooltip, SW_HIDE);
+    }
+    if boxed.drop_target.is_some() {
+        let _ = RevokeDragDrop(boxed.hwnd);
     }
     if !boxed.trash_bmp.0.is_null() {
         let _ = DeleteObject(boxed.trash_bmp);
