@@ -40,8 +40,9 @@ use windows::{
                 HMENU, IMAGE_BITMAP, LR_CREATEDIBSECTION, LR_DEFAULTCOLOR, LR_SHARED, SW_HIDE,
                 WNDCLASSW, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN,
                 WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_SETFOCUS,
-                WM_SIZE, WM_USER, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_TRANSPARENT,
-                WS_VISIBLE, WINDOW_EX_STYLE, WINDOW_STYLE, IDC_ARROW,
+                WM_SIZE, WM_TIMER, WM_USER, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+                WS_EX_TRANSPARENT, WS_VISIBLE, WINDOW_EX_STYLE, WINDOW_STYLE, IDC_ARROW,
+                SetTimer, KillTimer,
             },
         },
     },
@@ -98,6 +99,8 @@ struct ToolbarState {
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const TRASH_SIZE: i32 = 26;
+const HOVER_TIMER_ID: usize = 0x42;
+const HOVER_TIMER_INTERVAL_MS: u32 = 50;
 
 pub fn register_class() {
     unsafe {
@@ -124,14 +127,14 @@ pub fn create_toolbar(parent: HWND, enable_multicast: bool) -> HWND {
             parent,
             defs: build_buttons(enable_multicast),
             buttons: Vec::new(),
-        tooltip: HWND(null_mut()),
-        keyboard_mode: false,
-        trash_bmp: HBITMAP(null_mut()),
-        trash_rect: RECT::default(),
-        drop_target: None,
-    });
+            tooltip: HWND(null_mut()),
+            keyboard_mode: false,
+            trash_bmp: HBITMAP(null_mut()),
+            trash_rect: RECT::default(),
+            drop_target: None,
+        });
         CreateWindowExW(
-            WINDOW_EX_STYLE(WS_EX_TRANSPARENT.0),
+            WINDOW_EX_STYLE(0),
             PCWSTR(to_wstring(TOOLBAR_CLASS).as_ptr()),
             PCWSTR::null(),
             WINDOW_STYLE(
@@ -204,6 +207,7 @@ unsafe extern "system" fn toolbar_wndproc(
                 state.hwnd = hwnd;
                 SetWindowLongPtrW(hwnd, GWL_USERDATA, state_ptr as isize);
                 init_toolbar(state);
+                let _ = SetTimer(hwnd, HOVER_TIMER_ID, HOVER_TIMER_INTERVAL_MS, None);
             }
             LRESULT(0)
         }
@@ -222,9 +226,18 @@ unsafe extern "system" fn toolbar_wndproc(
         WM_MOUSEMOVE => {
             if let Some(state) = state(hwnd) {
                 track_mouse(hwnd);
-                handle_hover(state, GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
+                refresh_hover_from_cursor(state);
             }
             LRESULT(0)
+        }
+        WM_TIMER => {
+            if wparam.0 == HOVER_TIMER_ID {
+                if let Some(state) = state(hwnd) {
+                    refresh_hover_from_cursor(state);
+                }
+                return LRESULT(0);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_MOUSELEAVE => {
             if let Some(state) = state(hwnd) {
@@ -280,10 +293,27 @@ unsafe extern "system" fn toolbar_wndproc(
             LRESULT(0)
         }
         WM_ERASEBKGND => LRESULT(1),
+        // Paint the parent background to keep transparency without WS_EX_TRANSPARENT.
+        windows::Win32::UI::WindowsAndMessaging::WM_ERASEBKGND => {
+            if let Some(state) = state(hwnd) {
+                let dc = HDC(wparam.0 as *mut _);
+                let mut pt = POINT { x: 0, y: 0 };
+                let mut pts = [pt];
+                MapWindowPoints(hwnd, state.parent, &mut pts);
+                pt = pts[0];
+                let mut old = POINT::default();
+                OffsetWindowOrgEx(dc, pt.x, pt.y, Some(&mut old));
+                let _ = SendMessageW(state.parent, WM_ERASEBKGND, WPARAM(dc.0 as usize), LPARAM(0));
+                SetWindowOrgEx(dc, old.x, old.y, None);
+                return LRESULT(1);
+            }
+            LRESULT(0)
+        }
         WM_DESTROY => {
             if let Some(ptr) = detach_state(hwnd) {
                 cleanup(ptr);
             }
+            let _ = KillTimer(hwnd, HOVER_TIMER_ID);
             LRESULT(0)
         }
         WM_TOGGLE_KEYBOARD => {
@@ -429,14 +459,6 @@ unsafe fn layout(state: &mut ToolbarState) {
 unsafe fn paint(state: &mut ToolbarState) {
     let mut ps = PAINTSTRUCT::default();
     let dc = BeginPaint(state.hwnd, &mut ps);
-    // Sync hover state based on the current cursor position in case a leave
-    // event was missed (keeps highlights accurate).
-    let mut pt = POINT { x: 0, y: 0 };
-    if windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt).is_ok() {
-        let mut local = pt;
-        let _ = ScreenToClient(state.hwnd, &mut local);
-        handle_hover(state, local.x, local.y);
-    }
     // Let the parent paint show through (transparent background).
     let mut pt = POINT { x: 0, y: 0 };
     let mut pts = [pt];
@@ -645,6 +667,44 @@ unsafe fn set_focus_button(state: &mut ToolbarState, idx: usize) {
 unsafe fn point_in_rect(x: i32, y: i32, rc: &RECT) -> bool {
     x >= rc.left && x < rc.right && y >= rc.top && y < rc.bottom
 }
+
+unsafe fn refresh_hover_from_cursor(state: &mut ToolbarState) {
+    let mut cursor = POINT::default();
+    if !windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut cursor).is_ok() {
+        return;
+    }
+    let mut client = cursor;
+    let _ = ScreenToClient(state.hwnd, &mut client);
+
+    let mut rc = RECT::default();
+    let _ = GetClientRect(state.hwnd, &mut rc);
+    let inside_toolbar = point_in_rect(client.x, client.y, &rc);
+    if !inside_toolbar {
+        clear_hover(state);
+        let _ = InvalidateRect(state.hwnd, None, false);
+        return;
+    }
+
+    let mut hit: Option<usize> = None;
+    for (idx, btn) in state.buttons.iter().enumerate() {
+        if point_in_rect(client.x, client.y, &btn.rect) {
+            hit = Some(idx);
+            break;
+        }
+    }
+    let mut changed = false;
+    for (idx, btn) in state.buttons.iter_mut().enumerate() {
+        let inside = hit == Some(idx);
+        if btn.hover != inside {
+            btn.hover = inside;
+            changed = true;
+        }
+    }
+    if changed {
+        let _ = InvalidateRect(state.hwnd, None, false);
+    }
+}
+
 
 unsafe fn track_mouse(hwnd: HWND) {
     let mut tme = TRACKMOUSEEVENT {
@@ -994,3 +1054,10 @@ unsafe fn render_toolbar_path(dc: HDC, width: i32) {
     CloseFigure(dc);
     EndPath(dc);
 }
+
+// Developer note:
+// Hover still sticks on some systems despite WM_MOUSELEAVE handling. We removed
+// WS_EX_TRANSPARENT and added timer-based hover refresh plus explicit
+// invalidations, but OS-level capture interference seems to keep hover lit.
+// When resuming, consider instrumenting WM_MOUSEMOVE/LEAVE arrival or falling
+// back to focus/press-only highlighting.
