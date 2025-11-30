@@ -9,8 +9,9 @@ use windows::{
         Graphics::Gdi::{
             AlphaBlend, BeginPaint, BeginPath, CloseFigure, CreateCompatibleDC, DeleteDC,
             DeleteObject, EndPaint, EndPath, FillRect, GetRgnBox, GetStockObject, GradientFill,
-            InvalidateRect, MapWindowPoints, PathToRegion, PolyBezierTo, ScreenToClient,
-            SelectClipRgn, SelectObject, SetDCBrushColor, SetDCPenColor, MoveToEx, LineTo,
+            InvalidateRect, MapWindowPoints, OffsetWindowOrgEx, PathToRegion, PolyBezierTo,
+            ScreenToClient, SelectClipRgn, SelectObject, SetDCBrushColor, SetDCPenColor,
+            SetWindowOrgEx, MoveToEx, LineTo,
             BLENDFUNCTION, GRADIENT_FILL_RECT_H, GRADIENT_RECT, HBITMAP, HBRUSH, HDC, HRGN,
             PAINTSTRUCT, TRIVERTEX, WHITE_BRUSH, DC_BRUSH, DC_PEN, AC_SRC_ALPHA, AC_SRC_OVER,
         },
@@ -418,52 +419,14 @@ unsafe fn layout(state: &mut ToolbarState) {
 unsafe fn paint(state: &ToolbarState) {
     let mut ps = PAINTSTRUCT::default();
     let dc = BeginPaint(state.hwnd, &mut ps);
-    let mut rc = RECT::default();
-    GetClientRect(state.hwnd, &mut rc);
-
-    // Gradient swoosh background (reuse the tab strip look).
-    SelectObject(dc, GetStockObject(DC_BRUSH));
-    SelectObject(dc, GetStockObject(DC_PEN));
-    SetDCBrushColor(dc, COLORREF(0x00efefef));
-    SetDCPenColor(dc, COLORREF(0x00efefef));
-    FillRect(dc, &rc, HBRUSH(GetStockObject(WHITE_BRUSH).0));
-
-    render_toolbar_path(dc, rc.right - rc.left);
-    let swoosh_rgn: HRGN = PathToRegion(dc);
-    let mut bounds = RECT::default();
-    GetRgnBox(swoosh_rgn, &mut bounds);
-    SelectClipRgn(dc, swoosh_rgn);
-    let verts = [
-        TRIVERTEX {
-            x: bounds.left,
-            y: bounds.top,
-            Red: 0xaa00,
-            Green: 0xaa00,
-            Blue: 0xc000,
-            Alpha: 0x0000,
-        },
-        TRIVERTEX {
-            x: bounds.right,
-            y: bounds.bottom,
-            Red: 0xef00,
-            Green: 0xef00,
-            Blue: 0xef00,
-            Alpha: 0x0000,
-        },
-    ];
-    let g_rect = [GRADIENT_RECT {
-        UpperLeft: 0,
-        LowerRight: 1,
-    }];
-    let _ = GradientFill(
-        dc,
-        &verts,
-        g_rect.as_ptr() as *const _,
-        g_rect.len() as u32,
-        GRADIENT_FILL_RECT_H,
-    );
-    SelectClipRgn(dc, HRGN::default());
-    let _ = DeleteObject(swoosh_rgn);
+    // Let the parent paint show through (transparent background).
+    let mut pt = POINT { x: 0, y: 0 };
+    let mut pts = [pt];
+    MapWindowPoints(state.hwnd, state.parent, &mut pts);
+    let mut old = POINT { x: 0, y: 0 };
+    OffsetWindowOrgEx(dc, pt.x, pt.y, Some(&mut old));
+    let _ = SendMessageW(state.parent, WM_ERASEBKGND, WPARAM(dc.0 as usize), LPARAM(0));
+    SetWindowOrgEx(dc, old.x, old.y, None);
 
     for btn in &state.buttons {
         paint_button(dc, btn);
