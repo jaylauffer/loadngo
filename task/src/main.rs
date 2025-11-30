@@ -214,59 +214,59 @@ unsafe fn detach_state(hwnd: HWND) -> Option<*mut UiState> {
 }
 
 unsafe fn create_children(parent: HWND, state: &mut UiState) {
-    state.tab_host = create_tab_host(parent, true);
+    let tab_host = create_tab_host(parent, true);
 
-    // Placeholder tab children (static controls for now).
-    let static_class = to_wstring("STATIC");
-    let day_text = to_wstring("Day Plan View");
+    // Placeholder children so the custom tab host renders its swoosh/toolbar.
+    let hinstance = GetModuleHandleW(None).unwrap();
     let day = CreateWindowExW(
-        WINDOW_EX_STYLE(WS_EX_CLIENTEDGE.0),
-        PCWSTR(static_class.as_ptr()),
-        PCWSTR(day_text.as_ptr()),
-        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0),
+        WINDOW_EX_STYLE(0),
+        PCWSTR(to_wstring("STATIC").as_ptr()),
+        PCWSTR(to_wstring("Day Planner (stub)").as_ptr()),
+        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
         0,
         0,
         100,
         100,
-        state.tab_host,
+        tab_host,
         HMENU(null_mut()),
-        None,
+        HINSTANCE(hinstance.0),
         None,
     )
-    .expect("create day plan view");
-    let proj_text = to_wstring("Project Plan View");
+    .expect("day tab child");
+
     let proj = CreateWindowExW(
-        WINDOW_EX_STYLE(WS_EX_CLIENTEDGE.0),
-        PCWSTR(static_class.as_ptr()),
-        PCWSTR(proj_text.as_ptr()),
-        WINDOW_STYLE(WS_CHILD.0),
+        WINDOW_EX_STYLE(0),
+        PCWSTR(to_wstring("STATIC").as_ptr()),
+        PCWSTR(to_wstring("Project Planner (stub)").as_ptr()),
+        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
         0,
         0,
         100,
         100,
-        state.tab_host,
+        tab_host,
         HMENU(null_mut()),
-        None,
+        HINSTANCE(hinstance.0),
         None,
     )
-    .expect("create project plan view");
+    .expect("project tab child");
 
     state.tab_children = vec![day, proj];
-    add_tab(state.tab_host, "Day Plan", day);
-    add_tab(state.tab_host, "Project Plan", proj);
+    add_tab(tab_host, "Day Plan", day);
+    add_tab(tab_host, "Project Plan", proj);
+    state.tab_host = tab_host;
 
     layout_children(state);
 }
 
-unsafe fn layout_children(state: &UiState) {
+unsafe fn layout_children(state: &mut UiState) {
     let mut rc: RECT = RECT::default();
     let _ = GetClientRect(state.hwnd, &mut rc);
     let _ = MoveWindow(
         state.tab_host,
         0,
         0,
-        rc.right,
-        rc.bottom,
+        rc.right - rc.left,
+        rc.bottom - rc.top,
         true,
     );
 }

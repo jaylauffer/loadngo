@@ -13,6 +13,7 @@ windows.workspace = true
 windows-core.workspace = true
 data = { path = "../data" }
 network = { path = "../network" }
+gui = { path = "../gui" }
 
 [build-dependencies]
 embed-resource = "2.4"
