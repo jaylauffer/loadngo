@@ -1,0 +1,17 @@
+//! Minimal GUI base layer extracted from the legacy loadngoGUI components.
+//! This crate provides lightweight wrappers for HWND-backed components,
+//! containers, simple buttons, and bitmap loading. It is intentionally thin
+//! scaffolding to support higher-level Day/Project planner windows.
+
+pub mod util;
+pub mod component;
+pub mod container;
+pub mod window;
+pub mod bitmap;
+pub mod button;
+
+pub use component::Component;
+pub use container::Container;
+pub use window::HostWindow;
+pub use bitmap::Bitmap;
+pub use button::Button;

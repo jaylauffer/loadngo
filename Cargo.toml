@@ -3,6 +3,7 @@ members = [
     "task",
     "data",
     "network",
+    "gui",
 ]
 resolver = "2"
 
