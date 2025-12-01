@@ -37,18 +37,19 @@ use windows::{
                 CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW, LoadCursorW,
                 LoadImageW, PostMessageW, RegisterClassW, SendMessageW, SetWindowLongPtrW,
                 ShowWindow, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWL_USERDATA,
-                HMENU, IMAGE_BITMAP, LR_CREATEDIBSECTION, LR_DEFAULTCOLOR, LR_SHARED, SW_HIDE,
-                WNDCLASSW, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN,
-                WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_SETFOCUS,
-                WM_SIZE, WM_TIMER, WM_USER, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
-                WS_EX_TRANSPARENT, WS_VISIBLE, WINDOW_EX_STYLE, WINDOW_STYLE, IDC_ARROW,
-                SetTimer, KillTimer,
+                HMENU, IMAGE_BITMAP, LR_CREATEDIBSECTION, LR_DEFAULTCOLOR, LR_SHARED, PRF_CHILDREN,
+                PRF_CLIENT, PRF_ERASEBKGND, SW_HIDE, WNDCLASSW, WM_COMMAND, WM_CREATE, WM_DESTROY,
+                WM_ERASEBKGND, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
+                WM_MOUSEMOVE, WM_PAINT, WM_PRINTCLIENT, WM_SETFOCUS, WM_SIZE, WM_TIMER, WM_USER,
+                WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_TRANSPARENT, WS_VISIBLE,
+                WINDOW_EX_STYLE, WINDOW_STYLE, IDC_ARROW, SetTimer, KillTimer,
             },
         },
     },
 };
 
 use crate::winutil::{to_wstring, MAKELONG};
+use gui::BufferedWnd;
 
 pub const TOOLBAR_CLASS: &str = "LNGToolbar";
 
@@ -95,6 +96,7 @@ struct ToolbarState {
     trash_bmp: HBITMAP,
     trash_rect: RECT,
     drop_target: Option<IDropTarget>,
+    buffer: BufferedWnd,
 }
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -127,11 +129,12 @@ pub fn create_toolbar(parent: HWND, enable_multicast: bool) -> HWND {
             parent,
             defs: build_buttons(enable_multicast),
             buttons: Vec::new(),
-            tooltip: HWND(null_mut()),
+        tooltip: HWND(null_mut()),
             keyboard_mode: false,
             trash_bmp: HBITMAP(null_mut()),
             trash_rect: RECT::default(),
             drop_target: None,
+            buffer: BufferedWnd::new(),
         });
         CreateWindowExW(
             WINDOW_EX_STYLE(WS_EX_TRANSPARENT.0),
@@ -456,23 +459,35 @@ unsafe fn layout(state: &mut ToolbarState) {
 }
 
 unsafe fn paint(state: &mut ToolbarState) {
-    let mut ps = PAINTSTRUCT::default();
-    let dc = BeginPaint(state.hwnd, &mut ps);
-    // Let the parent paint show through (transparent background).
-    let mut pt = POINT { x: 0, y: 0 };
-    let mut pts = [pt];
-    MapWindowPoints(state.hwnd, state.parent, &mut pts);
-    pt = pts[0];
-    let mut old = POINT { x: 0, y: 0 };
-    OffsetWindowOrgEx(dc, pt.x, pt.y, Some(&mut old));
-    let _ = SendMessageW(state.parent, WM_ERASEBKGND, WPARAM(dc.0 as usize), LPARAM(0));
-    SetWindowOrgEx(dc, old.x, old.y, None);
+    let state_ptr = state as *mut ToolbarState;
+    let buffer = &mut state.buffer;
+    let _ = buffer.paint(state.hwnd, move |_, dc, width, height| {
+        let state = unsafe { &mut *state_ptr };
+        // Let the parent paint show through (transparent background).
+        let mut pt = POINT { x: 0, y: 0 };
+        let mut pts = [pt];
+        MapWindowPoints(state.hwnd, state.parent, &mut pts);
+        pt = pts[0];
+        let mut old = POINT { x: 0, y: 0 };
+        let _ = OffsetWindowOrgEx(dc, pt.x, pt.y, Some(&mut old));
+        let flags = (PRF_CLIENT | PRF_ERASEBKGND | PRF_CHILDREN) as isize;
+        let _ = SendMessageW(
+            state.parent,
+            WM_PRINTCLIENT,
+            WPARAM(dc.0 as usize),
+            LPARAM(flags),
+        );
+        let _ = SetWindowOrgEx(dc, old.x, old.y, None);
 
-    for btn in &state.buttons {
-        paint_button(dc, btn);
-    }
-    paint_trash(dc, state);
-    EndPaint(state.hwnd, &ps);
+        // Draw toolbar content.
+        for btn in &state.buttons {
+            paint_button(dc, btn);
+        }
+        paint_trash(dc, state);
+        // width/height currently unused but kept for parity with legacy.
+        let _ = (width, height);
+        Ok(())
+    });
 }
 
 unsafe fn paint_button(dc: HDC, btn: &ButtonState) {
@@ -749,6 +764,7 @@ mod tests {
             trash_bmp: HBITMAP::default(),
             trash_rect: RECT::default(),
             drop_target: None,
+            buffer: BufferedWnd::new(),
         }
     }
 
