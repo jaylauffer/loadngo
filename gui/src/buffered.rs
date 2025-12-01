@@ -17,6 +17,7 @@ pub struct ImgBuffer {
     pub width: i32,
     pub height: i32,
     pub hbitmap: HBITMAP,
+    bits: *mut std::ffi::c_void,
 }
 
 impl ImgBuffer {
@@ -35,10 +36,16 @@ impl ImgBuffer {
             };
             let mut bits = std::ptr::null_mut();
             let hbitmap = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0)?;
+            // Clear to transparent to avoid garbage/flicker before we paint.
+            if !bits.is_null() {
+                let len = (width * height * 4) as usize;
+                std::ptr::write_bytes(bits, 0, len);
+            }
             Ok(Self {
                 width,
                 height,
                 hbitmap,
+                bits,
             })
         }
     }

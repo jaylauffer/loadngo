@@ -7,14 +7,14 @@ use windows::{
             COLORREF, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, POINT, POINTL, RECT, WPARAM,
         },
     Graphics::Gdi::{
-            AlphaBlend, BeginPaint, BeginPath, CloseFigure, CreateCompatibleDC, DeleteDC,
-            DeleteObject, EndPaint, EndPath, FillRect, GetRgnBox, GetStockObject, GradientFill,
-            InvalidateRect, MapWindowPoints, OffsetWindowOrgEx, PathToRegion, PolyBezierTo,
-            ScreenToClient, SelectClipRgn, SelectObject, SetDCBrushColor, SetDCPenColor,
-            SetWindowOrgEx, MoveToEx, LineTo, DrawEdge,
+            AlphaBlend, BeginPaint, BeginPath, BitBlt, CloseFigure, CreateCompatibleDC, DeleteDC,
+            DeleteObject, EndPaint, EndPath, FillRect, GetDC, GetRgnBox, GetStockObject,
+            GradientFill, InvalidateRect, MapWindowPoints, OffsetWindowOrgEx, PathToRegion,
+            PolyBezierTo, ReleaseDC, ScreenToClient, SelectClipRgn, SelectObject, SetDCBrushColor,
+            SetDCPenColor, SetWindowOrgEx, MoveToEx, LineTo, DrawEdge,
             BLENDFUNCTION, GRADIENT_FILL_RECT_H, GRADIENT_RECT, HBITMAP, HBRUSH, HDC, HRGN,
-            PAINTSTRUCT, TRIVERTEX, WHITE_BRUSH, DC_BRUSH, DC_PEN, AC_SRC_ALPHA, AC_SRC_OVER,
-            EDGE_ETCHED, EDGE_SUNKEN, BF_RECT,
+            PAINTSTRUCT, SRCCOPY, TRIVERTEX, WHITE_BRUSH, DC_BRUSH, DC_PEN, AC_SRC_ALPHA,
+            AC_SRC_OVER, EDGE_ETCHED, EDGE_SUNKEN, BF_RECT,
         },
         System::{
             Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, STGMEDIUM, TYMED_HGLOBAL},
@@ -468,16 +468,35 @@ unsafe fn paint(state: &mut ToolbarState) {
         let mut pts = [pt];
         MapWindowPoints(state.hwnd, state.parent, &mut pts);
         pt = pts[0];
-        let mut old = POINT { x: 0, y: 0 };
-        let _ = OffsetWindowOrgEx(dc, pt.x, pt.y, Some(&mut old));
-        let flags = (PRF_CLIENT | PRF_ERASEBKGND | PRF_CHILDREN) as isize;
-        let _ = SendMessageW(
-            state.parent,
-            WM_PRINTCLIENT,
-            WPARAM(dc.0 as usize),
-            LPARAM(flags),
-        );
-        let _ = SetWindowOrgEx(dc, old.x, old.y, None);
+        // Preferred: grab pixels directly from parent DC to avoid WM_PRINTCLIENT
+        // returning nothing for some parents.
+        let parent_dc = GetDC(state.parent);
+        if !parent_dc.0.is_null() {
+            let _ = BitBlt(
+                dc,
+                0,
+                0,
+                width,
+                height,
+                parent_dc,
+                pt.x,
+                pt.y,
+                SRCCOPY,
+            );
+            let _ = ReleaseDC(state.parent, parent_dc);
+        } else {
+            // Fallback: ask parent to render its client.
+            let mut old = POINT { x: 0, y: 0 };
+            let _ = OffsetWindowOrgEx(dc, pt.x, pt.y, Some(&mut old));
+            let flags = (PRF_CLIENT | PRF_ERASEBKGND | PRF_CHILDREN) as isize;
+            let _ = SendMessageW(
+                state.parent,
+                WM_PRINTCLIENT,
+                WPARAM(dc.0 as usize),
+                LPARAM(flags),
+            );
+            let _ = SetWindowOrgEx(dc, old.x, old.y, None);
+        }
 
         // Draw toolbar content.
         for btn in &state.buttons {
@@ -505,10 +524,10 @@ unsafe fn paint_button(dc: HDC, btn: &ButtonState) {
         },
         AlphaFormat: AC_SRC_ALPHA as u8,
     };
-    AlphaBlend(
-        dc,
-        btn.rect.left + 2,
-        btn.rect.top + 2,
+            let _ = AlphaBlend(
+                dc,
+                btn.rect.left + 2,
+                btn.rect.top + 2,
         width - 4,
         height - 4,
         hdc_btn,
@@ -543,10 +562,10 @@ unsafe fn paint_trash(dc: HDC, state: &ToolbarState) {
         SourceConstantAlpha: 0xbf,
         AlphaFormat: AC_SRC_ALPHA as u8,
     };
-    AlphaBlend(
-        dc,
-        state.trash_rect.left + 2,
-        state.trash_rect.top + 2,
+            let _ = AlphaBlend(
+                dc,
+                state.trash_rect.left + 2,
+                state.trash_rect.top + 2,
         width - 4,
         height - 4,
         hdc_trash,
