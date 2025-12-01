@@ -9,6 +9,7 @@ pub mod container;
 pub mod window;
 pub mod bitmap;
 pub mod button;
+pub mod buffered;
 pub mod list;
 pub mod tabs;
 
@@ -17,5 +18,6 @@ pub use container::Container;
 pub use window::HostWindow;
 pub use bitmap::Bitmap;
 pub use button::Button;
+pub use buffered::{BufferedWnd, ImgBuffer, WM_INVALIDATE};
 pub use list::{ListBox, ListCombo};
 pub use tabs::{TabbedContainer, TabPage};

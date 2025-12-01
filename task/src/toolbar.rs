@@ -134,7 +134,7 @@ pub fn create_toolbar(parent: HWND, enable_multicast: bool) -> HWND {
             drop_target: None,
         });
         CreateWindowExW(
-            WINDOW_EX_STYLE(0),
+            WINDOW_EX_STYLE(WS_EX_TRANSPARENT.0),
             PCWSTR(to_wstring(TOOLBAR_CLASS).as_ptr()),
             PCWSTR::null(),
             WINDOW_STYLE(
@@ -292,9 +292,8 @@ unsafe extern "system" fn toolbar_wndproc(
             }
             LRESULT(0)
         }
-        WM_ERASEBKGND => LRESULT(1),
-        // Paint the parent background to keep transparency without WS_EX_TRANSPARENT.
-        windows::Win32::UI::WindowsAndMessaging::WM_ERASEBKGND => {
+        // Paint the parent background so the transparent toolbar blends in.
+        WM_ERASEBKGND => {
             if let Some(state) = state(hwnd) {
                 let dc = HDC(wparam.0 as *mut _);
                 let mut pt = POINT { x: 0, y: 0 };
@@ -307,7 +306,7 @@ unsafe extern "system" fn toolbar_wndproc(
                 SetWindowOrgEx(dc, old.x, old.y, None);
                 return LRESULT(1);
             }
-            LRESULT(0)
+            LRESULT(1)
         }
         WM_DESTROY => {
             if let Some(ptr) = detach_state(hwnd) {
