@@ -8,12 +8,12 @@ use windows::{
         },
     Graphics::Gdi::{
             AlphaBlend, BeginPaint, BeginPath, BitBlt, CloseFigure, CreateCompatibleDC, DeleteDC,
-            DeleteObject, EndPaint, EndPath, FillRect, GetDC, GetRgnBox, GetStockObject,
+            DeleteObject, EndPaint, EndPath, FillRect, GetDC, GetObjectW, GetRgnBox, GetStockObject,
             GradientFill, InvalidateRect, MapWindowPoints, OffsetWindowOrgEx, PathToRegion,
             PolyBezierTo, ReleaseDC, ScreenToClient, SelectClipRgn, SelectObject, SetDCBrushColor,
             SetDCPenColor, SetWindowOrgEx, MoveToEx, LineTo, DrawEdge,
-            BLENDFUNCTION, GRADIENT_FILL_RECT_H, GRADIENT_RECT, HBITMAP, HBRUSH, HDC, HRGN,
-            PAINTSTRUCT, SRCCOPY, TRIVERTEX, WHITE_BRUSH, DC_BRUSH, DC_PEN, AC_SRC_ALPHA,
+            BITMAP, BLENDFUNCTION, GRADIENT_FILL_RECT_H, GRADIENT_RECT, HBITMAP, HBRUSH, HDC,
+            HRGN, PAINTSTRUCT, SRCCOPY, TRIVERTEX, WHITE_BRUSH, DC_BRUSH, DC_PEN, AC_SRC_ALPHA,
             AC_SRC_OVER, EDGE_ETCHED, EDGE_SUNKEN, BF_RECT,
         },
         System::{
@@ -349,6 +349,7 @@ unsafe fn init_toolbar(state: &mut ToolbarState) {
             LR_CREATEDIBSECTION | LR_DEFAULTCOLOR | LR_SHARED,
         )
         .unwrap();
+        premultiply_bitmap(HBITMAP(bmp.0));
         let mut rect = RECT::default();
         rect.left = x;
         rect.top = 2;
@@ -374,7 +375,9 @@ unsafe fn init_toolbar(state: &mut ToolbarState) {
         LR_CREATEDIBSECTION | LR_DEFAULTCOLOR | LR_SHARED,
     )
     .unwrap_or_default();
-    state.trash_bmp = HBITMAP(trash_bmp.0);
+    let hbmp = HBITMAP(trash_bmp.0);
+    premultiply_bitmap(hbmp);
+    state.trash_bmp = hbmp;
 
     let tooltip = CreateWindowExW(
         WINDOW_EX_STYLE(WS_EX_TRANSPARENT.0),
@@ -735,6 +738,42 @@ unsafe fn refresh_hover_from_cursor(state: &mut ToolbarState) {
     }
     if changed {
         let _ = InvalidateRect(state.hwnd, None, false);
+    }
+}
+
+unsafe fn premultiply_bitmap(bmp: HBITMAP) {
+    if bmp.0.is_null() {
+        return;
+    }
+    let mut info = BITMAP::default();
+    let got = GetObjectW(
+        bmp,
+        std::mem::size_of::<BITMAP>() as i32,
+        Some(&mut info as *mut _ as *mut _),
+    );
+    if got == 0 || info.bmBits.is_null() || info.bmBitsPixel != 32 {
+        return;
+    }
+    let width = info.bmWidth as usize;
+    let height = info.bmHeight as usize;
+    let stride = info.bmWidthBytes as usize;
+    let buf = std::slice::from_raw_parts_mut(info.bmBits as *mut u8, stride * height);
+    for y in 0..height {
+        let row = y * stride;
+        for x in 0..width {
+            let p = row + x * 4;
+            let b = buf[p];
+            let g = buf[p + 1];
+            let r = buf[p + 2];
+            let a = buf[p + 3];
+            if a == 0xff {
+                continue;
+            }
+            buf[p] = ((b as u16 * a as u16) / 255) as u8;
+            buf[p + 1] = ((g as u16 * a as u16) / 255) as u8;
+            buf[p + 2] = ((r as u16 * a as u16) / 255) as u8;
+            // alpha unchanged
+        }
     }
 }
 
