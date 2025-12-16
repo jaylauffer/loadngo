@@ -1,4 +1,5 @@
 use crate::component::Component;
+use tracing::debug;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::InvalidateRect;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -31,6 +32,10 @@ impl Container {
             capturing_idx: None,
             tracking_mouse: false,
         }
+    }
+
+    pub fn set_hwnd(&mut self, hwnd: HWND) {
+        self.hwnd = hwnd;
     }
 
     pub fn add(&mut self, child: Box<dyn Component>) {
@@ -122,16 +127,44 @@ impl Container {
                 hwndTrack: self.hwnd,
                 dwHoverTime: 0,
             };
-            self.tracking_mouse = unsafe { TrackMouseEvent(&mut tme).is_ok() };
+            match unsafe { TrackMouseEvent(&mut tme) } {
+                Ok(_) => {
+                    self.tracking_mouse = true;
+                }
+                Err(err) => {
+                    self.tracking_mouse = false;
+                    debug!(
+                        target: "gui::container",
+                        "TrackMouseEvent failed for hwnd={:?}: {err:?}",
+                        self.hwnd
+                    );
+                }
+            }
         }
         let pt = self.to_client_point(lparam);
         if let Some(idx) = self.capturing_idx {
+            debug!(
+                target: "gui::container",
+                "mouse_move capturing idx={} pt=({}, {})",
+                idx,
+                pt.x,
+                pt.y
+            );
             let lp = self.repack_lparam(pt);
             if let Some(child) = self.children.get_mut(idx) {
                 return child.handle_message(WM_MOUSEMOVE, WPARAM(0), lp);
             }
         }
         let hit_idx = self.hit_test(pt);
+        debug!(
+            target: "gui::container",
+            "mouse_move pt=({}, {}) hit_idx={:?} hover_idx={:?} tracking={}",
+            pt.x,
+            pt.y,
+            hit_idx,
+            self.hover_idx,
+            self.tracking_mouse
+        );
         if hit_idx != self.hover_idx {
             if let Some(prev) = self.hover_idx {
                 if let Some(c) = self.children.get_mut(prev) {
@@ -144,6 +177,10 @@ impl Container {
                 }
             }
             self.hover_idx = hit_idx;
+            // Force a repaint whenever hover target changes to ensure stale visuals clear.
+            unsafe {
+                let _ = InvalidateRect(self.hwnd, None, false);
+            }
         }
         if let Some(idx) = hit_idx {
             let lp = self.repack_lparam(pt);
@@ -180,10 +217,20 @@ impl Container {
     }
 
     fn handle_mouse_leave(&mut self) -> LRESULT {
+        debug!(
+            target: "gui::container",
+            "mouse_leave clearing hover_idx={:?} capturing_idx={:?}",
+            self.hover_idx,
+            self.capturing_idx
+        );
         if let Some(prev) = self.hover_idx.take() {
             if let Some(c) = self.children.get_mut(prev) {
                 c.mouse_exited();
             }
+        }
+        // Force a repaint so any hovered visuals are cleared.
+        unsafe {
+            let _ = InvalidateRect(self.hwnd, None, false);
         }
         self.tracking_mouse = false;
         LRESULT(0)

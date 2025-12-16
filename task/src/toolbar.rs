@@ -38,10 +38,11 @@ use windows::{
                 SetWindowLongPtrW, ShowWindow, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
                 CW_USEDEFAULT, GWL_USERDATA, HMENU, IDC_ARROW, IMAGE_BITMAP, LR_CREATEDIBSECTION,
                 LR_DEFAULTCOLOR, LR_SHARED, PRF_CHILDREN, PRF_CLIENT, PRF_ERASEBKGND, SW_HIDE,
-                WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND,
-                WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
-                WM_PRINTCLIENT, WM_SETFOCUS, WM_SIZE, WM_TIMER, WM_USER, WNDCLASSW, WS_CHILD,
-                WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_TRANSPARENT, WS_VISIBLE,
+                WINDOW_EX_STYLE, WINDOW_STYLE, WM_CAPTURECHANGED, WM_COMMAND, WM_CREATE,
+                WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_PRINTCLIENT, WM_SETFOCUS, WM_SIZE,
+                WM_TIMER, WM_USER, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+                WS_EX_TRANSPARENT, WS_VISIBLE,
             },
         },
     },
@@ -331,6 +332,7 @@ unsafe extern "system" fn toolbar_wndproc(
             if !state_ptr.is_null() {
                 let state = &mut *state_ptr;
                 state.hwnd = hwnd;
+                state.container.set_hwnd(hwnd);
                 SetWindowLongPtrW(hwnd, GWL_USERDATA, state_ptr as isize);
                 init_toolbar(state);
             }
@@ -361,6 +363,18 @@ unsafe extern "system" fn toolbar_wndproc(
             LRESULT(0)
         }
         WM_LBUTTONUP => {
+            if let Some(state) = state(hwnd) {
+                let _ = state.container.handle_message(msg, wparam, lparam);
+            }
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            if let Some(state) = state(hwnd) {
+                let _ = state.container.handle_message(msg, wparam, lparam);
+            }
+            LRESULT(0)
+        }
+        WM_CAPTURECHANGED => {
             if let Some(state) = state(hwnd) {
                 let _ = state.container.handle_message(msg, wparam, lparam);
             }
