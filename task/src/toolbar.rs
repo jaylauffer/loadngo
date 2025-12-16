@@ -109,13 +109,6 @@ impl ToolbarButton {
         unsafe {
             let width = self.rect.right - self.rect.left;
             let height = self.rect.bottom - self.rect.top;
-            // Background to clear any prior hover/focus drawings.
-            let brush = HBRUSH(GetStockObject(DC_BRUSH).0);
-            SelectObject(dc, brush);
-            SelectObject(dc, GetStockObject(DC_PEN));
-            SetDCBrushColor(dc, COLORREF(0x00efefef));
-            let _ = FillRect(dc, &self.rect, brush);
-
             let hdc_btn = CreateCompatibleDC(dc);
             let old = SelectObject(hdc_btn, self.bmp);
             let bf = BLENDFUNCTION {
@@ -206,7 +199,7 @@ impl Component for ToolbarButton {
     fn mouse_entered(&mut self) {
         self.hover = true;
         unsafe {
-            let _ = InvalidateRect(self.host_hwnd, Some(&self.rect), false);
+            invalidate_expanded(self.host_hwnd, &self.rect);
         }
     }
 
@@ -214,7 +207,7 @@ impl Component for ToolbarButton {
         self.hover = false;
         self.pressed = false;
         unsafe {
-            let _ = InvalidateRect(self.host_hwnd, Some(&self.rect), false);
+            invalidate_expanded(self.host_hwnd, &self.rect);
         }
     }
 
@@ -627,13 +620,6 @@ unsafe fn paint(state: &mut ToolbarState) {
             );
             let _ = SetWindowOrgEx(dc, old.x, old.y, None);
         }
-        // Clear any stale content in case parent did not fill our area (matches CBasicButton background).
-        let brush = HBRUSH(GetStockObject(DC_BRUSH).0);
-        let _ = SelectObject(dc, brush);
-        let _ = SelectObject(dc, GetStockObject(DC_PEN));
-        SetDCBrushColor(dc, COLORREF(0x00efefef));
-        let fill_rect = RECT { left: 0, top: 0, right: width, bottom: height };
-        let _ = FillRect(dc, &fill_rect, brush);
 
         // Draw toolbar content.
         for child in &state.container.children {
@@ -760,6 +746,18 @@ unsafe fn set_focus_button(state: &mut ToolbarState, idx: usize) {
 
 fn point_in_rect(x: i32, y: i32, rc: &RECT) -> bool {
     x >= rc.left && x < rc.right && y >= rc.top && y < rc.bottom
+}
+
+fn invalidate_expanded(hwnd: HWND, rc: &RECT) {
+    let mut r = *rc;
+    // Expand a couple of pixels so border artifacts get repainted.
+    r.left -= 2;
+    r.top -= 2;
+    r.right += 2;
+    r.bottom += 2;
+    unsafe {
+        let _ = InvalidateRect(hwnd, Some(&r), false);
+    }
 }
 
 unsafe fn premultiply_bitmap(bmp: HBITMAP) {
