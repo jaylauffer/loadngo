@@ -24,7 +24,7 @@ use tracing_subscriber::{fmt::writer::MakeWriterExt, EnvFilter};
 use windows::core::PCWSTR;
 use windows::Win32::{
     Foundation::{GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
-    Graphics::Gdi::HBRUSH,
+    Graphics::Gdi::{GetStockObject, HBRUSH, WHITE_BRUSH},
     System::{Com::CoInitializeEx, LibraryLoader::GetModuleHandleW},
     UI::{
         Controls::{InitCommonControlsEx, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX},
@@ -34,16 +34,19 @@ use windows::Win32::{
             SetWindowLongPtrW, ShowWindow, TranslateMessage, CREATESTRUCTW, CW_USEDEFAULT,
             GWLP_USERDATA, HICON, HMENU, IDC_ARROW, MSG, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
             WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NCCREATE, WM_SIZE, WM_TIMER, WNDCLASSEXW,
-            WNDCLASS_STYLES, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE,
-            WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+            WNDCLASS_STYLES, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_OVERLAPPEDWINDOW,
+            WS_VISIBLE, CS_HREDRAW, CS_VREDRAW,
         },
     },
 };
 use winutil::to_wstring;
 
-const APP_CLASS: &str = "LoadNgoTaskMainWnd";
-const AUTOSAVE_TIMER_ID: usize = 0x400;
-const AUTOSAVE_INTERVAL_MS: u32 = 60_000;
+const APP_CLASS: &str = "TTrackerMWnd";
+const AUTOSAVE_TIMER_ID: usize = 1;
+// Match the legacy timer cadence from the C++ app (~12 minutes).
+const AUTOSAVE_INTERVAL_MS: u32 = 719_011;
+const WM_STOREPLAN: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 1240;
+const WM_SYNCHPLAN: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 1260;
 
 struct UiState {
     hwnd: HWND,
@@ -102,13 +105,13 @@ unsafe fn register_window_class(hinstance: HINSTANCE) -> Result<()> {
     let class_name = to_wstring(APP_CLASS);
     let mut wc = WNDCLASSEXW::default();
     wc.cbSize = size_of::<WNDCLASSEXW>() as u32;
-    wc.style = WNDCLASS_STYLES(0);
+    wc.style = WNDCLASS_STYLES(CS_HREDRAW.0 | CS_VREDRAW.0);
     wc.lpfnWndProc = Some(wndproc);
     wc.hInstance = hinstance;
     wc.hCursor = LoadCursorW(None, IDC_ARROW)?;
     wc.hIcon = HICON::default();
     wc.hIconSm = HICON::default();
-    wc.hbrBackground = HBRUSH(null_mut());
+    wc.hbrBackground = HBRUSH(GetStockObject(WHITE_BRUSH).0);
     wc.lpszClassName = PCWSTR(class_name.as_ptr());
     let atom = RegisterClassExW(&wc);
     if atom == 0 {
@@ -123,10 +126,10 @@ unsafe fn register_window_class(hinstance: HINSTANCE) -> Result<()> {
 
 unsafe fn create_main_window(hinstance: HINSTANCE, state: Box<UiState>) -> Result<HWND> {
     let class_name = to_wstring(APP_CLASS);
-    let title = to_wstring("Task v0.1 (Rust)");
+    let title = to_wstring("Task v.15");
     let lp_param = Box::into_raw(state) as _;
     let hwnd = CreateWindowExW(
-        WINDOW_EX_STYLE(WS_EX_CLIENTEDGE.0),
+        WINDOW_EX_STYLE(0),
         PCWSTR(class_name.as_ptr()),
         PCWSTR(title.as_ptr()),
         WINDOW_STYLE(WS_OVERLAPPEDWINDOW.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
@@ -186,6 +189,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(state) = get_state(hwnd) {
                 let cmd_id = lparam.0 as i32;
                 handle_toolbar_command(state, cmd_id);
+            }
+            LRESULT(0)
+        }
+        WM_STOREPLAN => {
+            if let Some(state) = get_state(hwnd) {
+                save_plan(state);
+            }
+            LRESULT(0)
+        }
+        WM_SYNCHPLAN => {
+            if let Some(state) = get_state(hwnd) {
+                let _ = state.network.send_sync_request(0);
             }
             LRESULT(0)
         }
