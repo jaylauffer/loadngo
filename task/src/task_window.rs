@@ -1,5 +1,5 @@
 use anyhow::Result;
-use data::{config::Configuration, model_utils::now_timestamp, service::Service, task::Task};
+use data::{config::Configuration, service::Service, task::Task};
 use network::Network;
 use std::{mem::size_of, ptr::null_mut};
 use tracing::info;
@@ -25,6 +25,7 @@ use windows::Win32::{
 
 use crate::{
     day_plan,
+    dragdrop::{register_drop_target, revoke_drop_target, DropPayload},
     project_plan,
     tabs::{add_tab, create_tab_host, toggle_toolbar_keyboard_mode},
     toolbar,
@@ -48,6 +49,7 @@ pub struct TaskWindowState {
     pub project_plan: HWND,
     pub schedule: HWND,
     pub chat: HWND,
+    pub drop_target: Option<windows::Win32::System::Ole::IDropTarget>,
     pub service: Service,
     pub network: Network,
     pub plan_name: String,
@@ -64,6 +66,7 @@ impl TaskWindowState {
             project_plan: HWND::default(),
             schedule: HWND::default(),
             chat: HWND::default(),
+            drop_target: None,
             service,
             network,
             plan_name,
@@ -240,6 +243,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     info!("(network) user depart placeholder");
                 }
                 save_plan(state);
+                if state.drop_target.is_some() {
+                    revoke_drop_target(state.tab_host);
+                    state.drop_target = None;
+                }
             }
             if let Some(state_ptr) = detach_state(hwnd) {
                 drop(Box::from_raw(state_ptr));
@@ -279,6 +286,17 @@ unsafe fn create_children(parent: HWND, state: &mut TaskWindowState) {
     add_tab(tab_host, "Project Plan", proj);
     add_tab(tab_host, "Schedule", sched);
     state.tab_host = tab_host;
+
+    // Accept drops on the tab host (matches legacy RegisterDragDrop on TaskTabWnd).
+    if let Ok(target) = register_drop_target(tab_host, |payload| {
+        match payload {
+            DropPayload::Files(files) => info!("Dropped files: {:?}", files),
+            DropPayload::Text(text) => info!("Dropped text: {text}"),
+        }
+        Ok(())
+    }) {
+        state.drop_target = Some(target);
+    }
 
     // Simple chat/status area along the bottom.
     state.chat = create_placeholder(parent, "Chat / status (not yet ported)");

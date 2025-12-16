@@ -3,6 +3,7 @@
 #![windows_subsystem = "windows"]
 
 mod day_plan;
+mod dragdrop;
 mod project_plan;
 mod tabs;
 mod task_window;
@@ -14,7 +15,7 @@ use tracing::Level;
 use tracing_subscriber::{fmt::writer::MakeWriterExt, EnvFilter};
 use windows::Win32::{
     Foundation::HWND,
-    System::{Com::CoInitializeEx, LibraryLoader::GetModuleHandleW},
+    System::{LibraryLoader::GetModuleHandleW, Ole::OleInitialize},
     UI::WindowsAndMessaging::{ShowWindow, SW_SHOW},
 };
 
@@ -29,7 +30,8 @@ fn main() -> Result<()> {
         .init();
 
     unsafe {
-        CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED).ok()?;
+        // Match legacy startup: OleInitialize instead of CoInitializeEx.
+        OleInitialize(None).ok().ok_or_else(|| anyhow::anyhow!("OleInitialize failed"))?;
         init_common_controls();
         let hinstance = GetModuleHandleW(None)?.into();
         let (mut service, mut network) = build_services()?;
