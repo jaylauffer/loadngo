@@ -3,6 +3,7 @@
 #![windows_subsystem = "windows"]
 
 mod day_planner;
+mod date_banner;
 mod dragdrop;
 mod project_plan;
 mod tabs;

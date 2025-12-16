@@ -6,8 +6,10 @@ use tracing::info;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CreateFontIndirectW, GetStockObject, LineTo, MoveToEx, SelectObject, SetBkMode, SetTextColor,
-    TextOutW, HBRUSH, HGDIOBJ, HFONT, LF_FACESIZE, LOGFONTW, TRANSPARENT, WHITE_BRUSH,
+    AlphaBlend, CreateCompatibleDC, CreateDIBSection, CreateFontIndirectW, CreateSolidBrush,
+    DeleteDC, DeleteObject, GetStockObject, LineTo, MoveToEx, SelectObject, SetBkMode, SetTextColor,
+    TextOutW, AC_SRC_ALPHA, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, DIB_RGB_COLORS, HBRUSH,
+    HDC, HGDIOBJ, HFONT, LF_FACESIZE, LOGFONTW, TRANSPARENT, WHITE_BRUSH, BI_RGB,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::SetScrollInfo;
@@ -27,6 +29,7 @@ const CLASS_NAME: &str = "DayPlanWnd";
 const HEADER_WIDTH: i32 = 70;
 const SPLITTER_BAR_WIDTH: i32 = 8;
 const DEFAULT_SPLIT: f64 = 0.55;
+const BANNER_HEIGHT: i32 = 42;
 const HOUR_FRACTION: f64 = 0.25; // 15-minute increments
 const HOUR_FRACTION_PX: i32 = 30;
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -37,12 +40,18 @@ const HOUR_STRINGS: [&str; 24] = [
     "10 PM", "11 PM",
 ];
 
+struct PaneState {
+    color: COLORREF,
+    label: Vec<u16>,
+}
+
 struct DayPlannerState {
     hwnd: HWND,
     service: *mut Service,
     spec_hwnd: HWND,
     actual_hwnd: HWND,
     splitter_hwnd: HWND,
+    banner_hwnd: HWND,
     split_percent: f64,
     start_hour_pos: f64,
     font: HFONT,
@@ -57,6 +66,7 @@ impl DayPlannerState {
             spec_hwnd: HWND::default(),
             actual_hwnd: HWND::default(),
             splitter_hwnd: HWND::default(),
+            banner_hwnd: HWND::default(),
             split_percent: DEFAULT_SPLIT,
             start_hour_pos: 8.0, // default 8 AM
             font: HFONT::default(),
@@ -80,6 +90,50 @@ pub fn register_class() -> Result<()> {
         let _ = RegisterClassW(&class);
     }
     Ok(())
+}
+
+fn register_pane_class() -> Result<()> {
+    unsafe {
+        static mut DONE: bool = false;
+        if DONE {
+            return Ok(());
+        }
+        let hinstance = GetModuleHandleW(None)?;
+        let class = WNDCLASSW {
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(pane_wndproc),
+            hInstance: hinstance.into(),
+            lpszClassName: PCWSTR(to_wstring("DayPlanPane").as_ptr()),
+            hbrBackground: HBRUSH(null_mut()),
+            hCursor: LoadCursorW(None, IDC_ARROW)?,
+            ..Default::default()
+        };
+        let _ = RegisterClassW(&class);
+        DONE = true;
+        Ok(())
+    }
+}
+
+fn register_splitter_class() -> Result<()> {
+    unsafe {
+        static mut DONE: bool = false;
+        if DONE {
+            return Ok(());
+        }
+        let hinstance = GetModuleHandleW(None)?;
+        let class = WNDCLASSW {
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(splitter_wndproc),
+            hInstance: hinstance.into(),
+            lpszClassName: PCWSTR(to_wstring("DayPlanSplitter").as_ptr()),
+            hbrBackground: HBRUSH(null_mut()),
+            hCursor: LoadCursorW(None, IDC_ARROW)?,
+            ..Default::default()
+        };
+        let _ = RegisterClassW(&class);
+        DONE = true;
+        Ok(())
+    }
 }
 
 pub fn create_day_planner(parent: HWND, service: *mut Service) -> HWND {
@@ -219,11 +273,30 @@ unsafe fn create_planner_font() -> HFONT {
 }
 
 unsafe fn create_children(hwnd: HWND, state: &mut DayPlannerState) {
+    register_pane_class().ok();
+    register_splitter_class().ok();
     let hinstance = GetModuleHandleW(None).unwrap();
+
+    // Banner across the top.
+    let banner = crate::date_banner::create_date_banner(hwnd);
+
+    let spec_state = Box::new(PaneState {
+        color: COLORREF(0x00e4f0ff),
+        label: to_wstring("Plan Details"),
+    });
+    let actual_state = Box::new(PaneState {
+        color: COLORREF(0x00fff4e4),
+        label: to_wstring("Actual Details"),
+    });
+    let split_state = Box::new(PaneState {
+        color: COLORREF(0x00d0d0d0),
+        label: Vec::new(),
+    });
+
     let spec = CreateWindowExW(
-        WINDOW_EX_STYLE(0),
-        PCWSTR(to_wstring("STATIC").as_ptr()),
-        PCWSTR(to_wstring("Spec Details").as_ptr()),
+        WINDOW_EX_STYLE(WS_EX_NOPARENTNOTIFY.0 | windows::Win32::UI::WindowsAndMessaging::WS_EX_TRANSPARENT.0),
+        PCWSTR(to_wstring("DayPlanPane").as_ptr()),
+        PCWSTR::null(),
         WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
         0,
         0,
@@ -232,13 +305,13 @@ unsafe fn create_children(hwnd: HWND, state: &mut DayPlannerState) {
         hwnd,
         HMENU(null_mut()),
         hinstance,
-        None,
+        Some(Box::into_raw(spec_state) as *mut _),
     )
     .expect("spec create");
     let actual = CreateWindowExW(
-        WINDOW_EX_STYLE(0),
-        PCWSTR(to_wstring("STATIC").as_ptr()),
-        PCWSTR(to_wstring("Actual Details").as_ptr()),
+        WINDOW_EX_STYLE(WS_EX_NOPARENTNOTIFY.0 | windows::Win32::UI::WindowsAndMessaging::WS_EX_TRANSPARENT.0),
+        PCWSTR(to_wstring("DayPlanPane").as_ptr()),
+        PCWSTR::null(),
         WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
         0,
         0,
@@ -247,12 +320,12 @@ unsafe fn create_children(hwnd: HWND, state: &mut DayPlannerState) {
         hwnd,
         HMENU(null_mut()),
         hinstance,
-        None,
+        Some(Box::into_raw(actual_state) as *mut _),
     )
     .expect("actual create");
     let split = CreateWindowExW(
         WINDOW_EX_STYLE(0),
-        PCWSTR(to_wstring("STATIC").as_ptr()),
+        PCWSTR(to_wstring("DayPlanSplitter").as_ptr()),
         PCWSTR::null(),
         WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
         0,
@@ -262,24 +335,28 @@ unsafe fn create_children(hwnd: HWND, state: &mut DayPlannerState) {
         hwnd,
         HMENU(null_mut()),
         hinstance,
-        None,
+        Some(Box::into_raw(split_state) as *mut _),
     )
     .expect("split create");
+    state.banner_hwnd = banner;
     state.spec_hwnd = spec;
     state.actual_hwnd = actual;
     state.splitter_hwnd = split;
 }
 
 unsafe fn layout_children(state: &mut DayPlannerState, width: i32, height: i32) {
+    let banner_h = BANNER_HEIGHT;
+    let plan_height = (height - banner_h).max(0);
     let plan_width = width - (HEADER_WIDTH + SPLITTER_BAR_WIDTH);
     let spec_width = (plan_width as f64 * state.split_percent) as i32;
     let act_width = plan_width - spec_width - SPLITTER_BAR_WIDTH;
     let mut x = HEADER_WIDTH;
-    let _ = MoveWindow(state.spec_hwnd, x, 0, spec_width, height, true);
+    let _ = MoveWindow(state.banner_hwnd, 0, 0, width, banner_h, true);
+    let _ = MoveWindow(state.spec_hwnd, x, banner_h, spec_width, plan_height, true);
     x += spec_width;
-    let _ = MoveWindow(state.splitter_hwnd, x, 0, SPLITTER_BAR_WIDTH, height, true);
+    let _ = MoveWindow(state.splitter_hwnd, x, banner_h, SPLITTER_BAR_WIDTH, plan_height, true);
     x += SPLITTER_BAR_WIDTH;
-    let _ = MoveWindow(state.actual_hwnd, x, 0, act_width.max(0), height, true);
+    let _ = MoveWindow(state.actual_hwnd, x, banner_h, act_width.max(0), plan_height, true);
 }
 
 unsafe fn init_scroll(state: &mut DayPlannerState) {
@@ -386,15 +463,17 @@ unsafe fn paint(state: &DayPlannerState) {
     let bg = HBRUSH(GetStockObject(WHITE_BRUSH).0);
     let _ = windows::Win32::Graphics::Gdi::FillRect(dc, &rc, bg);
 
-    // header separator
-    let _ = MoveToEx(dc, HEADER_WIDTH, 0, None);
+    // header separator and banner baseline
+    let _ = MoveToEx(dc, 0, BANNER_HEIGHT, None);
+    let _ = LineTo(dc, width, BANNER_HEIGHT);
+    let _ = MoveToEx(dc, HEADER_WIDTH, BANNER_HEIGHT, None);
     let _ = LineTo(dc, HEADER_WIDTH, height);
 
     let old_font = SelectObject(dc, state.font);
     let _ = SetBkMode(dc, TRANSPARENT);
     let _ = SetTextColor(dc, COLORREF(0x00202020));
 
-    let mut y = -((state.start_hour_pos / HOUR_FRACTION) as i32 % (HOUR_FRACTION_PX));
+    let mut y = BANNER_HEIGHT + -((state.start_hour_pos / HOUR_FRACTION) as i32 % (HOUR_FRACTION_PX));
     let mut hour_idx = ((state.start_hour_pos / 1.0).floor() as i32) % 24;
     while y < height {
         let _ = MoveToEx(dc, 0, y, None);
@@ -414,6 +493,147 @@ unsafe fn paint(state: &DayPlannerState) {
 
     let _ = SelectObject(dc, old_font);
     let _ = windows::Win32::Graphics::Gdi::EndPaint(state.hwnd, &ps);
+}
+
+unsafe fn alpha_fill(dc: HDC, rc: &RECT, color: COLORREF, alpha: u8) {
+    let width = 1;
+    let height = 1;
+    let mut bmi = BITMAPINFO::default();
+    bmi.bmiHeader = BITMAPINFOHEADER {
+        biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+        biWidth: width,
+        biHeight: height,
+        biPlanes: 1,
+        biBitCount: 32,
+        biCompression: BI_RGB.0 as u32,
+        biSizeImage: (width * height * 4) as u32,
+        ..Default::default()
+    };
+    let mut bits = std::ptr::null_mut();
+    let hbitmap = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0).ok();
+    if let Some(hbmp) = hbitmap {
+        let mem_dc = CreateCompatibleDC(dc);
+        let old = SelectObject(mem_dc, hbmp);
+        if !bits.is_null() {
+            let b = (color.0 & 0xFF) as u8;
+            let g = ((color.0 >> 8) & 0xFF) as u8;
+            let r = ((color.0 >> 16) & 0xFF) as u8;
+            let pixel: [u8; 4] = [
+                ((b as u16 * alpha as u16) / 255) as u8,
+                ((g as u16 * alpha as u16) / 255) as u8,
+                ((r as u16 * alpha as u16) / 255) as u8,
+                alpha,
+            ];
+            std::ptr::copy_nonoverlapping(pixel.as_ptr(), bits as *mut u8, 4);
+        }
+        let bf = BLENDFUNCTION {
+            BlendOp: AC_SRC_ALPHA as u8,
+            BlendFlags: 0,
+            SourceConstantAlpha: 255,
+            AlphaFormat: 1, // use per-pixel alpha
+        };
+        let w = rc.right - rc.left;
+        let h = rc.bottom - rc.top;
+        let _ = AlphaBlend(mem_dc, 0, 0, 1, 1, mem_dc, 0, 0, 1, 1, bf); // noop to satisfy some drivers
+        let _ = AlphaBlend(dc, rc.left, rc.top, w, h, mem_dc, 0, 0, 1, 1, bf);
+        let _ = SelectObject(mem_dc, old);
+        let _ = DeleteDC(mem_dc);
+        let _ = DeleteObject(hbmp);
+    }
+}
+
+unsafe extern "system" fn pane_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_CREATE => {
+            let cs = &*(lparam.0 as *const CREATESTRUCTW);
+            let ptr = cs.lpCreateParams as *mut PaneState;
+            if !ptr.is_null() {
+                SetWindowLongPtrW(hwnd, GWL_USERDATA, ptr as isize);
+            }
+            LRESULT(0)
+        }
+        WM_PAINT => {
+            let mut ps = windows::Win32::Graphics::Gdi::PAINTSTRUCT::default();
+            let dc = windows::Win32::Graphics::Gdi::BeginPaint(hwnd, &mut ps);
+            if !dc.0.is_null() {
+                let mut rc = RECT::default();
+                let _ = GetClientRect(hwnd, &mut rc);
+                if let Some(state) = (GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut PaneState).as_ref() {
+                    alpha_fill(dc, &rc, state.color, 160);
+                    if !state.label.is_empty() {
+                        let _ = SetBkMode(dc, TRANSPARENT);
+                        let _ = SetTextColor(dc, COLORREF(0x00303030));
+                        let _ = TextOutW(dc, 6, 6, &state.label);
+                    }
+                }
+            }
+            let _ = windows::Win32::Graphics::Gdi::EndPaint(hwnd, &mut ps);
+            LRESULT(0)
+        }
+        WM_DESTROY => {
+            let ptr = GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut PaneState;
+            if !ptr.is_null() {
+                let _ = SetWindowLongPtrW(hwnd, GWL_USERDATA, 0);
+                drop(Box::from_raw(ptr));
+            }
+            LRESULT(0)
+        }
+        WM_ERASEBKGND => LRESULT(1),
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+unsafe extern "system" fn splitter_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_CREATE => {
+            let cs = &*(lparam.0 as *const CREATESTRUCTW);
+            let ptr = cs.lpCreateParams as *mut PaneState;
+            if !ptr.is_null() {
+                SetWindowLongPtrW(hwnd, GWL_USERDATA, ptr as isize);
+            }
+            LRESULT(0)
+        }
+        WM_PAINT => {
+            let mut ps = windows::Win32::Graphics::Gdi::PAINTSTRUCT::default();
+            let dc = windows::Win32::Graphics::Gdi::BeginPaint(hwnd, &mut ps);
+            if !dc.0.is_null() {
+                let mut rc = RECT::default();
+                let _ = GetClientRect(hwnd, &mut rc);
+                let color = if let Some(state) =
+                    (GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut PaneState).as_ref()
+                {
+                    state.color
+                } else {
+                    COLORREF(0x00c0c0c0)
+                };
+                let brush = CreateSolidBrush(color);
+                let _ = windows::Win32::Graphics::Gdi::FillRect(dc, &rc, brush);
+                let _ = DeleteObject(brush);
+            }
+            let _ = windows::Win32::Graphics::Gdi::EndPaint(hwnd, &mut ps);
+            LRESULT(0)
+        }
+        WM_DESTROY => {
+            let ptr = GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut PaneState;
+            if !ptr.is_null() {
+                let _ = SetWindowLongPtrW(hwnd, GWL_USERDATA, 0);
+                drop(Box::from_raw(ptr));
+            }
+            LRESULT(0)
+        }
+        WM_ERASEBKGND => LRESULT(1),
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
 }
 
 unsafe fn register_drop(state: &mut DayPlannerState) {
