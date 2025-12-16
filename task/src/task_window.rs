@@ -12,10 +12,10 @@ use windows::Win32::{
         Controls::{InitCommonControlsEx, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX},
         WindowsAndMessaging::{
             CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
-            GetWindowLongPtrW, GetWindowRect, KillTimer, LoadCursorW, MoveWindow, PostQuitMessage,
-            RegisterClassExW, SetTimer, SetWindowLongPtrW, ShowWindow, TranslateMessage,
-            CREATESTRUCTW, CW_USEDEFAULT, GWLP_USERDATA, HICON, HMENU, IDC_ARROW, MSG, SW_SHOW,
-            WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NCCREATE,
+            GetWindowLongPtrW, GetWindowRect, KillTimer, LoadCursorW, LoadImageW, MoveWindow,
+            PostQuitMessage, RegisterClassExW, SetTimer, SetWindowLongPtrW, TranslateMessage,
+            CREATESTRUCTW, GWLP_USERDATA, HICON, HMENU, IDC_ARROW, IMAGE_ICON, LR_DEFAULTCOLOR,
+            MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NCCREATE,
             WM_SIZE, WM_SYSCOMMAND, WM_TIMER, WNDCLASSEXW, WNDCLASS_STYLES, WS_CHILD,
             WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_OVERLAPPEDWINDOW, WS_VISIBLE, CS_HREDRAW,
             CS_VREDRAW, SC_KEYMENU, WS_EX_ACCEPTFILES,
@@ -33,6 +33,7 @@ use crate::{
 
 const CLASS_NAME: &str = "loadngo::Task::20::MainWindowClass";
 const WINDOW_TITLE: &str = "loadngo Task";
+const IDI_APPICON: u16 = 114;
 const CHAT_HEIGHT: i32 = 80;
 const AUTOSAVE_TIMER_ID: usize = 1;
 // Matches the legacy cadence in TaskWindow/TaskMainWnd (approx 12 minutes).
@@ -87,8 +88,9 @@ pub unsafe fn register_window_class(hinstance: HINSTANCE) -> Result<()> {
     wc.lpfnWndProc = Some(wndproc);
     wc.hInstance = hinstance;
     wc.hCursor = LoadCursorW(None, IDC_ARROW)?;
-    wc.hIcon = HICON::default();
-    wc.hIconSm = HICON::default();
+    let icons = load_app_icons(hinstance);
+    wc.hIcon = icons.0;
+    wc.hIconSm = icons.1;
     wc.hbrBackground = HBRUSH(GetStockObject(WHITE_BRUSH).0);
     wc.lpszClassName = PCWSTR(class_name.as_ptr());
     let atom = RegisterClassExW(&wc);
@@ -311,7 +313,8 @@ fn save_plan(state: &TaskWindowState) {
 unsafe fn handle_toolbar_command(state: &mut TaskWindowState, cmd_id: i32) {
     match cmd_id {
         toolbar::TBCREATETASK => {
-            let task = Task::spawn("New Task", "local-user", 1, 1, data::model_utils::now_timestamp());
+            let task =
+                Task::spawn("New Task", "local-user", 1, 1, data::model_utils::now_timestamp());
             state.service.add_task(task);
             info!("Created task ({} total)", state.service.tasks.len());
             day_plan::refresh(state.day_plan);
@@ -353,15 +356,6 @@ unsafe fn create_placeholder(parent: HWND, text: &str) -> HWND {
     .expect("create placeholder")
 }
 
-// A minimal message loop so callers can reuse this module standalone.
-pub unsafe fn message_loop() {
-    let mut msg = MSG::default();
-    while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-        let _ = TranslateMessage(&msg);
-        DispatchMessageW(&msg);
-    }
-}
-
 pub unsafe fn build_services() -> Result<(Service, Network)> {
     let mut config = Configuration::new();
     config.set("enableMulticast", "0");
@@ -376,5 +370,41 @@ pub fn load_all(service: &mut Service, plan_name: &str) {
     match service.load_all(plan_name) {
         Ok(_) => info!("Loaded plan \"{plan_name}\" (with config)"),
         Err(err) => info!("No existing plan \"{plan_name}\" to load ({err:?})"),
+    }
+}
+
+fn load_app_icons(hinstance: HINSTANCE) -> (HICON, HICON) {
+    unsafe {
+        let res = PCWSTR(IDI_APPICON as usize as *const u16);
+        let large = LoadImageW(
+            hinstance,
+            res,
+            IMAGE_ICON,
+            32,
+            32,
+            LR_DEFAULTCOLOR,
+        )
+        .map(|h| HICON(h.0))
+        .unwrap_or_default();
+        let small = LoadImageW(
+            hinstance,
+            res,
+            IMAGE_ICON,
+            16,
+            16,
+            LR_DEFAULTCOLOR,
+        )
+        .map(|h| HICON(h.0))
+        .unwrap_or_default();
+        (large, small)
+    }
+}
+
+// A minimal message loop so callers can reuse this module standalone.
+pub unsafe fn message_loop() {
+    let mut msg = MSG::default();
+    while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+        let _ = TranslateMessage(&msg);
+        DispatchMessageW(&msg);
     }
 }

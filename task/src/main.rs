@@ -18,10 +18,7 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{ShowWindow, SW_SHOW},
 };
 
-use task_window::{
-    build_services, create_main_window, init_common_controls, load_all, message_loop,
-    register_window_class,
-};
+use task_window::{build_services, create_main_window, init_common_controls, load_all, message_loop, register_window_class};
 
 fn main() -> Result<()> {
     let file_appender = tracing_appender::rolling::never(".", "task.log");
@@ -39,9 +36,8 @@ fn main() -> Result<()> {
         load_all(&mut service, "user_plan");
         network.init()?;
         register_window_class(hinstance)?;
-        let hwnd: HWND =
-            create_main_window(hinstance, service, network, "user_plan".to_string())?;
-        ShowWindow(hwnd, SW_SHOW);
+        let hwnd: HWND = create_main_window(hinstance, service, network, "user_plan".to_string())?;
+        let _ = ShowWindow(hwnd, SW_SHOW);
         tracing::info!("TaskWindow started");
         message_loop();
     }
