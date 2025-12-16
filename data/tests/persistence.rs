@@ -1,10 +1,4 @@
-use data::{
-    model_utils::now_timestamp,
-    task::Task,
-    persistence,
-    undo::UndoStack,
-    value::Value,
-};
+use data::{model_utils::now_timestamp, persistence, task::Task, undo::UndoStack, value::Value};
 use std::collections::HashMap;
 use tempfile::NamedTempFile;
 
@@ -18,10 +12,10 @@ fn task_round_trip_serialization() {
     task.due_date = 12345;
     task.scheduled_start = 10000;
     task.estimated_duration = 3600;
-    task
-        .properties
+    task.properties
         .insert("title".to_string(), Value::Str("demo".into()));
-    task.properties.insert("flag".to_string(), Value::Bool(true));
+    task.properties
+        .insert("flag".to_string(), Value::Bool(true));
     task.properties.insert("count".to_string(), Value::U64(7));
 
     let file = NamedTempFile::new().expect("temp file");
@@ -52,7 +46,10 @@ fn undo_round_trip_add_remove() {
     let mut tasks: HashMap<u64, Task> = HashMap::new();
     let mut undo = UndoStack::default();
 
-    undo.apply(data::undo::Command::AddTask { task: task.clone() }, &mut tasks);
+    undo.apply(
+        data::undo::Command::AddTask { task: task.clone() },
+        &mut tasks,
+    );
     assert!(tasks.contains_key(&task.entity.id));
 
     undo.undo(&mut tasks);
@@ -79,5 +76,8 @@ fn deterministic_output_for_sorted_tasks() {
 
     let bytes1 = std::fs::read(file1.path()).unwrap();
     let bytes2 = std::fs::read(file2.path()).unwrap();
-    assert_eq!(bytes1, bytes2, "deterministic ordering should produce identical output");
+    assert_eq!(
+        bytes1, bytes2,
+        "deterministic ordering should produce identical output"
+    );
 }

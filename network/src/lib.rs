@@ -101,7 +101,10 @@ impl Network {
 
     /// Send a raw frame to the target address.
     pub fn send_frame<A: ToSocketAddrs>(&self, target: A, frame: &[u8]) -> Result<usize> {
-        let sock = self.socket.as_ref().ok_or_else(|| anyhow::anyhow!("socket not bound"))?;
+        let sock = self
+            .socket
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("socket not bound"))?;
         Ok(sock.send_to(frame, target)?)
     }
 
@@ -123,7 +126,10 @@ impl Network {
 
     /// Receive a raw frame into the provided buffer.
     pub fn recv_frame(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
-        let sock = self.socket.as_ref().ok_or_else(|| anyhow::anyhow!("socket not bound"))?;
+        let sock = self
+            .socket
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("socket not bound"))?;
         Ok(sock.recv_from(buf)?)
     }
 
@@ -133,7 +139,10 @@ impl Network {
         F: FnMut(SocketAddr, Header, Message),
     {
         use std::io::ErrorKind;
-        let sock = self.socket.as_ref().ok_or_else(|| anyhow::anyhow!("socket not bound"))?;
+        let sock = self
+            .socket
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("socket not bound"))?;
         let mut buf = [0u8; 64 * 1024];
         match sock.recv_from(&mut buf) {
             Ok((len, addr)) => {

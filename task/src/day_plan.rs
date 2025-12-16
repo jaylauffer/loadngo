@@ -12,9 +12,9 @@ use windows::{
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
             CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW, RegisterClassW,
-            SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWL_USERDATA, WNDCLASSW,
-            WM_CREATE, WM_DESTROY, WM_PAINT, WM_SIZE, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
-            WS_VISIBLE, WINDOW_EX_STYLE, WINDOW_STYLE,
+            SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWL_USERDATA,
+            WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_PAINT, WM_SIZE, WNDCLASSW,
+            WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_VISIBLE,
         },
     },
 };
@@ -55,9 +55,7 @@ pub fn create_day_plan(parent: HWND, service: *mut Service) -> HWND {
             WINDOW_EX_STYLE(0),
             PCWSTR(to_wstring(CLASS_NAME).as_ptr()),
             PCWSTR::null(),
-            WINDOW_STYLE(
-                WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0,
-            ),
+            WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
             0,
             0,
             100,
@@ -77,12 +75,7 @@ pub fn refresh(hwnd: HWND) {
     }
 }
 
-unsafe extern "system" fn wndproc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_CREATE => {
             let cs = &*(lparam.0 as *const CREATESTRUCTW);
@@ -125,7 +118,10 @@ unsafe fn paint(state: &mut DayPlanState) {
     // Prepare text output.
     let _ = SetBkMode(dc, TRANSPARENT);
     let _ = SetTextColor(dc, COLORREF(0x00202020));
-    let old_font = SelectObject(dc, GetStockObject(windows::Win32::Graphics::Gdi::DEFAULT_GUI_FONT));
+    let old_font = SelectObject(
+        dc,
+        GetStockObject(windows::Win32::Graphics::Gdi::DEFAULT_GUI_FONT),
+    );
 
     // Build a small status string plus a handful of tasks.
     let mut lines = vec![format!(

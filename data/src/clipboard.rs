@@ -38,7 +38,7 @@ fn set_clipboard_text(text: &str) -> Result<()> {
 
         let hmem: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, bytes)?;
         if hmem.0.is_null() {
-        let _ = CloseClipboard();
+            let _ = CloseClipboard();
             anyhow::bail!("GlobalAlloc failed");
         }
 
@@ -47,11 +47,7 @@ fn set_clipboard_text(text: &str) -> Result<()> {
             let _ = CloseClipboard();
             anyhow::bail!("GlobalLock failed");
         }
-        copy_nonoverlapping(
-            utf16.as_ptr() as *const c_void,
-            locked,
-            bytes,
-        );
+        copy_nonoverlapping(utf16.as_ptr() as *const c_void, locked, bytes);
         let _ = GlobalUnlock(hmem);
 
         SetClipboardData(CF_UNICODETEXT, HANDLE(hmem.0))?;

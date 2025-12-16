@@ -28,7 +28,11 @@ impl TreeControl {
                 PCWSTR(cls.as_ptr()),
                 PCWSTR::null(),
                 WINDOW_STYLE(
-                    WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPSIBLINGS.0 | TVS_HASBUTTONS | TVS_HASLINES
+                    WS_CHILD.0
+                        | WS_VISIBLE.0
+                        | WS_CLIPSIBLINGS.0
+                        | TVS_HASBUTTONS
+                        | TVS_HASLINES
                         | TVS_LINESATROOT,
                 ),
                 0,
@@ -98,6 +102,14 @@ impl Component for TreeControl {
     fn handle_message(&mut self, _msg: u32, _wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
         LRESULT(0)
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
 /// Simple combo wrapper that uses a LISTBOX-style drop-down, not a real tree combo.
@@ -154,5 +166,13 @@ impl Component for TreeCombo {
     }
     fn handle_message(&mut self, _msg: u32, _wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
         LRESULT(0)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }

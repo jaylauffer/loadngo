@@ -8,16 +8,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use hash::fnv1a;
 pub use model_utils::generate_id;
-pub use types::{Atom, Duration, Id, Ip, TimeStamp};
 pub use sync::{Discrepancy, Participant, Sync};
+pub use types::{Atom, Duration, Id, Ip, TimeStamp};
+pub mod action;
 pub mod clipboard;
-pub mod crypto;
 pub mod config;
+pub mod crypto;
+pub mod data_object;
 pub mod file_manager;
 pub mod listener;
 pub mod service;
-pub mod action;
-pub mod data_object;
 
 pub mod types {
     use serde::{Deserialize, Serialize};
@@ -142,9 +142,9 @@ pub mod entity {
     use super::hash::fnv1a;
     use super::types::{Id, TimeStamp};
     use super::value::Value;
+    use crate::generate_id;
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
-    use crate::generate_id;
 
     /// Minimal stand-in for the C++ Entity base class.
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -326,7 +326,13 @@ pub mod sync {
             self.properties.insert(key.into(), value);
         }
 
-        pub fn record_discrepancy(&mut self, origin: Id, foreign: Id, local: Id, code: Id) -> Discrepancy {
+        pub fn record_discrepancy(
+            &mut self,
+            origin: Id,
+            foreign: Id,
+            local: Id,
+            code: Id,
+        ) -> Discrepancy {
             Discrepancy {
                 sync_id: self.sync_id,
                 entity_origin_id: origin,
@@ -651,7 +657,8 @@ pub mod netmsg {
                 MessageType::Empty => Vec::new(),
                 MessageType::UserIntroduction => {
                     if let Message::UserIntroduction(body) = self {
-                        let mut buf = Vec::with_capacity(8 + 64 + body.name.len() + 1 + body.device.len());
+                        let mut buf =
+                            Vec::with_capacity(8 + 64 + body.name.len() + 1 + body.device.len());
                         buf.extend_from_slice(&body.machine_id.to_le_bytes());
                         buf.extend_from_slice(&body.user_key);
                         buf.extend_from_slice(body.name.as_bytes());
@@ -774,7 +781,11 @@ pub mod netmsg {
                     }
                 }
                 MessageType::ConcludeSync => {
-                    if let Message::ConcludeSync { sync_id, consolidated_id } = self {
+                    if let Message::ConcludeSync {
+                        sync_id,
+                        consolidated_id,
+                    } = self
+                    {
                         let mut buf = Vec::with_capacity(16);
                         buf.extend_from_slice(&sync_id.to_le_bytes());
                         buf.extend_from_slice(&consolidated_id.to_le_bytes());
@@ -997,7 +1008,10 @@ pub mod netmsg {
                             discrepancy,
                         });
                     }
-                    Message::ReportDiscrepancies(DiscrepanciesReport { sync_id, discrepancies })
+                    Message::ReportDiscrepancies(DiscrepanciesReport {
+                        sync_id,
+                        discrepancies,
+                    })
                 }
                 MessageType::EntityInfo => Message::EntityInfo(parse_entity(body)?),
                 MessageType::EntityMove => Message::EntityMove(parse_entity(body)?),
@@ -1020,7 +1034,10 @@ pub mod netmsg {
                     }
                     let sync_id = Id::from_le_bytes(body[0..8].try_into().ok()?);
                     let consolidated_id = Id::from_le_bytes(body[8..16].try_into().ok()?);
-                    Message::ConcludeSync { sync_id, consolidated_id }
+                    Message::ConcludeSync {
+                        sync_id,
+                        consolidated_id,
+                    }
                 }
                 MessageType::Chat => Message::Chat(body.to_vec()),
                 MessageType::PrivateChat => Message::PrivateChat(body.to_vec()),
@@ -1190,7 +1207,11 @@ pub mod task_compare {
     impl Default for TaskComparator {
         fn default() -> Self {
             Self {
-                fields: [SortField::DueDate, SortField::Priority, SortField::StartDate],
+                fields: [
+                    SortField::DueDate,
+                    SortField::Priority,
+                    SortField::StartDate,
+                ],
             }
         }
     }
@@ -1209,7 +1230,9 @@ pub mod task_compare {
                     SortField::DueDate => compare_u64(lhs.due_date, rhs.due_date),
                     SortField::Priority => lhs.priority.cmp(&rhs.priority),
                     SortField::CreateDate => compare_u64(lhs.entity.created, rhs.entity.created),
-                    SortField::EstimatedDuration => compare_u64(lhs.estimated_duration, rhs.estimated_duration),
+                    SortField::EstimatedDuration => {
+                        compare_u64(lhs.estimated_duration, rhs.estimated_duration)
+                    }
                     SortField::StartDate => compare_u64(lhs.scheduled_start, rhs.scheduled_start),
                     SortField::TaskTitle => compare_str(
                         lhs.properties
@@ -1273,9 +1296,18 @@ pub mod undo {
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub enum Command {
-        AddTask { task: Task },
-        RemoveTask { task: Task },
-        UpdateProperty { id: u64, key: String, old: Value, new: Value },
+        AddTask {
+            task: Task,
+        },
+        RemoveTask {
+            task: Task,
+        },
+        UpdateProperty {
+            id: u64,
+            key: String,
+            old: Value,
+            new: Value,
+        },
     }
 
     #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -1370,9 +1402,9 @@ pub mod user {
 
 pub mod task {
     use super::entity::Entity;
+    use super::model_utils::generate_id;
     use super::types::Id;
     use super::value::Value;
-    use super::model_utils::generate_id;
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
 
@@ -1405,8 +1437,21 @@ pub mod task {
         }
 
         /// Convenience helper for creating a bare task with generated ids.
-        pub fn spawn(name: impl Into<String>, owner: impl Into<String>, machine_id: Id, user_id: Id, created: u64) -> Self {
-            let entity = Entity::with_machine_user(generate_id(), generate_id(), owner, created, machine_id, user_id);
+        pub fn spawn(
+            name: impl Into<String>,
+            owner: impl Into<String>,
+            machine_id: Id,
+            user_id: Id,
+            created: u64,
+        ) -> Self {
+            let entity = Entity::with_machine_user(
+                generate_id(),
+                generate_id(),
+                owner,
+                created,
+                machine_id,
+                user_id,
+            );
             Task::new(entity, name)
         }
     }

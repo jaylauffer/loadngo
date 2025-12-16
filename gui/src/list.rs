@@ -2,8 +2,8 @@ use anyhow::Result;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, MoveWindow, SendMessageW, HMENU, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WS_CHILD, WS_CLIPSIBLINGS, WS_VISIBLE,
+    CreateWindowExW, MoveWindow, SendMessageW, HMENU, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD,
+    WS_CLIPSIBLINGS, WS_VISIBLE,
 };
 
 use crate::component::Component;
@@ -29,7 +29,11 @@ impl ListBox {
                 PCWSTR(cls.as_ptr()),
                 PCWSTR::null(),
                 WINDOW_STYLE(
-                    WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPSIBLINGS.0 | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
+                    WS_CHILD.0
+                        | WS_VISIBLE.0
+                        | WS_CLIPSIBLINGS.0
+                        | LBS_NOTIFY
+                        | LBS_NOINTEGRALHEIGHT,
                 ),
                 0,
                 0,
@@ -55,7 +59,12 @@ impl ListBox {
     pub fn add_item(&self, text: &str) {
         let w = to_wstring(text);
         unsafe {
-            let _ = SendMessageW(self.hwnd, LB_ADDSTRING, WPARAM(0), LPARAM(w.as_ptr() as isize));
+            let _ = SendMessageW(
+                self.hwnd,
+                LB_ADDSTRING,
+                WPARAM(0),
+                LPARAM(w.as_ptr() as isize),
+            );
         }
     }
 
@@ -86,6 +95,14 @@ impl Component for ListBox {
 
     fn handle_message(&mut self, _msg: u32, _wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
         LRESULT(0)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 
@@ -169,5 +186,13 @@ impl Component for ListCombo {
 
     fn handle_message(&mut self, _msg: u32, _wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
         LRESULT(0)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }

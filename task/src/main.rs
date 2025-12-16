@@ -5,26 +5,22 @@
 
 #![windows_subsystem = "windows"]
 
-mod toolbar;
-mod tabs;
-mod winutil;
 mod day_plan;
 mod project_plan;
+mod tabs;
+mod toolbar;
+mod winutil;
 
 use anyhow::Result;
 use data::{
-    config::Configuration,
-    file_manager::FileManager,
-    model_utils::now_timestamp,
-    service::Service,
+    config::Configuration, file_manager::FileManager, model_utils::now_timestamp, service::Service,
     task::Task,
 };
 use network::Network;
 use std::{mem::size_of, path::PathBuf, ptr::null_mut};
 use tabs::{add_tab, create_tab_host, toggle_toolbar_keyboard_mode};
-use tracing::info;
-use tracing_subscriber::EnvFilter;
-use winutil::to_wstring;
+use tracing::{info, Level};
+use tracing_subscriber::{fmt::writer::MakeWriterExt, EnvFilter};
 use windows::core::PCWSTR;
 use windows::Win32::{
     Foundation::{GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
@@ -36,13 +32,14 @@ use windows::Win32::{
             CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
             GetWindowLongPtrW, LoadCursorW, MoveWindow, PostQuitMessage, RegisterClassExW,
             SetWindowLongPtrW, ShowWindow, TranslateMessage, CREATESTRUCTW, CW_USEDEFAULT,
-            GWLP_USERDATA, HMENU, HICON, IDC_ARROW, MSG, SW_SHOW, WM_COMMAND, WM_CREATE,
-            WM_DESTROY, WM_NCCREATE, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDCLASS_STYLES,
-            WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
-            WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_EX_CLIENTEDGE,
+            GWLP_USERDATA, HICON, HMENU, IDC_ARROW, MSG, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
+            WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NCCREATE, WM_SIZE, WM_TIMER, WNDCLASSEXW,
+            WNDCLASS_STYLES, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE,
+            WS_OVERLAPPEDWINDOW, WS_VISIBLE,
         },
     },
 };
+use winutil::to_wstring;
 
 const APP_CLASS: &str = "LoadNgoTaskMainWnd";
 const AUTOSAVE_TIMER_ID: usize = 0x400;
@@ -60,8 +57,11 @@ struct UiState {
 }
 
 fn main() -> Result<()> {
+    let file_appender = tracing_appender::rolling::never(".", "task.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(EnvFilter::from_default_env().add_directive(Level::DEBUG.into()))
+        .with_writer(non_blocking.and(std::io::stdout))
         .init();
 
     unsafe {
@@ -142,12 +142,7 @@ unsafe fn create_main_window(hinstance: HINSTANCE, state: Box<UiState>) -> Resul
     Ok(hwnd)
 }
 
-unsafe extern "system" fn wndproc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_NCCREATE => {
             let createstruct = &*(lparam.0 as *const CREATESTRUCTW);
@@ -308,13 +303,7 @@ fn save_plan(state: &UiState) {
 unsafe fn handle_toolbar_command(state: &mut UiState, cmd_id: i32) {
     match cmd_id {
         toolbar::TBCREATETASK => {
-            let task = Task::spawn(
-                "New Task",
-                "local-user",
-                1,
-                1,
-                now_timestamp(),
-            );
+            let task = Task::spawn("New Task", "local-user", 1, 1, now_timestamp());
             state.service.add_task(task);
             info!("Created task ({} total)", state.service.tasks.len());
             day_plan::refresh(state.day_plan);
@@ -326,12 +315,10 @@ unsafe fn handle_toolbar_command(state: &mut UiState, cmd_id: i32) {
         toolbar::TBMAKEREPORT => {
             info!("Report generation not yet ported");
         }
-        toolbar::TBSYNCHRONIZE => {
-            match state.network.send_sync_request(0) {
-                Ok(_) => info!("Sent sync request"),
-                Err(err) => info!("Sync request failed: {err:?}"),
-            }
-        }
+        toolbar::TBSYNCHRONIZE => match state.network.send_sync_request(0) {
+            Ok(_) => info!("Sent sync request"),
+            Err(err) => info!("Sync request failed: {err:?}"),
+        },
         toolbar::TBPRINT => info!("Print not yet implemented"),
         _ => {}
     }

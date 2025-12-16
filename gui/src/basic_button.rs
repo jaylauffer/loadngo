@@ -105,7 +105,10 @@ impl BasicButton {
             let _ = FillRect(dc, &rc, bg);
             let _ = SetBkColor(dc, COLORREF(0x00f0f0f0));
             let _ = SetTextColor(dc, COLORREF(0x00202020));
-            let old_font = SelectObject(dc, GetStockObject(windows::Win32::Graphics::Gdi::DEFAULT_GUI_FONT));
+            let old_font = SelectObject(
+                dc,
+                GetStockObject(windows::Win32::Graphics::Gdi::DEFAULT_GUI_FONT),
+            );
             let text = to_wstring(&self.text);
             let mut buf = text;
             if !buf.is_empty() {
@@ -126,7 +129,9 @@ impl BasicButton {
                     COLORREF(0x00707070),
                 );
                 let old_pen = SelectObject(dc, pen);
-                let _ = windows::Win32::Graphics::Gdi::Rectangle(dc, rc.left, rc.top, rc.right, rc.bottom);
+                let _ = windows::Win32::Graphics::Gdi::Rectangle(
+                    dc, rc.left, rc.top, rc.right, rc.bottom,
+                );
                 let _ = SelectObject(dc, old_pen);
                 let _ = DeleteObject(pen);
             }
@@ -237,6 +242,13 @@ impl Component for BasicButton {
     fn id(&self) -> i32 {
         self.id
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
 /// Adds hover tracking border like CBasicHitTrackButton.
@@ -272,5 +284,11 @@ impl Component for HitTrackButton {
     }
     fn id(&self) -> i32 {
         self.0.id()
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }

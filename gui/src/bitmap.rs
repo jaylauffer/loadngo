@@ -29,7 +29,11 @@ impl Bitmap {
             let hbm = HBITMAP(hbm_raw.0);
 
             let mut bmp = BITMAP::default();
-            GetObjectW(hbm, std::mem::size_of::<BITMAP>() as i32, Some(&mut bmp as *mut _ as *mut _));
+            GetObjectW(
+                hbm,
+                std::mem::size_of::<BITMAP>() as i32,
+                Some(&mut bmp as *mut _ as *mut _),
+            );
             Ok(Self {
                 handle: hbm,
                 width: bmp.bmWidth,

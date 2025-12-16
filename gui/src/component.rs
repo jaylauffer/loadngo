@@ -1,7 +1,8 @@
+use std::any::Any;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 
 /// Basic component abstraction that mirrors the legacy CComponent responsibilities.
-pub trait Component {
+pub trait Component: Any {
     fn hwnd(&self) -> HWND;
     fn bounds(&self) -> RECT;
     fn set_bounds(&mut self, rect: RECT);
@@ -20,6 +21,11 @@ pub trait Component {
     fn id(&self) -> i32 {
         0
     }
+
+    /// For downcasting specific component types.
+    fn as_any(&self) -> &dyn Any;
+
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 
     /// Simple hit-test against the component's RECT.
     fn hit_test(&self, pt: POINT) -> bool {

@@ -74,7 +74,7 @@ fn discrepancies_match_legacy_layout() {
     expected.extend_from_slice(&0x6c6e6774u32.to_le_bytes());
     expected.extend_from_slice(&(MessageType::ReportDiscrepancies as u32).to_le_bytes());
     expected.extend_from_slice(&1u32.to_le_bytes()); // response
-    // payload: syncid + 2 discrepancy structs (5 u64 each)
+                                                     // payload: syncid + 2 discrepancy structs (5 u64 each)
     let payload_len = 8 + (entries.len() * 5 * 8);
     expected.extend_from_slice(&(payload_len as u32).to_le_bytes());
     expected.extend_from_slice(&999u64.to_le_bytes());

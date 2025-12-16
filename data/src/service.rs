@@ -28,13 +28,15 @@ impl Service {
 
     pub fn add_task(&mut self, task: Task) {
         let id = task.entity.id;
-        self.undo.apply(Command::AddTask { task: task.clone() }, &mut self.tasks);
+        self.undo
+            .apply(Command::AddTask { task: task.clone() }, &mut self.tasks);
         self.tasks.insert(id, task);
     }
 
     pub fn remove_task(&mut self, id: u64) {
         if let Some(task) = self.tasks.remove(&id) {
-            self.undo.apply(Command::RemoveTask { task }, &mut self.tasks);
+            self.undo
+                .apply(Command::RemoveTask { task }, &mut self.tasks);
         }
     }
 

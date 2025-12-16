@@ -1,10 +1,15 @@
 use crate::component::Component;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::InvalidateRect;
-use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
-use windows::Win32::UI::WindowsAndMessaging::{
-    MoveWindow, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
 };
+use windows::Win32::UI::WindowsAndMessaging::{
+    MoveWindow, WM_CAPTURECHANGED, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE,
+};
+
+const WM_MOUSELEAVE_CONST: u32 = 0x02A3;
 
 /// Simple container that owns child Components and forwards messages.
 pub struct Container {
@@ -12,6 +17,8 @@ pub struct Container {
     pub children: Vec<Box<dyn Component>>,
     focus_idx: Option<usize>,
     hover_idx: Option<usize>,
+    capturing_idx: Option<usize>,
+    tracking_mouse: bool,
 }
 
 impl Container {
@@ -21,6 +28,8 @@ impl Container {
             children: Vec::new(),
             focus_idx: None,
             hover_idx: None,
+            capturing_idx: None,
+            tracking_mouse: false,
         }
     }
 
@@ -50,7 +59,9 @@ impl Container {
             }
             x += w + gap;
         }
-        unsafe { let _ = InvalidateRect(self.hwnd, None, false); }
+        unsafe {
+            let _ = InvalidateRect(self.hwnd, None, false);
+        }
     }
 
     /// Dispatch a message to children until handled.
@@ -59,6 +70,11 @@ impl Container {
             WM_MOUSEMOVE => self.handle_mouse_move(wparam, lparam),
             WM_LBUTTONDOWN | WM_LBUTTONUP => self.handle_mouse_button(msg, wparam, lparam),
             WM_KEYDOWN | WM_KEYUP | WM_CHAR => self.forward_to_focus(msg, wparam, lparam),
+            WM_MOUSELEAVE_CONST => self.handle_mouse_leave(),
+            WM_CAPTURECHANGED => {
+                self.capturing_idx = None;
+                LRESULT(0)
+            }
             _ => self.forward_first(msg, wparam, lparam),
         }
     }
@@ -99,7 +115,22 @@ impl Container {
     }
 
     fn handle_mouse_move(&mut self, _wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if !self.tracking_mouse {
+            let mut tme = TRACKMOUSEEVENT {
+                cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE,
+                hwndTrack: self.hwnd,
+                dwHoverTime: 0,
+            };
+            self.tracking_mouse = unsafe { TrackMouseEvent(&mut tme).is_ok() };
+        }
         let pt = self.to_client_point(lparam);
+        if let Some(idx) = self.capturing_idx {
+            let lp = self.repack_lparam(pt);
+            if let Some(child) = self.children.get_mut(idx) {
+                return child.handle_message(WM_MOUSEMOVE, WPARAM(0), lp);
+            }
+        }
         let hit_idx = self.hit_test(pt);
         if hit_idx != self.hover_idx {
             if let Some(prev) = self.hover_idx {
@@ -127,18 +158,39 @@ impl Container {
         let pt = self.to_client_point(lparam);
         if let Some(idx) = self.hit_test(pt) {
             self.focus_child(idx);
+            if msg == WM_LBUTTONDOWN {
+                self.capturing_idx = Some(idx);
+                unsafe {
+                    let _ = SetCapture(self.hwnd);
+                }
+            }
             let lp = self.repack_lparam(pt);
             if let Some(child) = self.children.get_mut(idx) {
-                return child.handle_message(msg, wparam, lp);
+                let res = child.handle_message(msg, wparam, lp);
+                if msg == WM_LBUTTONUP {
+                    self.capturing_idx = None;
+                    unsafe {
+                        let _ = ReleaseCapture();
+                    }
+                }
+                return res;
             }
         }
         LRESULT(0)
     }
 
+    fn handle_mouse_leave(&mut self) -> LRESULT {
+        if let Some(prev) = self.hover_idx.take() {
+            if let Some(c) = self.children.get_mut(prev) {
+                c.mouse_exited();
+            }
+        }
+        self.tracking_mouse = false;
+        LRESULT(0)
+    }
+
     fn hit_test(&self, pt: POINT) -> Option<usize> {
-        self.children
-            .iter()
-            .position(|c| c.hit_test(pt))
+        self.children.iter().position(|c| c.hit_test(pt))
     }
 
     fn to_client_point(&self, lparam: LPARAM) -> POINT {

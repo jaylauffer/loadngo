@@ -9,7 +9,9 @@ pub struct Configuration {
 
 impl Configuration {
     pub fn new() -> Self {
-        Self { map: HashMap::new() }
+        Self {
+            map: HashMap::new(),
+        }
     }
 
     pub fn set(&mut self, key: impl Into<String>, value: impl Into<String>) {

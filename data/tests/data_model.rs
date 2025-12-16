@@ -53,7 +53,8 @@ fn task_comparator_can_sort_by_title() {
 
     let mut t1 = Task::spawn("zulu", "owner", 1, 1, 10);
     let t2 = Task::spawn("alpha", "owner", 1, 1, 10);
-    t1.properties.insert("title".into(), Value::Str("omega".into()));
+    t1.properties
+        .insert("title".into(), Value::Str("omega".into()));
 
     assert_eq!(cmp.compare(&t1, &t2), Ordering::Greater);
 }

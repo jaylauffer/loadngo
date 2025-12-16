@@ -4,8 +4,8 @@ use anyhow::Result;
 use windows::Win32::Foundation::{BOOL, HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
     AlphaBlend, BeginPaint, BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
-    EndPaint, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS,
-    HBITMAP, HDC, PAINTSTRUCT, SRCCOPY, AC_SRC_ALPHA,
+    EndPaint, SelectObject, AC_SRC_ALPHA, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION,
+    DIB_RGB_COLORS, HBITMAP, HDC, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, WM_USER};
 
@@ -130,17 +130,7 @@ impl BufferedWnd {
                     AlphaFormat: AC_SRC_ALPHA as u8,
                 };
                 let _ = AlphaBlend(
-                    dc,
-                    x,
-                    y,
-                    buf.width,
-                    buf.height,
-                    mem_dc,
-                    0,
-                    0,
-                    buf.width,
-                    buf.height,
-                    bf,
+                    dc, x, y, buf.width, buf.height, mem_dc, 0, 0, buf.width, buf.height, bf,
                 );
                 let _ = SelectObject(mem_dc, old);
                 let _ = DeleteDC(mem_dc);

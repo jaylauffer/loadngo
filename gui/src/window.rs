@@ -5,9 +5,9 @@ use windows::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, RECT, WPAR
 use windows::Win32::Graphics::Gdi::HBRUSH;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, GetClientRect, RegisterClassExW, SetWindowLongPtrW, ShowWindow,
-    CREATESTRUCTW, CW_USEDEFAULT, GWLP_USERDATA, HMENU, HICON, IDC_ARROW, SW_SHOW, WNDCLASSEXW,
-    WNDCLASS_STYLES, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+    CreateWindowExW, DefWindowProcW, GetClientRect, RegisterClassExW, SetWindowLongPtrW,
+    ShowWindow, CREATESTRUCTW, CW_USEDEFAULT, GWLP_USERDATA, HICON, HMENU, IDC_ARROW, SW_SHOW,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSEXW, WNDCLASS_STYLES, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
     WS_OVERLAPPEDWINDOW,
 };
 
@@ -65,7 +65,9 @@ impl HostWindow {
 
     pub fn client_rect(&self) -> RECT {
         let mut rc = RECT::default();
-        unsafe { let _ = GetClientRect(self.hwnd, &mut rc); }
+        unsafe {
+            let _ = GetClientRect(self.hwnd, &mut rc);
+        }
         rc
     }
 

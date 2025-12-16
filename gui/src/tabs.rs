@@ -2,12 +2,11 @@ use anyhow::Result;
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::UI::Controls::TCITEMW;
+use windows::Win32::UI::Controls::{TCIF_TEXT, TCM_INSERTITEMW, TCM_SETCURSEL, WC_TABCONTROLW};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, GetClientRect, MoveWindow, SendMessageW, SetParent, ShowWindow, HMENU, SW_HIDE,
-    SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_VISIBLE,
-};
-use windows::Win32::UI::Controls::{
-    TCM_INSERTITEMW, TCM_SETCURSEL, WC_TABCONTROLW, TCIF_TEXT,
+    CreateWindowExW, GetClientRect, MoveWindow, SendMessageW, SetParent, ShowWindow, HMENU,
+    SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+    WS_VISIBLE,
 };
 
 use crate::component::Component;
@@ -32,9 +31,7 @@ impl TabbedContainer {
                 WINDOW_EX_STYLE(0),
                 PCWSTR(WC_TABCONTROLW.as_ptr()),
                 PCWSTR::null(),
-                WINDOW_STYLE(
-                    WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0,
-                ),
+                WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
                 0,
                 0,
                 200,
@@ -53,7 +50,9 @@ impl TabbedContainer {
     }
 
     pub fn add_page(&mut self, title: &str, hwnd: HWND) {
-        unsafe { let _ = SetParent(hwnd, self.hwnd); }
+        unsafe {
+            let _ = SetParent(hwnd, self.hwnd);
+        }
         let mut title_w = to_wstring(title);
         let mut item = TCITEMW::default();
         item.mask = TCIF_TEXT;
@@ -78,7 +77,9 @@ impl TabbedContainer {
 
     fn layout_pages(&self) {
         let mut rc = RECT::default();
-        unsafe { let _ = GetClientRect(self.hwnd, &mut rc); }
+        unsafe {
+            let _ = GetClientRect(self.hwnd, &mut rc);
+        }
         // Basic layout: stack pages to fill client area below tabs.
         let tab_height = 30; // approximation
         for (idx, page) in self.pages.iter().enumerate() {
@@ -119,7 +120,9 @@ impl Component for TabbedContainer {
 
     fn bounds(&self) -> RECT {
         let mut rc = RECT::default();
-        unsafe { let _ = GetClientRect(self.hwnd, &mut rc); }
+        unsafe {
+            let _ = GetClientRect(self.hwnd, &mut rc);
+        }
         rc
     }
 
@@ -134,5 +137,13 @@ impl Component for TabbedContainer {
         } else {
             LRESULT(0)
         }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
