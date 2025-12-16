@@ -17,6 +17,16 @@ pub trait Component: Any {
     fn mouse_entered(&mut self) {}
     fn mouse_exited(&mut self) {}
 
+    /// Optional drag-over hook (returns true if accepted).
+    fn drag_over(&mut self, _pt: POINT) -> bool {
+        false
+    }
+
+    /// Optional drop hook for a list of file paths; return true if handled.
+    fn drop_files(&mut self, _files: &[String], _pt: POINT) -> bool {
+        false
+    }
+
     /// Component identifier (used by some listeners/command handlers).
     fn id(&self) -> i32 {
         0

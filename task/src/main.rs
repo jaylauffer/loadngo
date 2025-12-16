@@ -15,7 +15,10 @@ use tracing::Level;
 use tracing_subscriber::{fmt::writer::MakeWriterExt, EnvFilter};
 use windows::Win32::{
     Foundation::HWND,
-    System::{LibraryLoader::GetModuleHandleW, Ole::OleInitialize},
+    System::{
+        LibraryLoader::GetModuleHandleW,
+        Ole::{OleInitialize, OleUninitialize},
+    },
     UI::WindowsAndMessaging::{ShowWindow, SW_SHOW},
 };
 
@@ -42,6 +45,7 @@ fn main() -> Result<()> {
         let _ = ShowWindow(hwnd, SW_SHOW);
         tracing::info!("TaskWindow started");
         message_loop();
+        OleUninitialize();
     }
     Ok(())
 }

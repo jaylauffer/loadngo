@@ -89,6 +89,8 @@ impl ContainerHost {
             WM_DESTROY => {
                 let ptr = Self::take_ptr(hwnd);
                 if !ptr.is_null() {
+                    // Clean up any drop target registration.
+                    unsafe { (&mut *ptr).container.revoke_file_drop(); }
                     drop(Box::from_raw(ptr));
                 }
                 LRESULT(0)

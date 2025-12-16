@@ -9,3 +9,4 @@ license.workspace = true
 anyhow.workspace = true
 windows.workspace = true
 tracing.workspace = true
+windows-core.workspace = true
