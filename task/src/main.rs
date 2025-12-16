@@ -2,7 +2,7 @@
 
 #![windows_subsystem = "windows"]
 
-mod day_plan;
+mod day_planner;
 mod dragdrop;
 mod project_plan;
 mod tabs;

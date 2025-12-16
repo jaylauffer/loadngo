@@ -24,7 +24,7 @@ use windows::Win32::{
 };
 
 use crate::{
-    day_plan,
+    day_planner,
     dragdrop::{register_drop_target, revoke_drop_target, DropPayload},
     project_plan,
     tabs::{add_tab, create_tab_host, toggle_toolbar_keyboard_mode},
@@ -189,7 +189,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(state) = get_state(hwnd) {
                 let id = wparam.0 as u64;
                 state.service.remove_task(id);
-                day_plan::refresh(state.day_plan);
+                day_planner::refresh(state.day_plan);
                 project_plan::refresh(state.project_plan);
                 info!("Deleted task {id} via trash drop");
             }
@@ -276,7 +276,7 @@ unsafe fn detach_state(hwnd: HWND) -> Option<*mut TaskWindowState> {
 unsafe fn create_children(parent: HWND, state: &mut TaskWindowState) {
     let tab_host = create_tab_host(parent, state.enable_multicast);
     let svc_ptr: *mut Service = &mut state.service;
-    let day = day_plan::create_day_plan(tab_host, svc_ptr);
+    let day = day_planner::create_day_planner(tab_host, svc_ptr);
     let proj = project_plan::create_project_plan(tab_host, svc_ptr);
     let sched = create_placeholder(tab_host, "Schedule (not yet ported)");
     state.day_plan = day;
@@ -335,7 +335,7 @@ unsafe fn handle_toolbar_command(state: &mut TaskWindowState, cmd_id: i32) {
                 Task::spawn("New Task", "local-user", 1, 1, data::model_utils::now_timestamp());
             state.service.add_task(task);
             info!("Created task ({} total)", state.service.tasks.len());
-            day_plan::refresh(state.day_plan);
+            day_planner::refresh(state.day_plan);
             project_plan::refresh(state.project_plan);
         }
         toolbar::TBSAVEPLAN => {
