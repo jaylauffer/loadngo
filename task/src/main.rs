@@ -71,8 +71,9 @@ fn main() -> Result<()> {
         CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED).ok()?;
         init_common_controls();
         let hinstance = GetModuleHandleW(None)?.into();
-        let (mut service, mut network) = build_services()?;
-        load_plan(&mut service, "user_plan");
+    let (mut service, mut network) = build_services()?;
+        // Load persisted configuration first, then plan data.
+        load_all(&mut service, "user_plan");
         network.init()?;
         register_window_class(hinstance)?;
         let state = Box::new(UiState {
@@ -309,9 +310,16 @@ fn load_plan(service: &mut Service, plan_name: &str) {
 }
 
 fn save_plan(state: &UiState) {
-    match state.service.save(&state.plan_name) {
+    match state.service.save_all(&state.plan_name) {
         Ok(_) => info!("Plan saved to {}", state.plan_name),
         Err(err) => info!("Save failed: {err:?}"),
+    }
+}
+
+fn load_all(service: &mut Service, plan_name: &str) {
+    match service.load_all(plan_name) {
+        Ok(_) => info!("Loaded plan \"{plan_name}\" (with config)"),
+        Err(err) => info!("No existing plan \"{plan_name}\" to load ({err:?})"),
     }
 }
 

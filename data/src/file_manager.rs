@@ -21,6 +21,10 @@ impl FileManager {
         self.base_dir.join(format!("{name}.json"))
     }
 
+    pub fn config_path(&self) -> PathBuf {
+        self.base_dir.join("config.json")
+    }
+
     pub fn save_tasks(&self, name: &str, tasks: &[Task]) -> Result<()> {
         let path = self.task_path(name);
         if let Some(parent) = path.parent() {

@@ -74,4 +74,15 @@ impl Service {
         self.tasks = tasks.into_iter().map(|t| (t.entity.id, t)).collect();
         Ok(())
     }
+
+    pub fn save_all(&self, name: &str) -> Result<()> {
+        self.config.save_to_file(self.files.config_path())?;
+        self.save(name)
+    }
+
+    pub fn load_all(&mut self, name: &str) -> Result<()> {
+        // Load configuration first, then tasks.
+        let _ = self.config.load_from_file(self.files.config_path());
+        self.load(name)
+    }
 }
