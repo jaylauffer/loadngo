@@ -77,6 +77,12 @@ impl Container {
             WM_KEYDOWN | WM_KEYUP | WM_CHAR => self.forward_to_focus(msg, wparam, lparam),
             WM_MOUSELEAVE_CONST => self.handle_mouse_leave(),
             WM_CAPTURECHANGED => {
+                if let Some(idx) = self.capturing_idx.take() {
+                    if let Some(child) = self.children.get_mut(idx) {
+                        child.mouse_exited();
+                    }
+                    self.hover_idx = None;
+                }
                 self.capturing_idx = None;
                 LRESULT(0)
             }
@@ -193,8 +199,38 @@ impl Container {
 
     fn handle_mouse_button(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         let pt = self.to_client_point(lparam);
+        // If a child previously captured the mouse, always forward button
+        // messages to it (even when the cursor is outside its bounds) so it can
+        // release its pressed/hover state. This mirrors the legacy CContainerWnd
+        // behaviour and prevents buttons from getting stuck when the mouse is
+        // released off the control.
+        if let Some(idx) = self.capturing_idx {
+            let lp = self.repack_lparam(pt);
+            if let Some(child) = self.children.get_mut(idx) {
+                let res = child.handle_message(msg, wparam, lp);
+                if msg == WM_LBUTTONUP {
+                    self.capturing_idx = None;
+                    // Update hover state based on the release point.
+                    if !child.hit_test(pt) {
+                        child.mouse_exited();
+                        self.hover_idx = None;
+                    } else {
+                        self.hover_idx = Some(idx);
+                    }
+                    unsafe {
+                        let _ = ReleaseCapture();
+                    }
+                }
+                return res;
+            } else {
+                self.capturing_idx = None;
+                unsafe {
+                    let _ = ReleaseCapture();
+                }
+                self.hover_idx = None;
+            }
+        }
         if let Some(idx) = self.hit_test(pt) {
-            self.focus_child(idx);
             if msg == WM_LBUTTONDOWN {
                 self.capturing_idx = Some(idx);
                 unsafe {
@@ -223,11 +259,11 @@ impl Container {
             self.hover_idx,
             self.capturing_idx
         );
-        if let Some(prev) = self.hover_idx.take() {
-            if let Some(c) = self.children.get_mut(prev) {
-                c.mouse_exited();
-            }
+        // Clear hover state on any component that may have retained visual hover.
+        for c in self.children.iter_mut() {
+            c.mouse_exited();
         }
+        self.hover_idx = None;
         // Force a repaint so any hovered visuals are cleared.
         unsafe {
             let _ = InvalidateRect(self.hwnd, None, false);

@@ -109,6 +109,13 @@ impl ToolbarButton {
         unsafe {
             let width = self.rect.right - self.rect.left;
             let height = self.rect.bottom - self.rect.top;
+            // Background to clear any prior hover/focus drawings.
+            let brush = HBRUSH(GetStockObject(DC_BRUSH).0);
+            SelectObject(dc, brush);
+            SelectObject(dc, GetStockObject(DC_PEN));
+            SetDCBrushColor(dc, COLORREF(0x00efefef));
+            let _ = FillRect(dc, &self.rect, brush);
+
             let hdc_btn = CreateCompatibleDC(dc);
             let old = SelectObject(hdc_btn, self.bmp);
             let bf = BLENDFUNCTION {
@@ -620,6 +627,13 @@ unsafe fn paint(state: &mut ToolbarState) {
             );
             let _ = SetWindowOrgEx(dc, old.x, old.y, None);
         }
+        // Clear any stale content in case parent did not fill our area (matches CBasicButton background).
+        let brush = HBRUSH(GetStockObject(DC_BRUSH).0);
+        let _ = SelectObject(dc, brush);
+        let _ = SelectObject(dc, GetStockObject(DC_PEN));
+        SetDCBrushColor(dc, COLORREF(0x00efefef));
+        let fill_rect = RECT { left: 0, top: 0, right: width, bottom: height };
+        let _ = FillRect(dc, &fill_rect, brush);
 
         // Draw toolbar content.
         for child in &state.container.children {
