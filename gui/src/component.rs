@@ -12,6 +12,15 @@ pub trait Component {
     /// Optional focus notifications.
     fn focus_changed(&mut self, _gained: bool) {}
 
+    /// Optional mouse enter/exit hooks.
+    fn mouse_entered(&mut self) {}
+    fn mouse_exited(&mut self) {}
+
+    /// Component identifier (used by some listeners/command handlers).
+    fn id(&self) -> i32 {
+        0
+    }
+
     /// Simple hit-test against the component's RECT.
     fn hit_test(&self, pt: POINT) -> bool {
         let rc = self.bounds();

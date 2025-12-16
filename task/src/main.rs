@@ -8,6 +8,8 @@
 mod toolbar;
 mod tabs;
 mod winutil;
+mod day_plan;
+mod project_plan;
 
 use anyhow::Result;
 use data::{
@@ -35,19 +37,23 @@ use windows::Win32::{
             GetWindowLongPtrW, LoadCursorW, MoveWindow, PostQuitMessage, RegisterClassExW,
             SetWindowLongPtrW, ShowWindow, TranslateMessage, CREATESTRUCTW, CW_USEDEFAULT,
             GWLP_USERDATA, HMENU, HICON, IDC_ARROW, MSG, SW_SHOW, WM_COMMAND, WM_CREATE,
-            WM_DESTROY, WM_NCCREATE, WM_SIZE, WNDCLASSEXW, WNDCLASS_STYLES, WINDOW_EX_STYLE,
-            WINDOW_STYLE, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_OVERLAPPEDWINDOW,
-            WS_VISIBLE, WS_EX_CLIENTEDGE,
+            WM_DESTROY, WM_NCCREATE, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDCLASS_STYLES,
+            WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+            WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_EX_CLIENTEDGE,
         },
     },
 };
 
 const APP_CLASS: &str = "LoadNgoTaskMainWnd";
+const AUTOSAVE_TIMER_ID: usize = 0x400;
+const AUTOSAVE_INTERVAL_MS: u32 = 60_000;
 
 struct UiState {
     hwnd: HWND,
     tab_host: HWND,
     tab_children: Vec<HWND>,
+    day_plan: HWND,
+    project_plan: HWND,
     service: Service,
     network: Network,
     plan_name: String,
@@ -62,13 +68,16 @@ fn main() -> Result<()> {
         CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED).ok()?;
         init_common_controls();
         let hinstance = GetModuleHandleW(None)?.into();
-        let (service, mut network) = build_services()?;
+        let (mut service, mut network) = build_services()?;
+        load_plan(&mut service, "user_plan");
         network.init()?;
         register_window_class(hinstance)?;
         let state = Box::new(UiState {
             hwnd: HWND::default(),
             tab_host: HWND::default(),
             tab_children: Vec::new(),
+            day_plan: HWND::default(),
+            project_plan: HWND::default(),
             service,
             network,
             plan_name: "user_plan".to_string(),
@@ -154,6 +163,12 @@ unsafe extern "system" fn wndproc(
         WM_CREATE => {
             if let Some(state) = get_state(hwnd) {
                 create_children(hwnd, state);
+                let _ = windows::Win32::UI::WindowsAndMessaging::SetTimer(
+                    hwnd,
+                    AUTOSAVE_TIMER_ID,
+                    AUTOSAVE_INTERVAL_MS,
+                    None,
+                );
             }
             LRESULT(0)
         }
@@ -183,11 +198,26 @@ unsafe extern "system" fn wndproc(
             if let Some(state) = get_state(hwnd) {
                 let id = wparam.0 as u64;
                 state.service.remove_task(id);
+                day_plan::refresh(state.day_plan);
+                project_plan::refresh(state.project_plan);
                 info!("Deleted task {id} via trash drop");
             }
             LRESULT(0)
         }
+        WM_TIMER => {
+            if wparam.0 == AUTOSAVE_TIMER_ID {
+                if let Some(state) = get_state(hwnd) {
+                    save_plan(state);
+                }
+                return LRESULT(0);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_DESTROY => {
+            if let Some(state) = get_state(hwnd) {
+                let _ = windows::Win32::UI::WindowsAndMessaging::KillTimer(hwnd, AUTOSAVE_TIMER_ID);
+                save_plan(state);
+            }
             if let Some(state_ptr) = detach_state(hwnd) {
                 drop(Box::from_raw(state_ptr));
             }
@@ -216,40 +246,12 @@ unsafe fn detach_state(hwnd: HWND) -> Option<*mut UiState> {
 unsafe fn create_children(parent: HWND, state: &mut UiState) {
     let tab_host = create_tab_host(parent, true);
 
-    // Placeholder children so the custom tab host renders its swoosh/toolbar.
-    let hinstance = GetModuleHandleW(None).unwrap();
-    let day = CreateWindowExW(
-        WINDOW_EX_STYLE(0),
-        PCWSTR(to_wstring("STATIC").as_ptr()),
-        PCWSTR(to_wstring("Day Planner (stub)").as_ptr()),
-        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
-        0,
-        0,
-        100,
-        100,
-        tab_host,
-        HMENU(null_mut()),
-        HINSTANCE(hinstance.0),
-        None,
-    )
-    .expect("day tab child");
+    let svc_ptr: *mut Service = &mut state.service;
+    let day = day_plan::create_day_plan(tab_host, svc_ptr);
+    let proj = project_plan::create_project_plan(tab_host, svc_ptr);
 
-    let proj = CreateWindowExW(
-        WINDOW_EX_STYLE(0),
-        PCWSTR(to_wstring("STATIC").as_ptr()),
-        PCWSTR(to_wstring("Project Planner (stub)").as_ptr()),
-        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
-        0,
-        0,
-        100,
-        100,
-        tab_host,
-        HMENU(null_mut()),
-        HINSTANCE(hinstance.0),
-        None,
-    )
-    .expect("project tab child");
-
+    state.day_plan = day;
+    state.project_plan = proj;
     state.tab_children = vec![day, proj];
     add_tab(tab_host, "Day Plan", day);
     add_tab(tab_host, "Project Plan", proj);
@@ -289,6 +291,20 @@ unsafe fn build_services() -> Result<(Service, Network)> {
     Ok((service, network))
 }
 
+fn load_plan(service: &mut Service, plan_name: &str) {
+    match service.load(plan_name) {
+        Ok(_) => info!("Loaded plan \"{plan_name}\""),
+        Err(err) => info!("No existing plan \"{plan_name}\" to load ({err:?})"),
+    }
+}
+
+fn save_plan(state: &UiState) {
+    match state.service.save(&state.plan_name) {
+        Ok(_) => info!("Plan saved to {}", state.plan_name),
+        Err(err) => info!("Save failed: {err:?}"),
+    }
+}
+
 unsafe fn handle_toolbar_command(state: &mut UiState, cmd_id: i32) {
     match cmd_id {
         toolbar::TBCREATETASK => {
@@ -301,12 +317,11 @@ unsafe fn handle_toolbar_command(state: &mut UiState, cmd_id: i32) {
             );
             state.service.add_task(task);
             info!("Created task ({} total)", state.service.tasks.len());
+            day_plan::refresh(state.day_plan);
+            project_plan::refresh(state.project_plan);
         }
         toolbar::TBSAVEPLAN => {
-            match state.service.save(&state.plan_name) {
-                Ok(_) => info!("Plan saved to {}", state.plan_name),
-                Err(err) => info!("Save failed: {err:?}"),
-            }
+            save_plan(state);
         }
         toolbar::TBMAKEREPORT => {
             info!("Report generation not yet ported");
