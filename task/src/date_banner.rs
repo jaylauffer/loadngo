@@ -1,6 +1,7 @@
 use std::ptr::null_mut;
 
 use anyhow::Result;
+use chrono::Local;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -10,10 +11,10 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW, LoadCursorW,
-    RegisterClassW, SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
-    GWL_USERDATA, HMENU, IDC_ARROW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY,
-    WM_ERASEBKGND, WM_PAINT, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW, LoadCursorW, RegisterClassW,
+    SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWL_USERDATA, HMENU,
+    IDC_ARROW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_PAINT,
+    WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_VISIBLE,
 };
 
 use crate::winutil::to_wstring;
@@ -50,9 +51,7 @@ pub fn create_date_banner(parent: HWND) -> HWND {
             WINDOW_EX_STYLE(0),
             PCWSTR(to_wstring(CLASS_NAME).as_ptr()),
             PCWSTR::null(),
-            WINDOW_STYLE(
-                WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0,
-            ),
+            WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             100,
@@ -170,7 +169,7 @@ unsafe fn draw_button(dc: HDC, rc: &RECT, text: &str) {
 }
 
 fn current_date_string() -> String {
-    "Date".to_string()
+    Local::now().format("%A, %B %d, %Y").to_string()
 }
 
 unsafe fn pick_bg() -> COLORREF {

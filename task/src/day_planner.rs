@@ -7,10 +7,10 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     AlphaBlend, CreateCompatibleDC, CreateDIBSection, CreateFontIndirectW, CreateSolidBrush,
-    DeleteDC, DeleteObject, GetStockObject, LineTo, MoveToEx, SelectObject, SetBkMode, SetTextColor,
-    ScreenToClient, TextOutW, AC_SRC_ALPHA, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION,
-    DIB_RGB_COLORS, HBRUSH, HDC, HGDIOBJ, HFONT, LF_FACESIZE, LOGFONTW, TRANSPARENT, WHITE_BRUSH,
-    BI_RGB,
+    DeleteDC, DeleteObject, GetStockObject, GradientFill, LineTo, MoveToEx, SelectObject, SetBkMode,
+    SetTextColor, ScreenToClient, TextOutW, AC_SRC_ALPHA, BITMAPINFO, BITMAPINFOHEADER,
+    BLENDFUNCTION, DIB_RGB_COLORS, GRADIENT_FILL_RECT_H, GRADIENT_RECT, HBRUSH, HDC, HGDIOBJ,
+    HFONT, LF_FACESIZE, LOGFONTW, TRIVERTEX, TRANSPARENT, WHITE_BRUSH, BI_RGB,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
@@ -34,14 +34,13 @@ const SPLITTER_BAR_WIDTH: i32 = 8;
 const DEFAULT_SPLIT: f64 = 0.55;
 const BANNER_HEIGHT: i32 = 42;
 const HOUR_FRACTION: f64 = 0.25; // 15-minute increments
-const HOUR_FRACTION_PX: i32 = 30;
+const HOUR_FRACTION_PX: i32 = 18;
 const MIN_PANE_WIDTH: i32 = 80;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
 const HOUR_STRINGS: [&str; 24] = [
-    "12 AM", "1 AM", "2 AM", "3 AM", "4 AM", "5 AM", "6 AM", "7 AM", "8 AM", "9 AM", "10 AM",
-    "11 AM", "12 PM", "1 PM", "2 PM", "3 PM", "4 PM", "5 PM", "6 PM", "7 PM", "8 PM", "9 PM",
-    "10 PM", "11 PM",
+    "12am", "1am", "2am", "3am", "4am", "5am", "6am", "7am", "8am", "9am", "10am", "11am", "12pm",
+    "1pm", "2pm", "3pm", "4pm", "5pm", "6pm", "7pm", "8pm", "9pm", "10pm", "11pm",
 ];
 
 struct PaneState {
@@ -305,7 +304,7 @@ unsafe fn create_children(hwnd: HWND, state: &mut DayPlannerState) {
     });
 
     let spec = CreateWindowExW(
-        WINDOW_EX_STYLE(WS_EX_NOPARENTNOTIFY.0 | windows::Win32::UI::WindowsAndMessaging::WS_EX_TRANSPARENT.0),
+        WINDOW_EX_STYLE(WS_EX_NOPARENTNOTIFY.0),
         PCWSTR(to_wstring("DayPlanPane").as_ptr()),
         PCWSTR::null(),
         WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
@@ -320,7 +319,7 @@ unsafe fn create_children(hwnd: HWND, state: &mut DayPlannerState) {
     )
     .expect("spec create");
     let actual = CreateWindowExW(
-        WINDOW_EX_STYLE(WS_EX_NOPARENTNOTIFY.0 | windows::Win32::UI::WindowsAndMessaging::WS_EX_TRANSPARENT.0),
+        WINDOW_EX_STYLE(WS_EX_NOPARENTNOTIFY.0),
         PCWSTR(to_wstring("DayPlanPane").as_ptr()),
         PCWSTR::null(),
         WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
@@ -490,6 +489,8 @@ unsafe fn paint(state: &DayPlannerState) {
     let bg = HBRUSH(GetStockObject(WHITE_BRUSH).0);
     let _ = windows::Win32::Graphics::Gdi::FillRect(dc, &rc, bg);
 
+    draw_hour_header(dc, height);
+
     // header separator and banner baseline
     let _ = MoveToEx(dc, 0, BANNER_HEIGHT, None);
     let _ = LineTo(dc, width, BANNER_HEIGHT);
@@ -520,6 +521,41 @@ unsafe fn paint(state: &DayPlannerState) {
 
     let _ = SelectObject(dc, old_font);
     let _ = windows::Win32::Graphics::Gdi::EndPaint(state.hwnd, &ps);
+}
+
+unsafe fn draw_hour_header(dc: HDC, height: i32) {
+    // Gradient fill the hour gutter to better match the legacy look.
+    let top = BANNER_HEIGHT;
+    let bottom = height;
+    let verts = [
+        TRIVERTEX {
+            x: 0,
+            y: top,
+            Red: 0xf0 << 8,
+            Green: 0xf0 << 8,
+            Blue: 0xf0 << 8,
+            Alpha: 0,
+        },
+        TRIVERTEX {
+            x: HEADER_WIDTH + 1,
+            y: bottom,
+            Red: 0xdc << 8,
+            Green: 0xdc << 8,
+            Blue: 0xdc << 8,
+            Alpha: 0,
+        },
+    ];
+    let rect = [GRADIENT_RECT {
+        UpperLeft: 0,
+        LowerRight: 1,
+    }];
+    let _ = GradientFill(
+        dc,
+        &verts,
+        rect.as_ptr() as *const _,
+        rect.len() as u32,
+        GRADIENT_FILL_RECT_H,
+    );
 }
 
 unsafe fn alpha_fill(dc: HDC, rc: &RECT, color: COLORREF, alpha: u8) {
