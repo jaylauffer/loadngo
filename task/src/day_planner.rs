@@ -4,21 +4,24 @@ use anyhow::Result;
 use data::service::Service;
 use tracing::info;
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     AlphaBlend, CreateCompatibleDC, CreateDIBSection, CreateFontIndirectW, CreateSolidBrush,
     DeleteDC, DeleteObject, GetStockObject, LineTo, MoveToEx, SelectObject, SetBkMode, SetTextColor,
-    TextOutW, AC_SRC_ALPHA, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, DIB_RGB_COLORS, HBRUSH,
-    HDC, HGDIOBJ, HFONT, LF_FACESIZE, LOGFONTW, TRANSPARENT, WHITE_BRUSH, BI_RGB,
+    ScreenToClient, TextOutW, AC_SRC_ALPHA, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION,
+    DIB_RGB_COLORS, HBRUSH, HDC, HGDIOBJ, HFONT, LF_FACESIZE, LOGFONTW, TRANSPARENT, WHITE_BRUSH,
+    BI_RGB,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::Controls::SetScrollInfo;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, GetClientRect, GetScrollInfo, GetWindowLongPtrW, LoadCursorW,
-    MoveWindow, RegisterClassW, SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
-    CW_USEDEFAULT, GWL_USERDATA, HMENU, IDC_ARROW, SCROLLBAR_COMMAND, SCROLLINFO, SIF_PAGE,
-    SIF_POS, SIF_RANGE, SIF_TRACKPOS, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY,
-    WM_ERASEBKGND, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_CHILD,
+    CreateWindowExW, DefWindowProcW, GetClientRect, GetCursorPos, GetScrollInfo, GetWindowLongPtrW,
+    LoadCursorW, MoveWindow, RegisterClassW, SetCursor, SetWindowLongPtrW, CREATESTRUCTW,
+    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWL_USERDATA, HMENU, IDC_ARROW, IDC_SIZEWE,
+    SCROLLBAR_COMMAND, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_CHILD,
     WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOPARENTNOTIFY, WS_VSCROLL, WS_VISIBLE,
 };
 
@@ -32,6 +35,7 @@ const DEFAULT_SPLIT: f64 = 0.55;
 const BANNER_HEIGHT: i32 = 42;
 const HOUR_FRACTION: f64 = 0.25; // 15-minute increments
 const HOUR_FRACTION_PX: i32 = 30;
+const MIN_PANE_WIDTH: i32 = 80;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
 const HOUR_STRINGS: [&str; 24] = [
@@ -43,6 +47,12 @@ const HOUR_STRINGS: [&str; 24] = [
 struct PaneState {
     color: COLORREF,
     label: Vec<u16>,
+}
+
+struct SplitterState {
+    color: COLORREF,
+    parent: HWND,
+    dragging: bool,
 }
 
 struct DayPlannerState {
@@ -288,9 +298,10 @@ unsafe fn create_children(hwnd: HWND, state: &mut DayPlannerState) {
         color: COLORREF(0x00fff4e4),
         label: to_wstring("Actual Details"),
     });
-    let split_state = Box::new(PaneState {
+    let split_state = Box::new(SplitterState {
         color: COLORREF(0x00d0d0d0),
-        label: Vec::new(),
+        parent: hwnd,
+        dragging: false,
     });
 
     let spec = CreateWindowExW(
@@ -348,7 +359,23 @@ unsafe fn layout_children(state: &mut DayPlannerState, width: i32, height: i32) 
     let banner_h = BANNER_HEIGHT;
     let plan_height = (height - banner_h).max(0);
     let plan_width = width - (HEADER_WIDTH + SPLITTER_BAR_WIDTH);
-    let spec_width = (plan_width as f64 * state.split_percent) as i32;
+    if plan_width <= MIN_PANE_WIDTH * 2 {
+        let spec_width = plan_width / 2;
+        let act_width = plan_width - spec_width - SPLITTER_BAR_WIDTH;
+        let mut x = HEADER_WIDTH;
+        let _ = MoveWindow(state.banner_hwnd, 0, 0, width, banner_h, true);
+        let _ = MoveWindow(state.spec_hwnd, x, banner_h, spec_width, plan_height, true);
+        x += spec_width;
+        let _ = MoveWindow(state.splitter_hwnd, x, banner_h, SPLITTER_BAR_WIDTH, plan_height, true);
+        x += SPLITTER_BAR_WIDTH;
+        let _ = MoveWindow(state.actual_hwnd, x, banner_h, act_width.max(0), plan_height, true);
+        return;
+    }
+
+    let mut spec_width = (plan_width as f64 * state.split_percent).round() as i32;
+    spec_width = spec_width.clamp(MIN_PANE_WIDTH, plan_width - MIN_PANE_WIDTH);
+    state.split_percent = (spec_width as f64 / plan_width as f64).clamp(0.1, 0.9);
+
     let act_width = plan_width - spec_width - SPLITTER_BAR_WIDTH;
     let mut x = HEADER_WIDTH;
     let _ = MoveWindow(state.banner_hwnd, 0, 0, width, banner_h, true);
@@ -597,11 +624,50 @@ unsafe extern "system" fn splitter_wndproc(
     match msg {
         WM_CREATE => {
             let cs = &*(lparam.0 as *const CREATESTRUCTW);
-            let ptr = cs.lpCreateParams as *mut PaneState;
+            let ptr = cs.lpCreateParams as *mut SplitterState;
             if !ptr.is_null() {
                 SetWindowLongPtrW(hwnd, GWL_USERDATA, ptr as isize);
             }
             LRESULT(0)
+        }
+        WM_LBUTTONDOWN => {
+            if let Some(state) = (GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut SplitterState).as_mut()
+            {
+                state.dragging = true;
+                let _ = SetCapture(hwnd);
+                LRESULT(0)
+            } else {
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+        }
+        WM_MOUSEMOVE => {
+            if let Some(split) = (GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut SplitterState).as_mut()
+            {
+                if split.dragging {
+                    update_split_from_cursor(split);
+                    return LRESULT(0);
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_LBUTTONUP => {
+            if let Some(split) = (GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut SplitterState).as_mut()
+            {
+                if split.dragging {
+                    split.dragging = false;
+                    let _ = ReleaseCapture();
+                }
+                LRESULT(0)
+            } else {
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+        }
+        WM_SETCURSOR => {
+            if let Ok(cursor) = LoadCursorW(None, IDC_SIZEWE) {
+                let _ = SetCursor(cursor);
+                return LRESULT(1);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_PAINT => {
             let mut ps = windows::Win32::Graphics::Gdi::PAINTSTRUCT::default();
@@ -610,7 +676,7 @@ unsafe extern "system" fn splitter_wndproc(
                 let mut rc = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rc);
                 let color = if let Some(state) =
-                    (GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut PaneState).as_ref()
+                    (GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut SplitterState).as_ref()
                 {
                     state.color
                 } else {
@@ -624,7 +690,7 @@ unsafe extern "system" fn splitter_wndproc(
             LRESULT(0)
         }
         WM_DESTROY => {
-            let ptr = GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut PaneState;
+            let ptr = GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut SplitterState;
             if !ptr.is_null() {
                 let _ = SetWindowLongPtrW(hwnd, GWL_USERDATA, 0);
                 drop(Box::from_raw(ptr));
@@ -645,6 +711,29 @@ unsafe fn register_drop(state: &mut DayPlannerState) {
         Ok(())
     }) {
         state.drop_target = Some(target);
+    }
+}
+
+unsafe fn update_split_from_cursor(split: &mut SplitterState) {
+    let mut pt = POINT::default();
+    if GetCursorPos(&mut pt).is_err() {
+        return;
+    }
+    let parent = split.parent;
+    let _ = ScreenToClient(parent, &mut pt);
+    if let Some(state) = get_state(parent) {
+        let mut rc = RECT::default();
+        let _ = GetClientRect(parent, &mut rc);
+        let width = rc.right - rc.left;
+        let height = rc.bottom - rc.top;
+        let plan_width = width - (HEADER_WIDTH + SPLITTER_BAR_WIDTH);
+        if plan_width <= (MIN_PANE_WIDTH * 2) {
+            return;
+        }
+        let raw = (pt.x - HEADER_WIDTH) as f64 / plan_width as f64;
+        state.split_percent = raw.clamp(0.1, 0.9);
+        layout_children(state, width, height);
+        refresh(parent);
     }
 }
 
