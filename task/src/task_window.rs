@@ -276,7 +276,13 @@ unsafe fn detach_state(hwnd: HWND) -> Option<*mut TaskWindowState> {
 unsafe fn create_children(parent: HWND, state: &mut TaskWindowState) {
     let tab_host = create_tab_host(parent, state.enable_multicast);
     let svc_ptr: *mut Service = &mut state.service;
-    let day = day_planner::create_day_planner(tab_host, svc_ptr);
+    let day = match day_planner::create_day_planner(tab_host, svc_ptr) {
+        Ok(hwnd) => hwnd,
+        Err(err) => {
+            info!("Failed to create DayPlanner: {err:?}");
+            create_placeholder(tab_host, "Day Planner failed to start")
+        }
+    };
     let proj = project_plan::create_project_plan(tab_host, svc_ptr);
     let sched = create_placeholder(tab_host, "Schedule (not yet ported)");
     state.day_plan = day;
