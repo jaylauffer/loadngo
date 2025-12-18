@@ -32,11 +32,12 @@ use crate::dragdrop::{register_drop_target, revoke_drop_target, DropPayload};
 use crate::winutil::to_wstring;
 
 const CLASS_NAME: &str = "DayPlanWnd";
+const HOST_CLASS: &str = "DayPlanHostWnd";
 const STATE_PROP: &str = "LNG_DayPlannerState";
 const HEADER_WIDTH: i32 = 70;
 const SPLITTER_BAR_WIDTH: i32 = 8;
 const DEFAULT_SPLIT: f64 = 0.55;
-const BANNER_HEIGHT: i32 = 42;
+const HOST_BANNER_HEIGHT: i32 = 42;
 const HOUR_FRACTION: f64 = 0.25; // 15-minute increments
 const HOUR_FRACTION_PX: i32 = 18; // pixels per 15-minute increment (matches legacy spacing)
 const MIN_PANE_WIDTH: i32 = 80;
@@ -65,7 +66,6 @@ struct DayPlannerState {
     spec_hwnd: HWND,
     actual_hwnd: HWND,
     splitter_hwnd: HWND,
-    banner_hwnd: HWND,
     split_percent: f64,
     start_hour_pos: f64,
     font: HFONT,
@@ -81,7 +81,6 @@ impl DayPlannerState {
             spec_hwnd: HWND::default(),
             actual_hwnd: HWND::default(),
             splitter_hwnd: HWND::default(),
-            banner_hwnd: HWND::default(),
             split_percent: DEFAULT_SPLIT,
             start_hour_pos: 8.0, // default 8 AM
             font: HFONT::default(),
@@ -138,7 +137,57 @@ fn register_splitter_class() -> Result<()> {
     }
 }
 
+fn register_host_class() -> Result<()> {
+    unsafe {
+        static mut DONE: bool = false;
+        if DONE {
+            return Ok(());
+        }
+        let hinstance = GetModuleHandleW(None)?;
+        let wc = WNDCLASSW {
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(host_wndproc),
+            hInstance: hinstance.into(),
+            lpszClassName: PCWSTR(to_wstring(HOST_CLASS).as_ptr()),
+            hbrBackground: HBRUSH(null_mut()),
+            hCursor: LoadCursorW(None, IDC_ARROW)?,
+            ..Default::default()
+        };
+        let _ = RegisterClassW(&wc);
+        DONE = true;
+    }
+    Ok(())
+}
+
 pub fn create_day_planner(parent: HWND, service: *mut Service) -> Result<HWND> {
+    register_host_class()?;
+    unsafe {
+        let hinstance = GetModuleHandleW(None)?;
+        let state = Box::new(DayPlannerHostState {
+            hwnd: HWND::default(),
+            banner_hwnd: HWND::default(),
+            body_hwnd: HWND::default(),
+            service,
+        });
+        let hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            PCWSTR(to_wstring(HOST_CLASS).as_ptr()),
+            PCWSTR::null(),
+            WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
+            0,
+            0,
+            100,
+            100,
+            parent,
+            HMENU(null_mut()),
+            hinstance,
+            Some(Box::into_raw(state) as *mut _),
+        )?;
+        Ok(hwnd)
+    }
+}
+
+fn create_planner_body(parent: HWND, service: *mut Service) -> Result<HWND> {
     unsafe {
         register_class()?;
         let hwnd = ContainerHost::create(parent, CLASS_NAME)?;
@@ -230,9 +279,6 @@ unsafe fn create_children(hwnd: HWND, state: &mut DayPlannerState) {
     register_splitter_class().ok();
     let hinstance = GetModuleHandleW(None).unwrap();
 
-    // Banner across the top.
-    let banner = crate::date_banner::create_date_banner(hwnd);
-
     let spec_state = Box::new(PaneState {
         color: COLORREF(0x00e4f0ff),
         label: to_wstring("Plan Details"),
@@ -292,26 +338,23 @@ unsafe fn create_children(hwnd: HWND, state: &mut DayPlannerState) {
         Some(Box::into_raw(split_state) as *mut _),
     )
     .expect("split create");
-    state.banner_hwnd = banner;
     state.spec_hwnd = spec;
     state.actual_hwnd = actual;
     state.splitter_hwnd = split;
 }
 
 unsafe fn layout_children(state: &mut DayPlannerState, width: i32, height: i32) {
-    let banner_h = BANNER_HEIGHT;
-    let plan_height = (height - banner_h).max(0);
+    let plan_height = height.max(0);
     let plan_width = width - (HEADER_WIDTH + SPLITTER_BAR_WIDTH);
     if plan_width <= MIN_PANE_WIDTH * 2 {
         let spec_width = plan_width / 2;
         let act_width = plan_width - spec_width - SPLITTER_BAR_WIDTH;
         let mut x = HEADER_WIDTH;
-        let _ = MoveWindow(state.banner_hwnd, 0, 0, width, banner_h, true);
-        let _ = MoveWindow(state.spec_hwnd, x, banner_h, spec_width, plan_height, true);
+        let _ = MoveWindow(state.spec_hwnd, x, 0, spec_width, plan_height, true);
         x += spec_width;
-        let _ = MoveWindow(state.splitter_hwnd, x, banner_h, SPLITTER_BAR_WIDTH, plan_height, true);
+        let _ = MoveWindow(state.splitter_hwnd, x, 0, SPLITTER_BAR_WIDTH, plan_height, true);
         x += SPLITTER_BAR_WIDTH;
-        let _ = MoveWindow(state.actual_hwnd, x, banner_h, act_width.max(0), plan_height, true);
+        let _ = MoveWindow(state.actual_hwnd, x, 0, act_width.max(0), plan_height, true);
         return;
     }
 
@@ -321,12 +364,11 @@ unsafe fn layout_children(state: &mut DayPlannerState, width: i32, height: i32) 
 
     let act_width = plan_width - spec_width - SPLITTER_BAR_WIDTH;
     let mut x = HEADER_WIDTH;
-    let _ = MoveWindow(state.banner_hwnd, 0, 0, width, banner_h, true);
-    let _ = MoveWindow(state.spec_hwnd, x, banner_h, spec_width, plan_height, true);
+    let _ = MoveWindow(state.spec_hwnd, x, 0, spec_width, plan_height, true);
     x += spec_width;
-    let _ = MoveWindow(state.splitter_hwnd, x, banner_h, SPLITTER_BAR_WIDTH, plan_height, true);
+    let _ = MoveWindow(state.splitter_hwnd, x, 0, SPLITTER_BAR_WIDTH, plan_height, true);
     x += SPLITTER_BAR_WIDTH;
-    let _ = MoveWindow(state.actual_hwnd, x, banner_h, act_width.max(0), plan_height, true);
+    let _ = MoveWindow(state.actual_hwnd, x, 0, act_width.max(0), plan_height, true);
 }
 
 unsafe fn init_scroll(state: &mut DayPlannerState) {
@@ -431,9 +473,7 @@ unsafe fn render_scene(state: &DayPlannerState, dc: HDC, width: i32, height: i32
 
     draw_hour_header(dc, height);
 
-    let _ = MoveToEx(dc, 0, BANNER_HEIGHT, None);
-    let _ = LineTo(dc, width, BANNER_HEIGHT);
-    let _ = MoveToEx(dc, HEADER_WIDTH, BANNER_HEIGHT, None);
+    let _ = MoveToEx(dc, HEADER_WIDTH, 0, None);
     let _ = LineTo(dc, HEADER_WIDTH, height);
 
     paint_panes_background(dc, state, width, height);
@@ -443,8 +483,10 @@ unsafe fn render_scene(state: &DayPlannerState, dc: HDC, width: i32, height: i32
     let _ = SetTextColor(dc, COLORREF(0x00202020));
 
     let pixels_per_hour = (HOUR_FRACTION_PX as f64 / HOUR_FRACTION) as i32;
-    let mut y = BANNER_HEIGHT - ((state.start_hour_pos / HOUR_FRACTION) as i32 % pixels_per_hour);
-    let mut hour_idx = ((state.start_hour_pos / 1.0).floor() as i32) % 24;
+    let start_hour = state.start_hour_pos.floor();
+    let fractional = state.start_hour_pos - start_hour;
+    let mut y = -((fractional / HOUR_FRACTION) * HOUR_FRACTION_PX as f64).round() as i32;
+    let mut hour_idx = (start_hour as i32).rem_euclid(24);
     while y < height {
         let _ = MoveToEx(dc, 0, y, None);
         let _ = LineTo(dc, width, y);
@@ -466,7 +508,7 @@ unsafe fn render_scene(state: &DayPlannerState, dc: HDC, width: i32, height: i32
 
 unsafe fn draw_hour_header(dc: HDC, height: i32) {
     // Gradient fill the hour gutter to better match the legacy look.
-    let top = BANNER_HEIGHT;
+    let top = 0;
     let bottom = height;
     let verts = [
         TRIVERTEX {
@@ -500,7 +542,7 @@ unsafe fn draw_hour_header(dc: HDC, height: i32) {
 }
 
 unsafe fn paint_panes_background(dc: HDC, state: &DayPlannerState, width: i32, height: i32) {
-    let plan_height = (height - BANNER_HEIGHT).max(0);
+    let plan_height = height.max(0);
     let plan_width = width - (HEADER_WIDTH + SPLITTER_BAR_WIDTH);
     if plan_width <= 0 {
         return;
@@ -511,21 +553,21 @@ unsafe fn paint_panes_background(dc: HDC, state: &DayPlannerState, width: i32, h
 
     let spec_rc = RECT {
         left: HEADER_WIDTH,
-        top: BANNER_HEIGHT,
+        top: 0,
         right: HEADER_WIDTH + spec_width,
-        bottom: BANNER_HEIGHT + plan_height,
+        bottom: plan_height,
     };
     let split_rc = RECT {
         left: spec_rc.right,
-        top: BANNER_HEIGHT,
+        top: 0,
         right: spec_rc.right + SPLITTER_BAR_WIDTH,
-        bottom: BANNER_HEIGHT + plan_height,
+        bottom: plan_height,
     };
     let act_rc = RECT {
         left: split_rc.right,
-        top: BANNER_HEIGHT,
+        top: 0,
         right: split_rc.right + act_width.max(0),
-        bottom: BANNER_HEIGHT + plan_height,
+        bottom: plan_height,
     };
 
     alpha_fill(dc, &spec_rc, COLORREF(0x00e4f0ff), 180);
@@ -863,4 +905,75 @@ fn LOWORD(l: u32) -> u16 {
 
 fn HIWORD(l: u32) -> u16 {
     ((l >> 16) & 0xffff) as u16
+}
+
+struct DayPlannerHostState {
+    hwnd: HWND,
+    banner_hwnd: HWND,
+    body_hwnd: HWND,
+    service: *mut Service,
+}
+
+unsafe extern "system" fn host_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_CREATE => {
+            let cs = &*(lparam.0 as *const CREATESTRUCTW);
+            let ptr = cs.lpCreateParams as *mut DayPlannerHostState;
+            if !ptr.is_null() {
+                let state = &mut *ptr;
+                state.hwnd = hwnd;
+                SetWindowLongPtrW(hwnd, GWL_USERDATA, ptr as isize);
+                let banner = crate::date_banner::create_date_banner(hwnd);
+                let body = create_planner_body(hwnd, state.service).expect("create planner body");
+                state.banner_hwnd = banner;
+                state.body_hwnd = body;
+                let mut rc = RECT::default();
+                let _ = GetClientRect(hwnd, &mut rc);
+                layout_host_children(state, rc.right - rc.left, rc.bottom - rc.top);
+            }
+            LRESULT(0)
+        }
+        WM_SIZE => {
+            if let Some(state) = host_state(hwnd) {
+                let width = LOWORD(lparam.0 as u32) as i32;
+                let height = HIWORD(lparam.0 as u32) as i32;
+                layout_host_children(state, width, height);
+            }
+            LRESULT(0)
+        }
+        WM_DESTROY => {
+            if let Some(ptr) = host_detach(hwnd) {
+                drop(Box::from_raw(ptr));
+            }
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+unsafe fn layout_host_children(state: &mut DayPlannerHostState, width: i32, height: i32) {
+    let banner_h = HOST_BANNER_HEIGHT;
+    let body_h = (height - banner_h).max(0);
+    let _ = MoveWindow(state.banner_hwnd, 0, 0, width, banner_h, true);
+    let _ = MoveWindow(state.body_hwnd, 0, banner_h, width, body_h, true);
+}
+
+unsafe fn host_state(hwnd: HWND) -> Option<&'static mut DayPlannerHostState> {
+    let ptr = GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut DayPlannerHostState;
+    ptr.as_mut()
+}
+
+unsafe fn host_detach(hwnd: HWND) -> Option<*mut DayPlannerHostState> {
+    let ptr = GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut DayPlannerHostState;
+    if !ptr.is_null() {
+        SetWindowLongPtrW(hwnd, GWL_USERDATA, 0);
+        Some(ptr)
+    } else {
+        None
+    }
 }

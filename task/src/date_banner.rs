@@ -185,7 +185,7 @@ unsafe fn create_banner_font() -> HFONT {
     lf.lfQuality = windows::Win32::Graphics::Gdi::ANTIALIASED_QUALITY;
     lf.lfPitchAndFamily = (windows::Win32::Graphics::Gdi::DEFAULT_PITCH.0
         | windows::Win32::Graphics::Gdi::FF_DONTCARE.0) as u8;
-    lf.lfHeight = -24;
+    lf.lfHeight = -28;
     lf.lfWeight = windows::Win32::Graphics::Gdi::FW_BOLD.0 as i32;
     let face = to_wstring("Palatino Linotype");
     for (i, ch) in face.iter().enumerate() {
