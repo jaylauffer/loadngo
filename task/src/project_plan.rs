@@ -1,31 +1,33 @@
-use data::service::Service;
 use std::ptr::null_mut;
 
+use data::service::Service;
 use windows::{
     core::PCWSTR,
     Win32::{
-        Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
-        Graphics::Gdi::{
-            BeginPaint, EndPaint, FillRect, GetStockObject, SelectObject, SetBkMode, SetTextColor,
-            TextOutW, DEFAULT_GUI_FONT, HBRUSH, PAINTSTRUCT, TRANSPARENT, WHITE_BRUSH,
-        },
+        Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
             CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW, RegisterClassW,
-            SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWL_USERDATA,
-            WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_PAINT, WM_SIZE, WNDCLASSW,
-            WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_VISIBLE,
+            SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWL_USERDATA, HMENU,
+            WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_SIZE, WNDCLASSW, WS_CHILD,
+            WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_VISIBLE,
         },
     },
 };
 
-use crate::winutil::to_wstring;
+use crate::{task_list, winutil::to_wstring};
 
 const CLASS_NAME: &str = "LNGProjectPlan";
+const DEFAULT_TASK_WIDTH: i32 = 150;
+const DETAIL_HEIGHT: i32 = 127;
 
 struct ProjectPlanState {
     hwnd: HWND,
     service: *mut Service,
+    hierarchy: HWND,
+    task_list: HWND,
+    detail: HWND,
+    task_width: i32,
 }
 
 pub fn register_class() {
@@ -36,7 +38,6 @@ pub fn register_class() {
             lpfnWndProc: Some(wndproc),
             hInstance: hinstance.into(),
             lpszClassName: PCWSTR(to_wstring(CLASS_NAME).as_ptr()),
-            hbrBackground: HBRUSH(null_mut()),
             ..Default::default()
         };
         let _ = RegisterClassW(&class);
@@ -50,6 +51,10 @@ pub fn create_project_plan(parent: HWND, service: *mut Service) -> HWND {
         let state = Box::new(ProjectPlanState {
             hwnd: HWND::default(),
             service,
+            hierarchy: HWND::default(),
+            task_list: HWND::default(),
+            detail: HWND::default(),
+            task_width: DEFAULT_TASK_WIDTH,
         });
         CreateWindowExW(
             WINDOW_EX_STYLE(0),
@@ -71,7 +76,9 @@ pub fn create_project_plan(parent: HWND, service: *mut Service) -> HWND {
 
 pub fn refresh(hwnd: HWND) {
     unsafe {
-        let _ = windows::Win32::Graphics::Gdi::InvalidateRect(hwnd, None, true);
+        if let Some(state) = state(hwnd) {
+            task_list::refresh_task_list(state.task_list);
+        }
     }
 }
 
@@ -84,13 +91,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let state = &mut *state_ptr;
                 state.hwnd = hwnd;
                 SetWindowLongPtrW(hwnd, GWL_USERDATA, state_ptr as isize);
+                create_children(state);
+                layout_children(state);
             }
             LRESULT(0)
         }
-        WM_SIZE => LRESULT(0),
-        WM_PAINT => {
+        WM_SIZE => {
             if let Some(state) = state(hwnd) {
-                paint(state);
+                layout_children(state);
             }
             LRESULT(0)
         }
@@ -104,75 +112,67 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     }
 }
 
-unsafe fn paint(state: &mut ProjectPlanState) {
-    let mut ps = PAINTSTRUCT::default();
-    let dc = BeginPaint(state.hwnd, &mut ps);
-
-    let mut rc = RECT::default();
-    let _ = GetClientRect(state.hwnd, &mut rc);
-    let bg = HBRUSH(GetStockObject(WHITE_BRUSH).0);
-    let _ = FillRect(dc, &rc, bg);
-    let _ = SetBkMode(dc, TRANSPARENT);
-    let _ = SetTextColor(dc, COLORREF(0x00202020));
-    let old_font = SelectObject(
-        dc,
-        GetStockObject(windows::Win32::Graphics::Gdi::DEFAULT_GUI_FONT),
-    );
-
-    let (total, top_level, with_parent) = match service(state) {
-        Some(svc) => {
-            let total = svc.tasks.len();
-            let top = svc.tasks.values().filter(|t| t.parent.is_none()).count();
-            let child = total.saturating_sub(top);
-            (total, top, child)
-        }
-        None => (0, 0, 0),
-    };
-
-    let mut lines = vec![format!(
-        "Project Plan ({} total, {} top-level, {} nested)",
-        total, top_level, with_parent
-    )];
-
-    if let Some(service) = service(state) {
-        let mut grouped: Vec<_> = service
-            .tasks
-            .values()
-            .filter(|t| t.parent.is_none())
-            .collect();
-        grouped.sort_by_key(|t| t.entity.id);
-        for parent in grouped.into_iter().take(8) {
-            let child_count = service
-                .tasks
-                .values()
-                .filter(|c| c.parent == Some(parent.entity.id))
-                .count();
-            lines.push(format!(
-                "{}: {} ({} children)",
-                parent.entity.id, parent.name, child_count
-            ));
-        }
-        if top_level > 8 {
-            lines.push(format!("... {} more top-level tasks", top_level - 8));
-        }
-    }
-
-    let mut y = 8;
-    for line in lines {
-        let mut w = to_wstring(&line);
-        if !w.is_empty() {
-            w.pop();
-        }
-        let _ = TextOutW(dc, 8, y, &w);
-        y += 18;
-    }
-
-    let _ = SelectObject(dc, old_font);
-    let _ = EndPaint(state.hwnd, &ps);
+unsafe fn create_children(state: &mut ProjectPlanState) {
+    state.hierarchy = create_placeholder(state.hwnd, "Project hierarchy (not yet ported)");
+    state.task_list = task_list::create_task_list_wnd(state.hwnd, state.service);
+    state.detail = create_placeholder(state.hwnd, "Task details (not yet ported)");
 }
 
-unsafe fn service(state: &ProjectPlanState) -> Option<&Service> {
-    state.service.as_ref()
+unsafe fn layout_children(state: &mut ProjectPlanState) {
+    let mut rc = RECT::default();
+    let _ = GetClientRect(state.hwnd, &mut rc);
+    let width = rc.right - rc.left;
+    let height = rc.bottom - rc.top;
+    let task_width = state
+        .task_width
+        .clamp(DEFAULT_TASK_WIDTH, (width / 3).max(DEFAULT_TASK_WIDTH));
+
+    let _ = windows::Win32::UI::WindowsAndMessaging::MoveWindow(
+        state.hierarchy,
+        0,
+        0,
+        width - task_width,
+        height,
+        true,
+    );
+
+    let list_height = (height - DETAIL_HEIGHT).max(0);
+    let _ = windows::Win32::UI::WindowsAndMessaging::MoveWindow(
+        state.task_list,
+        width - task_width,
+        0,
+        task_width,
+        list_height,
+        true,
+    );
+    let _ = windows::Win32::UI::WindowsAndMessaging::MoveWindow(
+        state.detail,
+        width - task_width,
+        height - DETAIL_HEIGHT,
+        task_width,
+        DETAIL_HEIGHT,
+        true,
+    );
+}
+
+unsafe fn create_placeholder(parent: HWND, text: &str) -> HWND {
+    let class = to_wstring("STATIC");
+    let label = to_wstring(text);
+    CreateWindowExW(
+        WINDOW_EX_STYLE(0),
+        PCWSTR(class.as_ptr()),
+        PCWSTR(label.as_ptr()),
+        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0),
+        0,
+        0,
+        100,
+        30,
+        parent,
+        HMENU(null_mut()),
+        None,
+        None,
+    )
+    .unwrap_or(HWND::default())
 }
 
 unsafe fn state(hwnd: HWND) -> Option<&'static mut ProjectPlanState> {

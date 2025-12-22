@@ -58,7 +58,6 @@ const HEADER_WIDTH: i32 = 70;
 const SPLITTER_BAR_WIDTH: i32 = 5;
 const SPLITTER_QUICKTAB_WIDTH: i32 = 8;
 const DEFAULT_SPLIT: f64 = 0.55;
-const HOST_BANNER_HEIGHT: i32 = 42;
 const HOUR_FRACTION: f64 = 0.25; // 15-minute increments
 const HOUR_FRACTION_PX: i32 = 18; // pixels per 15-minute increment (matches legacy spacing)
 const MIN_PANE_WIDTH: i32 = 80;
@@ -498,7 +497,6 @@ pub fn create_day_planner(parent: HWND, service: *mut Service) -> Result<HWND> {
         let hinstance = GetModuleHandleW(None)?;
         let state = Box::new(DayPlannerHostState {
             hwnd: HWND::default(),
-            banner_hwnd: HWND::default(),
             body_hwnd: HWND::default(),
             service,
         });
@@ -1907,7 +1905,6 @@ fn point_in_rect(pt: POINT, rc: RECT) -> bool {
 
 struct DayPlannerHostState {
     hwnd: HWND,
-    banner_hwnd: HWND,
     body_hwnd: HWND,
     service: *mut Service,
 }
@@ -1926,9 +1923,7 @@ unsafe extern "system" fn host_wndproc(
                 let state = &mut *ptr;
                 state.hwnd = hwnd;
                 SetWindowLongPtrW(hwnd, GWL_USERDATA, ptr as isize);
-                let banner = crate::date_banner::create_date_banner(hwnd);
                 let body = create_planner_body(hwnd, state.service).expect("create planner body");
-                state.banner_hwnd = banner;
                 state.body_hwnd = body;
                 let mut rc = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rc);
@@ -1955,10 +1950,7 @@ unsafe extern "system" fn host_wndproc(
 }
 
 unsafe fn layout_host_children(state: &mut DayPlannerHostState, width: i32, height: i32) {
-    let banner_h = HOST_BANNER_HEIGHT;
-    let body_h = (height - banner_h).max(0);
-    let _ = MoveWindow(state.banner_hwnd, 0, 0, width, banner_h, true);
-    let _ = MoveWindow(state.body_hwnd, 0, banner_h, width, body_h, true);
+    let _ = MoveWindow(state.body_hwnd, 0, 0, width, height.max(0), true);
 }
 
 unsafe fn host_state(hwnd: HWND) -> Option<&'static mut DayPlannerHostState> {

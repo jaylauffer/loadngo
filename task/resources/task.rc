@@ -6,6 +6,13 @@
 #define IDB_TBTASKSYNCH  223
 #define IDB_TBTRASHCAN   224
 #define IDB_TBPRINT      235
+#define IDB_XHATCHBR     131
+#define IDB_PRIORITY1    227
+#define IDB_PRIORITY2    229
+#define IDB_PRIORITY3    228
+#define IDB_PRIORITY4    230
+#define IDB_PRIORITY5    231
+#define IDB_GREY_X       245
 #define IDB_SPEC_TOP_RIGHT 115
 #define IDB_SPEC_BOTTOM_LEFT 116
 #define IDB_SPEC_BOTTOM_RIGHT 117
@@ -29,6 +36,13 @@ IDB_TBMAKEREPORT BITMAP "resources/make_report.bmp"
 IDB_TBTASKSYNCH  BITMAP "resources/task_synch.bmp"
 IDB_TBTRASHCAN   BITMAP "resources/trashcan.bmp"
 IDB_TBPRINT      BITMAP "resources/print.bmp"
+IDB_XHATCHBR     BITMAP "resources/xhatchbr.bmp"
+IDB_PRIORITY1    BITMAP "resources/priority1.bmp"
+IDB_PRIORITY2    BITMAP "resources/priority2.bmp"
+IDB_PRIORITY3    BITMAP "resources/priority3.bmp"
+IDB_PRIORITY4    BITMAP "resources/priority4.bmp"
+IDB_PRIORITY5    BITMAP "resources/priority5.bmp"
+IDB_GREY_X       BITMAP "resources/grey_x.bmp"
 IDB_SPEC_TOP_RIGHT BITMAP "resources/spec_top_right.bmp"
 IDB_SPEC_BOTTOM_LEFT BITMAP "resources/spec_bottom_left.bmp"
 IDB_SPEC_BOTTOM_RIGHT BITMAP "resources/spec_bottom_right.bmp"
