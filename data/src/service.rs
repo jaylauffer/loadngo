@@ -3,6 +3,7 @@
 use crate::config::Configuration;
 use crate::file_manager::FileManager;
 use crate::task::Task;
+use crate::task::TimeEntry;
 use crate::undo::{Command, UndoStack};
 use crate::value::Value;
 use anyhow::Result;
@@ -13,6 +14,7 @@ pub struct Service {
     pub config: Configuration,
     pub files: FileManager,
     pub tasks: HashMap<u64, Task>,
+    pub time_entries: HashMap<u64, TimeEntry>,
     pub undo: UndoStack,
 }
 
@@ -22,6 +24,7 @@ impl Service {
             config,
             files,
             tasks: HashMap::new(),
+            time_entries: HashMap::new(),
             undo: UndoStack::default(),
         }
     }
@@ -69,20 +72,34 @@ impl Service {
         self.files.save_tasks(name, &tasks)
     }
 
+    pub fn save_entries(&self, name: &str) -> Result<()> {
+        let entries: Vec<TimeEntry> = self.time_entries.values().cloned().collect();
+        self.files.save_time_entries(name, &entries)
+    }
+
     pub fn load(&mut self, name: &str) -> Result<()> {
         let tasks = self.files.load_tasks(name)?;
         self.tasks = tasks.into_iter().map(|t| (t.entity.id, t)).collect();
         Ok(())
     }
 
+    pub fn load_entries(&mut self, name: &str) -> Result<()> {
+        let entries = self.files.load_time_entries(name)?;
+        self.time_entries = entries.into_iter().map(|e| (e.entity.id, e)).collect();
+        Ok(())
+    }
+
     pub fn save_all(&self, name: &str) -> Result<()> {
         self.config.save_to_file(self.files.config_path())?;
-        self.save(name)
+        self.save(name)?;
+        self.save_entries(name)
     }
 
     pub fn load_all(&mut self, name: &str) -> Result<()> {
         // Load configuration first, then tasks.
         let _ = self.config.load_from_file(self.files.config_path());
-        self.load(name)
+        self.load(name)?;
+        let _ = self.load_entries(name);
+        Ok(())
     }
 }

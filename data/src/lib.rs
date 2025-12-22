@@ -1459,6 +1459,12 @@ pub mod task {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub enum EntryKind {
+        Spec,
+        Actual,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct TimeEntry {
         pub entity: Entity,
         pub task_id: Id,
@@ -1466,6 +1472,7 @@ pub mod task {
         pub start: u64,
         pub stop: u64,
         pub title: String,
+        pub kind: EntryKind,
         pub notes: Option<String>,
     }
 }
@@ -1474,6 +1481,7 @@ pub mod task {
 pub mod persistence {
     use super::model_utils::now_timestamp;
     use super::task::Task;
+    use super::task::TimeEntry;
     use super::types::{Id, TimeStamp};
     use super::value::Value;
     use anyhow::Result;
@@ -1559,6 +1567,30 @@ pub mod persistence {
         Ok(tasks)
     }
 
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct TimeEntryFile {
+        pub version: u32,
+        pub generated_at: TimeStamp,
+        pub entries: Vec<TimeEntry>,
+    }
+
+    /// Write time entries to a deterministic JSON file (sorted by id/start).
+    pub fn write_time_entry_file(path: impl AsRef<Path>, entries: &[TimeEntry]) -> Result<()> {
+        let json = time_entries_to_json(entries);
+        let writer = File::create(path)?;
+        serde_json::to_writer_pretty(writer, &json)?;
+        Ok(())
+    }
+
+    /// Read time entries from a JSON file written by `write_time_entry_file`.
+    pub fn read_time_entry_file(path: impl AsRef<Path>) -> Result<Vec<TimeEntry>> {
+        let reader = File::open(path)?;
+        let json: TimeEntryFile = serde_json::from_reader(reader)?;
+        let mut entries = json.entries;
+        entries.sort_by(|a, b| a.entity.id.cmp(&b.entity.id).then(a.start.cmp(&b.start)));
+        Ok(entries)
+    }
+
     /// Convert tasks into deterministic JSON payload (sorted by id/name/properties).
     pub fn tasks_to_json(tasks: &[Task]) -> Result<TaskFile> {
         let mut ordered: Vec<SerdeTask> = tasks.iter().map(SerdeTask::from).collect();
@@ -1582,6 +1614,16 @@ pub mod persistence {
         let mut tasks: Vec<Task> = json.tasks.into_iter().map(Task::from).collect();
         tasks.sort_by(|a, b| a.entity.id.cmp(&b.entity.id).then(a.name.cmp(&b.name)));
         Ok(tasks)
+    }
+
+    fn time_entries_to_json(entries: &[TimeEntry]) -> TimeEntryFile {
+        let mut ordered: Vec<TimeEntry> = entries.to_vec();
+        ordered.sort_by(|a, b| a.entity.id.cmp(&b.entity.id).then(a.start.cmp(&b.start)));
+        TimeEntryFile {
+            version: 1,
+            generated_at: now_timestamp(),
+            entries: ordered,
+        }
     }
 }
 

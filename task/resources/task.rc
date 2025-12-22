@@ -6,6 +6,22 @@
 #define IDB_TBTASKSYNCH  223
 #define IDB_TBTRASHCAN   224
 #define IDB_TBPRINT      235
+#define IDB_SPEC_TOP_RIGHT 115
+#define IDB_SPEC_BOTTOM_LEFT 116
+#define IDB_SPEC_BOTTOM_RIGHT 117
+#define IDB_SPEC_LEFT 118
+#define IDB_SPEC_RIGHT 119
+#define IDB_SPEC_TOP 120
+#define IDB_SPEC_TOP_LEFT 121
+#define IDB_SPEC_BOTTOM 122
+#define IDB_ACTUAL_TOP_RIGHT 123
+#define IDB_ACTUAL_BOTTOM_LEFT 124
+#define IDB_ACTUAL_BOTTOM_RIGHT 125
+#define IDB_ACTUAL_LEFT 126
+#define IDB_ACTUAL_RIGHT 127
+#define IDB_ACTUAL_TOP 128
+#define IDB_ACTUAL_TOP_LEFT 129
+#define IDB_ACTUAL_BOTTOM 130
 
 IDB_TBNEWTASK    BITMAP "resources/new_task.bmp"
 IDB_TBSAVEPLAN   BITMAP "resources/save_plan.bmp"
@@ -13,4 +29,19 @@ IDB_TBMAKEREPORT BITMAP "resources/make_report.bmp"
 IDB_TBTASKSYNCH  BITMAP "resources/task_synch.bmp"
 IDB_TBTRASHCAN   BITMAP "resources/trashcan.bmp"
 IDB_TBPRINT      BITMAP "resources/print.bmp"
-
+IDB_SPEC_TOP_RIGHT BITMAP "resources/spec_top_right.bmp"
+IDB_SPEC_BOTTOM_LEFT BITMAP "resources/spec_bottom_left.bmp"
+IDB_SPEC_BOTTOM_RIGHT BITMAP "resources/spec_bottom_right.bmp"
+IDB_SPEC_LEFT BITMAP "resources/spec_left.bmp"
+IDB_SPEC_RIGHT BITMAP "resources/spec_right.bmp"
+IDB_SPEC_TOP BITMAP "resources/spec_top.bmp"
+IDB_SPEC_TOP_LEFT BITMAP "resources/spec_top_left.bmp"
+IDB_SPEC_BOTTOM BITMAP "resources/spec_bottom.bmp"
+IDB_ACTUAL_TOP_RIGHT BITMAP "resources/act_top_right.bmp"
+IDB_ACTUAL_BOTTOM_LEFT BITMAP "resources/act_bottom_left.bmp"
+IDB_ACTUAL_BOTTOM_RIGHT BITMAP "resources/act_bottom_right.bmp"
+IDB_ACTUAL_LEFT BITMAP "resources/act_left.bmp"
+IDB_ACTUAL_RIGHT BITMAP "resources/act_right.bmp"
+IDB_ACTUAL_TOP BITMAP "resources/act_top.bmp"
+IDB_ACTUAL_TOP_LEFT BITMAP "resources/act_top_left.bmp"
+IDB_ACTUAL_BOTTOM BITMAP "resources/act_bottom.bmp"

@@ -1,20 +1,23 @@
 use std::ptr::null_mut;
+use std::sync::Once;
 
 use anyhow::Result;
 use data::entity::Entity;
 use data::model_utils::{generate_id, now_timestamp, UNITS_PER_HOUR};
 use data::service::Service;
-use data::task::TimeEntry;
+use data::task::{EntryKind, TimeEntry};
 use gui::buffered::BufferedWnd;
 use gui::component::Component;
 use gui::container::Container;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CreateFontIndirectW, CreateSolidBrush, DeleteObject, DrawEdge, FillRect, GetStockObject,
-    GradientFill, LineTo, MoveToEx, ScreenToClient, SelectObject, SetBkMode, SetTextColor, TextOutW,
-    BDR_RAISEDOUTER, BF_RECT, GRADIENT_FILL_RECT_H, GRADIENT_RECT, HBRUSH, HDC, HGDIOBJ, HFONT,
-    LF_FACESIZE, LOGFONTW, TRIVERTEX, TRANSPARENT, WHITE_BRUSH,
+    CreateFontIndirectW, CreateSolidBrush, DeleteObject, DrawEdge, DrawFocusRect, FillRect,
+    GetObjectW, GetStockObject, GradientFill, LineTo, MoveToEx, ScreenToClient, SelectObject,
+    SetBkMode, SetTextColor, StretchDIBits, TextOutW, BDR_RAISEDOUTER, BF_RECT, BITMAPINFO,
+    BITMAPINFOHEADER, DIB_RGB_COLORS, DIBSECTION, GRADIENT_FILL_RECT_H, GRADIENT_RECT, HBITMAP,
+    HBRUSH, HDC, HGDIOBJ, HFONT, LF_FACESIZE, LOGFONTW, SRCCOPY, TRIVERTEX, TRANSPARENT,
+    WHITE_BRUSH,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL};
@@ -23,16 +26,23 @@ use windows::Win32::System::Ole::{
     IDropTarget, IDropTarget_Impl, RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop, CF_HDROP,
     CF_UNICODETEXT, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetFocus, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL, VK_ESCAPE, VK_RETURN,
+    VK_SHIFT,
+};
 use windows::Win32::UI::Controls::SetScrollInfo;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, GetClientRect, GetCursorPos, GetScrollInfo, GetWindowLongPtrW,
-    LoadCursorW, MoveWindow, RegisterClassW, SetCursor, SetWindowLongPtrW, CREATESTRUCTW,
-    CS_HREDRAW, CS_VREDRAW, GWL_USERDATA, HMENU, IDC_ARROW, IDC_SIZEWE,
-    SCROLLBAR_COMMAND, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_CAPTURECHANGED, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_VSCROLL,
-    WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_VISIBLE, WS_VSCROLL,
+    LoadCursorW, LoadImageW, MoveWindow, RegisterClassW, SendMessageW, SetCursor, SetWindowLongPtrW,
+    SetWindowPos, SetWindowTextW, ShowWindow, GetWindowTextW,
+    CREATESTRUCTW,
+    CS_HREDRAW, CS_VREDRAW, GWL_USERDATA, HMENU, IDC_ARROW, IDC_SIZEWE, IMAGE_BITMAP,
+    LR_CREATEDIBSECTION, LR_SHARED, SCROLLBAR_COMMAND, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE,
+    SIF_TRACKPOS, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_CAPTURECHANGED, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_VSCROLL, WNDCLASSW,
+    WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_VISIBLE, WS_VSCROLL, WS_EX_CLIENTEDGE, CBS_DROPDOWN,
+    CB_ADDSTRING, CB_RESETCONTENT, CBN_SELENDOK, SW_HIDE, SWP_SHOWWINDOW, HWND_TOP,
 };
 use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 
@@ -51,6 +61,22 @@ const HOUR_FRACTION_PX: i32 = 18; // pixels per 15-minute increment (matches leg
 const MIN_PANE_WIDTH: i32 = 80;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const UNITS_PER_FRACTION: u64 = UNITS_PER_HOUR / 4;
+const IDB_SPEC_TOP_RIGHT: u16 = 115;
+const IDB_SPEC_BOTTOM_LEFT: u16 = 116;
+const IDB_SPEC_BOTTOM_RIGHT: u16 = 117;
+const IDB_SPEC_LEFT: u16 = 118;
+const IDB_SPEC_RIGHT: u16 = 119;
+const IDB_SPEC_TOP: u16 = 120;
+const IDB_SPEC_TOP_LEFT: u16 = 121;
+const IDB_SPEC_BOTTOM: u16 = 122;
+const IDB_ACTUAL_TOP_RIGHT: u16 = 123;
+const IDB_ACTUAL_BOTTOM_LEFT: u16 = 124;
+const IDB_ACTUAL_BOTTOM_RIGHT: u16 = 125;
+const IDB_ACTUAL_LEFT: u16 = 126;
+const IDB_ACTUAL_RIGHT: u16 = 127;
+const IDB_ACTUAL_TOP: u16 = 128;
+const IDB_ACTUAL_TOP_LEFT: u16 = 129;
+const IDB_ACTUAL_BOTTOM: u16 = 130;
 
 const HOUR_STRINGS: [&str; 24] = [
     "12am", "1am", "2am", "3am", "4am", "5am", "6am", "7am", "8am", "9am", "10am", "11am", "12pm",
@@ -128,10 +154,11 @@ impl Component for DayPlanPane {
             WM_LBUTTONDOWN => {
                 if let Some(state) = unsafe { get_state(self.host_hwnd) } {
                     if let Some((idx, rc, resizing)) = hit_test_entry(self, state, pt) {
+                        let entry_id = self.entries[idx].entity.id;
                         let offset_y = pt.y - rc.top;
-                        self.selected_id = Some(self.entries[idx].entity.id);
+                        self.selected_id = Some(entry_id);
                         self.drag = Some(EntryDragState {
-                            idx,
+                            entry_id,
                             offset_y,
                             mode: if resizing {
                                 DragMode::Resize
@@ -160,7 +187,7 @@ impl Component for DayPlanPane {
                         refresh(self.host_hwnd);
                         return LRESULT(1);
                     }
-                    create_entry_at(self, state, pt);
+                    begin_editor(state, self.kind, pt);
                     refresh(self.host_hwnd);
                     return LRESULT(1);
                 }
@@ -187,7 +214,7 @@ enum DragMode {
 
 #[derive(Clone, Copy)]
 struct EntryDragState {
-    idx: usize,
+    entry_id: u64,
     offset_y: i32,
     mode: DragMode,
 }
@@ -253,6 +280,44 @@ impl Component for DayPlanSplitter {
     }
 }
 
+struct DetailEditor {
+    hwnd: HWND,
+    last_rect: RECT,
+}
+
+impl DetailEditor {
+    unsafe fn create(parent: HWND) -> Result<Self> {
+        let cls = to_wstring("COMBOBOX");
+        let hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE(WS_EX_CLIENTEDGE.0),
+            PCWSTR(cls.as_ptr()),
+            PCWSTR::null(),
+            WINDOW_STYLE(WS_CHILD.0 | (CBS_DROPDOWN as u32) | WS_VSCROLL.0),
+            0,
+            0,
+            160,
+            24,
+            parent,
+            HMENU(null_mut()),
+            None,
+            None,
+        )?;
+        ShowWindow(hwnd, SW_HIDE);
+        Ok(Self {
+            hwnd,
+            last_rect: RECT::default(),
+        })
+    }
+}
+
+struct SpecDetailEditor {
+    editor: DetailEditor,
+}
+
+struct ActualDetailEditor {
+    editor: DetailEditor,
+}
+
 struct DayPlannerState {
     hwnd: HWND,
     container: Container,
@@ -264,6 +329,8 @@ struct DayPlannerState {
     font: HFONT,
     buffer: BufferedWnd,
     drop_target: Option<windows::Win32::System::Ole::IDropTarget>,
+    spec_editor: Option<SpecDetailEditor>,
+    actual_editor: Option<ActualDetailEditor>,
 }
 
 impl DayPlannerState {
@@ -279,6 +346,8 @@ impl DayPlannerState {
             font: HFONT::default(),
             buffer: BufferedWnd::new(),
             drop_target: None,
+            spec_editor: None,
+            actual_editor: None,
         }
     }
 }
@@ -431,6 +500,19 @@ unsafe fn create_children(state: &mut DayPlannerState) {
     state.container.add(Box::new(spec));
     state.container.add(Box::new(actual));
     state.container.add(Box::new(splitter));
+}
+
+unsafe fn create_editors(state: &mut DayPlannerState) {
+    if state.spec_editor.is_none() {
+        state.spec_editor = DetailEditor::create(state.hwnd)
+            .ok()
+            .map(|editor| SpecDetailEditor { editor });
+    }
+    if state.actual_editor.is_none() {
+        state.actual_editor = DetailEditor::create(state.hwnd)
+            .ok()
+            .map(|editor| ActualDetailEditor { editor });
+    }
 }
 
 unsafe fn layout_children(state: &mut DayPlannerState, width: i32, height: i32) {
@@ -593,6 +675,8 @@ unsafe extern "system" fn planner_wndproc(
                 SetWindowLongPtrW(hwnd, GWL_USERDATA, ptr as isize);
                 init_scroll(state);
                 create_children(state);
+                create_editors(state);
+                sync_entries_from_service(state);
                 register_drop(state);
                 let mut rc = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rc);
@@ -617,6 +701,59 @@ unsafe extern "system" fn planner_wndproc(
                 handle_scroll(state, wparam);
             }
             LRESULT(0)
+        }
+        WM_COMMAND => {
+            if let Some(state) = get_state(hwnd) {
+                let code = ((wparam.0 >> 16) & 0xffff) as u16;
+                if code == CBN_SELENDOK as u16 {
+                    let src = HWND(lparam.0 as *mut _);
+                    if let Some(editor) = state.spec_editor.as_ref() {
+                        if editor.editor.hwnd == src {
+                            commit_editor(state, PaneKind::Spec, true);
+                            return LRESULT(0);
+                        }
+                    }
+                    if let Some(editor) = state.actual_editor.as_ref() {
+                        if editor.editor.hwnd == src {
+                            let suppress = is_suppress_key();
+                            commit_editor(state, PaneKind::Actual, suppress);
+                            return LRESULT(0);
+                        }
+                    }
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_KEYDOWN => {
+            if let Some(state) = get_state(hwnd) {
+                let focus = GetFocus();
+                if let Some(editor) = state.spec_editor.as_ref() {
+                    if editor.editor.hwnd == focus {
+                        if wparam.0 as u32 == VK_RETURN.0 as u32 {
+                            commit_editor(state, PaneKind::Spec, true);
+                            return LRESULT(0);
+                        }
+                        if wparam.0 as u32 == VK_ESCAPE.0 as u32 {
+                            cancel_editor(state, PaneKind::Spec);
+                            return LRESULT(0);
+                        }
+                    }
+                }
+                if let Some(editor) = state.actual_editor.as_ref() {
+                    if editor.editor.hwnd == focus {
+                        if wparam.0 as u32 == VK_RETURN.0 as u32 {
+                            let suppress = is_suppress_key();
+                            commit_editor(state, PaneKind::Actual, suppress);
+                            return LRESULT(0);
+                        }
+                        if wparam.0 as u32 == VK_ESCAPE.0 as u32 {
+                            cancel_editor(state, PaneKind::Actual);
+                            return LRESULT(0);
+                        }
+                    }
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_MOUSEWHEEL => {
             if let Some(state) = get_state(hwnd) {
@@ -868,15 +1005,11 @@ fn create_entry_at(pane: &mut DayPlanPane, state: &DayPlannerState, pt: POINT) {
         PaneKind::Actual => format!("Actual: {base_title}"),
         PaneKind::Spec => base_title,
     };
-    pane.entries.push(TimeEntry {
-        entity: Entity::new(generate_id(), generate_id(), "local", now_timestamp()),
-        task_id,
-        duration: stop - start,
-        start,
-        stop,
-        title,
-        notes: None,
-    });
+    let kind = match pane.kind {
+        PaneKind::Spec => EntryKind::Spec,
+        PaneKind::Actual => EntryKind::Actual,
+    };
+    add_time_entry(state, task_id, title, start, stop, kind);
 }
 
 fn update_entry_drag(
@@ -885,18 +1018,16 @@ fn update_entry_drag(
     pt: POINT,
     drag: &EntryDragState,
 ) {
-    if drag.idx >= pane.entries.len() {
+    let entry_id = drag.entry_id;
+    let Some(entry) = entry_by_id(state, entry_id) else {
         return;
-    }
-    let entry = &mut pane.entries[drag.idx];
+    };
     match drag.mode {
         DragMode::Move => {
             let y = pt.y - drag.offset_y;
             let new_start = time_from_point(state, pane.rect, y);
             let duration = entry.stop.saturating_sub(entry.start).max(UNITS_PER_FRACTION);
-            entry.start = new_start;
-            entry.stop = new_start + duration;
-            entry.duration = duration;
+            update_entry_time(state, entry_id, new_start, new_start + duration);
         }
         DragMode::Resize => {
             let mut new_stop = time_from_point(state, pane.rect, pt.y);
@@ -905,8 +1036,7 @@ fn update_entry_drag(
             } else {
                 new_stop += UNITS_PER_FRACTION;
             }
-            entry.stop = new_stop;
-            entry.duration = entry.stop - entry.start;
+            update_entry_time(state, entry_id, entry.start, new_stop);
         }
     }
 }
@@ -932,6 +1062,235 @@ fn default_entry_title(state: &DayPlannerState) -> (u64, String) {
     (0, "New Entry".to_string())
 }
 
+fn begin_editor(state: &DayPlannerState, kind: PaneKind, pt: POINT) {
+    let Some(editor) = editor_for_kind(state, kind) else {
+        return;
+    };
+    let Some(pane_rect) = pane_rect_for_kind(state, kind) else {
+        return;
+    };
+    let y_in_pane = (pt.y - pane_rect.top).max(0);
+    let segment = if y_in_pane >= HOUR_FRACTION_PX {
+        y_in_pane / HOUR_FRACTION_PX
+    } else {
+        0
+    };
+    let top = pane_rect.top + (segment * HOUR_FRACTION_PX) + 1;
+    let rect = RECT {
+        left: pane_rect.left,
+        top,
+        right: pane_rect.right,
+        bottom: top + HOUR_FRACTION_PX - 1,
+    };
+    populate_editor(state, editor.hwnd);
+    unsafe {
+        SetWindowPos(
+            editor.hwnd,
+            HWND_TOP,
+            rect.left,
+            rect.top,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+            SWP_SHOWWINDOW,
+        );
+        let _ = SetFocus(editor.hwnd);
+        let _ = SetWindowTextW(editor.hwnd, PCWSTR::null());
+    }
+    if let Some(state_mut) = unsafe { get_state(state.hwnd) } {
+        if let Some(editor_mut) = editor_for_kind_mut(state_mut, kind) {
+            editor_mut.last_rect = rect;
+        }
+    }
+}
+
+fn populate_editor(state: &DayPlannerState, hwnd: HWND) {
+    if state.service.is_null() {
+        return;
+    }
+    let service = unsafe { &*state.service };
+    let mut names: Vec<String> = service.tasks.values().map(|t| t.name.clone()).collect();
+    names.sort();
+    unsafe {
+        let _ = SendMessageW(hwnd, CB_RESETCONTENT, WPARAM(0), LPARAM(0));
+        for name in names {
+            let w = to_wstring(&name);
+            let _ = SendMessageW(hwnd, CB_ADDSTRING, WPARAM(0), LPARAM(w.as_ptr() as isize));
+        }
+    }
+}
+
+fn editor_for_kind(state: &DayPlannerState, kind: PaneKind) -> Option<&DetailEditor> {
+    match kind {
+        PaneKind::Spec => state.spec_editor.as_ref().map(|e| &e.editor),
+        PaneKind::Actual => state.actual_editor.as_ref().map(|e| &e.editor),
+    }
+}
+
+fn editor_for_kind_mut(state: &mut DayPlannerState, kind: PaneKind) -> Option<&mut DetailEditor> {
+    match kind {
+        PaneKind::Spec => state.spec_editor.as_mut().map(|e| &mut e.editor),
+        PaneKind::Actual => state.actual_editor.as_mut().map(|e| &mut e.editor),
+    }
+}
+
+fn pane_rect_for_kind(state: &DayPlannerState, kind: PaneKind) -> Option<RECT> {
+    state
+        .container
+        .children
+        .iter()
+        .find_map(|child| {
+            child
+                .as_any()
+                .downcast_ref::<DayPlanPane>()
+                .filter(|pane| pane.kind == kind)
+                .map(|pane| pane.rect)
+        })
+}
+
+fn commit_editor(state: &DayPlannerState, kind: PaneKind, suppress: bool) {
+    let Some(editor) = editor_for_kind(state, kind) else {
+        return;
+    };
+    let text = editor_text(editor.hwnd);
+    if text.is_empty() {
+        cancel_editor(state, kind);
+        return;
+    }
+    let task = find_or_create_task(state, &text);
+    let (start, stop) = editor_time_range(state, kind);
+    let entry_kind = match kind {
+        PaneKind::Spec => EntryKind::Spec,
+        PaneKind::Actual => EntryKind::Actual,
+    };
+    let title = if suppress {
+        format!("(suppressed) {}", task.name)
+    } else {
+        task.name.clone()
+    };
+    add_time_entry(state, task.entity.id, title, start, stop, entry_kind);
+    cancel_editor(state, kind);
+}
+
+fn editor_time_range(state: &DayPlannerState, kind: PaneKind) -> (u64, u64) {
+    if let Some(editor) = editor_for_kind(state, kind) {
+        let y = editor.last_rect.top;
+        let rect = pane_rect_for_kind(state, kind).unwrap_or(editor.last_rect);
+        let start = time_from_point(state, rect, y);
+        return (start, start + UNITS_PER_FRACTION);
+    }
+    (state.active_date, state.active_date + UNITS_PER_FRACTION)
+}
+
+fn cancel_editor(state: &DayPlannerState, kind: PaneKind) {
+    let Some(editor) = editor_for_kind(state, kind) else {
+        return;
+    };
+    unsafe {
+        ShowWindow(editor.hwnd, SW_HIDE);
+    }
+}
+
+fn editor_text(hwnd: HWND) -> String {
+    let mut buf = vec![0u16; 512];
+    let len = unsafe { GetWindowTextW(hwnd, &mut buf) } as usize;
+    buf.truncate(len);
+    String::from_utf16_lossy(&buf)
+}
+
+fn find_or_create_task(state: &DayPlannerState, name: &str) -> data::task::Task {
+    let service = unsafe { &mut *state.service };
+    if let Some(task) = service.tasks.values().find(|t| t.name == name) {
+        return task.clone();
+    }
+    let task = data::task::Task::spawn(name, "local-user", 1, 1, now_timestamp());
+    service.add_task(task.clone());
+    task
+}
+
+fn is_suppress_key() -> bool {
+    unsafe {
+        (GetKeyState(VK_CONTROL.0 as i32) & (0x8000u16 as i16)) != 0
+            || (GetKeyState(VK_SHIFT.0 as i32) & (0x8000u16 as i16)) != 0
+    }
+}
+
+fn entry_by_id(state: &DayPlannerState, entry_id: u64) -> Option<TimeEntry> {
+    if state.service.is_null() {
+        return None;
+    }
+    let service = unsafe { &*state.service };
+    service.time_entries.get(&entry_id).cloned()
+}
+
+fn add_time_entry(
+    state: &DayPlannerState,
+    task_id: u64,
+    title: String,
+    start: u64,
+    stop: u64,
+    kind: EntryKind,
+) {
+    if state.service.is_null() {
+        return;
+    }
+    let entry = TimeEntry {
+        entity: Entity::new(generate_id(), generate_id(), "local", now_timestamp()),
+        task_id,
+        duration: stop.saturating_sub(start).max(UNITS_PER_FRACTION),
+        start,
+        stop,
+        title,
+        kind,
+        notes: None,
+    };
+    let service = unsafe { &mut *state.service };
+    service.time_entries.insert(entry.entity.id, entry);
+    sync_entries_from_service(state);
+}
+
+fn update_entry_time(state: &DayPlannerState, entry_id: u64, start: u64, stop: u64) {
+    if state.service.is_null() {
+        return;
+    }
+    let service = unsafe { &mut *state.service };
+    if let Some(entry) = service.time_entries.get_mut(&entry_id) {
+        entry.start = start;
+        entry.stop = stop.max(start + UNITS_PER_FRACTION);
+        entry.duration = entry.stop.saturating_sub(entry.start).max(UNITS_PER_FRACTION);
+    }
+    sync_entries_from_service(state);
+}
+
+fn sync_entries_from_service(state: &DayPlannerState) {
+    if state.service.is_null() {
+        return;
+    }
+    let entries: Vec<TimeEntry> = {
+        let service = unsafe { &*state.service };
+        service.time_entries.values().cloned().collect()
+    };
+    let mut spec_entries = Vec::new();
+    let mut actual_entries = Vec::new();
+    for entry in entries {
+        match entry.kind {
+            EntryKind::Spec => spec_entries.push(entry),
+            EntryKind::Actual => actual_entries.push(entry),
+        }
+    }
+    if let Some(state_mut) = unsafe { get_state(state.hwnd) } {
+        for child in state_mut.container.children.iter_mut() {
+            if let Some(pane) = child.as_any_mut().downcast_mut::<DayPlanPane>() {
+                pane.entries = if pane.kind == PaneKind::Spec {
+                    spec_entries.clone()
+                } else {
+                    actual_entries.clone()
+                };
+            }
+        }
+    }
+    refresh(state.hwnd);
+}
+
 fn draw_entry(
     dc: HDC,
     entry: &TimeEntry,
@@ -950,22 +1309,152 @@ fn draw_entry(
         let _ = SetBkMode(dc, TRANSPARENT);
         let _ = SetTextColor(dc, text);
     }
-    unsafe {
-        let _ = DrawEdge(dc, &mut rc, BDR_RAISEDOUTER, BF_RECT);
-    }
-    if let Some(sel) = selected {
-        if sel == entry.entity.id {
-            unsafe {
-                let _ = DrawEdge(dc, &mut rc, BDR_RAISEDOUTER, BF_RECT);
-            }
-        }
-    }
+    paint_border(dc, rc, kind, selected == Some(entry.entity.id));
     let mut w = to_wstring(&entry.title);
     if !w.is_empty() {
         w.pop();
     }
     unsafe {
         let _ = TextOutW(dc, rc.left + 6, rc.top + 4, &w);
+    }
+}
+
+struct BorderBitmaps {
+    top_left: HBITMAP,
+    top_right: HBITMAP,
+    bottom_left: HBITMAP,
+    bottom_right: HBITMAP,
+    left: HBITMAP,
+    right: HBITMAP,
+    top: HBITMAP,
+    bottom: HBITMAP,
+}
+
+struct BorderSets {
+    spec: BorderBitmaps,
+    actual: BorderBitmaps,
+}
+
+fn border_bitmaps() -> Option<&'static BorderSets> {
+    static INIT: Once = Once::new();
+    static mut SETS: Option<BorderSets> = None;
+    unsafe {
+        INIT.call_once(|| {
+            let sets = (|| -> Result<BorderSets> {
+                let hinstance = GetModuleHandleW(None)?;
+                let load = |id: u16| -> Result<HBITMAP> {
+                    let handle = LoadImageW(
+                        hinstance,
+                        PCWSTR(id as usize as *const u16),
+                        IMAGE_BITMAP,
+                        6,
+                        6,
+                        LR_SHARED | LR_CREATEDIBSECTION,
+                    )?;
+                    Ok(HBITMAP(handle.0))
+                };
+                Ok(BorderSets {
+                    spec: BorderBitmaps {
+                        top_left: load(IDB_SPEC_TOP_LEFT)?,
+                        top_right: load(IDB_SPEC_TOP_RIGHT)?,
+                        bottom_left: load(IDB_SPEC_BOTTOM_LEFT)?,
+                        bottom_right: load(IDB_SPEC_BOTTOM_RIGHT)?,
+                        left: load(IDB_SPEC_LEFT)?,
+                        right: load(IDB_SPEC_RIGHT)?,
+                        top: load(IDB_SPEC_TOP)?,
+                        bottom: load(IDB_SPEC_BOTTOM)?,
+                    },
+                    actual: BorderBitmaps {
+                        top_left: load(IDB_ACTUAL_TOP_LEFT)?,
+                        top_right: load(IDB_ACTUAL_TOP_RIGHT)?,
+                        bottom_left: load(IDB_ACTUAL_BOTTOM_LEFT)?,
+                        bottom_right: load(IDB_ACTUAL_BOTTOM_RIGHT)?,
+                        left: load(IDB_ACTUAL_LEFT)?,
+                        right: load(IDB_ACTUAL_RIGHT)?,
+                        top: load(IDB_ACTUAL_TOP)?,
+                        bottom: load(IDB_ACTUAL_BOTTOM)?,
+                    },
+                })
+            })();
+            if let Ok(sets) = sets {
+                SETS = Some(sets);
+            }
+        });
+        SETS.as_ref()
+    }
+}
+
+fn paint_border(dc: HDC, rc: RECT, kind: PaneKind, focused: bool) {
+    let Some(sets) = border_bitmaps() else {
+        unsafe {
+            let _ = DrawEdge(dc, &mut rc.clone(), BDR_RAISEDOUTER, BF_RECT);
+        }
+        return;
+    };
+    let bitmaps = match kind {
+        PaneKind::Spec => &sets.spec,
+        PaneKind::Actual => &sets.actual,
+    };
+    let w = rc.right - rc.left;
+    let h = rc.bottom - rc.top;
+    if w <= 12 || h <= 12 {
+        unsafe {
+            let _ = DrawEdge(dc, &mut rc.clone(), BDR_RAISEDOUTER, BF_RECT);
+        }
+        return;
+    }
+    draw_bitmap(dc, bitmaps.top_left, rc.left, rc.top, 6, 6);
+    draw_bitmap(dc, bitmaps.top_right, rc.right - 6, rc.top, 6, 6);
+    draw_bitmap(dc, bitmaps.bottom_right, rc.right - 6, rc.bottom - 6, 6, 6);
+    draw_bitmap(dc, bitmaps.bottom_left, rc.left, rc.bottom - 6, 6, 6);
+    draw_bitmap(dc, bitmaps.top, rc.left + 6, rc.top, w - 12, 6);
+    draw_bitmap(dc, bitmaps.right, rc.right - 6, rc.top + 6, 6, h - 12);
+    draw_bitmap(dc, bitmaps.bottom, rc.left + 6, rc.bottom - 6, w - 12, 6);
+    draw_bitmap(dc, bitmaps.left, rc.left, rc.top + 6, 6, h - 12);
+    if focused {
+        let mut focus = RECT {
+            left: rc.left + 2,
+            top: rc.top + 2,
+            right: rc.right - 2,
+            bottom: rc.bottom - 2,
+        };
+        unsafe {
+            let _ = DrawFocusRect(dc, &focus);
+        }
+    }
+}
+
+fn draw_bitmap(dc: HDC, bmp: HBITMAP, x: i32, y: i32, w: i32, h: i32) {
+    if bmp.0.is_null() {
+        return;
+    }
+    let mut dib = DIBSECTION::default();
+    let got = unsafe { GetObjectW(bmp, std::mem::size_of::<DIBSECTION>() as i32, Some(&mut dib as *mut _ as *mut _)) };
+    if got == 0 {
+        return;
+    }
+    let mut bmi = BITMAPINFO::default();
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            &dib.dsBmih as *const BITMAPINFOHEADER,
+            &mut bmi.bmiHeader as *mut BITMAPINFOHEADER,
+            1,
+        );
+        let _ = StretchDIBits(
+            dc,
+            x,
+            y,
+            w,
+            h,
+            0,
+            0,
+            6,
+            6,
+            Some(dib.dsBm.bmBits as *const _),
+            &bmi,
+            DIB_RGB_COLORS,
+            SRCCOPY,
+        );
     }
 }
 
@@ -1143,16 +1632,12 @@ fn drop_entry_at_point(state: &mut DayPlannerState, pt: POINT, title: String) {
             .get_mut(idx)
             .and_then(|child| child.as_any_mut().downcast_mut::<DayPlanPane>())
         {
-            pane.entries.push(TimeEntry {
-                entity: Entity::new(generate_id(), generate_id(), "local", now_timestamp()),
-                task_id: 0,
-                duration: stop - start,
-                start,
-                stop,
-                title,
-                notes: None,
-            });
-            refresh(state.hwnd);
+            let kind = match pane.kind {
+                PaneKind::Spec => EntryKind::Spec,
+                PaneKind::Actual => EntryKind::Actual,
+            };
+            let task_id = 0;
+            add_time_entry(state, task_id, title, start, stop, kind);
         }
     }
 }
