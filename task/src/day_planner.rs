@@ -1,11 +1,13 @@
 use std::ptr::null_mut;
 
 use anyhow::Result;
+use data::entity::Entity;
+use data::model_utils::{generate_id, now_timestamp, UNITS_PER_HOUR};
 use data::service::Service;
+use data::task::TimeEntry;
 use gui::buffered::BufferedWnd;
 use gui::component::Component;
 use gui::container::Container;
-use tracing::info;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -15,6 +17,12 @@ use windows::Win32::Graphics::Gdi::{
     LF_FACESIZE, LOGFONTW, TRIVERTEX, TRANSPARENT, WHITE_BRUSH,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL};
+use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+use windows::Win32::System::Ole::{
+    IDropTarget, IDropTarget_Impl, RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop, CF_HDROP,
+    CF_UNICODETEXT, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::Controls::SetScrollInfo;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -26,8 +34,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_VSCROLL,
     WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_VISIBLE, WS_VSCROLL,
 };
+use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 
-use crate::dragdrop::{register_drop_target, revoke_drop_target, DropPayload};
+use windows::core::implement;
 use crate::winutil::to_wstring;
 
 const CLASS_NAME: &str = "DayPlanWnd";
@@ -41,6 +50,7 @@ const HOUR_FRACTION: f64 = 0.25; // 15-minute increments
 const HOUR_FRACTION_PX: i32 = 18; // pixels per 15-minute increment (matches legacy spacing)
 const MIN_PANE_WIDTH: i32 = 80;
 const WM_MOUSELEAVE: u32 = 0x02A3;
+const UNITS_PER_FRACTION: u64 = UNITS_PER_HOUR / 4;
 
 const HOUR_STRINGS: [&str; 24] = [
     "12am", "1am", "2am", "3am", "4am", "5am", "6am", "7am", "8am", "9am", "10am", "11am", "12pm",
@@ -57,6 +67,9 @@ struct DayPlanPane {
     host_hwnd: HWND,
     rect: RECT,
     kind: PaneKind,
+    entries: Vec<TimeEntry>,
+    selected_id: Option<u64>,
+    drag: Option<EntryDragState>,
 }
 
 impl DayPlanPane {
@@ -65,6 +78,9 @@ impl DayPlanPane {
             host_hwnd,
             rect: RECT::default(),
             kind,
+            entries: Vec::new(),
+            selected_id: None,
+            drag: None,
         }
     }
 
@@ -79,6 +95,16 @@ impl DayPlanPane {
             let _ = MoveToEx(dc, self.rect.left + 10, self.rect.top + y, None);
             let _ = LineTo(dc, self.rect.right - 10, self.rect.top + y);
             y += HOUR_FRACTION_PX;
+        }
+        if let Some(state) = get_state(self.host_hwnd) {
+            for entry in &self.entries {
+                if let Some(rc) = entry_rect(entry, state, self.rect) {
+                    if !rects_overlap(rc, self.rect) {
+                        continue;
+                    }
+                    draw_entry(dc, entry, rc, self.kind, self.selected_id);
+                }
+            }
         }
     }
 }
@@ -96,8 +122,52 @@ impl Component for DayPlanPane {
         self.rect = rect;
     }
 
-    fn handle_message(&mut self, _msg: u32, _wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
-        LRESULT(0)
+    fn handle_message(&mut self, msg: u32, _wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        let pt = point_from_lparam(lparam);
+        match msg {
+            WM_LBUTTONDOWN => {
+                if let Some(state) = unsafe { get_state(self.host_hwnd) } {
+                    if let Some((idx, rc, resizing)) = hit_test_entry(self, state, pt) {
+                        let offset_y = pt.y - rc.top;
+                        self.selected_id = Some(self.entries[idx].entity.id);
+                        self.drag = Some(EntryDragState {
+                            idx,
+                            offset_y,
+                            mode: if resizing {
+                                DragMode::Resize
+                            } else {
+                                DragMode::Move
+                            },
+                        });
+                        return LRESULT(1);
+                    }
+                }
+                LRESULT(0)
+            }
+            WM_MOUSEMOVE => {
+                if let Some(state) = unsafe { get_state(self.host_hwnd) } {
+                    if let Some(drag) = self.drag {
+                        update_entry_drag(self, state, pt, &drag);
+                        refresh(self.host_hwnd);
+                        return LRESULT(1);
+                    }
+                }
+                LRESULT(0)
+            }
+            WM_LBUTTONUP => {
+                if let Some(state) = unsafe { get_state(self.host_hwnd) } {
+                    if self.drag.take().is_some() {
+                        refresh(self.host_hwnd);
+                        return LRESULT(1);
+                    }
+                    create_entry_at(self, state, pt);
+                    refresh(self.host_hwnd);
+                    return LRESULT(1);
+                }
+                LRESULT(0)
+            }
+            _ => LRESULT(0),
+        }
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -107,6 +177,19 @@ impl Component for DayPlanPane {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
+}
+
+#[derive(Clone, Copy)]
+enum DragMode {
+    Move,
+    Resize,
+}
+
+#[derive(Clone, Copy)]
+struct EntryDragState {
+    idx: usize,
+    offset_y: i32,
+    mode: DragMode,
 }
 
 struct DayPlanSplitter {
@@ -176,6 +259,7 @@ struct DayPlannerState {
     service: *mut Service,
     split_percent: f64,
     splitter_dragging: bool,
+    active_date: u64,
     start_hour_pos: f64,
     font: HFONT,
     buffer: BufferedWnd,
@@ -190,6 +274,7 @@ impl DayPlannerState {
             service,
             split_percent: DEFAULT_SPLIT,
             splitter_dragging: false,
+            active_date: 0,
             start_hour_pos: 8.0, // default 8 AM
             font: HFONT::default(),
             buffer: BufferedWnd::new(),
@@ -615,7 +700,7 @@ unsafe extern "system" fn planner_wndproc(
                     let _ = DeleteObject(HGDIOBJ((*ptr).font.0));
                 }
                 if (*ptr).drop_target.is_some() {
-                    revoke_drop_target(hwnd);
+                    let _ = RevokeDragDrop(hwnd);
                 }
                 drop(Box::from_raw(ptr));
             }
@@ -731,16 +816,360 @@ unsafe fn paint_components(dc: HDC, state: &DayPlannerState) {
     }
 }
 
-unsafe fn register_drop(state: &mut DayPlannerState) {
-    if let Ok(target) = register_drop_target(state.hwnd, |payload| {
-        match payload {
-            DropPayload::Files(files) => info!("Dropped files on DayPlanner: {:?}", files),
-            DropPayload::Text(t) => info!("Dropped text on DayPlanner: {}", t),
+fn entry_rect(entry: &TimeEntry, state: &DayPlannerState, pane: RECT) -> Option<RECT> {
+    if entry.stop <= entry.start {
+        return None;
+    }
+    let width = pane.right - pane.left;
+    if width <= 4 {
+        return None;
+    }
+    let initial_pos = (state.start_hour_pos / HOUR_FRACTION).floor() as i32;
+    let start_offset = entry.start.saturating_sub(state.active_date);
+    let pos = (start_offset / UNITS_PER_FRACTION) as i32;
+    let y = (pos - initial_pos) * HOUR_FRACTION_PX;
+    let duration = entry.stop.saturating_sub(entry.start).max(UNITS_PER_FRACTION);
+    let segments = (duration / UNITS_PER_FRACTION).max(1) as i32;
+    let entry_height = segments * HOUR_FRACTION_PX;
+
+    Some(RECT {
+        left: pane.left + 2,
+        top: pane.top + y,
+        right: pane.right - 2,
+        bottom: pane.top + y + entry_height,
+    })
+}
+
+fn rects_overlap(a: RECT, b: RECT) -> bool {
+    a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
+}
+
+fn hit_test_entry(
+    pane: &DayPlanPane,
+    state: &DayPlannerState,
+    pt: POINT,
+) -> Option<(usize, RECT, bool)> {
+    for (idx, entry) in pane.entries.iter().enumerate() {
+        if let Some(rc) = entry_rect(entry, state, pane.rect) {
+            if point_in_rect(pt, rc) {
+                let resizing = pt.y >= rc.bottom - 7;
+                return Some((idx, rc, resizing));
+            }
         }
-        Ok(())
-    }) {
+    }
+    None
+}
+
+fn create_entry_at(pane: &mut DayPlanPane, state: &DayPlannerState, pt: POINT) {
+    let start = time_from_point(state, pane.rect, pt.y);
+    let stop = start + UNITS_PER_FRACTION;
+    let (task_id, base_title) = default_entry_title(state);
+    let title = match pane.kind {
+        PaneKind::Actual => format!("Actual: {base_title}"),
+        PaneKind::Spec => base_title,
+    };
+    pane.entries.push(TimeEntry {
+        entity: Entity::new(generate_id(), generate_id(), "local", now_timestamp()),
+        task_id,
+        duration: stop - start,
+        start,
+        stop,
+        title,
+        notes: None,
+    });
+}
+
+fn update_entry_drag(
+    pane: &mut DayPlanPane,
+    state: &DayPlannerState,
+    pt: POINT,
+    drag: &EntryDragState,
+) {
+    if drag.idx >= pane.entries.len() {
+        return;
+    }
+    let entry = &mut pane.entries[drag.idx];
+    match drag.mode {
+        DragMode::Move => {
+            let y = pt.y - drag.offset_y;
+            let new_start = time_from_point(state, pane.rect, y);
+            let duration = entry.stop.saturating_sub(entry.start).max(UNITS_PER_FRACTION);
+            entry.start = new_start;
+            entry.stop = new_start + duration;
+            entry.duration = duration;
+        }
+        DragMode::Resize => {
+            let mut new_stop = time_from_point(state, pane.rect, pt.y);
+            if new_stop <= entry.start {
+                new_stop = entry.start + UNITS_PER_FRACTION;
+            } else {
+                new_stop += UNITS_PER_FRACTION;
+            }
+            entry.stop = new_stop;
+            entry.duration = entry.stop - entry.start;
+        }
+    }
+}
+
+fn time_from_point(state: &DayPlannerState, pane: RECT, y: i32) -> u64 {
+    let y_in_pane = (y - pane.top).max(0);
+    let screen_segment = if y_in_pane >= HOUR_FRACTION_PX {
+        y_in_pane / HOUR_FRACTION_PX
+    } else {
+        0
+    };
+    let offset = (screen_segment as f64 * HOUR_FRACTION) + state.start_hour_pos;
+    state.active_date + (offset * UNITS_PER_HOUR as f64) as u64
+}
+
+fn default_entry_title(state: &DayPlannerState) -> (u64, String) {
+    if !state.service.is_null() {
+        let service = unsafe { &*state.service };
+        if let Some(task) = service.tasks.values().next() {
+            return (task.entity.id, task.name.clone());
+        }
+    }
+    (0, "New Entry".to_string())
+}
+
+fn draw_entry(
+    dc: HDC,
+    entry: &TimeEntry,
+    mut rc: RECT,
+    kind: PaneKind,
+    selected: Option<u64>,
+) {
+    let (fill, text) = match kind {
+        PaneKind::Spec => (COLORREF(0x00f5efb4), COLORREF(0x00000000)),
+        PaneKind::Actual => (COLORREF(0x00cbe7ff), COLORREF(0x00000000)),
+    };
+    let brush = unsafe { CreateSolidBrush(fill) };
+    unsafe {
+        let _ = FillRect(dc, &rc, brush);
+        let _ = DeleteObject(brush);
+        let _ = SetBkMode(dc, TRANSPARENT);
+        let _ = SetTextColor(dc, text);
+    }
+    unsafe {
+        let _ = DrawEdge(dc, &mut rc, BDR_RAISEDOUTER, BF_RECT);
+    }
+    if let Some(sel) = selected {
+        if sel == entry.entity.id {
+            unsafe {
+                let _ = DrawEdge(dc, &mut rc, BDR_RAISEDOUTER, BF_RECT);
+            }
+        }
+    }
+    let mut w = to_wstring(&entry.title);
+    if !w.is_empty() {
+        w.pop();
+    }
+    unsafe {
+        let _ = TextOutW(dc, rc.left + 6, rc.top + 4, &w);
+    }
+}
+
+unsafe fn register_drop(state: &mut DayPlannerState) {
+    let target: IDropTarget = DayPlannerDropTarget {
+        hwnd: state.hwnd,
+        state: state as *mut DayPlannerState,
+    }
+    .into();
+    if RegisterDragDrop(state.hwnd, &target).is_ok() {
         state.drop_target = Some(target);
     }
+}
+
+#[implement(IDropTarget)]
+struct DayPlannerDropTarget {
+    hwnd: HWND,
+    state: *mut DayPlannerState,
+}
+
+impl DayPlannerDropTarget {
+    fn state(&self) -> Option<&mut DayPlannerState> {
+        unsafe { self.state.as_mut() }
+    }
+
+    fn has_format(&self, data_obj: &IDataObject, cf: u16) -> bool {
+        let mut format = FORMATETC::default();
+        format.cfFormat = cf;
+        format.ptd = std::ptr::null_mut();
+        format.dwAspect = DVASPECT_CONTENT.0 as u32;
+        format.lindex = -1;
+        format.tymed = TYMED_HGLOBAL.0 as u32;
+        unsafe { data_obj.QueryGetData(&format).is_ok() }
+    }
+
+    fn choose_effect(&self, data_obj: &IDataObject) -> DROPEFFECT {
+        if self.has_format(data_obj, CF_HDROP.0 as u16)
+            || self.has_format(data_obj, CF_UNICODETEXT.0 as u16)
+        {
+            DROPEFFECT_COPY
+        } else {
+            DROPEFFECT_NONE
+        }
+    }
+
+    fn extract_files(&self, data_obj: &IDataObject) -> Option<Vec<String>> {
+        let mut format = FORMATETC::default();
+        format.cfFormat = CF_HDROP.0 as u16;
+        format.ptd = std::ptr::null_mut();
+        format.dwAspect = DVASPECT_CONTENT.0 as u32;
+        format.lindex = -1;
+        format.tymed = TYMED_HGLOBAL.0 as u32;
+        let mut medium = unsafe { data_obj.GetData(&format).ok()? };
+        let hdrop = HDROP(unsafe { medium.u.hGlobal.0 });
+        let count = unsafe { DragQueryFileW(hdrop, 0xFFFFFFFF, None) };
+        let mut files = Vec::new();
+        for i in 0..count {
+            let len = unsafe { DragQueryFileW(hdrop, i, None) } + 1;
+            let mut buf = vec![0u16; len as usize];
+            let written = unsafe { DragQueryFileW(hdrop, i, Some(&mut buf)) };
+            buf.truncate(written as usize);
+            files.push(String::from_utf16_lossy(&buf));
+        }
+        unsafe { ReleaseStgMedium(&mut medium) };
+        Some(files)
+    }
+
+    fn extract_text(&self, data_obj: &IDataObject) -> Option<String> {
+        let mut format = FORMATETC::default();
+        format.cfFormat = CF_UNICODETEXT.0 as u16;
+        format.ptd = std::ptr::null_mut();
+        format.dwAspect = DVASPECT_CONTENT.0 as u32;
+        format.lindex = -1;
+        format.tymed = TYMED_HGLOBAL.0 as u32;
+        let mut medium = unsafe { data_obj.GetData(&format).ok()? };
+        let handle = unsafe { medium.u.hGlobal };
+        if handle.0.is_null() {
+            unsafe { ReleaseStgMedium(&mut medium) };
+            return None;
+        }
+        let ptr = unsafe { GlobalLock(handle) } as *const u16;
+        if ptr.is_null() {
+            unsafe { ReleaseStgMedium(&mut medium) };
+            return None;
+        }
+        let mut len = 0usize;
+        loop {
+            let ch = unsafe { *ptr.add(len) };
+            if ch == 0 {
+                break;
+            }
+            len += 1;
+        }
+        let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
+        let text = String::from_utf16_lossy(slice);
+        unsafe {
+            let _ = GlobalUnlock(handle);
+            ReleaseStgMedium(&mut medium);
+        }
+        Some(text)
+    }
+}
+
+#[allow(non_snake_case)]
+impl IDropTarget_Impl for DayPlannerDropTarget_Impl {
+    fn DragEnter(
+        &self,
+        pDataObj: Option<&IDataObject>,
+        _grfKeyState: windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS,
+        _pt: &windows::Win32::Foundation::POINTL,
+        pdwEffect: *mut DROPEFFECT,
+    ) -> windows::core::Result<()> {
+        unsafe { *pdwEffect = DROPEFFECT_NONE };
+        if let Some(obj) = pDataObj {
+            unsafe { *pdwEffect = self.choose_effect(obj) };
+        }
+        Ok(())
+    }
+
+    fn DragOver(
+        &self,
+        _grfKeyState: windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS,
+        _pt: &windows::Win32::Foundation::POINTL,
+        pdwEffect: *mut DROPEFFECT,
+    ) -> windows::core::Result<()> {
+        unsafe { *pdwEffect = DROPEFFECT_COPY };
+        Ok(())
+    }
+
+    fn DragLeave(&self) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn Drop(
+        &self,
+        pDataObj: Option<&IDataObject>,
+        _grfKeyState: windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS,
+        pt: &windows::Win32::Foundation::POINTL,
+        pdwEffect: *mut DROPEFFECT,
+    ) -> windows::core::Result<()> {
+        unsafe { *pdwEffect = DROPEFFECT_NONE };
+        let Some(obj) = pDataObj else {
+            return Ok(());
+        };
+        let mut client = POINT { x: pt.x, y: pt.y };
+        unsafe {
+            let _ = ScreenToClient(self.hwnd, &mut client);
+        }
+        if let Some(state) = self.state() {
+            if let Some(files) = self.extract_files(obj) {
+                let title = files
+                    .get(0)
+                    .map(|s| s.clone())
+                    .unwrap_or_else(|| "Dropped File".to_string());
+                drop_entry_at_point(state, client, title);
+                unsafe { *pdwEffect = DROPEFFECT_COPY };
+                return Ok(());
+            }
+            if let Some(text) = self.extract_text(obj) {
+                drop_entry_at_point(state, client, text);
+                unsafe { *pdwEffect = DROPEFFECT_COPY };
+            }
+        }
+        Ok(())
+    }
+}
+
+fn drop_entry_at_point(state: &mut DayPlannerState, pt: POINT, title: String) {
+    if let Some((idx, rect)) = pane_index_at_point(state, pt) {
+        let start = time_from_point(state, rect, pt.y);
+        let stop = start + UNITS_PER_FRACTION;
+        if let Some(pane) = state
+            .container
+            .children
+            .get_mut(idx)
+            .and_then(|child| child.as_any_mut().downcast_mut::<DayPlanPane>())
+        {
+            pane.entries.push(TimeEntry {
+                entity: Entity::new(generate_id(), generate_id(), "local", now_timestamp()),
+                task_id: 0,
+                duration: stop - start,
+                start,
+                stop,
+                title,
+                notes: None,
+            });
+            refresh(state.hwnd);
+        }
+    }
+}
+
+fn pane_index_at_point(state: &DayPlannerState, pt: POINT) -> Option<(usize, RECT)> {
+    state
+        .container
+        .children
+        .iter()
+        .enumerate()
+        .find_map(|(idx, child)| {
+            child
+                .as_any()
+                .downcast_ref::<DayPlanPane>()
+                .filter(|pane| point_in_rect(pt, pane.rect))
+                .map(|pane| (idx, pane.rect))
+        })
 }
 
 unsafe fn update_split_from_point(state: &mut DayPlannerState, x: i32) {

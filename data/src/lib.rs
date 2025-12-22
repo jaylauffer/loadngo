@@ -98,6 +98,8 @@ pub mod model_utils {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    pub const UNITS_PER_HOUR: u64 = 36_000_000_000;
+    pub const UNITS_PER_MINUTE: u64 = UNITS_PER_HOUR / 60;
 
     /// Generate an id using hostname, username, process-local counter, and timestamp.
     pub fn generate_id() -> Id {
@@ -1461,6 +1463,9 @@ pub mod task {
         pub entity: Entity,
         pub task_id: Id,
         pub duration: u64,
+        pub start: u64,
+        pub stop: u64,
+        pub title: String,
         pub notes: Option<String>,
     }
 }
