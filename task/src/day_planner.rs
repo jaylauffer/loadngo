@@ -4,28 +4,27 @@ use anyhow::Result;
 use data::service::Service;
 use gui::buffered::BufferedWnd;
 use gui::component::Component;
-use gui::container_host::ContainerHost;
+use gui::container::Container;
 use tracing::info;
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    AlphaBlend, CreateCompatibleDC, CreateDIBSection, CreateFontIndirectW, CreateSolidBrush,
-    DeleteDC, DeleteObject, GetStockObject, GradientFill, LineTo, MoveToEx, SelectObject, SetBkMode,
-    SetTextColor, ScreenToClient, TextOutW, AC_SRC_ALPHA, BITMAPINFO, BITMAPINFOHEADER,
-    BLENDFUNCTION, DIB_RGB_COLORS, GRADIENT_FILL_RECT_H, GRADIENT_RECT, HBRUSH, HDC, HGDIOBJ,
-    HFONT, LF_FACESIZE, LOGFONTW, TRIVERTEX, TRANSPARENT, WHITE_BRUSH, BI_RGB,
+    CreateFontIndirectW, CreateSolidBrush, DeleteObject, DrawEdge, FillRect, GetStockObject,
+    GradientFill, LineTo, MoveToEx, ScreenToClient, SelectObject, SetBkMode, SetTextColor, TextOutW,
+    BDR_RAISEDOUTER, BF_RECT, GRADIENT_FILL_RECT_H, GRADIENT_RECT, HBRUSH, HDC, HGDIOBJ, HFONT,
+    LF_FACESIZE, LOGFONTW, TRIVERTEX, TRANSPARENT, WHITE_BRUSH,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::Controls::SetScrollInfo;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, GetClientRect, GetCursorPos, GetScrollInfo, GetWindowLongPtrW,
-    GetPropW, LoadCursorW, MoveWindow, RegisterClassW, RemovePropW, SetCursor, SetPropW,
-    SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWL_USERDATA, HMENU, IDC_ARROW,
-    IDC_SIZEWE, SCROLLBAR_COMMAND, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONDOWN,
+    LoadCursorW, MoveWindow, RegisterClassW, SetCursor, SetWindowLongPtrW, CREATESTRUCTW,
+    CS_HREDRAW, CS_VREDRAW, GWL_USERDATA, HMENU, IDC_ARROW, IDC_SIZEWE,
+    SCROLLBAR_COMMAND, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_CAPTURECHANGED, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONDOWN,
     WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_VSCROLL,
-    WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOPARENTNOTIFY, WS_VISIBLE,
+    WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::dragdrop::{register_drop_target, revoke_drop_target, DropPayload};
@@ -33,9 +32,9 @@ use crate::winutil::to_wstring;
 
 const CLASS_NAME: &str = "DayPlanWnd";
 const HOST_CLASS: &str = "DayPlanHostWnd";
-const STATE_PROP: &str = "LNG_DayPlannerState";
 const HEADER_WIDTH: i32 = 70;
-const SPLITTER_BAR_WIDTH: i32 = 8;
+const SPLITTER_BAR_WIDTH: i32 = 5;
+const SPLITTER_QUICKTAB_WIDTH: i32 = 8;
 const DEFAULT_SPLIT: f64 = 0.55;
 const HOST_BANNER_HEIGHT: i32 = 42;
 const HOUR_FRACTION: f64 = 0.25; // 15-minute increments
@@ -48,27 +47,138 @@ const HOUR_STRINGS: [&str; 24] = [
     "1pm", "2pm", "3pm", "4pm", "5pm", "6pm", "7pm", "8pm", "9pm", "10pm", "11pm",
 ];
 
-struct PaneState {
-    color: COLORREF,
-    label: Vec<u16>,
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PaneKind {
+    Spec,
+    Actual,
 }
 
-struct SplitterState {
-    color: COLORREF,
-    parent: HWND,
-    dragging: bool,
+struct DayPlanPane {
+    host_hwnd: HWND,
+    rect: RECT,
+    kind: PaneKind,
+}
+
+impl DayPlanPane {
+    fn new(host_hwnd: HWND, kind: PaneKind) -> Self {
+        Self {
+            host_hwnd,
+            rect: RECT::default(),
+            kind,
+        }
+    }
+
+    unsafe fn paint(&self, dc: HDC) {
+        let width = self.rect.right - self.rect.left;
+        let height = self.rect.bottom - self.rect.top;
+        if width <= 0 || height <= 0 {
+            return;
+        }
+        let mut y = 0;
+        while y <= height {
+            let _ = MoveToEx(dc, self.rect.left + 10, self.rect.top + y, None);
+            let _ = LineTo(dc, self.rect.right - 10, self.rect.top + y);
+            y += HOUR_FRACTION_PX;
+        }
+    }
+}
+
+impl Component for DayPlanPane {
+    fn hwnd(&self) -> HWND {
+        self.host_hwnd
+    }
+
+    fn bounds(&self) -> RECT {
+        self.rect
+    }
+
+    fn set_bounds(&mut self, rect: RECT) {
+        self.rect = rect;
+    }
+
+    fn handle_message(&mut self, _msg: u32, _wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
+        LRESULT(0)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+struct DayPlanSplitter {
+    host_hwnd: HWND,
+    rect: RECT,
+    bar_rect: RECT,
+}
+
+impl DayPlanSplitter {
+    fn new(host_hwnd: HWND) -> Self {
+        Self {
+            host_hwnd,
+            rect: RECT::default(),
+            bar_rect: RECT::default(),
+        }
+    }
+
+    fn update_bar_rect(&mut self) {
+        self.bar_rect = RECT {
+            left: self.rect.left + SPLITTER_QUICKTAB_WIDTH,
+            top: self.rect.top,
+            right: self.rect.right - SPLITTER_QUICKTAB_WIDTH,
+            bottom: self.rect.bottom,
+        };
+    }
+
+    unsafe fn paint(&self, dc: HDC) {
+        let brush = CreateSolidBrush(COLORREF(0x009b9b9b));
+        let _ = FillRect(dc, &self.bar_rect, brush);
+        let _ = DeleteObject(brush);
+        let mut edge_rc = self.bar_rect;
+        let _ = DrawEdge(dc, &mut edge_rc, BDR_RAISEDOUTER, BF_RECT);
+    }
+}
+
+impl Component for DayPlanSplitter {
+    fn hwnd(&self) -> HWND {
+        self.host_hwnd
+    }
+
+    fn bounds(&self) -> RECT {
+        self.rect
+    }
+
+    fn set_bounds(&mut self, rect: RECT) {
+        self.rect = rect;
+        self.update_bar_rect();
+    }
+
+    fn handle_message(&mut self, msg: u32, _wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        let _ = (msg, lparam);
+        LRESULT(0)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
 struct DayPlannerState {
     hwnd: HWND,
-    container_hwnd: HWND,
+    container: Container,
     service: *mut Service,
-    spec_hwnd: HWND,
-    actual_hwnd: HWND,
-    splitter_hwnd: HWND,
     split_percent: f64,
+    splitter_dragging: bool,
     start_hour_pos: f64,
     font: HFONT,
+    buffer: BufferedWnd,
     drop_target: Option<windows::Win32::System::Ole::IDropTarget>,
 }
 
@@ -76,24 +186,19 @@ impl DayPlannerState {
     fn new(service: *mut Service) -> Self {
         Self {
             hwnd: HWND::default(),
-            container_hwnd: HWND::default(),
+            container: Container::new(HWND::default()),
             service,
-            spec_hwnd: HWND::default(),
-            actual_hwnd: HWND::default(),
-            splitter_hwnd: HWND::default(),
             split_percent: DEFAULT_SPLIT,
+            splitter_dragging: false,
             start_hour_pos: 8.0, // default 8 AM
             font: HFONT::default(),
+            buffer: BufferedWnd::new(),
             drop_target: None,
         }
     }
 }
 
 pub fn register_class() -> Result<()> {
-    ContainerHost::register(CLASS_NAME)
-}
-
-fn register_pane_class() -> Result<()> {
     unsafe {
         static mut DONE: bool = false;
         if DONE {
@@ -102,31 +207,9 @@ fn register_pane_class() -> Result<()> {
         let hinstance = GetModuleHandleW(None)?;
         let class = WNDCLASSW {
             style: CS_HREDRAW | CS_VREDRAW,
-            lpfnWndProc: Some(pane_wndproc),
+            lpfnWndProc: Some(planner_wndproc),
             hInstance: hinstance.into(),
-            lpszClassName: PCWSTR(to_wstring("DayPlanPane").as_ptr()),
-            hbrBackground: HBRUSH(null_mut()),
-            hCursor: LoadCursorW(None, IDC_ARROW)?,
-            ..Default::default()
-        };
-        let _ = RegisterClassW(&class);
-        DONE = true;
-        Ok(())
-    }
-}
-
-fn register_splitter_class() -> Result<()> {
-    unsafe {
-        static mut DONE: bool = false;
-        if DONE {
-            return Ok(());
-        }
-        let hinstance = GetModuleHandleW(None)?;
-        let class = WNDCLASSW {
-            style: CS_HREDRAW | CS_VREDRAW,
-            lpfnWndProc: Some(splitter_wndproc),
-            hInstance: hinstance.into(),
-            lpszClassName: PCWSTR(to_wstring("DayPlanSplitter").as_ptr()),
+            lpszClassName: PCWSTR(to_wstring(CLASS_NAME).as_ptr()),
             hbrBackground: HBRUSH(null_mut()),
             hCursor: LoadCursorW(None, IDC_ARROW)?,
             ..Default::default()
@@ -190,33 +273,24 @@ pub fn create_day_planner(parent: HWND, service: *mut Service) -> Result<HWND> {
 fn create_planner_body(parent: HWND, service: *mut Service) -> Result<HWND> {
     unsafe {
         register_class()?;
-        let hwnd = ContainerHost::create(parent, CLASS_NAME)?;
-        let mut state = Box::new(DayPlannerState::new(service));
-        state.hwnd = hwnd;
-        state.container_hwnd = hwnd;
-        state.font = create_planner_font();
-        init_scroll(&mut state);
-        create_children(hwnd, &mut state);
-        register_drop(&mut state);
-        // Size children to the current client area immediately (in case WM_SIZE hasn't fired yet).
-        let mut rc = RECT::default();
-        let _ = GetClientRect(hwnd, &mut rc);
-        let width = rc.right - rc.left;
-        let height = rc.bottom - rc.top;
-        layout_children(&mut state, width, height);
-        update_page(&mut state, height);
-
-        // Store state on the window via property so ContainerHost can keep GWLP_USERDATA.
-        let ptr = Box::into_raw(state);
-        let handle = HANDLE(ptr as *mut _ as *mut _);
-        let _ = SetPropW(hwnd, PCWSTR(to_wstring(STATE_PROP).as_ptr()), handle);
-
-        // Attach the planner component to the container host so messages flow through Container.
-        let mut comp = Box::new(DayPlannerComponent::new(hwnd));
-        let mut rc = RECT::default();
-        let _ = GetClientRect(hwnd, &mut rc);
-        comp.set_bounds(rc);
-        let _ = ContainerHost::with_container(hwnd, |c| c.add(comp));
+        let hinstance = GetModuleHandleW(None)?;
+        let state = Box::new(DayPlannerState::new(service));
+        let hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            PCWSTR(to_wstring(CLASS_NAME).as_ptr()),
+            PCWSTR::null(),
+            WINDOW_STYLE(
+                WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0 | WS_VSCROLL.0,
+            ),
+            0,
+            0,
+            100,
+            100,
+            parent,
+            HMENU(null_mut()),
+            hinstance,
+            Some(Box::into_raw(state) as *mut _),
+        )?;
         Ok(hwnd)
     }
 }
@@ -228,26 +302,17 @@ pub fn refresh(hwnd: HWND) {
 }
 
 unsafe fn get_state(hwnd: HWND) -> Option<&'static mut DayPlannerState> {
-    let key = to_wstring(STATE_PROP);
-    let handle = GetPropW(hwnd, PCWSTR(key.as_ptr()));
-    if handle.0.is_null() {
-        None
-    } else {
-        (handle.0 as *mut DayPlannerState).as_mut()
-    }
+    let ptr = GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut DayPlannerState;
+    ptr.as_mut()
 }
 
 unsafe fn detach_state(hwnd: HWND) -> Option<*mut DayPlannerState> {
-    let key = to_wstring(STATE_PROP);
-    match RemovePropW(hwnd, PCWSTR(key.as_ptr())) {
-        Ok(handle) => {
-            if handle.0.is_null() {
-                None
-            } else {
-                Some(handle.0 as *mut DayPlannerState)
-            }
-        }
-        Err(_) => None,
+    let ptr = GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut DayPlannerState;
+    if !ptr.is_null() {
+        SetWindowLongPtrW(hwnd, GWL_USERDATA, 0);
+        Some(ptr)
+    } else {
+        None
     }
 }
 
@@ -274,101 +339,66 @@ unsafe fn create_planner_font() -> HFONT {
     CreateFontIndirectW(&lf)
 }
 
-unsafe fn create_children(hwnd: HWND, state: &mut DayPlannerState) {
-    register_pane_class().ok();
-    register_splitter_class().ok();
-    let hinstance = GetModuleHandleW(None).unwrap();
-
-    let spec_state = Box::new(PaneState {
-        color: COLORREF(0x00e4f0ff),
-        label: to_wstring("Plan Details"),
-    });
-    let actual_state = Box::new(PaneState {
-        color: COLORREF(0x00fff4e4),
-        label: to_wstring("Actual Details"),
-    });
-    let split_state = Box::new(SplitterState {
-        color: COLORREF(0x00d0d0d0),
-        parent: hwnd,
-        dragging: false,
-    });
-
-    let spec = CreateWindowExW(
-        WINDOW_EX_STYLE(WS_EX_NOPARENTNOTIFY.0),
-        PCWSTR(to_wstring("DayPlanPane").as_ptr()),
-        PCWSTR::null(),
-        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
-        0,
-        0,
-        100,
-        100,
-        hwnd,
-        HMENU(null_mut()),
-        hinstance,
-        Some(Box::into_raw(spec_state) as *mut _),
-    )
-    .expect("spec create");
-    let actual = CreateWindowExW(
-        WINDOW_EX_STYLE(WS_EX_NOPARENTNOTIFY.0),
-        PCWSTR(to_wstring("DayPlanPane").as_ptr()),
-        PCWSTR::null(),
-        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
-        0,
-        0,
-        100,
-        100,
-        hwnd,
-        HMENU(null_mut()),
-        hinstance,
-        Some(Box::into_raw(actual_state) as *mut _),
-    )
-    .expect("actual create");
-    let split = CreateWindowExW(
-        WINDOW_EX_STYLE(0),
-        PCWSTR(to_wstring("DayPlanSplitter").as_ptr()),
-        PCWSTR::null(),
-        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
-        0,
-        0,
-        SPLITTER_BAR_WIDTH,
-        100,
-        hwnd,
-        HMENU(null_mut()),
-        hinstance,
-        Some(Box::into_raw(split_state) as *mut _),
-    )
-    .expect("split create");
-    state.spec_hwnd = spec;
-    state.actual_hwnd = actual;
-    state.splitter_hwnd = split;
+unsafe fn create_children(state: &mut DayPlannerState) {
+    let spec = DayPlanPane::new(state.hwnd, PaneKind::Spec);
+    let actual = DayPlanPane::new(state.hwnd, PaneKind::Actual);
+    let splitter = DayPlanSplitter::new(state.hwnd);
+    state.container.add(Box::new(spec));
+    state.container.add(Box::new(actual));
+    state.container.add(Box::new(splitter));
 }
 
 unsafe fn layout_children(state: &mut DayPlannerState, width: i32, height: i32) {
     let plan_height = height.max(0);
     let plan_width = width - (HEADER_WIDTH + SPLITTER_BAR_WIDTH);
-    if plan_width <= MIN_PANE_WIDTH * 2 {
-        let spec_width = plan_width / 2;
-        let act_width = plan_width - spec_width - SPLITTER_BAR_WIDTH;
-        let mut x = HEADER_WIDTH;
-        let _ = MoveWindow(state.spec_hwnd, x, 0, spec_width, plan_height, true);
-        x += spec_width;
-        let _ = MoveWindow(state.splitter_hwnd, x, 0, SPLITTER_BAR_WIDTH, plan_height, true);
-        x += SPLITTER_BAR_WIDTH;
-        let _ = MoveWindow(state.actual_hwnd, x, 0, act_width.max(0), plan_height, true);
+    if plan_width <= 0 {
         return;
     }
+    let (spec_width, act_width) = if plan_width <= MIN_PANE_WIDTH * 2 {
+        let spec_width = plan_width / 2;
+        let act_width = plan_width - spec_width - SPLITTER_BAR_WIDTH;
+        (spec_width, act_width)
+    } else {
+        let mut spec_width = (plan_width as f64 * state.split_percent).round() as i32;
+        spec_width = spec_width.clamp(MIN_PANE_WIDTH, plan_width - MIN_PANE_WIDTH);
+        state.split_percent = (spec_width as f64 / plan_width as f64).clamp(0.1, 0.9);
+        let act_width = plan_width - spec_width - SPLITTER_BAR_WIDTH;
+        (spec_width, act_width)
+    };
 
-    let mut spec_width = (plan_width as f64 * state.split_percent).round() as i32;
-    spec_width = spec_width.clamp(MIN_PANE_WIDTH, plan_width - MIN_PANE_WIDTH);
-    state.split_percent = (spec_width as f64 / plan_width as f64).clamp(0.1, 0.9);
+    let spec_rect = RECT {
+        left: HEADER_WIDTH,
+        top: 0,
+        right: HEADER_WIDTH + spec_width,
+        bottom: plan_height,
+    };
+    let actual_left = HEADER_WIDTH + spec_width + SPLITTER_BAR_WIDTH;
+    let act_rect = RECT {
+        left: actual_left,
+        top: 0,
+        right: actual_left + act_width.max(0),
+        bottom: plan_height,
+    };
+    let split_left = HEADER_WIDTH + spec_width - SPLITTER_QUICKTAB_WIDTH;
+    let split_rect = RECT {
+        left: split_left,
+        top: 0,
+        right: split_left + SPLITTER_BAR_WIDTH + (SPLITTER_QUICKTAB_WIDTH * 2),
+        bottom: plan_height,
+    };
 
-    let act_width = plan_width - spec_width - SPLITTER_BAR_WIDTH;
-    let mut x = HEADER_WIDTH;
-    let _ = MoveWindow(state.spec_hwnd, x, 0, spec_width, plan_height, true);
-    x += spec_width;
-    let _ = MoveWindow(state.splitter_hwnd, x, 0, SPLITTER_BAR_WIDTH, plan_height, true);
-    x += SPLITTER_BAR_WIDTH;
-    let _ = MoveWindow(state.actual_hwnd, x, 0, act_width.max(0), plan_height, true);
+    for child in state.container.children.iter_mut() {
+        if let Some(pane) = child.as_any_mut().downcast_mut::<DayPlanPane>() {
+            pane.rect = if pane.kind == PaneKind::Spec {
+                spec_rect
+            } else {
+                act_rect
+            };
+        } else if let Some(splitter) = child.as_any_mut().downcast_mut::<DayPlanSplitter>() {
+            splitter.rect = split_rect;
+            splitter.update_bar_rect();
+        }
+    }
 }
 
 unsafe fn init_scroll(state: &mut DayPlannerState) {
@@ -460,6 +490,156 @@ unsafe fn adjust_scroll(state: &mut DayPlannerState, delta_lines: i32) {
     refresh(state.hwnd);
 }
 
+unsafe extern "system" fn planner_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_CREATE => {
+            let cs = &*(lparam.0 as *const CREATESTRUCTW);
+            let ptr = cs.lpCreateParams as *mut DayPlannerState;
+            if !ptr.is_null() {
+                let state = &mut *ptr;
+                state.hwnd = hwnd;
+                state.container.set_hwnd(hwnd);
+                state.font = create_planner_font();
+                SetWindowLongPtrW(hwnd, GWL_USERDATA, ptr as isize);
+                init_scroll(state);
+                create_children(state);
+                register_drop(state);
+                let mut rc = RECT::default();
+                let _ = GetClientRect(hwnd, &mut rc);
+                let width = rc.right - rc.left;
+                let height = rc.bottom - rc.top;
+                layout_children(state, width, height);
+                update_page(state, height);
+            }
+            LRESULT(0)
+        }
+        WM_SIZE => {
+            if let Some(state) = get_state(hwnd) {
+                let w = LOWORD(lparam.0 as u32) as i32;
+                let h = HIWORD(lparam.0 as u32) as i32;
+                layout_children(state, w, h);
+                update_page(state, h);
+            }
+            LRESULT(0)
+        }
+        WM_VSCROLL => {
+            if let Some(state) = get_state(hwnd) {
+                handle_scroll(state, wparam);
+            }
+            LRESULT(0)
+        }
+        WM_MOUSEWHEEL => {
+            if let Some(state) = get_state(hwnd) {
+                let delta = ((wparam.0 >> 16) & 0xffff) as i16 as i32;
+                let lines = -delta / 120;
+                adjust_scroll(state, lines);
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONDOWN => {
+            if let Some(state) = get_state(hwnd) {
+                let pt = point_from_lparam(lparam);
+                if splitter_hit_test(state, pt) {
+                    state.splitter_dragging = true;
+                    let _ = SetCapture(hwnd);
+                } else {
+                    let _ = state.container.handle_message(msg, wparam, lparam);
+                }
+            }
+            LRESULT(0)
+        }
+        WM_MOUSEMOVE => {
+            if let Some(state) = get_state(hwnd) {
+                let pt = point_from_lparam(lparam);
+                if state.splitter_dragging {
+                    update_split_from_point(state, pt.x);
+                } else {
+                    let _ = state.container.handle_message(msg, wparam, lparam);
+                }
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            if let Some(state) = get_state(hwnd) {
+                if state.splitter_dragging {
+                    state.splitter_dragging = false;
+                    let _ = ReleaseCapture();
+                } else {
+                    let _ = state.container.handle_message(msg, wparam, lparam);
+                }
+            }
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            if let Some(state) = get_state(hwnd) {
+                let _ = state.container.handle_message(msg, wparam, lparam);
+            }
+            LRESULT(0)
+        }
+        WM_CAPTURECHANGED => {
+            if let Some(state) = get_state(hwnd) {
+                state.splitter_dragging = false;
+                let _ = state.container.handle_message(msg, wparam, lparam);
+            }
+            LRESULT(0)
+        }
+        WM_PAINT => {
+            if let Some(state) = get_state(hwnd) {
+                let state_ptr = state as *mut DayPlannerState;
+                let buffer = &mut state.buffer;
+                let _ = buffer.paint(hwnd, |_, mem_dc, w, h| {
+                    let state = unsafe { &*state_ptr };
+                    render_scene(state, mem_dc, w, h);
+                    Ok(())
+                });
+            }
+            LRESULT(0)
+        }
+        WM_SETCURSOR => {
+            if cursor_over_splitter(hwnd) {
+                if let Ok(cursor) = LoadCursorW(None, IDC_SIZEWE) {
+                    let _ = SetCursor(cursor);
+                    return LRESULT(1);
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_DESTROY => {
+            if let Some(ptr) = detach_state(hwnd) {
+                if !(*ptr).font.is_invalid() {
+                    let _ = DeleteObject(HGDIOBJ((*ptr).font.0));
+                }
+                if (*ptr).drop_target.is_some() {
+                    revoke_drop_target(hwnd);
+                }
+                drop(Box::from_raw(ptr));
+            }
+            LRESULT(0)
+        }
+        WM_ERASEBKGND => LRESULT(1),
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+unsafe fn cursor_over_splitter(hwnd: HWND) -> bool {
+    let mut pt = POINT::default();
+    if GetCursorPos(&mut pt).is_err() {
+        return false;
+    }
+    let _ = ScreenToClient(hwnd, &mut pt);
+    if let Some(state) = get_state(hwnd) {
+        if let Some(rc) = splitter_rect(state) {
+            return point_in_rect(pt, rc);
+        }
+    }
+    false
+}
+
 unsafe fn render_scene(state: &DayPlannerState, dc: HDC, width: i32, height: i32) {
     let mut rc = RECT {
         left: 0,
@@ -475,8 +655,6 @@ unsafe fn render_scene(state: &DayPlannerState, dc: HDC, width: i32, height: i32
 
     let _ = MoveToEx(dc, HEADER_WIDTH, 0, None);
     let _ = LineTo(dc, HEADER_WIDTH, height);
-
-    paint_panes_background(dc, state, width, height);
 
     let old_font = SelectObject(dc, state.font);
     let _ = SetBkMode(dc, TRANSPARENT);
@@ -502,6 +680,8 @@ unsafe fn render_scene(state: &DayPlannerState, dc: HDC, width: i32, height: i32
         y += pixels_per_hour;
         hour_idx = (hour_idx + 1) % 24;
     }
+
+    paint_components(dc, state);
 
     let _ = SelectObject(dc, old_font);
 }
@@ -541,326 +721,13 @@ unsafe fn draw_hour_header(dc: HDC, height: i32) {
     );
 }
 
-unsafe fn paint_panes_background(dc: HDC, state: &DayPlannerState, width: i32, height: i32) {
-    let plan_height = height.max(0);
-    let plan_width = width - (HEADER_WIDTH + SPLITTER_BAR_WIDTH);
-    if plan_width <= 0 {
-        return;
-    }
-    let mut spec_width = (plan_width as f64 * state.split_percent).round() as i32;
-    spec_width = spec_width.clamp(MIN_PANE_WIDTH, plan_width - MIN_PANE_WIDTH);
-    let act_width = plan_width - spec_width - SPLITTER_BAR_WIDTH;
-
-    let spec_rc = RECT {
-        left: HEADER_WIDTH,
-        top: 0,
-        right: HEADER_WIDTH + spec_width,
-        bottom: plan_height,
-    };
-    let split_rc = RECT {
-        left: spec_rc.right,
-        top: 0,
-        right: spec_rc.right + SPLITTER_BAR_WIDTH,
-        bottom: plan_height,
-    };
-    let act_rc = RECT {
-        left: split_rc.right,
-        top: 0,
-        right: split_rc.right + act_width.max(0),
-        bottom: plan_height,
-    };
-
-    alpha_fill(dc, &spec_rc, COLORREF(0x00e4f0ff), 180);
-    alpha_fill(dc, &split_rc, COLORREF(0x00d0d0d0), 200);
-    alpha_fill(dc, &act_rc, COLORREF(0x00fff4e4), 180);
-}
-
-struct DayPlannerComponent {
-    hwnd: HWND,
-    rect: RECT,
-    buffer: BufferedWnd,
-}
-
-impl DayPlannerComponent {
-    fn new(hwnd: HWND) -> Self {
-        Self {
-            hwnd,
-            rect: RECT::default(),
-            buffer: BufferedWnd::new(),
+unsafe fn paint_components(dc: HDC, state: &DayPlannerState) {
+    for child in &state.container.children {
+        if let Some(pane) = child.as_any().downcast_ref::<DayPlanPane>() {
+            pane.paint(dc);
+        } else if let Some(splitter) = child.as_any().downcast_ref::<DayPlanSplitter>() {
+            splitter.paint(dc);
         }
-    }
-}
-
-impl Component for DayPlannerComponent {
-    fn hwnd(&self) -> HWND {
-        self.hwnd
-    }
-
-    fn bounds(&self) -> RECT {
-        self.rect
-    }
-
-    fn set_bounds(&mut self, rect: RECT) {
-        self.rect = rect;
-    }
-
-    fn handle_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        unsafe {
-            match msg {
-                WM_SIZE => {
-                    if let Some(state) = get_state(self.hwnd) {
-                        let w = LOWORD(lparam.0 as u32) as i32;
-                        let h = HIWORD(lparam.0 as u32) as i32;
-                        self.rect = RECT {
-                            left: 0,
-                            top: 0,
-                            right: w,
-                            bottom: h,
-                        };
-                        layout_children(state, w, h);
-                        update_page(state, h);
-                    }
-                    LRESULT(1)
-                }
-                WM_VSCROLL => {
-                    if let Some(state) = get_state(self.hwnd) {
-                        handle_scroll(state, wparam);
-                    }
-                    LRESULT(1)
-                }
-                WM_MOUSEWHEEL => {
-                    if let Some(state) = get_state(self.hwnd) {
-                        let delta = ((wparam.0 >> 16) & 0xffff) as i16 as i32;
-                        let lines = -delta / 120;
-                        adjust_scroll(state, lines);
-                    }
-                    LRESULT(1)
-                }
-                WM_PAINT => {
-                    if let Some(state) = get_state(self.hwnd) {
-                        let _ = self.buffer.paint(self.hwnd, |_, mem_dc, w, h| {
-                            render_scene(state, mem_dc, w, h);
-                            Ok(())
-                        });
-                    }
-                    LRESULT(1)
-                }
-                WM_DESTROY => {
-                    if let Some(ptr) = detach_state(self.hwnd) {
-                        if !(*ptr).font.is_invalid() {
-                            let _ = windows::Win32::Graphics::Gdi::DeleteObject(HGDIOBJ((*ptr).font.0));
-                        }
-                        if (*ptr).drop_target.is_some() {
-                            revoke_drop_target(self.hwnd);
-                        }
-                        drop(Box::from_raw(ptr));
-                    }
-                    LRESULT(1)
-                }
-                WM_ERASEBKGND => LRESULT(1),
-                WM_SETCURSOR => {
-                    if let Ok(cursor) = LoadCursorW(None, IDC_SIZEWE) {
-                        let _ = SetCursor(cursor);
-                        return LRESULT(1);
-                    }
-                    LRESULT(0)
-                }
-                _ => LRESULT(0),
-            }
-        }
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-}
-
-unsafe fn alpha_fill(dc: HDC, rc: &RECT, color: COLORREF, alpha: u8) {
-    let width = 1;
-    let height = 1;
-    let mut bmi = BITMAPINFO::default();
-    bmi.bmiHeader = BITMAPINFOHEADER {
-        biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-        biWidth: width,
-        biHeight: height,
-        biPlanes: 1,
-        biBitCount: 32,
-        biCompression: BI_RGB.0 as u32,
-        biSizeImage: (width * height * 4) as u32,
-        ..Default::default()
-    };
-    let mut bits = std::ptr::null_mut();
-    let hbitmap = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0).ok();
-    if let Some(hbmp) = hbitmap {
-        let mem_dc = CreateCompatibleDC(dc);
-        let old = SelectObject(mem_dc, hbmp);
-        if !bits.is_null() {
-            let b = (color.0 & 0xFF) as u8;
-            let g = ((color.0 >> 8) & 0xFF) as u8;
-            let r = ((color.0 >> 16) & 0xFF) as u8;
-            let pixel: [u8; 4] = [
-                ((b as u16 * alpha as u16) / 255) as u8,
-                ((g as u16 * alpha as u16) / 255) as u8,
-                ((r as u16 * alpha as u16) / 255) as u8,
-                alpha,
-            ];
-            std::ptr::copy_nonoverlapping(pixel.as_ptr(), bits as *mut u8, 4);
-        }
-        let bf = BLENDFUNCTION {
-            BlendOp: AC_SRC_ALPHA as u8,
-            BlendFlags: 0,
-            SourceConstantAlpha: 255,
-            AlphaFormat: 1, // use per-pixel alpha
-        };
-        let w = rc.right - rc.left;
-        let h = rc.bottom - rc.top;
-        let _ = AlphaBlend(mem_dc, 0, 0, 1, 1, mem_dc, 0, 0, 1, 1, bf); // noop to satisfy some drivers
-        let _ = AlphaBlend(dc, rc.left, rc.top, w, h, mem_dc, 0, 0, 1, 1, bf);
-        let _ = SelectObject(mem_dc, old);
-        let _ = DeleteDC(mem_dc);
-        let _ = DeleteObject(hbmp);
-    }
-}
-
-unsafe extern "system" fn pane_wndproc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    match msg {
-        WM_CREATE => {
-            let cs = &*(lparam.0 as *const CREATESTRUCTW);
-            let ptr = cs.lpCreateParams as *mut PaneState;
-            if !ptr.is_null() {
-                SetWindowLongPtrW(hwnd, GWL_USERDATA, ptr as isize);
-            }
-            LRESULT(0)
-        }
-        WM_PAINT => {
-            let mut ps = windows::Win32::Graphics::Gdi::PAINTSTRUCT::default();
-            let dc = windows::Win32::Graphics::Gdi::BeginPaint(hwnd, &mut ps);
-            if !dc.0.is_null() {
-                let mut rc = RECT::default();
-                let _ = GetClientRect(hwnd, &mut rc);
-                if let Some(state) = (GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut PaneState).as_ref() {
-                    alpha_fill(dc, &rc, state.color, 200);
-                    if !state.label.is_empty() {
-                        let _ = SetBkMode(dc, TRANSPARENT);
-                        let _ = SetTextColor(dc, COLORREF(0x00303030));
-                        let _ = TextOutW(dc, 6, 6, &state.label);
-                    } else {
-                        // Ensure some fill even if label is empty.
-                        let brush = CreateSolidBrush(state.color);
-                        let _ = windows::Win32::Graphics::Gdi::FillRect(dc, &rc, brush);
-                        let _ = DeleteObject(brush);
-                    }
-                }
-            }
-            let _ = windows::Win32::Graphics::Gdi::EndPaint(hwnd, &mut ps);
-            LRESULT(0)
-        }
-        WM_DESTROY => {
-            let ptr = GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut PaneState;
-            if !ptr.is_null() {
-                let _ = SetWindowLongPtrW(hwnd, GWL_USERDATA, 0);
-                drop(Box::from_raw(ptr));
-            }
-            LRESULT(0)
-        }
-        WM_ERASEBKGND => LRESULT(1),
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
-    }
-}
-
-unsafe extern "system" fn splitter_wndproc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    match msg {
-        WM_CREATE => {
-            let cs = &*(lparam.0 as *const CREATESTRUCTW);
-            let ptr = cs.lpCreateParams as *mut SplitterState;
-            if !ptr.is_null() {
-                SetWindowLongPtrW(hwnd, GWL_USERDATA, ptr as isize);
-            }
-            LRESULT(0)
-        }
-        WM_LBUTTONDOWN => {
-            if let Some(state) = (GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut SplitterState).as_mut()
-            {
-                state.dragging = true;
-                let _ = SetCapture(hwnd);
-                LRESULT(0)
-            } else {
-                DefWindowProcW(hwnd, msg, wparam, lparam)
-            }
-        }
-        WM_MOUSEMOVE => {
-            if let Some(split) = (GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut SplitterState).as_mut()
-            {
-                if split.dragging {
-                    update_split_from_cursor(split);
-                    return LRESULT(0);
-                }
-            }
-            DefWindowProcW(hwnd, msg, wparam, lparam)
-        }
-        WM_LBUTTONUP => {
-            if let Some(split) = (GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut SplitterState).as_mut()
-            {
-                if split.dragging {
-                    split.dragging = false;
-                    let _ = ReleaseCapture();
-                }
-                LRESULT(0)
-            } else {
-                DefWindowProcW(hwnd, msg, wparam, lparam)
-            }
-        }
-        WM_SETCURSOR => {
-            if let Ok(cursor) = LoadCursorW(None, IDC_SIZEWE) {
-                let _ = SetCursor(cursor);
-                return LRESULT(1);
-            }
-            DefWindowProcW(hwnd, msg, wparam, lparam)
-        }
-        WM_PAINT => {
-            let mut ps = windows::Win32::Graphics::Gdi::PAINTSTRUCT::default();
-            let dc = windows::Win32::Graphics::Gdi::BeginPaint(hwnd, &mut ps);
-            if !dc.0.is_null() {
-                let mut rc = RECT::default();
-                let _ = GetClientRect(hwnd, &mut rc);
-                let color = if let Some(state) =
-                    (GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut SplitterState).as_ref()
-                {
-                    state.color
-                } else {
-                    COLORREF(0x00c0c0c0)
-                };
-                let brush = CreateSolidBrush(color);
-                let _ = windows::Win32::Graphics::Gdi::FillRect(dc, &rc, brush);
-                let _ = DeleteObject(brush);
-            }
-            let _ = windows::Win32::Graphics::Gdi::EndPaint(hwnd, &mut ps);
-            LRESULT(0)
-        }
-        WM_DESTROY => {
-            let ptr = GetWindowLongPtrW(hwnd, GWL_USERDATA) as *mut SplitterState;
-            if !ptr.is_null() {
-                let _ = SetWindowLongPtrW(hwnd, GWL_USERDATA, 0);
-                drop(Box::from_raw(ptr));
-            }
-            LRESULT(0)
-        }
-        WM_ERASEBKGND => LRESULT(1),
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
 
@@ -876,27 +743,19 @@ unsafe fn register_drop(state: &mut DayPlannerState) {
     }
 }
 
-unsafe fn update_split_from_cursor(split: &mut SplitterState) {
-    let mut pt = POINT::default();
-    if GetCursorPos(&mut pt).is_err() {
+unsafe fn update_split_from_point(state: &mut DayPlannerState, x: i32) {
+    let mut rc = RECT::default();
+    let _ = GetClientRect(state.hwnd, &mut rc);
+    let width = rc.right - rc.left;
+    let height = rc.bottom - rc.top;
+    let plan_width = width - (HEADER_WIDTH + SPLITTER_BAR_WIDTH);
+    if plan_width <= (MIN_PANE_WIDTH * 2) {
         return;
     }
-    let parent = split.parent;
-    let _ = ScreenToClient(parent, &mut pt);
-    if let Some(state) = get_state(parent) {
-        let mut rc = RECT::default();
-        let _ = GetClientRect(parent, &mut rc);
-        let width = rc.right - rc.left;
-        let height = rc.bottom - rc.top;
-        let plan_width = width - (HEADER_WIDTH + SPLITTER_BAR_WIDTH);
-        if plan_width <= (MIN_PANE_WIDTH * 2) {
-            return;
-        }
-        let raw = (pt.x - HEADER_WIDTH) as f64 / plan_width as f64;
-        state.split_percent = raw.clamp(0.1, 0.9);
-        layout_children(state, width, height);
-        refresh(parent);
-    }
+    let raw = (x - HEADER_WIDTH) as f64 / plan_width as f64;
+    state.split_percent = raw.clamp(0.1, 0.9);
+    layout_children(state, width, height);
+    refresh(state.hwnd);
 }
 
 fn LOWORD(l: u32) -> u16 {
@@ -905,6 +764,39 @@ fn LOWORD(l: u32) -> u16 {
 
 fn HIWORD(l: u32) -> u16 {
     ((l >> 16) & 0xffff) as u16
+}
+
+fn GET_X_LPARAM(lp: LPARAM) -> i32 {
+    (lp.0 as u32 & 0xffff) as i16 as i32
+}
+
+fn GET_Y_LPARAM(lp: LPARAM) -> i32 {
+    ((lp.0 as u32 >> 16) & 0xffff) as i16 as i32
+}
+
+fn point_from_lparam(lp: LPARAM) -> POINT {
+    POINT {
+        x: GET_X_LPARAM(lp),
+        y: GET_Y_LPARAM(lp),
+    }
+}
+
+fn splitter_hit_test(state: &DayPlannerState, pt: POINT) -> bool {
+    splitter_rect(state)
+        .map(|rc| point_in_rect(pt, rc))
+        .unwrap_or(false)
+}
+
+fn splitter_rect(state: &DayPlannerState) -> Option<RECT> {
+    state
+        .container
+        .children
+        .iter()
+        .find_map(|child| child.as_any().downcast_ref::<DayPlanSplitter>().map(|s| s.bounds()))
+}
+
+fn point_in_rect(pt: POINT, rc: RECT) -> bool {
+    pt.x >= rc.left && pt.x < rc.right && pt.y >= rc.top && pt.y < rc.bottom
 }
 
 struct DayPlannerHostState {
