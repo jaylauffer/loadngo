@@ -32,15 +32,17 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Controls::SetScrollInfo;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, GetClientRect, GetCursorPos, GetScrollInfo, GetWindowLongPtrW,
-    LoadCursorW, LoadImageW, MoveWindow, RegisterClassW, SendMessageW, SetCursor, SetWindowLongPtrW,
-    SetWindowPos, SetWindowTextW, ShowWindow, GetWindowTextW,
-    CREATESTRUCTW,
-    CS_HREDRAW, CS_VREDRAW, GWL_USERDATA, HMENU, IDC_ARROW, IDC_SIZEWE, IMAGE_BITMAP,
+    CallWindowProcW, CreateWindowExW, DefWindowProcW, FindWindowExW, GetClientRect, GetCursorPos,
+    GetScrollInfo, GetWindowLongPtrW, LoadCursorW, LoadImageW, MoveWindow, RegisterClassW,
+    SendMessageW, SetCursor, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
+    GetWindowTextW, CREATESTRUCTW,
+    CS_HREDRAW, CS_VREDRAW, GWL_USERDATA, GWLP_USERDATA, GWLP_WNDPROC, HMENU, IDC_ARROW, IDC_SIZEWE,
+    IMAGE_BITMAP,
     LR_CREATEDIBSECTION, LR_SHARED, SCROLLBAR_COMMAND, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE,
     SIF_TRACKPOS, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_CAPTURECHANGED, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_VSCROLL, WNDCLASSW,
+    WM_CAPTURECHANGED, WM_CHAR, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN,
+    WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_PAINT,
+    WM_SETCURSOR, WM_SIZE, WM_VSCROLL, WNDCLASSW, WNDPROC,
     WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_VISIBLE, WS_VSCROLL, WS_EX_CLIENTEDGE, CBS_DROPDOWN,
     CB_ADDSTRING, CB_RESETCONTENT, CBN_SELENDOK, SW_HIDE, SWP_SHOWWINDOW, HWND_TOP,
 };
@@ -283,6 +285,7 @@ impl Component for DayPlanSplitter {
 struct DetailEditor {
     hwnd: HWND,
     last_rect: RECT,
+    edit_hwnd: HWND,
 }
 
 impl DetailEditor {
@@ -303,13 +306,105 @@ impl DetailEditor {
             None,
         )?;
         ShowWindow(hwnd, SW_HIDE);
+        let edit_cls = to_wstring("Edit");
+        let edit_hwnd = FindWindowExW(
+            hwnd,
+            HWND::default(),
+            PCWSTR(edit_cls.as_ptr()),
+            PCWSTR::null(),
+        )
+        .unwrap_or(HWND::default());
         Ok(Self {
             hwnd,
             last_rect: RECT::default(),
+            edit_hwnd,
         })
+    }
+
+    unsafe fn attach_subclass(&mut self, host_hwnd: HWND, kind: PaneKind) {
+        if self.edit_hwnd.0.is_null() {
+            return;
+        }
+        let prev = GetWindowLongPtrW(self.edit_hwnd, GWLP_WNDPROC);
+        let prev_proc: WNDPROC = std::mem::transmute(prev);
+        let data = Box::new(EditorSubclassData {
+            host_hwnd,
+            kind,
+            prev_proc,
+        });
+        SetWindowLongPtrW(
+            self.edit_hwnd,
+            GWLP_USERDATA,
+            Box::into_raw(data) as isize,
+        );
+        SetWindowLongPtrW(
+            self.edit_hwnd,
+            GWLP_WNDPROC,
+            editor_subclass_proc as isize,
+        );
     }
 }
 
+struct EditorSubclassData {
+    host_hwnd: HWND,
+    kind: PaneKind,
+    prev_proc: WNDPROC,
+}
+
+unsafe extern "system" fn editor_subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut EditorSubclassData;
+    if ptr.is_null() {
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
+    let data = &mut *ptr;
+    match msg {
+        WM_KEYDOWN => match wparam.0 as u32 {
+            k if k == VK_RETURN.0 as u32 => {
+                if let Some(state) = get_state(data.host_hwnd) {
+                    let suppress = if data.kind == PaneKind::Actual {
+                        is_suppress_key()
+                    } else {
+                        true
+                    };
+                    commit_editor(state, data.kind, suppress);
+                }
+                return LRESULT(0);
+            }
+            k if k == VK_ESCAPE.0 as u32 => {
+                if let Some(state) = get_state(data.host_hwnd) {
+                    cancel_editor(state, data.kind);
+                }
+                return LRESULT(0);
+            }
+            _ => {}
+        },
+        WM_CHAR | WM_KEYUP => match wparam.0 as u32 {
+            k if k == VK_RETURN.0 as u32 || k == VK_ESCAPE.0 as u32 => return LRESULT(0),
+            _ => {}
+        },
+        WM_NCDESTROY => {
+            let prev_proc = data.prev_proc;
+            SetWindowLongPtrW(hwnd, GWLP_WNDPROC, prev_proc.map(|p| p as isize).unwrap_or(0));
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            drop(Box::from_raw(ptr));
+            if let Some(proc) = prev_proc {
+                return CallWindowProcW(Some(proc), hwnd, msg, wparam, lparam);
+            }
+            return DefWindowProcW(hwnd, msg, wparam, lparam);
+        }
+        _ => {}
+    }
+    if let Some(proc) = data.prev_proc {
+        CallWindowProcW(Some(proc), hwnd, msg, wparam, lparam)
+    } else {
+        DefWindowProcW(hwnd, msg, wparam, lparam)
+    }
+}
 struct SpecDetailEditor {
     editor: DetailEditor,
 }
@@ -504,14 +599,16 @@ unsafe fn create_children(state: &mut DayPlannerState) {
 
 unsafe fn create_editors(state: &mut DayPlannerState) {
     if state.spec_editor.is_none() {
-        state.spec_editor = DetailEditor::create(state.hwnd)
-            .ok()
-            .map(|editor| SpecDetailEditor { editor });
+        if let Ok(mut editor) = DetailEditor::create(state.hwnd) {
+            editor.attach_subclass(state.hwnd, PaneKind::Spec);
+            state.spec_editor = Some(SpecDetailEditor { editor });
+        }
     }
     if state.actual_editor.is_none() {
-        state.actual_editor = DetailEditor::create(state.hwnd)
-            .ok()
-            .map(|editor| ActualDetailEditor { editor });
+        if let Ok(mut editor) = DetailEditor::create(state.hwnd) {
+            editor.attach_subclass(state.hwnd, PaneKind::Actual);
+            state.actual_editor = Some(ActualDetailEditor { editor });
+        }
     }
 }
 
