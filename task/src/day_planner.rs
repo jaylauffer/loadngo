@@ -12,12 +12,13 @@ use gui::container::Container;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CreateFontIndirectW, CreateSolidBrush, DeleteObject, DrawEdge, DrawFocusRect, FillRect,
-    GetObjectW, GetStockObject, GradientFill, LineTo, MoveToEx, ScreenToClient, SelectObject,
-    SetBkMode, SetTextColor, StretchDIBits, TextOutW, BDR_RAISEDOUTER, BF_RECT, BITMAPINFO,
-    BITMAPINFOHEADER, DIB_RGB_COLORS, DIBSECTION, GRADIENT_FILL_RECT_H, GRADIENT_RECT, HBITMAP,
-    HBRUSH, HDC, HGDIOBJ, HFONT, LF_FACESIZE, LOGFONTW, SRCCOPY, TRIVERTEX, TRANSPARENT,
-    WHITE_BRUSH,
+    AlphaBlend, CreateCompatibleDC, CreateDIBSection, CreateFontIndirectW, CreateSolidBrush,
+    DeleteDC, DeleteObject, DrawEdge, DrawFocusRect, FillRect, GetObjectW, GetPixel, GetStockObject,
+    GradientFill, LineTo, MoveToEx, ScreenToClient, SelectObject, SetBkMode, SetTextColor,
+    StretchDIBits, TextOutW, AC_SRC_OVER, BDR_RAISEDOUTER, BF_RECT, BI_RGB, BITMAPINFO,
+    BITMAPINFOHEADER, BLENDFUNCTION, DIB_RGB_COLORS, DIBSECTION, GRADIENT_FILL_RECT_H,
+    GRADIENT_RECT, HBITMAP, HBRUSH, HDC, HGDIOBJ, HFONT, LF_FACESIZE, LOGFONTW, SRCCOPY, TRIVERTEX,
+    TRANSPARENT, WHITE_BRUSH,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL};
@@ -130,7 +131,7 @@ impl DayPlanPane {
                     if !rects_overlap(rc, self.rect) {
                         continue;
                     }
-                    draw_entry(dc, entry, rc, self.kind, self.selected_id);
+                    draw_entry(dc, entry, rc, self.kind, self.selected_id, state.font);
                 }
             }
         }
@@ -569,13 +570,13 @@ unsafe fn create_planner_font() -> HFONT {
     let mut lf: LOGFONTW = std::mem::zeroed();
     lf.lfCharSet = windows::Win32::Graphics::Gdi::DEFAULT_CHARSET;
     lf.lfClipPrecision = windows::Win32::Graphics::Gdi::CLIP_DEFAULT_PRECIS;
-    lf.lfOutPrecision = windows::Win32::Graphics::Gdi::OUT_TT_ONLY_PRECIS;
-    lf.lfQuality = windows::Win32::Graphics::Gdi::ANTIALIASED_QUALITY;
+    lf.lfOutPrecision = windows::Win32::Graphics::Gdi::OUT_TT_PRECIS;
+    lf.lfQuality = windows::Win32::Graphics::Gdi::CLEARTYPE_QUALITY;
     lf.lfPitchAndFamily = (windows::Win32::Graphics::Gdi::DEFAULT_PITCH.0
         | windows::Win32::Graphics::Gdi::FF_DONTCARE.0) as u8;
-    lf.lfHeight = -26;
-    lf.lfWeight = windows::Win32::Graphics::Gdi::FW_BOLD.0 as i32;
-    let face = to_wstring("Palatino Linotype");
+    lf.lfHeight = -12;
+    lf.lfWeight = windows::Win32::Graphics::Gdi::FW_NORMAL.0 as i32;
+    let face = to_wstring("Arial");
     for (i, ch) in face.iter().enumerate() {
         if i >= LF_FACESIZE as usize - 1 {
             break;
@@ -1391,28 +1392,122 @@ fn sync_entries_from_service(state: &DayPlannerState) {
 fn draw_entry(
     dc: HDC,
     entry: &TimeEntry,
-    mut rc: RECT,
+    rc: RECT,
     kind: PaneKind,
     selected: Option<u64>,
+    font: HFONT,
 ) {
-    let (fill, text) = match kind {
-        PaneKind::Spec => (COLORREF(0x00f5efb4), COLORREF(0x00000000)),
-        PaneKind::Actual => (COLORREF(0x00cbe7ff), COLORREF(0x00000000)),
-    };
-    let brush = unsafe { CreateSolidBrush(fill) };
+    let width = rc.right - rc.left;
+    let height = rc.bottom - rc.top;
+    if width <= 0 || height <= 0 {
+        return;
+    }
+
     unsafe {
-        let _ = FillRect(dc, &rc, brush);
+        let mem_dc = CreateCompatibleDC(dc);
+        if mem_dc.is_invalid() {
+            draw_entry_opaque(dc, entry, rc, kind, selected, font);
+            return;
+        }
+
+        let mut info = BITMAPINFO::default();
+        info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        info.bmiHeader.biWidth = width;
+        info.bmiHeader.biHeight = height;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB.0 as u32;
+        info.bmiHeader.biSizeImage = (width * height * 4) as u32;
+
+        let mut bits = std::ptr::null_mut();
+        let dib = match CreateDIBSection(mem_dc, &info, DIB_RGB_COLORS, &mut bits, None, 0) {
+            Ok(dib) => dib,
+            Err(_) => {
+                let _ = DeleteDC(mem_dc);
+                draw_entry_opaque(dc, entry, rc, kind, selected, font);
+                return;
+            }
+        };
+
+        let old = SelectObject(mem_dc, HGDIOBJ(dib.0));
+        let local = RECT {
+            left: 0,
+            top: 0,
+            right: width,
+            bottom: height,
+        };
+        draw_entry_opaque(mem_dc, entry, local, kind, selected, font);
+
+        let bf = BLENDFUNCTION {
+            BlendOp: AC_SRC_OVER as u8,
+            BlendFlags: 0,
+            SourceConstantAlpha: 0xBF,
+            AlphaFormat: 0,
+        };
+        let _ = AlphaBlend(
+            dc,
+            rc.left,
+            rc.top,
+            width,
+            height,
+            mem_dc,
+            0,
+            0,
+            width,
+            height,
+            bf,
+        );
+
+        let _ = SelectObject(mem_dc, old);
+        let _ = DeleteObject(HGDIOBJ(dib.0));
+        let _ = DeleteDC(mem_dc);
+    }
+}
+
+fn draw_entry_opaque(
+    dc: HDC,
+    entry: &TimeEntry,
+    rc: RECT,
+    kind: PaneKind,
+    selected: Option<u64>,
+    font: HFONT,
+) {
+    let mut old_font = HGDIOBJ::default();
+    unsafe {
+        if !font.is_invalid() {
+            old_font = SelectObject(dc, font);
+        }
+    }
+
+    paint_border(dc, rc, kind, selected == Some(entry.entity.id));
+
+    unsafe {
+        let color = GetPixel(dc, rc.left + 5, rc.top + 5);
+        let brush = CreateSolidBrush(color);
+        let fill_rect = RECT {
+            left: rc.left + 6,
+            top: rc.top + 6,
+            right: rc.right - 6,
+            bottom: rc.bottom - 6,
+        };
+        let _ = FillRect(dc, &fill_rect, brush);
         let _ = DeleteObject(brush);
         let _ = SetBkMode(dc, TRANSPARENT);
-        let _ = SetTextColor(dc, text);
+        let _ = SetTextColor(dc, COLORREF(0x00000000));
     }
-    paint_border(dc, rc, kind, selected == Some(entry.entity.id));
+
     let mut w = to_wstring(&entry.title);
     if !w.is_empty() {
         w.pop();
     }
     unsafe {
-        let _ = TextOutW(dc, rc.left + 6, rc.top + 4, &w);
+        let _ = TextOutW(dc, rc.left + 8, rc.top + 2, &w);
+    }
+
+    unsafe {
+        if !old_font.0.is_null() {
+            let _ = SelectObject(dc, old_font);
+        }
     }
 }
 
