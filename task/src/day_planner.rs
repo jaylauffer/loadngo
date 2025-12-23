@@ -10,7 +10,9 @@ use gui::buffered::BufferedWnd;
 use gui::component::Component;
 use gui::container::Container;
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    COLORREF, FILETIME, HWND, LPARAM, LRESULT, POINT, RECT, SYSTEMTIME, WPARAM,
+};
 use windows::Win32::Graphics::Gdi::{
     AlphaBlend, CreateCompatibleDC, CreateDIBSection, CreateFontIndirectW, CreateSolidBrush,
     DeleteDC, DeleteObject, DrawEdge, DrawFocusRect, FillRect, GetObjectW, GetPixel, GetStockObject,
@@ -20,9 +22,12 @@ use windows::Win32::Graphics::Gdi::{
     GRADIENT_RECT, HBITMAP, HBRUSH, HDC, HGDIOBJ, HFONT, LF_FACESIZE, LOGFONTW, SRCCOPY, TRIVERTEX,
     TRANSPARENT, WHITE_BRUSH,
 };
+use windows::Win32::Storage::FileSystem::{FileTimeToLocalFileTime, LocalFileTimeToFileTime};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL};
 use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+use windows::Win32::System::SystemInformation::GetSystemTimeAsFileTime;
+use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToFileTime};
 use windows::Win32::System::Ole::{
     IDropTarget, IDropTarget_Impl, RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop, CF_HDROP,
     CF_UNICODETEXT, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
@@ -422,6 +427,7 @@ struct DayPlannerState {
     active_date: u64,
     start_hour_pos: f64,
     font: HFONT,
+    header_font: HFONT,
     buffer: BufferedWnd,
     drop_target: Option<windows::Win32::System::Ole::IDropTarget>,
     spec_editor: Option<SpecDetailEditor>,
@@ -439,6 +445,7 @@ impl DayPlannerState {
             active_date: 0,
             start_hour_pos: 8.0, // default 8 AM
             font: HFONT::default(),
+            header_font: HFONT::default(),
             buffer: BufferedWnd::new(),
             drop_target: None,
             spec_editor: None,
@@ -583,6 +590,26 @@ unsafe fn create_planner_font() -> HFONT {
             break;
         }
         lf.lfFaceName[i] = *ch;
+    }
+    CreateFontIndirectW(&lf)
+}
+
+unsafe fn create_header_font() -> HFONT {
+    let mut lf: LOGFONTW = std::mem::zeroed();
+    lf.lfCharSet = windows::Win32::Graphics::Gdi::DEFAULT_CHARSET;
+    lf.lfClipPrecision = windows::Win32::Graphics::Gdi::CLIP_DEFAULT_PRECIS;
+    lf.lfOutPrecision = windows::Win32::Graphics::Gdi::OUT_TT_ONLY_PRECIS;
+    lf.lfQuality = windows::Win32::Graphics::Gdi::ANTIALIASED_QUALITY;
+    lf.lfPitchAndFamily = (windows::Win32::Graphics::Gdi::DEFAULT_PITCH.0
+        | windows::Win32::Graphics::Gdi::FF_DONTCARE.0) as u8;
+    lf.lfHeight = -26;
+    lf.lfWeight = windows::Win32::Graphics::Gdi::FW_BOLD.0 as i32;
+    let face = to_wstring("Palatino Linotype");
+    for (i, ch) in face.iter().enumerate().take(LF_FACESIZE as usize) {
+        lf.lfFaceName[i] = *ch;
+        if *ch == 0 {
+            break;
+        }
     }
     CreateFontIndirectW(&lf)
 }
@@ -768,6 +795,7 @@ unsafe extern "system" fn planner_wndproc(
                 state.hwnd = hwnd;
                 state.container.set_hwnd(hwnd);
                 state.font = create_planner_font();
+                state.header_font = create_header_font();
                 SetWindowLongPtrW(hwnd, GWL_USERDATA, ptr as isize);
                 init_scroll(state);
                 create_children(state);
@@ -932,6 +960,9 @@ unsafe extern "system" fn planner_wndproc(
                 if !(*ptr).font.is_invalid() {
                     let _ = DeleteObject(HGDIOBJ((*ptr).font.0));
                 }
+                if !(*ptr).header_font.is_invalid() {
+                    let _ = DeleteObject(HGDIOBJ((*ptr).header_font.0));
+                }
                 if (*ptr).drop_target.is_some() {
                     let _ = RevokeDragDrop(hwnd);
                 }
@@ -974,7 +1005,7 @@ unsafe fn render_scene(state: &DayPlannerState, dc: HDC, width: i32, height: i32
     let _ = MoveToEx(dc, HEADER_WIDTH, 0, None);
     let _ = LineTo(dc, HEADER_WIDTH, height);
 
-    let old_font = SelectObject(dc, state.font);
+    let old_font = SelectObject(dc, state.header_font);
     let _ = SetBkMode(dc, TRANSPARENT);
     let _ = SetTextColor(dc, COLORREF(0x00202020));
 
@@ -999,9 +1030,8 @@ unsafe fn render_scene(state: &DayPlannerState, dc: HDC, width: i32, height: i32
         hour_idx = (hour_idx + 1) % 24;
     }
 
-    paint_components(dc, state);
-
     let _ = SelectObject(dc, old_font);
+    paint_components(dc, state);
 }
 
 unsafe fn draw_hour_header(dc: HDC, height: i32) {
@@ -1071,6 +1101,35 @@ fn entry_rect(entry: &TimeEntry, state: &DayPlannerState, pane: RECT) -> Option<
         right: pane.right - 2,
         bottom: pane.top + y + entry_height,
     })
+}
+
+unsafe fn local_start_of_day() -> u64 {
+    let utc_now = GetSystemTimeAsFileTime();
+    let mut local_now = FILETIME::default();
+    let _ = FileTimeToLocalFileTime(&utc_now, &mut local_now);
+
+    let mut utc_from_local = FILETIME::default();
+    let _ = LocalFileTimeToFileTime(&local_now, &mut utc_from_local);
+
+    let mut sys = SYSTEMTIME::default();
+    let _ = FileTimeToSystemTime(&utc_from_local, &mut sys);
+    sys.wHour = 0;
+    sys.wMinute = 0;
+    sys.wSecond = 0;
+    sys.wMilliseconds = 0;
+
+    let mut utc_midnight = FILETIME::default();
+    let _ = SystemTimeToFileTime(&sys, &mut utc_midnight);
+
+    let utc_now_val = filetime_to_u64(utc_from_local);
+    let utc_mid_val = filetime_to_u64(utc_midnight);
+    let delta = utc_now_val.saturating_sub(utc_mid_val);
+    let local_now_val = filetime_to_u64(local_now);
+    local_now_val.saturating_sub(delta)
+}
+
+fn filetime_to_u64(ft: FILETIME) -> u64 {
+    ((ft.dwHighDateTime as u64) << 32) | ft.dwLowDateTime as u64
 }
 
 fn rects_overlap(a: RECT, b: RECT) -> bool {
@@ -1361,6 +1420,8 @@ fn sync_entries_from_service(state: &DayPlannerState) {
     if state.service.is_null() {
         return;
     }
+    let active_date = unsafe { local_start_of_day() };
+    let end_date = active_date.saturating_add(UNITS_PER_HOUR * 24);
     let entries: Vec<TimeEntry> = {
         let service = unsafe { &*state.service };
         service.time_entries.values().cloned().collect()
@@ -1368,12 +1429,16 @@ fn sync_entries_from_service(state: &DayPlannerState) {
     let mut spec_entries = Vec::new();
     let mut actual_entries = Vec::new();
     for entry in entries {
+        if entry.stop <= active_date || entry.start >= end_date {
+            continue;
+        }
         match entry.kind {
             EntryKind::Spec => spec_entries.push(entry),
             EntryKind::Actual => actual_entries.push(entry),
         }
     }
     if let Some(state_mut) = unsafe { get_state(state.hwnd) } {
+        state_mut.active_date = active_date;
         for child in state_mut.container.children.iter_mut() {
             if let Some(pane) = child.as_any_mut().downcast_mut::<DayPlanPane>() {
                 pane.entries = if pane.kind == PaneKind::Spec {
