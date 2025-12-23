@@ -681,6 +681,12 @@ unsafe extern "system" fn task_list_wndproc(
             LRESULT(0)
         }
         WM_DESTROY => {
+            if let Some(state) = task_list_state(hwnd) {
+                if let Some(list) = state.list.as_mut() {
+                    let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(list.hwnd());
+                }
+                state.list = None;
+            }
             if let Some(ptr) = detach_task_list_state(hwnd) {
                 drop(Box::from_raw(ptr));
             }
@@ -883,6 +889,12 @@ unsafe extern "system" fn dp_task_list_wndproc(
             LRESULT(0)
         }
         WM_DESTROY => {
+            if let Some(state) = dp_task_list_state(hwnd) {
+                if let Some(list) = state.list.as_mut() {
+                    let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(list.hwnd());
+                }
+                state.list = None;
+            }
             if let Some(ptr) = detach_dp_task_list_state(hwnd) {
                 drop(Box::from_raw(ptr));
             }

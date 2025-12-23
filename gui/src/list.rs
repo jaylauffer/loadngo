@@ -191,7 +191,14 @@ impl ListBox {
 
     fn hit_test(&self, pt: POINT) -> Option<usize> {
         if let Ok(items) = self.items.lock() {
-            for (i, item) in items.iter().enumerate() {
+            let total = items.len();
+            let start = self.visible_pos.max(0) as usize;
+            let end = if self.visible_count > 0 {
+                (start + self.visible_count as usize).min(total)
+            } else {
+                total
+            };
+            for (i, item) in items.iter().enumerate().take(end).skip(start) {
                 if item.contains(pt) {
                     return Some(i);
                 }
@@ -355,7 +362,7 @@ impl Component for ListBox {
                 self.drag_index = None;
                 LRESULT(0)
             }
-            _ => LRESULT(0),
+            _ => unsafe { DefWindowProcW(self.hwnd, msg, wparam, lparam) },
         }
     }
 
