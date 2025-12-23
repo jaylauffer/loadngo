@@ -13,11 +13,12 @@ use windows::Win32::UI::Controls::SetScrollInfo;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, GetClientRect, GetScrollInfo, GetWindowLongPtrW, LoadCursorW,
     MoveWindow, RegisterClassExW, SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
-    CW_USEDEFAULT, GWL_USERDATA, HMENU, IDC_ARROW, SCROLLINFO, SCROLLBAR_COMMAND, SIF_PAGE,
-    SIF_POS, SIF_RANGE, SIF_TRACKPOS, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY,
-    WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SIZE,
-    WM_VSCROLL, WNDCLASSEXW, WNDCLASS_STYLES, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
-    WS_EX_NOPARENTNOTIFY, WS_VSCROLL, WS_VISIBLE,
+    CW_USEDEFAULT, GWL_USERDATA, GetSystemMetrics, HMENU, IDC_ARROW, SCROLLINFO,
+    SCROLLBAR_COMMAND, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SM_CXDRAG, SM_CYDRAG,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SIZE, WM_VSCROLL, WNDCLASSEXW,
+    WNDCLASS_STYLES, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOPARENTNOTIFY, WS_VSCROLL,
+    WS_VISIBLE,
 };
 
 use crate::buffered::BufferedWnd;
@@ -46,6 +47,9 @@ pub struct ListBox {
     visible_pos: i32,
     visible_count: i32,
     tracking: bool,
+    drag_start: Option<POINT>,
+    drag_index: Option<usize>,
+    drag_handler: Option<Arc<dyn Fn(usize)>>,
 }
 
 impl ListBox {
@@ -76,6 +80,9 @@ impl ListBox {
                 visible_pos: 0,
                 visible_count: 0,
                 tracking: false,
+                drag_start: None,
+                drag_index: None,
+                drag_handler: None,
             });
             let ptr = Box::into_raw(host);
             let hwnd = CreateWindowExW(
@@ -108,7 +115,13 @@ impl ListBox {
         self.visible_pos = 0;
         self.hilite = -1;
         self.selected = None;
+        self.drag_start = None;
+        self.drag_index = None;
         self.invalidate();
+    }
+
+    pub fn set_drag_handler(&mut self, handler: Option<Arc<dyn Fn(usize)>>) {
+        self.drag_handler = handler;
     }
 
     fn invalidate(&self) {
@@ -188,6 +201,21 @@ impl ListBox {
     }
 
     fn handle_mouse_move(&mut self, lparam: LPARAM) {
+        if let (Some(start), Some(idx)) = (self.drag_start, self.drag_index) {
+            let pt = POINT {
+                x: (lparam.0 & 0xffff) as i16 as i32,
+                y: ((lparam.0 >> 16) & 0xffff) as i16 as i32,
+            };
+            let drag_x = unsafe { GetSystemMetrics(SM_CXDRAG) };
+            let drag_y = unsafe { GetSystemMetrics(SM_CYDRAG) };
+            if (pt.x - start.x).abs() > drag_x || (pt.y - start.y).abs() > drag_y {
+                if let Some(handler) = self.drag_handler.as_ref() {
+                    handler(idx);
+                }
+                self.drag_start = None;
+                self.drag_index = None;
+            }
+        }
         self.start_tracking();
         let pt = POINT {
             x: (lparam.0 & 0xffff) as i16 as i32,
@@ -313,11 +341,18 @@ impl Component for ListBox {
                 if let Some(idx) = self.hit_test(pt) {
                     self.selected = Some(idx);
                     self.hilite = idx as i32;
+                    self.drag_start = Some(pt);
+                    self.drag_index = Some(idx);
                     self.invalidate();
+                } else {
+                    self.drag_start = None;
+                    self.drag_index = None;
                 }
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
+                self.drag_start = None;
+                self.drag_index = None;
                 LRESULT(0)
             }
             _ => LRESULT(0),

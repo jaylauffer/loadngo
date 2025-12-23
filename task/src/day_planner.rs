@@ -25,6 +25,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::Storage::FileSystem::{FileTimeToLocalFileTime, LocalFileTimeToFileTime};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL};
+use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
 use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 use windows::Win32::System::SystemInformation::GetSystemTimeAsFileTime;
 use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToFileTime};
@@ -84,6 +85,17 @@ const IDB_ACTUAL_RIGHT: u16 = 127;
 const IDB_ACTUAL_TOP: u16 = 128;
 const IDB_ACTUAL_TOP_LEFT: u16 = 129;
 const IDB_ACTUAL_BOTTOM: u16 = 130;
+
+fn format_task() -> u16 {
+    static INIT: Once = Once::new();
+    static mut CF: u16 = 0;
+    unsafe {
+        INIT.call_once(|| {
+            CF = RegisterClipboardFormatW(PCWSTR(to_wstring("loadngo::data::task").as_ptr())) as u16;
+        });
+        CF
+    }
+}
 
 const HOUR_STRINGS: [&str; 24] = [
     "12am", "1am", "2am", "3am", "4am", "5am", "6am", "7am", "8am", "9am", "10am", "11am", "12pm",
@@ -1748,6 +1760,7 @@ impl DayPlannerDropTarget {
     fn choose_effect(&self, data_obj: &IDataObject) -> DROPEFFECT {
         if self.has_format(data_obj, CF_HDROP.0 as u16)
             || self.has_format(data_obj, CF_UNICODETEXT.0 as u16)
+            || self.has_format(data_obj, format_task())
         {
             DROPEFFECT_COPY
         } else {
@@ -1811,6 +1824,32 @@ impl DayPlannerDropTarget {
         }
         Some(text)
     }
+
+    fn extract_task_id(&self, data_obj: &IDataObject) -> Option<u64> {
+        let mut format = FORMATETC::default();
+        format.cfFormat = format_task();
+        format.ptd = std::ptr::null_mut();
+        format.dwAspect = DVASPECT_CONTENT.0 as u32;
+        format.lindex = -1;
+        format.tymed = TYMED_HGLOBAL.0 as u32;
+        let mut medium = unsafe { data_obj.GetData(&format).ok()? };
+        let handle = unsafe { medium.u.hGlobal };
+        if handle.0.is_null() {
+            unsafe { ReleaseStgMedium(&mut medium) };
+            return None;
+        }
+        let ptr = unsafe { GlobalLock(handle) } as *const u64;
+        if ptr.is_null() {
+            unsafe { ReleaseStgMedium(&mut medium) };
+            return None;
+        }
+        let id = unsafe { *ptr };
+        unsafe {
+            let _ = GlobalUnlock(handle);
+            ReleaseStgMedium(&mut medium);
+        }
+        Some(id)
+    }
 }
 
 #[allow(non_snake_case)]
@@ -1859,17 +1898,26 @@ impl IDropTarget_Impl for DayPlannerDropTarget_Impl {
             let _ = ScreenToClient(self.hwnd, &mut client);
         }
         if let Some(state) = self.state() {
+            if let Some(task_id) = self.extract_task_id(obj) {
+                let title = unsafe { state.service.as_ref() }
+                    .and_then(|svc| svc.tasks.get(&task_id))
+                    .map(|task| task.name.clone())
+                    .unwrap_or_else(|| "Task".to_string());
+                drop_entry_at_point(state, client, title, Some(task_id));
+                unsafe { *pdwEffect = DROPEFFECT_COPY };
+                return Ok(());
+            }
             if let Some(files) = self.extract_files(obj) {
                 let title = files
                     .get(0)
                     .map(|s| s.clone())
                     .unwrap_or_else(|| "Dropped File".to_string());
-                drop_entry_at_point(state, client, title);
+                drop_entry_at_point(state, client, title, None);
                 unsafe { *pdwEffect = DROPEFFECT_COPY };
                 return Ok(());
             }
             if let Some(text) = self.extract_text(obj) {
-                drop_entry_at_point(state, client, text);
+                drop_entry_at_point(state, client, text, None);
                 unsafe { *pdwEffect = DROPEFFECT_COPY };
             }
         }
@@ -1877,7 +1925,12 @@ impl IDropTarget_Impl for DayPlannerDropTarget_Impl {
     }
 }
 
-fn drop_entry_at_point(state: &mut DayPlannerState, pt: POINT, title: String) {
+fn drop_entry_at_point(
+    state: &mut DayPlannerState,
+    pt: POINT,
+    title: String,
+    task_id: Option<u64>,
+) {
     if let Some((idx, rect)) = pane_index_at_point(state, pt) {
         let start = time_from_point(state, rect, pt.y);
         let stop = start + UNITS_PER_FRACTION;
@@ -1891,8 +1944,16 @@ fn drop_entry_at_point(state: &mut DayPlannerState, pt: POINT, title: String) {
                 PaneKind::Spec => EntryKind::Spec,
                 PaneKind::Actual => EntryKind::Actual,
             };
-            let task_id = 0;
-            add_time_entry(state, task_id, title, start, stop, kind);
+            let id = task_id.unwrap_or(0);
+            let entry_title = if id != 0 {
+                unsafe { state.service.as_ref() }
+                    .and_then(|svc| svc.tasks.get(&id))
+                    .map(|task| task.name.clone())
+                    .unwrap_or(title)
+            } else {
+                title
+            };
+            add_time_entry(state, id, entry_title, start, stop, kind);
         }
     }
 }

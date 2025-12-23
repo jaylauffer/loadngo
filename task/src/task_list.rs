@@ -1,4 +1,5 @@
-use std::sync::Once;
+use std::cell::Cell;
+use std::sync::{Arc, Once};
 
 use data::{service::Service, task::Task, task_compare::TaskComparator};
 use gui::{
@@ -7,16 +8,33 @@ use gui::{
     list::{ListBox, ListBoxItem},
 };
 use windows::{
-    core::PCWSTR,
+    core::{implement, Error, HRESULT, PCWSTR},
     Win32::{
-        Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
+        Foundation::{
+            BOOL, COLORREF, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS,
+            DV_E_DVASPECT, DV_E_FORMATETC, DV_E_TYMED, E_INVALIDARG, E_NOTIMPL, E_OUTOFMEMORY,
+            HGLOBAL, HWND, LPARAM, LRESULT, RECT, S_FALSE, S_OK, WPARAM,
+        },
         Graphics::Gdi::{
             AlphaBlend, CreateCompatibleDC, CreateFontIndirectW, DeleteDC, DrawTextW,
             GetStockObject, GetTextMetricsW, SelectObject, SetDCBrushColor, SetDCPenColor, AC_SRC_OVER,
             BLENDFUNCTION, DC_BRUSH, DC_PEN, DRAW_TEXT_FORMAT, DT_NOPREFIX, HBRUSH, HDC, HFONT,
             HGDIOBJ, LOGFONTW, TEXTMETRICW,
         },
-        System::LibraryLoader::GetModuleHandleW,
+        System::{
+            Com::{
+                IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumFORMATETC_Impl, FORMATETC,
+                STGMEDIUM, TYMED_HGLOBAL, DVASPECT_CONTENT, DATADIR_GET,
+            },
+            DataExchange::RegisterClipboardFormatW,
+            LibraryLoader::GetModuleHandleW,
+            Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
+            Ole::{
+                DoDragDrop, IDropSource, IDropSource_Impl, CF_TEXT, CF_UNICODETEXT, DROPEFFECT,
+                DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE,
+            },
+            SystemServices::MODIFIERKEYS_FLAGS,
+        },
         UI::{
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW, MoveWindow,
@@ -41,12 +59,29 @@ const IDB_PRIORITY4: u16 = 230;
 const IDB_PRIORITY5: u16 = 231;
 const IDB_XHATCHBR: u16 = 131;
 
+fn format_task() -> u16 {
+    static INIT: Once = Once::new();
+    static mut CF: u16 = 0;
+    unsafe {
+        INIT.call_once(|| {
+            CF = RegisterClipboardFormatW(PCWSTR(to_wstring("loadngo::data::task").as_ptr())) as u16;
+        });
+        CF
+    }
+}
+
 #[derive(Clone)]
 struct TaskListItem {
     task_id: u64,
     title: String,
     priority: i32,
     bounds: RECT,
+}
+
+#[derive(Clone)]
+struct TaskDragInfo {
+    id: u64,
+    title: String,
 }
 
 impl TaskListItem {
@@ -87,8 +122,8 @@ impl ListBoxItem for TaskListItem {
             if highlighted {
                 SelectObject(dc, HGDIOBJ(GetStockObject(DC_BRUSH).0));
                 SelectObject(dc, HGDIOBJ(GetStockObject(DC_PEN).0));
-                SetDCBrushColor(dc, COLORREF(0x00b0d5ce));
-                SetDCPenColor(dc, COLORREF(0x00b0d5ce));
+                SetDCBrushColor(dc, COLORREF(0x00e5f5c3));
+                SetDCPenColor(dc, COLORREF(0x00e5f5c3));
                 let _ = windows::Win32::Graphics::Gdi::Rectangle(dc, -4, 0, width - 2, line_h);
             }
 
@@ -202,8 +237,8 @@ fn draw_bitmap_alpha(dc: HDC, bmp: &Bitmap, x: i32, y: i32) {
         let bf = BLENDFUNCTION {
             BlendOp: AC_SRC_OVER as u8,
             BlendFlags: 0,
-            SourceConstantAlpha: 0xCF,
-            AlphaFormat: 0,
+            SourceConstantAlpha: 0xFF,
+            AlphaFormat: windows::Win32::Graphics::Gdi::AC_SRC_ALPHA as u8,
         };
         let _ = AlphaBlend(
             dc,
@@ -220,6 +255,267 @@ fn draw_bitmap_alpha(dc: HDC, bmp: &Bitmap, x: i32, y: i32) {
         );
         let _ = SelectObject(mem_dc, old);
         let _ = DeleteDC(mem_dc);
+    }
+}
+
+#[implement(IEnumFORMATETC)]
+struct FormatEtcEnum {
+    formats: Vec<FORMATETC>,
+    index: Cell<usize>,
+}
+
+impl FormatEtcEnum {
+    fn new(formats: Vec<FORMATETC>) -> Self {
+        Self {
+            formats,
+            index: Cell::new(0),
+        }
+    }
+}
+
+#[allow(non_snake_case)]
+impl IEnumFORMATETC_Impl for FormatEtcEnum_Impl {
+    fn Next(
+        &self,
+        celt: u32,
+        rgelt: *mut FORMATETC,
+        pcelt_fetched: *mut u32,
+    ) -> HRESULT {
+        if rgelt.is_null() {
+            return E_INVALIDARG;
+        }
+        let mut fetched = 0u32;
+        let mut idx = self.index.get();
+        unsafe {
+            while fetched < celt && idx < self.formats.len() {
+                rgelt.add(fetched as usize).write(self.formats[idx]);
+                fetched += 1;
+                idx += 1;
+            }
+            if !pcelt_fetched.is_null() {
+                *pcelt_fetched = fetched;
+            }
+        }
+        self.index.set(idx);
+        if fetched == celt { S_OK } else { S_FALSE }
+    }
+
+    fn Skip(&self, celt: u32) -> windows::core::Result<()> {
+        let idx = self.index.get().saturating_add(celt as usize);
+        self.index.set(idx);
+        if idx <= self.formats.len() {
+            Ok(())
+        } else {
+            Err(Error::from(S_FALSE))
+        }
+    }
+
+    fn Reset(&self) -> windows::core::Result<()> {
+        self.index.set(0);
+        Ok(())
+    }
+
+    fn Clone(&self) -> windows::core::Result<IEnumFORMATETC> {
+        Ok(FormatEtcEnum {
+            formats: self.formats.clone(),
+            index: Cell::new(self.index.get()),
+        }
+        .into())
+    }
+}
+
+#[implement(IDataObject)]
+struct TaskDataObject {
+    task_id: u64,
+    title: String,
+}
+
+impl TaskDataObject {
+    fn formats() -> Vec<FORMATETC> {
+        let mut formats = Vec::new();
+        formats.push(FORMATETC {
+            cfFormat: format_task(),
+            ptd: std::ptr::null_mut(),
+            dwAspect: DVASPECT_CONTENT.0 as u32,
+            lindex: -1,
+            tymed: TYMED_HGLOBAL.0 as u32,
+        });
+        formats.push(FORMATETC {
+            cfFormat: CF_UNICODETEXT.0 as u16,
+            ptd: std::ptr::null_mut(),
+            dwAspect: DVASPECT_CONTENT.0 as u32,
+            lindex: -1,
+            tymed: TYMED_HGLOBAL.0 as u32,
+        });
+        formats.push(FORMATETC {
+            cfFormat: CF_TEXT.0 as u16,
+            ptd: std::ptr::null_mut(),
+            dwAspect: DVASPECT_CONTENT.0 as u32,
+            lindex: -1,
+            tymed: TYMED_HGLOBAL.0 as u32,
+        });
+        formats
+    }
+
+    fn alloc_hglobal(bytes: &[u8]) -> windows::core::Result<HGLOBAL> {
+        unsafe {
+            let handle = GlobalAlloc(GMEM_MOVEABLE, bytes.len())?;
+            let ptr = GlobalLock(handle) as *mut u8;
+            if ptr.is_null() {
+                return Err(Error::from(E_OUTOFMEMORY));
+            }
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+            let _ = GlobalUnlock(handle);
+            Ok(handle)
+        }
+    }
+
+    fn medium_from_hglobal(handle: HGLOBAL) -> STGMEDIUM {
+        let mut medium = STGMEDIUM::default();
+        medium.tymed = TYMED_HGLOBAL.0 as u32;
+        medium.u.hGlobal = handle;
+        medium
+    }
+
+    fn write_task_id(&self) -> windows::core::Result<STGMEDIUM> {
+        let bytes = self.task_id.to_le_bytes();
+        let handle = Self::alloc_hglobal(&bytes)?;
+        Ok(Self::medium_from_hglobal(handle))
+    }
+
+    fn write_text(&self, unicode: bool) -> windows::core::Result<STGMEDIUM> {
+        if unicode {
+            let mut wide: Vec<u16> = self.title.encode_utf16().collect();
+            wide.push(0);
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    wide.as_ptr() as *const u8,
+                    wide.len() * std::mem::size_of::<u16>(),
+                )
+            };
+            let handle = Self::alloc_hglobal(bytes)?;
+            Ok(Self::medium_from_hglobal(handle))
+        } else {
+            let mut bytes = self.title.clone().into_bytes();
+            bytes.push(0);
+            let handle = Self::alloc_hglobal(&bytes)?;
+            Ok(Self::medium_from_hglobal(handle))
+        }
+    }
+}
+
+#[allow(non_snake_case)]
+impl IDataObject_Impl for TaskDataObject_Impl {
+    fn GetData(&self, pformatetc: *const FORMATETC) -> windows::core::Result<STGMEDIUM> {
+        if pformatetc.is_null() {
+            return Err(Error::from(E_INVALIDARG));
+        }
+        let fmt = unsafe { *pformatetc };
+        if fmt.cfFormat == format_task() {
+            return self.write_task_id();
+        }
+        if fmt.cfFormat == CF_UNICODETEXT.0 as u16 {
+            return self.write_text(true);
+        }
+        if fmt.cfFormat == CF_TEXT.0 as u16 {
+            return self.write_text(false);
+        }
+        Err(Error::from(DV_E_FORMATETC))
+    }
+
+    fn GetDataHere(&self, _pformatetc: *const FORMATETC, _pmedium: *mut STGMEDIUM) -> windows::core::Result<()> {
+        Err(Error::from(E_NOTIMPL))
+    }
+
+    fn QueryGetData(&self, pformatetc: *const FORMATETC) -> HRESULT {
+        if pformatetc.is_null() {
+            return E_INVALIDARG;
+        }
+        let fmt = unsafe { *pformatetc };
+        let supported = fmt.cfFormat == format_task()
+            || fmt.cfFormat == CF_TEXT.0 as u16
+            || fmt.cfFormat == CF_UNICODETEXT.0 as u16;
+        if !supported {
+            return DV_E_FORMATETC;
+        }
+        if fmt.dwAspect != DVASPECT_CONTENT.0 as u32 {
+            return DV_E_DVASPECT;
+        }
+        if (fmt.tymed & TYMED_HGLOBAL.0 as u32) == 0 {
+            return DV_E_TYMED;
+        }
+        S_OK
+    }
+
+    fn GetCanonicalFormatEtc(&self, _pformatectin: *const FORMATETC, _pformatetcout: *mut FORMATETC) -> HRESULT {
+        E_NOTIMPL
+    }
+
+    fn SetData(&self, _pformatetc: *const FORMATETC, _pmedium: *const STGMEDIUM, _frelease: BOOL) -> windows::core::Result<()> {
+        Err(Error::from(E_NOTIMPL))
+    }
+
+    fn EnumFormatEtc(&self, direction: u32) -> windows::core::Result<IEnumFORMATETC> {
+        if direction == DATADIR_GET.0 as u32 {
+            Ok(FormatEtcEnum::new(TaskDataObject::formats()).into())
+        } else {
+            Err(Error::from(E_NOTIMPL))
+        }
+    }
+
+    fn DAdvise(&self, _pformatetc: *const FORMATETC, _advf: u32, _padvsink: Option<&windows::Win32::System::Com::IAdviseSink>) -> windows::core::Result<u32> {
+        Err(Error::from(E_NOTIMPL))
+    }
+
+    fn DUnadvise(&self, _dwconnection: u32) -> windows::core::Result<()> {
+        Err(Error::from(E_NOTIMPL))
+    }
+
+    fn EnumDAdvise(&self) -> windows::core::Result<windows::Win32::System::Com::IEnumSTATDATA> {
+        Err(Error::from(E_NOTIMPL))
+    }
+}
+
+#[implement(IDropSource)]
+struct TaskDropSource;
+
+#[allow(non_snake_case)]
+impl IDropSource_Impl for TaskDropSource_Impl {
+    fn QueryContinueDrag(
+        &self,
+        fEscapePressed: BOOL,
+        grfKeyState: MODIFIERKEYS_FLAGS,
+    ) -> HRESULT {
+        if fEscapePressed.as_bool() {
+            return DRAGDROP_S_CANCEL;
+        }
+        if grfKeyState.contains(windows::Win32::System::SystemServices::MK_LBUTTON) {
+            S_OK
+        } else {
+            DRAGDROP_S_DROP
+        }
+    }
+
+    fn GiveFeedback(&self, _dwEffect: DROPEFFECT) -> HRESULT {
+        DRAGDROP_S_USEDEFAULTCURSORS
+    }
+}
+
+fn begin_task_drag(info: &TaskDragInfo) {
+    unsafe {
+        let data_obj: IDataObject = TaskDataObject {
+            task_id: info.id,
+            title: info.title.clone(),
+        }
+        .into();
+        let source: IDropSource = TaskDropSource.into();
+        let mut effect = DROPEFFECT(0);
+        let _ = DoDragDrop(
+            &data_obj,
+            &source,
+            DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK,
+            &mut effect,
+        );
     }
 }
 
@@ -256,7 +552,7 @@ impl TaskListAdapter {
         self.context_id = context_id;
     }
 
-    fn items(&self, service: &Service) -> Vec<Box<dyn ListBoxItem>> {
+    fn collect_tasks<'a>(&self, service: &'a Service) -> Vec<&'a Task> {
         let mut has_children = std::collections::HashSet::new();
         for task in service.tasks.values() {
             if let Some(parent) = task.parent {
@@ -281,6 +577,10 @@ impl TaskListAdapter {
 
         tasks.sort_by(|a, b| self.comparator.compare(a, b));
         tasks
+    }
+
+    fn items(&self, service: &Service) -> Vec<Box<dyn ListBoxItem>> {
+        self.collect_tasks(service)
             .into_iter()
             .map(|task| Box::new(TaskListItem::from_task(task)) as Box<dyn ListBoxItem>)
             .collect()
@@ -292,6 +592,7 @@ struct TaskListState {
     list: Option<Box<ListBox>>,
     service: *mut Service,
     adapter: TaskListAdapter,
+    drag_items: Vec<TaskDragInfo>,
 }
 
 pub fn create_task_list_wnd(parent: HWND, service: *mut Service) -> HWND {
@@ -303,6 +604,7 @@ pub fn create_task_list_wnd(parent: HWND, service: *mut Service) -> HWND {
             list: None,
             service,
             adapter: TaskListAdapter::new_top_level(),
+            drag_items: Vec::new(),
         });
         CreateWindowExW(
             WINDOW_EX_STYLE(0),
@@ -357,7 +659,15 @@ unsafe extern "system" fn task_list_wndproc(
                 let state = &mut *state_ptr;
                 state.hwnd = hwnd;
                 SetWindowLongPtrW(hwnd, GWL_USERDATA, state_ptr as isize);
-                if let Ok(list) = ListBox::create(hwnd) {
+                if let Ok(mut list) = ListBox::create(hwnd) {
+                    let handler = Arc::new(move |idx| unsafe {
+                        if let Some(state) = (state_ptr as *mut TaskListState).as_mut() {
+                            if let Some(info) = state.drag_items.get(idx).cloned() {
+                                begin_task_drag(&info);
+                            }
+                        }
+                    });
+                    list.set_drag_handler(Some(handler));
                     state.list = Some(list);
                     rebuild_task_list(state);
                 }
@@ -396,7 +706,18 @@ unsafe fn rebuild_task_list(state: &mut TaskListState) {
         None => return,
     };
     if let Some(list) = state.list.as_mut() {
-        let items = state.adapter.items(service);
+        let tasks = state.adapter.collect_tasks(service);
+        state.drag_items = tasks
+            .iter()
+            .map(|task| TaskDragInfo {
+                id: task.entity.id,
+                title: task.name.clone(),
+            })
+            .collect();
+        let items = tasks
+            .iter()
+            .map(|task| Box::new(TaskListItem::from_task(task)) as Box<dyn ListBoxItem>)
+            .collect();
         list.set_items(items);
     }
 }
@@ -424,6 +745,7 @@ struct DpTaskListState {
     detail_hwnd: HWND,
     service: *mut Service,
     adapter: TaskListAdapter,
+    drag_items: Vec<TaskDragInfo>,
 }
 
 pub fn create_dp_task_list_wnd(parent: HWND, service: *mut Service) -> HWND {
@@ -438,6 +760,7 @@ pub fn create_dp_task_list_wnd(parent: HWND, service: *mut Service) -> HWND {
             detail_hwnd: HWND::default(),
             service,
             adapter: TaskListAdapter::new_leaves(),
+            drag_items: Vec::new(),
         });
         CreateWindowExW(
             WINDOW_EX_STYLE(0),
@@ -493,7 +816,15 @@ unsafe extern "system" fn dp_task_list_wndproc(
                 state.hwnd = hwnd;
                 SetWindowLongPtrW(hwnd, GWL_USERDATA, state_ptr as isize);
 
-                if let Ok(list) = ListBox::create(hwnd) {
+                if let Ok(mut list) = ListBox::create(hwnd) {
+                    let handler = Arc::new(move |idx| unsafe {
+                        if let Some(state) = (state_ptr as *mut DpTaskListState).as_mut() {
+                            if let Some(info) = state.drag_items.get(idx).cloned() {
+                                begin_task_drag(&info);
+                            }
+                        }
+                    });
+                    list.set_drag_handler(Some(handler));
                     state.list = Some(list);
                 }
 
@@ -630,7 +961,18 @@ unsafe fn rebuild_dp_task_list(state: &mut DpTaskListState) {
         None => return,
     };
     if let Some(list) = state.list.as_mut() {
-        let items = state.adapter.items(service);
+        let tasks = state.adapter.collect_tasks(service);
+        state.drag_items = tasks
+            .iter()
+            .map(|task| TaskDragInfo {
+                id: task.entity.id,
+                title: task.name.clone(),
+            })
+            .collect();
+        let items = tasks
+            .iter()
+            .map(|task| Box::new(TaskListItem::from_task(task)) as Box<dyn ListBoxItem>)
+            .collect();
         list.set_items(items);
     }
 }
