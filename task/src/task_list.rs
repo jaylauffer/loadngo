@@ -13,13 +13,15 @@ use windows::{
         Foundation::{
             BOOL, COLORREF, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS,
             DV_E_DVASPECT, DV_E_FORMATETC, DV_E_TYMED, E_INVALIDARG, E_NOTIMPL, E_OUTOFMEMORY,
-            HGLOBAL, HWND, LPARAM, LRESULT, RECT, S_FALSE, S_OK, WPARAM,
+            HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, S_FALSE, S_OK, WPARAM,
         },
         Graphics::Gdi::{
-            AlphaBlend, CreateCompatibleDC, CreateFontIndirectW, DeleteDC, DrawTextW,
-            GetStockObject, GetTextMetricsW, SelectObject, SetDCBrushColor, SetDCPenColor, AC_SRC_OVER,
-            BLENDFUNCTION, DC_BRUSH, DC_PEN, DRAW_TEXT_FORMAT, DT_NOPREFIX, HBRUSH, HDC, HFONT,
-            HGDIOBJ, LOGFONTW, TEXTMETRICW,
+            AlphaBlend, BeginPaint, CreateCompatibleDC, CreateFontIndirectW, CreateSolidBrush,
+            DeleteDC, DeleteObject, DrawEdge, DrawTextW, EndPaint, FillRect, GetStockObject,
+            GetTextMetricsW, MapWindowPoints, ScreenToClient, SelectObject, SetDCBrushColor,
+            SetDCPenColor, AC_SRC_OVER, BDR_RAISEDOUTER, BF_RECT, BLENDFUNCTION, DC_BRUSH, DC_PEN,
+            DRAW_TEXT_FORMAT, DT_NOPREFIX, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW, PAINTSTRUCT,
+            TEXTMETRICW,
         },
         System::{
             Com::{
@@ -36,18 +38,21 @@ use windows::{
             SystemServices::MODIFIERKEYS_FLAGS,
         },
         UI::{
+            Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
             WindowsAndMessaging::{
-                CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW, MoveWindow,
-                RegisterClassW, SendMessageW, SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW,
-                CS_VREDRAW, CW_USEDEFAULT, GWL_USERDATA, HMENU, WINDOW_EX_STYLE, WINDOW_STYLE,
-                WM_COMMAND, WM_CREATE, WM_DESTROY, WM_SIZE, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN,
-                WS_CLIPSIBLINGS, WS_VISIBLE, CB_GETCURSEL, CBN_SELCHANGE,
+                CreateWindowExW, DefWindowProcW, GetClientRect, GetCursorPos, GetParent,
+                GetWindowLongPtrW, LoadCursorW, MoveWindow, PostMessageW, RegisterClassW,
+                SendMessageW, SetCursor, SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
+                CW_USEDEFAULT, GWL_USERDATA, HMENU, IDC_SIZEWE, WINDOW_EX_STYLE, WINDOW_STYLE,
+                WM_CAPTURECHANGED, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_SETCURSOR, WM_SIZE, WNDCLASSW, WS_CHILD,
+                WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_VISIBLE, CB_GETCURSEL, CBN_SELCHANGE,
             },
         },
     },
 };
 
-use crate::winutil::to_wstring;
+use crate::winutil::{to_wstring, WM_SPLITTERREPOS};
 
 const TASK_LIST_CLASS: &str = "LNGTaskListWnd";
 const DP_TASK_LIST_CLASS: &str = "LNGDPTaskListWnd";
@@ -58,6 +63,7 @@ const IDB_PRIORITY3: u16 = 228;
 const IDB_PRIORITY4: u16 = 230;
 const IDB_PRIORITY5: u16 = 231;
 const IDB_XHATCHBR: u16 = 131;
+const ADJUST_BAR_WIDTH: i32 = 5;
 
 fn format_task() -> u16 {
     static INIT: Once = Once::new();
@@ -68,6 +74,66 @@ fn format_task() -> u16 {
         });
         CF
     }
+}
+
+fn point_from_lparam(lparam: LPARAM) -> POINT {
+    POINT {
+        x: (lparam.0 as u32 & 0xffff) as i16 as i32,
+        y: ((lparam.0 as u32 >> 16) & 0xffff) as i16 as i32,
+    }
+}
+
+fn point_in_rect(pt: POINT, rc: RECT) -> bool {
+    pt.x >= rc.left && pt.x < rc.right && pt.y >= rc.top && pt.y < rc.bottom
+}
+
+unsafe fn set_adjust_cursor(hwnd: HWND, rc: RECT) -> bool {
+    let mut pt = POINT::default();
+    if GetCursorPos(&mut pt).is_err() {
+        return false;
+    }
+    let mut client = pt;
+    let _ = ScreenToClient(hwnd, &mut client);
+    if point_in_rect(client, rc) {
+        if let Ok(cursor) = LoadCursorW(None, IDC_SIZEWE) {
+            let _ = SetCursor(cursor);
+            return true;
+        }
+    }
+    false
+}
+
+unsafe fn post_splitter_repos(hwnd: HWND, pt: POINT) {
+    let parent = match GetParent(hwnd) {
+        Ok(parent) => parent,
+        Err(_) => return,
+    };
+    if parent.0.is_null() {
+        return;
+    }
+    let mut pts = [pt];
+    let _ = MapWindowPoints(hwnd, parent, &mut pts);
+    let mapped = pts[0];
+    let _ = PostMessageW(
+        parent,
+        WM_SPLITTERREPOS,
+        WPARAM(hwnd.0 as usize),
+        LPARAM(mapped.x as isize),
+    );
+}
+
+unsafe fn paint_adjust_bar(hwnd: HWND, rc: RECT) -> LRESULT {
+    let mut ps = PAINTSTRUCT::default();
+    let dc = BeginPaint(hwnd, &mut ps);
+    if !dc.0.is_null() {
+        let brush = CreateSolidBrush(COLORREF(0x009b9b9b));
+        let _ = FillRect(dc, &rc, brush);
+        let _ = DeleteObject(brush);
+        let mut edge = rc;
+        let _ = DrawEdge(dc, &mut edge, BDR_RAISEDOUTER, BF_RECT);
+        let _ = EndPaint(hwnd, &ps);
+    }
+    LRESULT(0)
 }
 
 #[derive(Clone)]
@@ -593,6 +659,8 @@ struct TaskListState {
     service: *mut Service,
     adapter: TaskListAdapter,
     drag_items: Vec<TaskDragInfo>,
+    adjusting: bool,
+    adjust_bar: RECT,
 }
 
 pub fn create_task_list_wnd(parent: HWND, service: *mut Service) -> HWND {
@@ -605,6 +673,13 @@ pub fn create_task_list_wnd(parent: HWND, service: *mut Service) -> HWND {
             service,
             adapter: TaskListAdapter::new_top_level(),
             drag_items: Vec::new(),
+            adjusting: false,
+            adjust_bar: RECT {
+                left: 0,
+                top: 0,
+                right: ADJUST_BAR_WIDTH,
+                bottom: 0,
+            },
         });
         CreateWindowExW(
             WINDOW_EX_STYLE(0),
@@ -674,11 +749,68 @@ unsafe extern "system" fn task_list_wndproc(
             }
             LRESULT(0)
         }
+        WM_SETCURSOR => {
+            if let Some(state) = task_list_state(hwnd) {
+                if unsafe { set_adjust_cursor(hwnd, state.adjust_bar) } {
+                    return LRESULT(1);
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_SIZE => {
             if let Some(state) = task_list_state(hwnd) {
                 layout_task_list(state);
             }
             LRESULT(0)
+        }
+        WM_LBUTTONDOWN => {
+            if let Some(state) = task_list_state(hwnd) {
+                let pt = point_from_lparam(lparam);
+                if point_in_rect(pt, state.adjust_bar) {
+                    state.adjusting = true;
+                    unsafe {
+                        let _ = SetCapture(hwnd);
+                    }
+                    return LRESULT(1);
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_MOUSEMOVE => {
+            if let Some(state) = task_list_state(hwnd) {
+                if state.adjusting {
+                    let pt = point_from_lparam(lparam);
+                    unsafe { post_splitter_repos(hwnd, pt) };
+                    return LRESULT(0);
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_LBUTTONUP => {
+            if let Some(state) = task_list_state(hwnd) {
+                if state.adjusting {
+                    state.adjusting = false;
+                    unsafe {
+                        let _ = ReleaseCapture();
+                        let pt = point_from_lparam(lparam);
+                        post_splitter_repos(hwnd, pt);
+                    }
+                    return LRESULT(0);
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_CAPTURECHANGED => {
+            if let Some(state) = task_list_state(hwnd) {
+                state.adjusting = false;
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_PAINT => {
+            if let Some(state) = task_list_state(hwnd) {
+                unsafe { return paint_adjust_bar(hwnd, state.adjust_bar); }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_DESTROY => {
             if let Some(state) = task_list_state(hwnd) {
@@ -699,10 +831,17 @@ unsafe extern "system" fn task_list_wndproc(
 unsafe fn layout_task_list(state: &mut TaskListState) {
     let mut rc = RECT::default();
     let _ = GetClientRect(state.hwnd, &mut rc);
+    let width = (rc.right - rc.left).max(0);
+    let height = (rc.bottom - rc.top).max(0);
+    state.adjust_bar = RECT {
+        left: 0,
+        top: 0,
+        right: ADJUST_BAR_WIDTH,
+        bottom: height,
+    };
     if let Some(list) = state.list.as_mut() {
-        let width = (rc.right - rc.left - 10).max(0);
-        let height = (rc.bottom - rc.top - 10).max(0);
-        let _ = MoveWindow(list.hwnd(), 5, 5, width, height, true);
+        let left = ADJUST_BAR_WIDTH;
+        let _ = MoveWindow(list.hwnd(), left, 5, (width - left).max(0), (height - 10).max(0), true);
     }
 }
 
@@ -752,6 +891,8 @@ struct DpTaskListState {
     service: *mut Service,
     adapter: TaskListAdapter,
     drag_items: Vec<TaskDragInfo>,
+    adjusting: bool,
+    adjust_bar: RECT,
 }
 
 pub fn create_dp_task_list_wnd(parent: HWND, service: *mut Service) -> HWND {
@@ -767,6 +908,13 @@ pub fn create_dp_task_list_wnd(parent: HWND, service: *mut Service) -> HWND {
             service,
             adapter: TaskListAdapter::new_leaves(),
             drag_items: Vec::new(),
+            adjusting: false,
+            adjust_bar: RECT {
+                left: 0,
+                top: 0,
+                right: ADJUST_BAR_WIDTH,
+                bottom: 0,
+            },
         });
         CreateWindowExW(
             WINDOW_EX_STYLE(0),
@@ -872,6 +1020,14 @@ unsafe extern "system" fn dp_task_list_wndproc(
             }
             LRESULT(0)
         }
+        WM_SETCURSOR => {
+            if let Some(state) = dp_task_list_state(hwnd) {
+                if unsafe { set_adjust_cursor(hwnd, state.adjust_bar) } {
+                    return LRESULT(1);
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_COMMAND => {
             if let Some(state) = dp_task_list_state(hwnd) {
                 let code = ((wparam.0 >> 16) & 0xffff) as u16;
@@ -887,6 +1043,55 @@ unsafe extern "system" fn dp_task_list_wndproc(
                 layout_dp_task_list(state);
             }
             LRESULT(0)
+        }
+        WM_LBUTTONDOWN => {
+            if let Some(state) = dp_task_list_state(hwnd) {
+                let pt = point_from_lparam(lparam);
+                if point_in_rect(pt, state.adjust_bar) {
+                    state.adjusting = true;
+                    unsafe {
+                        let _ = SetCapture(hwnd);
+                    }
+                    return LRESULT(1);
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_MOUSEMOVE => {
+            if let Some(state) = dp_task_list_state(hwnd) {
+                if state.adjusting {
+                    let pt = point_from_lparam(lparam);
+                    unsafe { post_splitter_repos(hwnd, pt) };
+                    return LRESULT(0);
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_LBUTTONUP => {
+            if let Some(state) = dp_task_list_state(hwnd) {
+                if state.adjusting {
+                    state.adjusting = false;
+                    unsafe {
+                        let _ = ReleaseCapture();
+                        let pt = point_from_lparam(lparam);
+                        post_splitter_repos(hwnd, pt);
+                    }
+                    return LRESULT(0);
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_CAPTURECHANGED => {
+            if let Some(state) = dp_task_list_state(hwnd) {
+                state.adjusting = false;
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_PAINT => {
+            if let Some(state) = dp_task_list_state(hwnd) {
+                unsafe { return paint_adjust_bar(hwnd, state.adjust_bar); }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_DESTROY => {
             if let Some(state) = dp_task_list_state(hwnd) {
@@ -909,19 +1114,33 @@ unsafe fn layout_dp_task_list(state: &mut DpTaskListState) {
     let _ = GetClientRect(state.hwnd, &mut rc);
     let width = (rc.right - rc.left).max(0);
     let height = (rc.bottom - rc.top).max(0);
+    state.adjust_bar = RECT {
+        left: 0,
+        top: 0,
+        right: ADJUST_BAR_WIDTH,
+        bottom: height,
+    };
     let context_h = 24;
     let detail_h = 84;
 
-    let _ = MoveWindow(state.context_combo, 10, 0, width - 20, context_h, true);
+    let content_left = ADJUST_BAR_WIDTH;
+    let _ = MoveWindow(
+        state.context_combo,
+        content_left + 5,
+        0,
+        (width - (content_left + 5)).max(0),
+        context_h,
+        true,
+    );
     let list_h = (height - context_h - detail_h - 10).max(0);
     if let Some(list) = state.list.as_mut() {
-        let _ = MoveWindow(list.hwnd(), 5, context_h + 5, width - 10, list_h, true);
+        let _ = MoveWindow(list.hwnd(), content_left, context_h + 5, (width - content_left).max(0), list_h, true);
     }
     let _ = MoveWindow(
         state.detail_hwnd,
-        5,
+        content_left,
         height - detail_h,
-        width - 10,
+        (width - content_left).max(0),
         detail_h,
         true,
     );

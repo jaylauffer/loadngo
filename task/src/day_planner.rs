@@ -1978,12 +1978,17 @@ unsafe fn update_split_from_point(state: &mut DayPlannerState, x: i32) {
     let _ = GetClientRect(state.hwnd, &mut rc);
     let width = rc.right - rc.left;
     let height = rc.bottom - rc.top;
-    let plan_width = width - (HEADER_WIDTH + SPLITTER_BAR_WIDTH);
-    if plan_width <= (MIN_PANE_WIDTH * 2) {
+    let offset = SPLITTER_QUICKTAB_WIDTH + 2;
+    if x - offset <= HEADER_WIDTH || x + offset >= width {
         return;
     }
-    let raw = (x - HEADER_WIDTH) as f64 / plan_width as f64;
-    state.split_percent = raw.clamp(0.1, 0.9);
+    let plan_width = width - HEADER_WIDTH;
+    if plan_width <= 0 {
+        return;
+    }
+    let spec_width = x - 3 - HEADER_WIDTH;
+    let raw = spec_width as f64 / plan_width as f64;
+    state.split_percent = raw.clamp(0.0, 1.0);
     layout_children(state, width, height);
     refresh(state.hwnd);
 }

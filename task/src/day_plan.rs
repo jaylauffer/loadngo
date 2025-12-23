@@ -17,7 +17,7 @@ use windows::{
 
 use crate::{
     date_banner, day_planner, task_list,
-    winutil::to_wstring,
+    winutil::{to_wstring, WM_SPLITTERREPOS},
 };
 
 const CLASS_NAME: &str = "LNGDayPlanFrame";
@@ -89,6 +89,26 @@ pub fn refresh(hwnd: HWND) {
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
+        WM_SPLITTERREPOS => {
+            if let Some(state) = state(hwnd) {
+                let mut rc = RECT::default();
+                let _ = GetClientRect(state.hwnd, &mut rc);
+                let mut width = rc.right - rc.left;
+                if width < 0 {
+                    width = 0;
+                }
+                let mut task_width = width - lparam.0 as i32;
+                let max = width / 3;
+                if task_width > max {
+                    task_width = max;
+                } else if task_width < DEFAULT_TASK_WIDTH {
+                    task_width = DEFAULT_TASK_WIDTH;
+                }
+                state.task_width = task_width;
+                layout_children(state);
+            }
+            LRESULT(0)
+        }
         WM_CREATE => {
             let cs = &*(lparam.0 as *const CREATESTRUCTW);
             let state_ptr = cs.lpCreateParams as *mut DayPlanFrameState;
