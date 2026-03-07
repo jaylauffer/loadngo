@@ -2,13 +2,14 @@
 
 #![windows_subsystem = "windows"]
 
-mod day_planner;
-mod day_plan;
 mod date_banner;
+mod day_plan;
+mod day_planner;
 mod dragdrop;
 mod project_plan;
-mod task_list;
+mod project_planner;
 mod tabs;
+mod task_list;
 mod task_window;
 mod toolbar;
 mod winutil;
@@ -25,7 +26,10 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{ShowWindow, SW_SHOW},
 };
 
-use task_window::{build_services, create_main_window, init_common_controls, load_all, message_loop, register_window_class};
+use task_window::{
+    build_services, create_main_window, init_common_controls, load_all, message_loop,
+    register_window_class,
+};
 
 fn main() -> Result<()> {
     let file_appender = tracing_appender::rolling::never(".", "task.log");
@@ -37,7 +41,9 @@ fn main() -> Result<()> {
 
     unsafe {
         // Match legacy startup: OleInitialize instead of CoInitializeEx.
-        OleInitialize(None).ok().ok_or_else(|| anyhow::anyhow!("OleInitialize failed"))?;
+        OleInitialize(None)
+            .ok()
+            .ok_or_else(|| anyhow::anyhow!("OleInitialize failed"))?;
         init_common_controls();
         let hinstance = GetModuleHandleW(None)?.into();
         let (mut service, mut network) = build_services()?;

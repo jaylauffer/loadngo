@@ -14,11 +14,11 @@ use windows::Win32::{
             CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
             GetWindowLongPtrW, GetWindowRect, KillTimer, LoadCursorW, LoadImageW, MoveWindow,
             PostQuitMessage, RegisterClassExW, SetTimer, SetWindowLongPtrW, TranslateMessage,
-            CREATESTRUCTW, GWLP_USERDATA, HICON, HMENU, IDC_ARROW, IMAGE_ICON, LR_DEFAULTCOLOR,
-            MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NCCREATE,
-            WM_SIZE, WM_SYSCOMMAND, WM_TIMER, WNDCLASSEXW, WNDCLASS_STYLES, WS_CHILD,
-            WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_OVERLAPPEDWINDOW, WS_VISIBLE, CS_HREDRAW,
-            CS_VREDRAW, SC_KEYMENU, WS_EX_ACCEPTFILES,
+            CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HICON, HMENU, IDC_ARROW,
+            IMAGE_ICON, LR_DEFAULTCOLOR, MSG, SC_KEYMENU, WINDOW_EX_STYLE, WINDOW_STYLE,
+            WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NCCREATE, WM_SIZE, WM_SYSCOMMAND, WM_TIMER,
+            WNDCLASSEXW, WNDCLASS_STYLES, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+            WS_EX_ACCEPTFILES, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
         },
     },
 };
@@ -226,10 +226,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         .service
                         .config
                         .set_int("mainWindowLeft", rc.left as i64);
-                    state
-                        .service
-                        .config
-                        .set_int("mainWindowTop", rc.top as i64);
+                    state.service.config.set_int("mainWindowTop", rc.top as i64);
                     state
                         .service
                         .config
@@ -311,14 +308,7 @@ unsafe fn layout_children(state: &mut TaskWindowState) {
     let tab_height = (height - CHAT_HEIGHT).max(0);
 
     let _ = MoveWindow(state.tab_host, 0, 0, width, tab_height, true);
-    let _ = MoveWindow(
-        state.chat,
-        0,
-        tab_height,
-        width,
-        CHAT_HEIGHT,
-        true,
-    );
+    let _ = MoveWindow(state.chat, 0, tab_height, width, CHAT_HEIGHT, true);
 }
 
 fn save_plan(state: &TaskWindowState) {
@@ -331,8 +321,13 @@ fn save_plan(state: &TaskWindowState) {
 unsafe fn handle_toolbar_command(state: &mut TaskWindowState, cmd_id: i32) {
     match cmd_id {
         toolbar::TBCREATETASK => {
-            let task =
-                Task::spawn("New Task", "local-user", 1, 1, data::model_utils::now_timestamp());
+            let task = Task::spawn(
+                "New Task",
+                "local-user",
+                1,
+                1,
+                data::model_utils::now_timestamp(),
+            );
             state.service.add_task(task);
             info!("Created task ({} total)", state.service.tasks.len());
             day_plan::refresh(state.day_plan);
@@ -394,26 +389,12 @@ pub fn load_all(service: &mut Service, plan_name: &str) {
 fn load_app_icons(hinstance: HINSTANCE) -> (HICON, HICON) {
     unsafe {
         let res = PCWSTR(IDI_APPICON as usize as *const u16);
-        let large = LoadImageW(
-            hinstance,
-            res,
-            IMAGE_ICON,
-            32,
-            32,
-            LR_DEFAULTCOLOR,
-        )
-        .map(|h| HICON(h.0))
-        .unwrap_or_default();
-        let small = LoadImageW(
-            hinstance,
-            res,
-            IMAGE_ICON,
-            16,
-            16,
-            LR_DEFAULTCOLOR,
-        )
-        .map(|h| HICON(h.0))
-        .unwrap_or_default();
+        let large = LoadImageW(hinstance, res, IMAGE_ICON, 32, 32, LR_DEFAULTCOLOR)
+            .map(|h| HICON(h.0))
+            .unwrap_or_default();
+        let small = LoadImageW(hinstance, res, IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR)
+            .map(|h| HICON(h.0))
+            .unwrap_or_default();
         (large, small)
     }
 }

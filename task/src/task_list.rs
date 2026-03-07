@@ -25,8 +25,8 @@ use windows::{
         },
         System::{
             Com::{
-                IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumFORMATETC_Impl, FORMATETC,
-                STGMEDIUM, TYMED_HGLOBAL, DVASPECT_CONTENT, DATADIR_GET,
+                IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumFORMATETC_Impl, DATADIR_GET,
+                DVASPECT_CONTENT, FORMATETC, STGMEDIUM, TYMED_HGLOBAL,
             },
             DataExchange::RegisterClipboardFormatW,
             LibraryLoader::GetModuleHandleW,
@@ -42,11 +42,12 @@ use windows::{
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, GetClientRect, GetCursorPos, GetParent,
                 GetWindowLongPtrW, LoadCursorW, MoveWindow, PostMessageW, RegisterClassW,
-                SendMessageW, SetCursor, SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
-                CW_USEDEFAULT, GWL_USERDATA, HMENU, IDC_SIZEWE, WINDOW_EX_STYLE, WINDOW_STYLE,
-                WM_CAPTURECHANGED, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_LBUTTONDOWN,
-                WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_SETCURSOR, WM_SIZE, WNDCLASSW, WS_CHILD,
-                WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_VISIBLE, CB_GETCURSEL, CBN_SELCHANGE,
+                SendMessageW, SetCursor, SetWindowLongPtrW, CBN_SELCHANGE, CB_GETCURSEL,
+                CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWL_USERDATA, HMENU,
+                IDC_SIZEWE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CAPTURECHANGED, WM_COMMAND,
+                WM_CREATE, WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
+                WM_SETCURSOR, WM_SIZE, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+                WS_VISIBLE,
             },
         },
     },
@@ -70,7 +71,8 @@ fn format_task() -> u16 {
     static mut CF: u16 = 0;
     unsafe {
         INIT.call_once(|| {
-            CF = RegisterClipboardFormatW(PCWSTR(to_wstring("loadngo::data::task").as_ptr())) as u16;
+            CF =
+                RegisterClipboardFormatW(PCWSTR(to_wstring("loadngo::data::task").as_ptr())) as u16;
         });
         CF
     }
@@ -241,7 +243,8 @@ fn task_list_font() -> HFONT {
             lf.lfOutPrecision = windows::Win32::Graphics::Gdi::OUT_TT_ONLY_PRECIS;
             lf.lfQuality = windows::Win32::Graphics::Gdi::ANTIALIASED_QUALITY;
             lf.lfPitchAndFamily = (windows::Win32::Graphics::Gdi::DEFAULT_PITCH.0
-                | windows::Win32::Graphics::Gdi::FF_DONTCARE.0) as u8;
+                | windows::Win32::Graphics::Gdi::FF_DONTCARE.0)
+                as u8;
             lf.lfHeight = -13;
             lf.lfWeight = windows::Win32::Graphics::Gdi::FW_NORMAL.0 as i32;
             let face = to_wstring("Arial");
@@ -307,17 +310,7 @@ fn draw_bitmap_alpha(dc: HDC, bmp: &Bitmap, x: i32, y: i32) {
             AlphaFormat: windows::Win32::Graphics::Gdi::AC_SRC_ALPHA as u8,
         };
         let _ = AlphaBlend(
-            dc,
-            x,
-            y,
-            bmp.width,
-            bmp.height,
-            mem_dc,
-            0,
-            0,
-            bmp.width,
-            bmp.height,
-            bf,
+            dc, x, y, bmp.width, bmp.height, mem_dc, 0, 0, bmp.width, bmp.height, bf,
         );
         let _ = SelectObject(mem_dc, old);
         let _ = DeleteDC(mem_dc);
@@ -341,12 +334,7 @@ impl FormatEtcEnum {
 
 #[allow(non_snake_case)]
 impl IEnumFORMATETC_Impl for FormatEtcEnum_Impl {
-    fn Next(
-        &self,
-        celt: u32,
-        rgelt: *mut FORMATETC,
-        pcelt_fetched: *mut u32,
-    ) -> HRESULT {
+    fn Next(&self, celt: u32, rgelt: *mut FORMATETC, pcelt_fetched: *mut u32) -> HRESULT {
         if rgelt.is_null() {
             return E_INVALIDARG;
         }
@@ -363,7 +351,11 @@ impl IEnumFORMATETC_Impl for FormatEtcEnum_Impl {
             }
         }
         self.index.set(idx);
-        if fetched == celt { S_OK } else { S_FALSE }
+        if fetched == celt {
+            S_OK
+        } else {
+            S_FALSE
+        }
     }
 
     fn Skip(&self, celt: u32) -> windows::core::Result<()> {
@@ -489,7 +481,11 @@ impl IDataObject_Impl for TaskDataObject_Impl {
         Err(Error::from(DV_E_FORMATETC))
     }
 
-    fn GetDataHere(&self, _pformatetc: *const FORMATETC, _pmedium: *mut STGMEDIUM) -> windows::core::Result<()> {
+    fn GetDataHere(
+        &self,
+        _pformatetc: *const FORMATETC,
+        _pmedium: *mut STGMEDIUM,
+    ) -> windows::core::Result<()> {
         Err(Error::from(E_NOTIMPL))
     }
 
@@ -513,11 +509,20 @@ impl IDataObject_Impl for TaskDataObject_Impl {
         S_OK
     }
 
-    fn GetCanonicalFormatEtc(&self, _pformatectin: *const FORMATETC, _pformatetcout: *mut FORMATETC) -> HRESULT {
+    fn GetCanonicalFormatEtc(
+        &self,
+        _pformatectin: *const FORMATETC,
+        _pformatetcout: *mut FORMATETC,
+    ) -> HRESULT {
         E_NOTIMPL
     }
 
-    fn SetData(&self, _pformatetc: *const FORMATETC, _pmedium: *const STGMEDIUM, _frelease: BOOL) -> windows::core::Result<()> {
+    fn SetData(
+        &self,
+        _pformatetc: *const FORMATETC,
+        _pmedium: *const STGMEDIUM,
+        _frelease: BOOL,
+    ) -> windows::core::Result<()> {
         Err(Error::from(E_NOTIMPL))
     }
 
@@ -529,7 +534,12 @@ impl IDataObject_Impl for TaskDataObject_Impl {
         }
     }
 
-    fn DAdvise(&self, _pformatetc: *const FORMATETC, _advf: u32, _padvsink: Option<&windows::Win32::System::Com::IAdviseSink>) -> windows::core::Result<u32> {
+    fn DAdvise(
+        &self,
+        _pformatetc: *const FORMATETC,
+        _advf: u32,
+        _padvsink: Option<&windows::Win32::System::Com::IAdviseSink>,
+    ) -> windows::core::Result<u32> {
         Err(Error::from(E_NOTIMPL))
     }
 
@@ -547,11 +557,7 @@ struct TaskDropSource;
 
 #[allow(non_snake_case)]
 impl IDropSource_Impl for TaskDropSource_Impl {
-    fn QueryContinueDrag(
-        &self,
-        fEscapePressed: BOOL,
-        grfKeyState: MODIFIERKEYS_FLAGS,
-    ) -> HRESULT {
+    fn QueryContinueDrag(&self, fEscapePressed: BOOL, grfKeyState: MODIFIERKEYS_FLAGS) -> HRESULT {
         if fEscapePressed.as_bool() {
             return DRAGDROP_S_CANCEL;
         }
@@ -628,9 +634,9 @@ impl TaskListAdapter {
 
         let mut tasks: Vec<&Task> = service.tasks.values().collect();
         tasks.retain(|task| match self.query {
-            TaskListQuery::TopLevel => {
-                self.context_id.map_or(task.parent.is_none(), |ctx| task.parent == Some(ctx))
-            }
+            TaskListQuery::TopLevel => self
+                .context_id
+                .map_or(task.parent.is_none(), |ctx| task.parent == Some(ctx)),
             TaskListQuery::Leaves => {
                 let is_leaf = !has_children.contains(&task.entity.id);
                 if let Some(ctx) = self.context_id {
@@ -808,7 +814,9 @@ unsafe extern "system" fn task_list_wndproc(
         }
         WM_PAINT => {
             if let Some(state) = task_list_state(hwnd) {
-                unsafe { return paint_adjust_bar(hwnd, state.adjust_bar); }
+                unsafe {
+                    return paint_adjust_bar(hwnd, state.adjust_bar);
+                }
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
@@ -841,7 +849,14 @@ unsafe fn layout_task_list(state: &mut TaskListState) {
     };
     if let Some(list) = state.list.as_mut() {
         let left = ADJUST_BAR_WIDTH;
-        let _ = MoveWindow(list.hwnd(), left, 5, (width - left).max(0), (height - 10).max(0), true);
+        let _ = MoveWindow(
+            list.hwnd(),
+            left,
+            5,
+            (width - left).max(0),
+            (height - 10).max(0),
+            true,
+        );
     }
 }
 
@@ -1089,7 +1104,9 @@ unsafe extern "system" fn dp_task_list_wndproc(
         }
         WM_PAINT => {
             if let Some(state) = dp_task_list_state(hwnd) {
-                unsafe { return paint_adjust_bar(hwnd, state.adjust_bar); }
+                unsafe {
+                    return paint_adjust_bar(hwnd, state.adjust_bar);
+                }
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
@@ -1134,7 +1151,14 @@ unsafe fn layout_dp_task_list(state: &mut DpTaskListState) {
     );
     let list_h = (height - context_h - detail_h - 10).max(0);
     if let Some(list) = state.list.as_mut() {
-        let _ = MoveWindow(list.hwnd(), content_left, context_h + 5, (width - content_left).max(0), list_h, true);
+        let _ = MoveWindow(
+            list.hwnd(),
+            content_left,
+            context_h + 5,
+            (width - content_left).max(0),
+            list_h,
+            true,
+        );
     }
     let _ = MoveWindow(
         state.detail_hwnd,
@@ -1148,35 +1172,48 @@ unsafe fn layout_dp_task_list(state: &mut DpTaskListState) {
 
 unsafe fn populate_context_combo(state: &mut DpTaskListState) {
     state.context_ids.clear();
-    let _ = SendMessageW(state.context_combo, windows::Win32::UI::WindowsAndMessaging::CB_RESETCONTENT, WPARAM(0), LPARAM(0));
+    let _ = SendMessageW(
+        state.context_combo,
+        windows::Win32::UI::WindowsAndMessaging::CB_RESETCONTENT,
+        WPARAM(0),
+        LPARAM(0),
+    );
 
     let add_item = |hwnd: HWND, text: &str| {
         let w = to_wstring(text);
-        let _ = SendMessageW(hwnd, windows::Win32::UI::WindowsAndMessaging::CB_ADDSTRING, WPARAM(0), LPARAM(w.as_ptr() as isize));
+        let _ = SendMessageW(
+            hwnd,
+            windows::Win32::UI::WindowsAndMessaging::CB_ADDSTRING,
+            WPARAM(0),
+            LPARAM(w.as_ptr() as isize),
+        );
     };
 
     add_item(state.context_combo, "All Tasks");
     state.context_ids.push(None);
 
     if let Some(service) = state.service.as_ref() {
-        let mut roots: Vec<&Task> = service.tasks.values().filter(|t| t.parent.is_none()).collect();
+        let mut roots: Vec<&Task> = service
+            .tasks
+            .values()
+            .filter(|t| t.parent.is_none())
+            .collect();
         roots.sort_by(|a, b| a.name.cmp(&b.name));
         for task in roots {
             add_item(state.context_combo, &task.name);
             state.context_ids.push(Some(task.entity.id));
         }
     }
-    let _ = SendMessageW(state.context_combo, windows::Win32::UI::WindowsAndMessaging::CB_SETCURSEL, WPARAM(0), LPARAM(0));
+    let _ = SendMessageW(
+        state.context_combo,
+        windows::Win32::UI::WindowsAndMessaging::CB_SETCURSEL,
+        WPARAM(0),
+        LPARAM(0),
+    );
 }
 
 unsafe fn apply_context_selection(state: &mut DpTaskListState) {
-    let idx = SendMessageW(
-        state.context_combo,
-        CB_GETCURSEL,
-        WPARAM(0),
-        LPARAM(0),
-    )
-    .0 as i32;
+    let idx = SendMessageW(state.context_combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i32;
     let selected = if idx >= 0 {
         state.context_ids.get(idx as usize).cloned().unwrap_or(None)
     } else {

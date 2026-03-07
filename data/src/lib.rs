@@ -11,12 +11,15 @@ pub use model_utils::generate_id;
 pub use sync::{Discrepancy, Participant, Sync};
 pub use types::{Atom, Duration, Id, Ip, TimeStamp};
 pub mod action;
+pub mod cas;
 pub mod clipboard;
 pub mod config;
 pub mod crypto;
 pub mod data_object;
 pub mod file_manager;
 pub mod listener;
+pub mod machine;
+pub mod p2pmsg;
 pub mod service;
 
 pub mod types {

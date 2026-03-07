@@ -1,14 +1,14 @@
 use anyhow::Result;
 use std::ptr::null_mut;
 use windows::core::PCWSTR;
+use windows::Win32::Foundation::GetLastError;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::HBRUSH;
-use windows::Win32::Foundation::GetLastError;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, RegisterClassExW, SetWindowLongPtrW, CREATESTRUCTW,
-    CW_USEDEFAULT, GWLP_USERDATA, HICON, HMENU, IDC_ARROW, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_CREATE, WM_DESTROY, WM_SIZE, WNDCLASSEXW, WNDCLASS_STYLES, GetClientRect,
+    CreateWindowExW, DefWindowProcW, GetClientRect, RegisterClassExW, SetWindowLongPtrW,
+    CREATESTRUCTW, CW_USEDEFAULT, GWLP_USERDATA, HICON, HMENU, IDC_ARROW, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_SIZE, WNDCLASSEXW, WNDCLASS_STYLES,
 };
 
 use crate::container::Container;
@@ -37,9 +37,7 @@ impl ContainerHost {
             wc.lpszClassName = PCWSTR(name_w.as_ptr());
             if RegisterClassExW(&wc) == 0 {
                 // Allow "already exists" to succeed so callers can register idempotently.
-                if GetLastError()
-                    != windows::Win32::Foundation::ERROR_CLASS_ALREADY_EXISTS
-                {
+                if GetLastError() != windows::Win32::Foundation::ERROR_CLASS_ALREADY_EXISTS {
                     anyhow::bail!("RegisterClassExW failed");
                 }
             }
@@ -110,12 +108,16 @@ impl ContainerHost {
             WM_DESTROY => {
                 if let Some(host) = Self::get_mut(hwnd) {
                     // Allow children/components to react before teardown.
-                    let _ = host.container.handle_message(WM_DESTROY, WPARAM(0), LPARAM(0));
+                    let _ = host
+                        .container
+                        .handle_message(WM_DESTROY, WPARAM(0), LPARAM(0));
                 }
                 let ptr = Self::take_ptr(hwnd);
                 if !ptr.is_null() {
                     // Clean up any drop target registration.
-                    unsafe { (&mut *ptr).container.revoke_file_drop(); }
+                    unsafe {
+                        (&mut *ptr).container.revoke_file_drop();
+                    }
                     drop(Box::from_raw(ptr));
                 }
                 LRESULT(0)

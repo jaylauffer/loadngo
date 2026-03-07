@@ -46,7 +46,10 @@ pub fn create_date_banner(parent: HWND) -> HWND {
     unsafe {
         register_class().expect("register date banner");
         let hinstance = GetModuleHandleW(None).unwrap();
-        let state = Box::new(BannerState { hwnd: HWND::default(), font: create_banner_font() });
+        let state = Box::new(BannerState {
+            hwnd: HWND::default(),
+            font: create_banner_font(),
+        });
         CreateWindowExW(
             WINDOW_EX_STYLE(0),
             PCWSTR(to_wstring(CLASS_NAME).as_ptr()),
@@ -133,7 +136,12 @@ unsafe fn paint(state: &mut BannerState) {
     // Left/right pseudo-buttons as outlined squares with text.
     let _ = SetBkMode(dc, TRANSPARENT);
     let _ = SetTextColor(dc, COLORREF(0));
-    let mut btn_rc = RECT { left: 0, top: 0, right: BUTTON_WIDTH, bottom: rc.bottom };
+    let mut btn_rc = RECT {
+        left: 0,
+        top: 0,
+        right: BUTTON_WIDTH,
+        bottom: rc.bottom,
+    };
     draw_button(dc, &btn_rc, "<");
     btn_rc.left = rc.right - BUTTON_WIDTH;
     btn_rc.right = rc.right;

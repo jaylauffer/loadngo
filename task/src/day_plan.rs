@@ -118,7 +118,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 if let Some(service) = state.service.as_ref() {
                     state.task_width = service
                         .config
-                        .get_int("dayplanTaskWidth", DEFAULT_TASK_WIDTH as i64) as i32;
+                        .get_int("dayplanTaskWidth", DEFAULT_TASK_WIDTH as i64)
+                        as i32;
                 }
                 SetWindowLongPtrW(hwnd, GWL_USERDATA, state_ptr as isize);
                 create_children(state);

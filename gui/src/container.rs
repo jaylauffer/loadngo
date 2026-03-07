@@ -1,22 +1,22 @@
 use crate::component::Component;
+use std::ptr::NonNull;
 use tracing::debug;
+use windows::core::implement;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::InvalidateRect;
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
-};
-use windows::Win32::UI::WindowsAndMessaging::{
-    MoveWindow, WM_CAPTURECHANGED, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE,
-};
-use windows::core::implement;
 use windows::Win32::System::Com::IDataObject;
 use windows::Win32::System::Ole::{
     IDropTarget, IDropTarget_Impl, RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop, CF_HDROP,
     DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
+};
 use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
-use std::ptr::NonNull;
+use windows::Win32::UI::WindowsAndMessaging::{
+    MoveWindow, WM_CAPTURECHANGED, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE,
+};
 const WM_MOUSELEAVE_CONST: u32 = 0x02A3;
 
 /// Simple container that owns child Components and forwards messages.
@@ -73,7 +73,9 @@ impl Container {
 
     pub fn revoke_file_drop(&mut self) {
         if self.drop_target.is_some() {
-            unsafe { let _ = RevokeDragDrop(self.hwnd); }
+            unsafe {
+                let _ = RevokeDragDrop(self.hwnd);
+            }
             self.drop_target = None;
         }
     }
@@ -347,7 +349,10 @@ struct ContainerDropTarget {
 
 impl ContainerDropTarget {
     fn new(hwnd: HWND, container_ptr: std::ptr::NonNull<Container>) -> Self {
-        Self { hwnd, container_ptr }
+        Self {
+            hwnd,
+            container_ptr,
+        }
     }
 
     fn extract_files(&self, data: &IDataObject) -> Option<Vec<String>> {
@@ -388,7 +393,9 @@ impl IDropTarget_Impl for ContainerDropTarget_Impl {
         pt: &windows::Win32::Foundation::POINTL,
         pdwEffect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
-        unsafe { *pdwEffect = DROPEFFECT_NONE; }
+        unsafe {
+            *pdwEffect = DROPEFFECT_NONE;
+        }
         if pDataObj.is_none() {
             return Ok(());
         }
@@ -398,7 +405,9 @@ impl IDropTarget_Impl for ContainerDropTarget_Impl {
             .map(|c| c.handle_drag_over(pt_client))
             .unwrap_or(false);
         if accept {
-            unsafe { *pdwEffect = DROPEFFECT_COPY; }
+            unsafe {
+                *pdwEffect = DROPEFFECT_COPY;
+            }
         }
         Ok(())
     }
@@ -414,7 +423,11 @@ impl IDropTarget_Impl for ContainerDropTarget_Impl {
             .map(|c| c.handle_drag_over(pt_client))
             .unwrap_or(false);
         unsafe {
-            *pdwEffect = if accept { DROPEFFECT_COPY } else { DROPEFFECT_NONE };
+            *pdwEffect = if accept {
+                DROPEFFECT_COPY
+            } else {
+                DROPEFFECT_NONE
+            };
         }
         Ok(())
     }
@@ -430,7 +443,9 @@ impl IDropTarget_Impl for ContainerDropTarget_Impl {
         pt: &windows::Win32::Foundation::POINTL,
         pdwEffect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
-        unsafe { *pdwEffect = DROPEFFECT_NONE; }
+        unsafe {
+            *pdwEffect = DROPEFFECT_NONE;
+        }
         if let Some(data) = pDataObj {
             if let Some(files) = self.extract_files(data) {
                 let pt_client = POINT { x: pt.x, y: pt.y };
@@ -438,7 +453,9 @@ impl IDropTarget_Impl for ContainerDropTarget_Impl {
                     .map(|c| c.handle_drop(files.clone(), pt_client))
                     .unwrap_or(false);
                 if handled {
-                    unsafe { *pdwEffect = DROPEFFECT_COPY; }
+                    unsafe {
+                        *pdwEffect = DROPEFFECT_COPY;
+                    }
                 }
             }
         }

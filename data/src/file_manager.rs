@@ -1,5 +1,6 @@
 //! Simple file manager for task persistence.
 
+use crate::cas::CasStorage;
 use crate::persistence;
 use crate::task::Task;
 use crate::task::TimeEntry;
@@ -28,6 +29,14 @@ impl FileManager {
 
     pub fn time_entry_path(&self, name: &str) -> PathBuf {
         self.base_dir.join(format!("{name}-entries.json"))
+    }
+
+    pub fn cas_path(&self) -> PathBuf {
+        self.base_dir.join("cas")
+    }
+
+    pub fn cas_storage(&self) -> Result<CasStorage> {
+        CasStorage::new(self.cas_path())
     }
 
     pub fn save_tasks(&self, name: &str, tasks: &[Task]) -> Result<()> {

@@ -1,0 +1,453 @@
+use crate::cas::CasHash;
+
+pub const PACKET_HDR: u32 = 0x6c6e6774;
+pub const HDR_LEN: usize = 16;
+pub const PING_LEN: usize = 8;
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageType {
+    Empty = 0,
+    UserIntroduction,
+    UserDeparture,
+    TransferBlobStart,
+    TransferBlobEnd,
+    TransferBlobData,
+    TransferBlobMissed,
+    TransferBlobComplete,
+    Ping,
+    EncodingBitset,
+    RequestContent,
+    TransferFileStart,
+    TransferFileData,
+    TransferFileEnd,
+    TransferFileMissed,
+    DeployComplete,
+    MessageCount,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Header {
+    pub tag: u32,
+    pub msg_type: MessageType,
+    pub is_response: bool,
+    pub length: u32,
+}
+
+impl Header {
+    pub fn new(msg_type: MessageType, is_response: bool, length: u32) -> Self {
+        Self {
+            tag: PACKET_HDR,
+            msg_type,
+            is_response,
+            length,
+        }
+    }
+
+    pub fn to_bytes(self) -> [u8; HDR_LEN] {
+        let mut buf = [0u8; HDR_LEN];
+        buf[0..4].copy_from_slice(&self.tag.to_le_bytes());
+        buf[4..8].copy_from_slice(&(self.msg_type as u32).to_le_bytes());
+        buf[8..12].copy_from_slice(&(u32::from(self.is_response)).to_le_bytes());
+        buf[12..16].copy_from_slice(&self.length.to_le_bytes());
+        buf
+    }
+
+    pub fn from_bytes(buf: &[u8]) -> Option<Self> {
+        if buf.len() < HDR_LEN {
+            return None;
+        }
+        let tag = u32::from_le_bytes(buf[0..4].try_into().ok()?);
+        let msg_type = match u32::from_le_bytes(buf[4..8].try_into().ok()?) {
+            0 => MessageType::Empty,
+            1 => MessageType::UserIntroduction,
+            2 => MessageType::UserDeparture,
+            3 => MessageType::TransferBlobStart,
+            4 => MessageType::TransferBlobEnd,
+            5 => MessageType::TransferBlobData,
+            6 => MessageType::TransferBlobMissed,
+            7 => MessageType::TransferBlobComplete,
+            8 => MessageType::Ping,
+            9 => MessageType::EncodingBitset,
+            10 => MessageType::RequestContent,
+            11 => MessageType::TransferFileStart,
+            12 => MessageType::TransferFileData,
+            13 => MessageType::TransferFileEnd,
+            14 => MessageType::TransferFileMissed,
+            15 => MessageType::DeployComplete,
+            16 => MessageType::MessageCount,
+            _ => return None,
+        };
+        let is_response = u32::from_le_bytes(buf[8..12].try_into().ok()?) != 0;
+        let length = u32::from_le_bytes(buf[12..16].try_into().ok()?);
+        Some(Self {
+            tag,
+            msg_type,
+            is_response,
+            length,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileStart {
+    pub time: u64,
+    pub filesize: u64,
+    pub hash: CasHash,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileData {
+    pub time: u64,
+    pub seq: u32,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileEnd {
+    pub time: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileMissed {
+    pub time: u64,
+    pub seq: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlobStart {
+    pub time: u64,
+    pub len: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlobData {
+    pub time: u64,
+    pub seq: u32,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlobEnd {
+    pub time: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlobMissed {
+    pub time: u64,
+    pub seq: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlobComplete {
+    pub time: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ping {
+    pub time: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EncodingBitset {
+    Request {
+        hash: CasHash,
+    },
+    Response {
+        hash: CasHash,
+        numbits: u32,
+        data: Vec<u8>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RequestContent {
+    Request { hashes: Vec<CasHash> },
+    Response { hash: CasHash, data: Vec<u8> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Message {
+    Empty,
+    UserIntroduction(String),
+    UserDeparture(String),
+    TransferBlobStart(BlobStart),
+    TransferBlobEnd(BlobEnd),
+    TransferBlobData(BlobData),
+    TransferBlobMissed(BlobMissed),
+    TransferBlobComplete(BlobComplete),
+    Ping(Ping),
+    EncodingBitset(EncodingBitset),
+    RequestContent(RequestContent),
+    TransferFileStart(FileStart),
+    TransferFileData(FileData),
+    TransferFileEnd(FileEnd),
+    TransferFileMissed(FileMissed),
+    DeployComplete(Vec<u8>),
+}
+
+impl Message {
+    pub fn message_type(&self) -> MessageType {
+        match self {
+            Message::Empty => MessageType::Empty,
+            Message::UserIntroduction(_) => MessageType::UserIntroduction,
+            Message::UserDeparture(_) => MessageType::UserDeparture,
+            Message::TransferBlobStart(_) => MessageType::TransferBlobStart,
+            Message::TransferBlobEnd(_) => MessageType::TransferBlobEnd,
+            Message::TransferBlobData(_) => MessageType::TransferBlobData,
+            Message::TransferBlobMissed(_) => MessageType::TransferBlobMissed,
+            Message::TransferBlobComplete(_) => MessageType::TransferBlobComplete,
+            Message::Ping(_) => MessageType::Ping,
+            Message::EncodingBitset(_) => MessageType::EncodingBitset,
+            Message::RequestContent(_) => MessageType::RequestContent,
+            Message::TransferFileStart(_) => MessageType::TransferFileStart,
+            Message::TransferFileData(_) => MessageType::TransferFileData,
+            Message::TransferFileEnd(_) => MessageType::TransferFileEnd,
+            Message::TransferFileMissed(_) => MessageType::TransferFileMissed,
+            Message::DeployComplete(_) => MessageType::DeployComplete,
+        }
+    }
+
+    pub fn to_bytes(&self, is_response: bool) -> Vec<u8> {
+        let payload = match self {
+            Message::Empty => Vec::new(),
+            Message::UserIntroduction(name) | Message::UserDeparture(name) => {
+                name.as_bytes().to_vec()
+            }
+            Message::TransferBlobStart(body) => {
+                let mut buf = Vec::with_capacity(12);
+                buf.extend_from_slice(&body.time.to_le_bytes());
+                buf.extend_from_slice(&body.len.to_le_bytes());
+                buf
+            }
+            Message::TransferBlobEnd(body) => body.time.to_le_bytes().to_vec(),
+            Message::TransferBlobData(body) => {
+                let mut buf = Vec::with_capacity(12 + body.data.len());
+                buf.extend_from_slice(&body.time.to_le_bytes());
+                buf.extend_from_slice(&body.seq.to_le_bytes());
+                buf.extend_from_slice(&body.data);
+                buf
+            }
+            Message::TransferBlobMissed(body) => {
+                let mut buf = Vec::with_capacity(12);
+                buf.extend_from_slice(&body.time.to_le_bytes());
+                buf.extend_from_slice(&body.seq.to_le_bytes());
+                buf
+            }
+            Message::TransferBlobComplete(body) => body.time.to_le_bytes().to_vec(),
+            Message::Ping(body) => body.time.to_le_bytes().to_vec(),
+            Message::EncodingBitset(body) => match body {
+                EncodingBitset::Request { hash } => hash.as_bytes().to_vec(),
+                EncodingBitset::Response {
+                    hash,
+                    numbits,
+                    data,
+                } => {
+                    let mut buf = Vec::with_capacity(CasHash::LEN + 4 + data.len());
+                    buf.extend_from_slice(hash.as_bytes());
+                    buf.extend_from_slice(&numbits.to_le_bytes());
+                    buf.extend_from_slice(data);
+                    buf
+                }
+            },
+            Message::RequestContent(body) => match body {
+                RequestContent::Request { hashes } => {
+                    let mut buf = Vec::with_capacity(hashes.len() * CasHash::LEN);
+                    for hash in hashes {
+                        buf.extend_from_slice(hash.as_bytes());
+                    }
+                    buf
+                }
+                RequestContent::Response { hash, data } => {
+                    let mut buf = Vec::with_capacity(CasHash::LEN + data.len());
+                    buf.extend_from_slice(hash.as_bytes());
+                    buf.extend_from_slice(data);
+                    buf
+                }
+            },
+            Message::TransferFileStart(body) => {
+                let mut buf = Vec::with_capacity(8 + 8 + CasHash::LEN);
+                buf.extend_from_slice(&body.time.to_le_bytes());
+                buf.extend_from_slice(&body.filesize.to_le_bytes());
+                buf.extend_from_slice(body.hash.as_bytes());
+                buf
+            }
+            Message::TransferFileData(body) => {
+                let mut buf = Vec::with_capacity(12 + body.data.len());
+                buf.extend_from_slice(&body.time.to_le_bytes());
+                buf.extend_from_slice(&body.seq.to_le_bytes());
+                buf.extend_from_slice(&body.data);
+                buf
+            }
+            Message::TransferFileEnd(body) => body.time.to_le_bytes().to_vec(),
+            Message::TransferFileMissed(body) => {
+                let mut buf = Vec::with_capacity(12);
+                buf.extend_from_slice(&body.time.to_le_bytes());
+                buf.extend_from_slice(&body.seq.to_le_bytes());
+                buf
+            }
+            Message::DeployComplete(data) => data.clone(),
+        };
+        let header = Header::new(self.message_type(), is_response, payload.len() as u32);
+        let mut out = header.to_bytes().to_vec();
+        out.extend_from_slice(&payload);
+        out
+    }
+
+    pub fn from_bytes(buf: &[u8]) -> Option<(Header, Message)> {
+        let header = Header::from_bytes(buf)?;
+        let body_len = header.length as usize;
+        if buf.len() < HDR_LEN + body_len {
+            return None;
+        }
+        let body = &buf[HDR_LEN..HDR_LEN + body_len];
+        let message = match header.msg_type {
+            MessageType::Empty => Message::Empty,
+            MessageType::UserIntroduction => {
+                Message::UserIntroduction(String::from_utf8_lossy(body).into_owned())
+            }
+            MessageType::UserDeparture => {
+                Message::UserDeparture(String::from_utf8_lossy(body).into_owned())
+            }
+            MessageType::TransferBlobStart => {
+                if body_len != 12 {
+                    return None;
+                }
+                let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
+                let len = i32::from_le_bytes(body[8..12].try_into().ok()?);
+                Message::TransferBlobStart(BlobStart { time, len })
+            }
+            MessageType::TransferBlobEnd => {
+                if body_len != 8 {
+                    return None;
+                }
+                let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
+                Message::TransferBlobEnd(BlobEnd { time })
+            }
+            MessageType::TransferBlobData => {
+                if body_len < 12 {
+                    return None;
+                }
+                let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
+                let seq = u32::from_le_bytes(body[8..12].try_into().ok()?);
+                Message::TransferBlobData(BlobData {
+                    time,
+                    seq,
+                    data: body[12..].to_vec(),
+                })
+            }
+            MessageType::TransferBlobMissed => {
+                if body_len != 12 {
+                    return None;
+                }
+                let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
+                let seq = u32::from_le_bytes(body[8..12].try_into().ok()?);
+                Message::TransferBlobMissed(BlobMissed { time, seq })
+            }
+            MessageType::TransferBlobComplete => {
+                if body_len != 8 {
+                    return None;
+                }
+                let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
+                Message::TransferBlobComplete(BlobComplete { time })
+            }
+            MessageType::Ping => {
+                if body_len != PING_LEN {
+                    return None;
+                }
+                let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
+                Message::Ping(Ping { time })
+            }
+            MessageType::EncodingBitset => {
+                if header.is_response {
+                    if body_len < CasHash::LEN + 4 {
+                        return None;
+                    }
+                    let hash = parse_hash(&body[0..CasHash::LEN])?;
+                    let numbits =
+                        u32::from_le_bytes(body[CasHash::LEN..CasHash::LEN + 4].try_into().ok()?);
+                    Message::EncodingBitset(EncodingBitset::Response {
+                        hash,
+                        numbits,
+                        data: body[CasHash::LEN + 4..].to_vec(),
+                    })
+                } else {
+                    if body_len != CasHash::LEN {
+                        return None;
+                    }
+                    Message::EncodingBitset(EncodingBitset::Request {
+                        hash: parse_hash(body)?,
+                    })
+                }
+            }
+            MessageType::RequestContent => {
+                if header.is_response {
+                    if body_len < CasHash::LEN {
+                        return None;
+                    }
+                    let hash = parse_hash(&body[0..CasHash::LEN])?;
+                    Message::RequestContent(RequestContent::Response {
+                        hash,
+                        data: body[CasHash::LEN..].to_vec(),
+                    })
+                } else {
+                    if body_len % CasHash::LEN != 0 {
+                        return None;
+                    }
+                    let mut hashes = Vec::with_capacity(body_len / CasHash::LEN);
+                    for chunk in body.chunks(CasHash::LEN) {
+                        hashes.push(parse_hash(chunk)?);
+                    }
+                    Message::RequestContent(RequestContent::Request { hashes })
+                }
+            }
+            MessageType::TransferFileStart => {
+                if body_len != 8 + 8 + CasHash::LEN {
+                    return None;
+                }
+                let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
+                let filesize = u64::from_le_bytes(body[8..16].try_into().ok()?);
+                let hash = parse_hash(&body[16..16 + CasHash::LEN])?;
+                Message::TransferFileStart(FileStart {
+                    time,
+                    filesize,
+                    hash,
+                })
+            }
+            MessageType::TransferFileData => {
+                if body_len < 12 {
+                    return None;
+                }
+                let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
+                let seq = u32::from_le_bytes(body[8..12].try_into().ok()?);
+                Message::TransferFileData(FileData {
+                    time,
+                    seq,
+                    data: body[12..].to_vec(),
+                })
+            }
+            MessageType::TransferFileEnd => {
+                if body_len != 8 {
+                    return None;
+                }
+                let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
+                Message::TransferFileEnd(FileEnd { time })
+            }
+            MessageType::TransferFileMissed => {
+                if body_len != 12 {
+                    return None;
+                }
+                let time = u64::from_le_bytes(body[0..8].try_into().ok()?);
+                let seq = u32::from_le_bytes(body[8..12].try_into().ok()?);
+                Message::TransferFileMissed(FileMissed { time, seq })
+            }
+            MessageType::DeployComplete => Message::DeployComplete(body.to_vec()),
+            MessageType::MessageCount => return None,
+        };
+        Some((header, message))
+    }
+}
+
+fn parse_hash(body: &[u8]) -> Option<CasHash> {
+    CasHash::from_slice(body).ok()
+}

@@ -15,48 +15,46 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Gdi::{
     AlphaBlend, CreateCompatibleDC, CreateDIBSection, CreateFontIndirectW, CreateSolidBrush,
-    DeleteDC, DeleteObject, DrawEdge, DrawFocusRect, FillRect, GetObjectW, GetPixel, GetStockObject,
-    GradientFill, LineTo, MoveToEx, ScreenToClient, SelectObject, SetBkMode, SetTextColor,
-    StretchDIBits, TextOutW, AC_SRC_OVER, BDR_RAISEDOUTER, BF_RECT, BI_RGB, BITMAPINFO,
-    BITMAPINFOHEADER, BLENDFUNCTION, DIB_RGB_COLORS, DIBSECTION, GRADIENT_FILL_RECT_H,
-    GRADIENT_RECT, HBITMAP, HBRUSH, HDC, HGDIOBJ, HFONT, LF_FACESIZE, LOGFONTW, SRCCOPY, TRIVERTEX,
-    TRANSPARENT, WHITE_BRUSH,
+    DeleteDC, DeleteObject, DrawEdge, DrawFocusRect, FillRect, GetObjectW, GetPixel,
+    GetStockObject, GradientFill, LineTo, MoveToEx, ScreenToClient, SelectObject, SetBkMode,
+    SetTextColor, StretchDIBits, TextOutW, AC_SRC_OVER, BDR_RAISEDOUTER, BF_RECT, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIBSECTION, DIB_RGB_COLORS, GRADIENT_FILL_RECT_H,
+    GRADIENT_RECT, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, LF_FACESIZE, LOGFONTW, SRCCOPY,
+    TRANSPARENT, TRIVERTEX, WHITE_BRUSH,
 };
 use windows::Win32::Storage::FileSystem::{FileTimeToLocalFileTime, LocalFileTimeToFileTime};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL};
 use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
-use windows::Win32::System::SystemInformation::GetSystemTimeAsFileTime;
-use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToFileTime};
 use windows::Win32::System::Ole::{
     IDropTarget, IDropTarget_Impl, RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop, CF_HDROP,
     CF_UNICODETEXT, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
 };
+use windows::Win32::System::SystemInformation::GetSystemTimeAsFileTime;
+use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToFileTime};
+use windows::Win32::UI::Controls::SetScrollInfo;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetFocus, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL, VK_ESCAPE, VK_RETURN,
     VK_SHIFT,
 };
-use windows::Win32::UI::Controls::SetScrollInfo;
+use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, FindWindowExW, GetClientRect, GetCursorPos,
-    GetScrollInfo, GetWindowLongPtrW, LoadCursorW, LoadImageW, MoveWindow, RegisterClassW,
-    SendMessageW, SetCursor, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
-    GetWindowTextW, CREATESTRUCTW,
-    CS_HREDRAW, CS_VREDRAW, GWL_USERDATA, GWLP_USERDATA, GWLP_WNDPROC, HMENU, IDC_ARROW, IDC_SIZEWE,
-    IMAGE_BITMAP,
-    LR_CREATEDIBSECTION, LR_SHARED, SCROLLBAR_COMMAND, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE,
-    SIF_TRACKPOS, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_CAPTURECHANGED, WM_CHAR, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN,
-    WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_PAINT,
-    WM_SETCURSOR, WM_SIZE, WM_VSCROLL, WNDCLASSW, WNDPROC,
-    WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_VISIBLE, WS_VSCROLL, WS_EX_CLIENTEDGE, CBS_DROPDOWN,
-    CB_ADDSTRING, CB_RESETCONTENT, CBN_SELENDOK, SW_HIDE, SWP_SHOWWINDOW, HWND_TOP,
+    GetScrollInfo, GetWindowLongPtrW, GetWindowTextW, LoadCursorW, LoadImageW, MoveWindow,
+    RegisterClassW, SendMessageW, SetCursor, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
+    ShowWindow, CBN_SELENDOK, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CREATESTRUCTW,
+    CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, GWLP_WNDPROC, GWL_USERDATA, HMENU, HWND_TOP, IDC_ARROW,
+    IDC_SIZEWE, IMAGE_BITMAP, LR_CREATEDIBSECTION, LR_SHARED, SCROLLBAR_COMMAND, SCROLLINFO,
+    SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SWP_SHOWWINDOW, SW_HIDE, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_CAPTURECHANGED, WM_CHAR, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND,
+    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY,
+    WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_VSCROLL, WNDCLASSW, WNDPROC, WS_CHILD, WS_CLIPCHILDREN,
+    WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE, WS_VISIBLE, WS_VSCROLL,
 };
-use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 
-use windows::core::implement;
 use crate::winutil::to_wstring;
+use windows::core::implement;
 
 const CLASS_NAME: &str = "DayPlanWnd";
 const HOST_CLASS: &str = "DayPlanHostWnd";
@@ -91,7 +89,8 @@ fn format_task() -> u16 {
     static mut CF: u16 = 0;
     unsafe {
         INIT.call_once(|| {
-            CF = RegisterClipboardFormatW(PCWSTR(to_wstring("loadngo::data::task").as_ptr())) as u16;
+            CF =
+                RegisterClipboardFormatW(PCWSTR(to_wstring("loadngo::data::task").as_ptr())) as u16;
         });
         CF
     }
@@ -349,16 +348,8 @@ impl DetailEditor {
             kind,
             prev_proc,
         });
-        SetWindowLongPtrW(
-            self.edit_hwnd,
-            GWLP_USERDATA,
-            Box::into_raw(data) as isize,
-        );
-        SetWindowLongPtrW(
-            self.edit_hwnd,
-            GWLP_WNDPROC,
-            editor_subclass_proc as isize,
-        );
+        SetWindowLongPtrW(self.edit_hwnd, GWLP_USERDATA, Box::into_raw(data) as isize);
+        SetWindowLongPtrW(self.edit_hwnd, GWLP_WNDPROC, editor_subclass_proc as isize);
     }
 }
 
@@ -406,7 +397,11 @@ unsafe extern "system" fn editor_subclass_proc(
         },
         WM_NCDESTROY => {
             let prev_proc = data.prev_proc;
-            SetWindowLongPtrW(hwnd, GWLP_WNDPROC, prev_proc.map(|p| p as isize).unwrap_or(0));
+            SetWindowLongPtrW(
+                hwnd,
+                GWLP_WNDPROC,
+                prev_proc.map(|p| p as isize).unwrap_or(0),
+            );
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             drop(Box::from_raw(ptr));
             if let Some(proc) = prev_proc {
@@ -712,7 +707,12 @@ unsafe fn init_scroll(state: &mut DayPlannerState) {
         nPos: (state.start_hour_pos / HOUR_FRACTION) as i32,
         ..Default::default()
     };
-    let _ = SetScrollInfo(state.hwnd, windows::Win32::UI::WindowsAndMessaging::SB_VERT, &si, true);
+    let _ = SetScrollInfo(
+        state.hwnd,
+        windows::Win32::UI::WindowsAndMessaging::SB_VERT,
+        &si,
+        true,
+    );
 }
 
 unsafe fn update_page(state: &mut DayPlannerState, height: i32) {
@@ -722,7 +722,12 @@ unsafe fn update_page(state: &mut DayPlannerState, height: i32) {
         nPage: (height / HOUR_FRACTION_PX).max(1) as u32,
         ..Default::default()
     };
-    let _ = SetScrollInfo(state.hwnd, windows::Win32::UI::WindowsAndMessaging::SB_VERT, &si, true);
+    let _ = SetScrollInfo(
+        state.hwnd,
+        windows::Win32::UI::WindowsAndMessaging::SB_VERT,
+        &si,
+        true,
+    );
 }
 
 unsafe fn handle_scroll(state: &mut DayPlannerState, wparam: WPARAM) {
@@ -1103,7 +1108,10 @@ fn entry_rect(entry: &TimeEntry, state: &DayPlannerState, pane: RECT) -> Option<
     let start_offset = entry.start.saturating_sub(state.active_date);
     let pos = (start_offset / UNITS_PER_FRACTION) as i32;
     let y = (pos - initial_pos) * HOUR_FRACTION_PX;
-    let duration = entry.stop.saturating_sub(entry.start).max(UNITS_PER_FRACTION);
+    let duration = entry
+        .stop
+        .saturating_sub(entry.start)
+        .max(UNITS_PER_FRACTION);
     let segments = (duration / UNITS_PER_FRACTION).max(1) as i32;
     let entry_height = segments * HOUR_FRACTION_PX;
 
@@ -1193,7 +1201,10 @@ fn update_entry_drag(
         DragMode::Move => {
             let y = pt.y - drag.offset_y;
             let new_start = time_from_point(state, pane.rect, y);
-            let duration = entry.stop.saturating_sub(entry.start).max(UNITS_PER_FRACTION);
+            let duration = entry
+                .stop
+                .saturating_sub(entry.start)
+                .max(UNITS_PER_FRACTION);
             update_entry_time(state, entry_id, new_start, new_start + duration);
         }
         DragMode::Resize => {
@@ -1301,17 +1312,13 @@ fn editor_for_kind_mut(state: &mut DayPlannerState, kind: PaneKind) -> Option<&m
 }
 
 fn pane_rect_for_kind(state: &DayPlannerState, kind: PaneKind) -> Option<RECT> {
-    state
-        .container
-        .children
-        .iter()
-        .find_map(|child| {
-            child
-                .as_any()
-                .downcast_ref::<DayPlanPane>()
-                .filter(|pane| pane.kind == kind)
-                .map(|pane| pane.rect)
-        })
+    state.container.children.iter().find_map(|child| {
+        child
+            .as_any()
+            .downcast_ref::<DayPlanPane>()
+            .filter(|pane| pane.kind == kind)
+            .map(|pane| pane.rect)
+    })
 }
 
 fn commit_editor(state: &DayPlannerState, kind: PaneKind, suppress: bool) {
@@ -1423,7 +1430,10 @@ fn update_entry_time(state: &DayPlannerState, entry_id: u64, start: u64, stop: u
     if let Some(entry) = service.time_entries.get_mut(&entry_id) {
         entry.start = start;
         entry.stop = stop.max(start + UNITS_PER_FRACTION);
-        entry.duration = entry.stop.saturating_sub(entry.start).max(UNITS_PER_FRACTION);
+        entry.duration = entry
+            .stop
+            .saturating_sub(entry.start)
+            .max(UNITS_PER_FRACTION);
     }
     sync_entries_from_service(state);
 }
@@ -1520,17 +1530,7 @@ fn draw_entry(
             AlphaFormat: 0,
         };
         let _ = AlphaBlend(
-            dc,
-            rc.left,
-            rc.top,
-            width,
-            height,
-            mem_dc,
-            0,
-            0,
-            width,
-            height,
-            bf,
+            dc, rc.left, rc.top, width, height, mem_dc, 0, 0, width, height, bf,
         );
 
         let _ = SelectObject(mem_dc, old);
@@ -1696,7 +1696,13 @@ fn draw_bitmap(dc: HDC, bmp: HBITMAP, x: i32, y: i32, w: i32, h: i32) {
         return;
     }
     let mut dib = DIBSECTION::default();
-    let got = unsafe { GetObjectW(bmp, std::mem::size_of::<DIBSECTION>() as i32, Some(&mut dib as *mut _ as *mut _)) };
+    let got = unsafe {
+        GetObjectW(
+            bmp,
+            std::mem::size_of::<DIBSECTION>() as i32,
+            Some(&mut dib as *mut _ as *mut _),
+        )
+    };
     if got == 0 {
         return;
     }
@@ -2023,11 +2029,12 @@ fn splitter_hit_test(state: &DayPlannerState, pt: POINT) -> bool {
 }
 
 fn splitter_rect(state: &DayPlannerState) -> Option<RECT> {
-    state
-        .container
-        .children
-        .iter()
-        .find_map(|child| child.as_any().downcast_ref::<DayPlanSplitter>().map(|s| s.bounds()))
+    state.container.children.iter().find_map(|child| {
+        child
+            .as_any()
+            .downcast_ref::<DayPlanSplitter>()
+            .map(|s| s.bounds())
+    })
 }
 
 fn point_in_rect(pt: POINT, rc: RECT) -> bool {

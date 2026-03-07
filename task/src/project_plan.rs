@@ -15,7 +15,10 @@ use windows::{
     },
 };
 
-use crate::{task_list, winutil::{to_wstring, WM_SPLITTERREPOS}};
+use crate::{
+    project_planner, task_list,
+    winutil::{to_wstring, WM_SPLITTERREPOS},
+};
 
 const CLASS_NAME: &str = "LNGProjectPlan";
 const DEFAULT_TASK_WIDTH: i32 = 150;
@@ -77,6 +80,7 @@ pub fn create_project_plan(parent: HWND, service: *mut Service) -> HWND {
 pub fn refresh(hwnd: HWND) {
     unsafe {
         if let Some(state) = state(hwnd) {
+            project_planner::refresh_project_hierarchy(state.hierarchy);
             task_list::refresh_task_list(state.task_list);
         }
     }
@@ -133,7 +137,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 }
 
 unsafe fn create_children(state: &mut ProjectPlanState) {
-    state.hierarchy = create_placeholder(state.hwnd, "Project hierarchy (not yet ported)");
+    state.hierarchy = project_planner::create_project_hierarchy(state.hwnd, state.service);
     state.task_list = task_list::create_task_list_wnd(state.hwnd, state.service);
     state.detail = create_placeholder(state.hwnd, "Task details (not yet ported)");
 }

@@ -1,9 +1,12 @@
 //! Networking layer placeholder using the Windows APIs.
 
+mod core;
+pub mod p2p;
+
 use anyhow::Result;
 use data::{
     netmsg::{self, Header, Message, MessageType},
-    Id, Participant,
+    p2pmsg, Id, Participant,
 };
 use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket},
@@ -11,6 +14,8 @@ use std::{
 };
 use tracing::info;
 use windows::Win32::Networking::WinSock::{WSAStartup, WSADATA};
+
+pub use core::{BlobFinish, BlobKey, ContentEnd, ContentFinish, NetworkCore};
 
 const fn make_word(low: u8, high: u8) -> u16 {
     (low as u16) | ((high as u16) << 8)
@@ -62,6 +67,14 @@ impl Network {
 
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        let sock = self
+            .socket
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("socket not bound"))?;
+        Ok(sock.local_addr()?)
     }
 
     pub fn init(&mut self) -> Result<()> {
@@ -170,6 +183,16 @@ impl Network {
         self.send_frame_with_retries(target, &frame)
     }
 
+    pub fn send_p2p_message<A: ToSocketAddrs>(
+        &self,
+        target: A,
+        msg: p2pmsg::Message,
+        is_response: bool,
+    ) -> Result<usize> {
+        let frame = msg.to_bytes(is_response);
+        self.send_frame_with_retries(target, &frame)
+    }
+
     pub fn register_participant(&self, participant: &Participant) {
         info!(ip = %participant.ip, "registering participant placeholder");
     }
@@ -183,6 +206,30 @@ impl Network {
         };
         let msg = Message::RequestUserTaskSynch(netmsg::UserTaskSynch { since });
         self.send_message(target, msg, MessageType::RequestUserTaskSynch, false)
+    }
+
+    pub fn recv_and_dispatch_p2p<F>(&self, handler: &mut F) -> Result<bool>
+    where
+        F: FnMut(SocketAddr, p2pmsg::Header, p2pmsg::Message),
+    {
+        use std::io::ErrorKind;
+        let sock = self
+            .socket
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("socket not bound"))?;
+        let mut buf = [0u8; 64 * 1024];
+        match sock.recv_from(&mut buf) {
+            Ok((len, addr)) => {
+                if let Some((hdr, msg)) = p2pmsg::Message::from_bytes(&buf[..len]) {
+                    handler(addr, hdr, msg);
+                }
+                Ok(true)
+            }
+            Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
+                Ok(false)
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 }
 

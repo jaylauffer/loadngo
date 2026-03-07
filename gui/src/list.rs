@@ -8,17 +8,16 @@ use windows::Win32::Graphics::Gdi::{
     SetDCPenColor, SetViewportOrgEx, DC_BRUSH, DC_PEN, HBRUSH, HDC, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::Controls::SetScrollInfo;
+use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, GetClientRect, GetScrollInfo, GetWindowLongPtrW, LoadCursorW,
-    MoveWindow, RegisterClassExW, SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
-    CW_USEDEFAULT, GWL_USERDATA, GetSystemMetrics, HMENU, IDC_ARROW, SCROLLINFO,
-    SCROLLBAR_COMMAND, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SM_CXDRAG, SM_CYDRAG,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SIZE, WM_VSCROLL, WNDCLASSEXW,
-    WNDCLASS_STYLES, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOPARENTNOTIFY, WS_VSCROLL,
-    WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, GetClientRect, GetScrollInfo, GetSystemMetrics,
+    GetWindowLongPtrW, LoadCursorW, MoveWindow, RegisterClassExW, SetWindowLongPtrW, CREATESTRUCTW,
+    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWL_USERDATA, HMENU, IDC_ARROW, SCROLLBAR_COMMAND,
+    SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SM_CXDRAG, SM_CYDRAG, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_PAINT, WM_SIZE, WM_VSCROLL, WNDCLASSEXW, WNDCLASS_STYLES, WS_CHILD,
+    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOPARENTNOTIFY, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::buffered::BufferedWnd;
@@ -72,7 +71,12 @@ impl ListBox {
             }
             let host = Box::new(ListBox {
                 hwnd: HWND::default(),
-                bounds: RECT { left: 0, top: 0, right: 200, bottom: 200 },
+                bounds: RECT {
+                    left: 0,
+                    top: 0,
+                    right: 200,
+                    bottom: 200,
+                },
                 items: Arc::new(Mutex::new(Vec::new())),
                 buffer: BufferedWnd::new(),
                 hilite: -1,
@@ -90,7 +94,11 @@ impl ListBox {
                 PCWSTR(class.as_ptr()),
                 PCWSTR::null(),
                 WINDOW_STYLE(
-                    WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0 | WS_VSCROLL.0,
+                    WS_CHILD.0
+                        | WS_VISIBLE.0
+                        | WS_CLIPCHILDREN.0
+                        | WS_CLIPSIBLINGS.0
+                        | WS_VSCROLL.0,
                 ),
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
@@ -156,22 +164,27 @@ impl ListBox {
         if let Ok(mut items) = self.items.lock() {
             let count = items.len() as i32;
             self.visible_count = 0;
-            for (i, item) in items
-                .iter_mut()
-                .enumerate()
-                .skip(self.visible_pos as usize)
-            {
+            for (i, item) in items.iter_mut().enumerate().skip(self.visible_pos as usize) {
                 if y > height {
                     break;
                 }
                 let i = i as i32;
                 let h = item.draw(dc, width - 6, height - y, self.hilite == i);
-                item.set_bounds(RECT { left: 0, top: y, right: width, bottom: y + h });
+                item.set_bounds(RECT {
+                    left: 0,
+                    top: y,
+                    right: width,
+                    bottom: y + h,
+                });
                 y += h;
-                unsafe { let _ = OffsetViewportOrgEx(dc, 0, h, None); }
+                unsafe {
+                    let _ = OffsetViewportOrgEx(dc, 0, h, None);
+                }
                 self.visible_count += 1;
             }
-            unsafe { let _ = SetViewportOrgEx(dc, orig.x, orig.y, None); }
+            unsafe {
+                let _ = SetViewportOrgEx(dc, orig.x, orig.y, None);
+            }
             self.update_scroll(count);
         }
     }
@@ -186,7 +199,14 @@ impl ListBox {
             nPos: self.visible_pos,
             ..Default::default()
         };
-        unsafe { let _ = SetScrollInfo(self.hwnd, windows::Win32::UI::WindowsAndMessaging::SB_VERT, &si, true); }
+        unsafe {
+            let _ = SetScrollInfo(
+                self.hwnd,
+                windows::Win32::UI::WindowsAndMessaging::SB_VERT,
+                &si,
+                true,
+            );
+        }
     }
 
     fn hit_test(&self, pt: POINT) -> Option<usize> {
@@ -264,7 +284,13 @@ impl ListBox {
             fMask: SIF_POS | SIF_RANGE | SIF_PAGE | SIF_TRACKPOS,
             ..Default::default()
         };
-        unsafe { let _ = GetScrollInfo(self.hwnd, windows::Win32::UI::WindowsAndMessaging::SB_VERT, &mut si); }
+        unsafe {
+            let _ = GetScrollInfo(
+                self.hwnd,
+                windows::Win32::UI::WindowsAndMessaging::SB_VERT,
+                &mut si,
+            );
+        }
         let mut pos = self.visible_pos + delta;
         let max = si.nMax.saturating_sub(self.visible_count.max(1) as i32) + 1;
         if pos < si.nMin {
@@ -275,7 +301,14 @@ impl ListBox {
         self.visible_pos = pos;
         si.fMask = SIF_POS;
         si.nPos = pos;
-        unsafe { let _ = SetScrollInfo(self.hwnd, windows::Win32::UI::WindowsAndMessaging::SB_VERT, &si, true); }
+        unsafe {
+            let _ = SetScrollInfo(
+                self.hwnd,
+                windows::Win32::UI::WindowsAndMessaging::SB_VERT,
+                &si,
+                true,
+            );
+        }
         self.invalidate();
     }
 }
@@ -307,7 +340,9 @@ impl Component for ListBox {
             WM_ERASEBKGND => LRESULT(1),
             WM_SIZE => {
                 let mut rc = RECT::default();
-                unsafe { let _ = GetClientRect(self.hwnd, &mut rc); }
+                unsafe {
+                    let _ = GetClientRect(self.hwnd, &mut rc);
+                }
                 self.bounds = rc;
                 self.invalidate();
                 LRESULT(0)
@@ -344,7 +379,10 @@ impl Component for ListBox {
                 LRESULT(0)
             }
             WM_LBUTTONDOWN => {
-                let pt = POINT { x: (lparam.0 & 0xffff) as i16 as i32, y: ((lparam.0 >> 16) & 0xffff) as i16 as i32 };
+                let pt = POINT {
+                    x: (lparam.0 & 0xffff) as i16 as i32,
+                    y: ((lparam.0 >> 16) & 0xffff) as i16 as i32,
+                };
                 if let Some(idx) = self.hit_test(pt) {
                     self.selected = Some(idx);
                     self.hilite = idx as i32;

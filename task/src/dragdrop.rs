@@ -2,24 +2,18 @@
 //! Provides a simple IDropTarget that reports CF_HDROP and CF_UNICODETEXT drops
 //! to a user-supplied callback.
 
-use std::{
-    ffi::OsString,
-    os::windows::ffi::OsStringExt,
-    sync::Arc,
-};
+use std::{ffi::OsString, os::windows::ffi::OsStringExt, sync::Arc};
 
 use anyhow::Result;
 use windows::core::implement;
 use windows::Win32::{
     Foundation::{HWND, POINTL},
-    System::Com::{
-        IDataObject, FORMATETC, STGMEDIUM, TYMED_HGLOBAL, DVASPECT_CONTENT,
+    System::Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, STGMEDIUM, TYMED_HGLOBAL},
+    System::Ole::{
+        IDropTarget, IDropTarget_Impl, RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop,
+        CF_HDROP, CF_UNICODETEXT, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
     },
     System::SystemServices::MODIFIERKEYS_FLAGS,
-    System::Ole::{
-        IDropTarget, IDropTarget_Impl, CF_HDROP, CF_UNICODETEXT, DROPEFFECT, DROPEFFECT_COPY,
-        DROPEFFECT_NONE, RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop,
-    },
     UI::Shell::{DragFinish, DragQueryFileW, HDROP},
 };
 
@@ -30,13 +24,17 @@ where
 {
     let target = DropTarget::new(hwnd, handler);
     let com_target: IDropTarget = target.into();
-    unsafe { RegisterDragDrop(hwnd, &com_target)?; }
+    unsafe {
+        RegisterDragDrop(hwnd, &com_target)?;
+    }
     Ok(com_target)
 }
 
 /// Unregister the drop target (call on window teardown).
 pub fn revoke_drop_target(hwnd: HWND) {
-    unsafe { let _ = RevokeDragDrop(hwnd); }
+    unsafe {
+        let _ = RevokeDragDrop(hwnd);
+    }
 }
 
 /// Data extracted from a drop.
@@ -134,10 +132,14 @@ impl IDropTarget_Impl for DropTarget_Impl {
         _pt: &POINTL,
         pdwEffect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
-        unsafe { *pdwEffect = DROPEFFECT_COPY; }
+        unsafe {
+            *pdwEffect = DROPEFFECT_COPY;
+        }
         // Just accept; real validation can happen on Drop.
         if pDataObj.is_none() {
-            unsafe { *pdwEffect = DROPEFFECT_NONE; }
+            unsafe {
+                *pdwEffect = DROPEFFECT_NONE;
+            }
         }
         Ok(())
     }
@@ -148,7 +150,9 @@ impl IDropTarget_Impl for DropTarget_Impl {
         _pt: &POINTL,
         pdwEffect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
-        unsafe { *pdwEffect = DROPEFFECT_COPY; }
+        unsafe {
+            *pdwEffect = DROPEFFECT_COPY;
+        }
         Ok(())
     }
 
@@ -163,7 +167,9 @@ impl IDropTarget_Impl for DropTarget_Impl {
         _pt: &POINTL,
         pdwEffect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
-        unsafe { *pdwEffect = DROPEFFECT_COPY; }
+        unsafe {
+            *pdwEffect = DROPEFFECT_COPY;
+        }
         if let Some(data) = pDataObj {
             if let Some(files) = self.extract_files(data) {
                 let _ = (self.handler)(DropPayload::Files(files));
