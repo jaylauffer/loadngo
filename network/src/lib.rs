@@ -13,12 +13,31 @@ use std::{
     time::Duration,
 };
 use tracing::info;
-use windows::Win32::Networking::WinSock::{WSAStartup, WSADATA};
 
 pub use core::{BlobFinish, BlobKey, ContentEnd, ContentFinish, NetworkCore};
 
+#[cfg(windows)]
 const fn make_word(low: u8, high: u8) -> u16 {
     (low as u16) | ((high as u16) << 8)
+}
+
+#[cfg(windows)]
+fn init_socket_runtime() -> Result<()> {
+    use windows::Win32::Networking::WinSock::{WSAStartup, WSADATA};
+
+    unsafe {
+        let mut data = WSADATA::default();
+        let ret = WSAStartup(make_word(2, 2), &mut data);
+        if ret != 0 {
+            anyhow::bail!("WSAStartup failed: {}", ret);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn init_socket_runtime() -> Result<()> {
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -78,13 +97,7 @@ impl Network {
     }
 
     pub fn init(&mut self) -> Result<()> {
-        unsafe {
-            let mut data = WSADATA::default();
-            let ret = WSAStartup(make_word(2, 2), &mut data);
-            if ret != 0 {
-                anyhow::bail!("WSAStartup failed: {}", ret);
-            }
-        }
+        init_socket_runtime()?;
         self.initialized = true;
         info!("network initialized");
         if self.socket.is_none() {
