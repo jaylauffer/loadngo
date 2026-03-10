@@ -1,3 +1,30 @@
+//! Content-addressed storage used by the data and network layers.
+//!
+//! ```rust
+//! use data::cas::CasStorage;
+//! use std::fs;
+//! use std::time::{SystemTime, UNIX_EPOCH};
+//!
+//! let unique = SystemTime::now()
+//!     .duration_since(UNIX_EPOCH)
+//!     .unwrap()
+//!     .as_nanos();
+//! let root = std::env::temp_dir().join(format!("loadngo_cas_doctest_{unique}"));
+//!
+//! let store = CasStorage::new(&root).unwrap();
+//! let payload = b"shared voice clip bytes";
+//!
+//! let (hash, inserted) = store.add_content(payload).unwrap();
+//! assert!(inserted);
+//! assert_eq!(store.verified_read_all(hash).unwrap(), payload);
+//!
+//! let (same_hash, inserted_again) = store.add_content(payload).unwrap();
+//! assert_eq!(same_hash, hash);
+//! assert!(!inserted_again);
+//!
+//! fs::remove_dir_all(&root).unwrap();
+//! ```
+
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -10,16 +37,16 @@ use std::str::FromStr;
 use std::sync::Mutex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CasHash([u8; 16]);
+pub struct CasHash([u8; 32]);
 
 impl CasHash {
-    pub const LEN: usize = 16;
+    pub const LEN: usize = 32;
 
     pub fn digest(bytes: &[u8]) -> Self {
-        Self(md5::compute(bytes).0)
+        Self(*blake3::hash(bytes).as_bytes())
     }
 
-    pub fn from_bytes(bytes: [u8; 16]) -> Self {
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
@@ -31,12 +58,12 @@ impl CasHash {
                 bytes.len()
             );
         }
-        let mut digest = [0u8; 16];
+        let mut digest = [0u8; 32];
         digest.copy_from_slice(bytes);
         Ok(Self(digest))
     }
 
-    pub fn as_bytes(&self) -> &[u8; 16] {
+    pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 
@@ -57,11 +84,12 @@ impl FromStr for CasHash {
     fn from_str(s: &str) -> Result<Self> {
         if s.len() != Self::LEN * 2 {
             bail!(
-                "invalid CAS hash length: expected 32 hex chars, got {}",
+                "invalid CAS hash length: expected {} hex chars, got {}",
+                Self::LEN * 2,
                 s.len()
             );
         }
-        let mut bytes = [0u8; 16];
+        let mut bytes = [0u8; 32];
         for (i, chunk) in s.as_bytes().chunks(2).enumerate() {
             let text = std::str::from_utf8(chunk)?;
             bytes[i] = u8::from_str_radix(text, 16)

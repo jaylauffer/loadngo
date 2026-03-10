@@ -1,4 +1,24 @@
 //! Networking layer placeholder using the Windows APIs.
+//!
+//! ```rust
+//! use data::cas::CasHash;
+//! use data::p2pmsg::{Message, MessageType, RequestContent};
+//! use network::p2p;
+//!
+//! let hash = CasHash::digest(b"voice line payload");
+//! let frame = p2p::request_content(&[hash]);
+//! let (header, message) = p2p::parse_frame(&frame).unwrap();
+//!
+//! assert_eq!(header.msg_type, MessageType::RequestContent);
+//! assert!(!header.is_response);
+//!
+//! match message {
+//!     Message::RequestContent(RequestContent::Request { hashes }) => {
+//!         assert_eq!(hashes, vec![hash]);
+//!     }
+//!     other => panic!("unexpected message: {other:?}"),
+//! }
+//! ```
 
 mod core;
 pub mod p2p;
