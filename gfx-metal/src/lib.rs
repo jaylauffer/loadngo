@@ -1,0 +1,2194 @@
+use std::{cell::RefCell, collections::HashMap};
+
+use loadngo_host_core::{decode_image_from_path, DecodedImage, TextMetrics};
+use loadngo_renderer::{
+    FrameCommand, FrameResourcePlan, GraphicsBackend, ImageResourceKey, Renderer, RendererConfig,
+    RendererError, TextRequest,
+};
+use ui_core::geometry::Color;
+
+thread_local! {
+    static REGISTERED_IMAGES: RefCell<HashMap<String, DecodedImage>> = RefCell::new(HashMap::new());
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetalBackendState {
+    UnboundSurface,
+    Headless,
+    Ready,
+    SurfaceBound,
+}
+
+pub struct MetalBackend {
+    state: MetalBackendState,
+    recorded_commands: Vec<FrameCommand>,
+    frame_open: bool,
+    text_font_source: Option<String>,
+    #[cfg(target_os = "macos")]
+    device: Option<macos::MetalDevice>,
+    #[cfg(target_os = "macos")]
+    command_queue: Option<macos::MetalCommandQueue>,
+    #[cfg(target_os = "macos")]
+    surface: Option<macos::MetalSurface>,
+    #[cfg(target_os = "macos")]
+    pipeline_state: Option<macos::MetalRenderPipelineState>,
+    #[cfg(target_os = "macos")]
+    textured_pipeline_state: Option<macos::MetalRenderPipelineState>,
+    #[cfg(target_os = "macos")]
+    sampler_state: Option<macos::MetalSamplerState>,
+    #[cfg(target_os = "macos")]
+    textures: HashMap<String, macos::MetalTexture>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ClearColor {
+    red: f64,
+    green: f64,
+    blue: f64,
+    alpha: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SolidRect {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    red: f32,
+    green: f32,
+    blue: f32,
+    alpha: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct BlitImage {
+    image_key: String,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    alpha: f32,
+    flip_vertical: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct GeneratedFrameImage {
+    image: DecodedImage,
+    placement: BlitImage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RasterMetrics {
+    width: f32,
+    height: f32,
+    baseline_from_top: f32,
+}
+
+pub fn measure_text_metrics(
+    text: &str,
+    font_source: Option<&str>,
+    font_size: f32,
+) -> Result<TextMetrics, RendererError> {
+    #[cfg(target_os = "macos")]
+    {
+        return macos::measure_text_metrics(text, font_source, font_size);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (text, font_source, font_size);
+        Err(RendererError::Text(
+            "native text measurement is unavailable on this platform".to_string(),
+        ))
+    }
+}
+
+pub fn register_image_resource(image_key: &str, image: &DecodedImage) {
+    REGISTERED_IMAGES.with(|images| {
+        images
+            .borrow_mut()
+            .insert(image_key.to_string(), image.clone());
+    });
+}
+
+impl Default for MetalBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MetalBackend {
+    pub fn new() -> Self {
+        Self {
+            state: MetalBackendState::UnboundSurface,
+            recorded_commands: Vec::new(),
+            frame_open: false,
+            text_font_source: None,
+            #[cfg(target_os = "macos")]
+            device: None,
+            #[cfg(target_os = "macos")]
+            command_queue: None,
+            #[cfg(target_os = "macos")]
+            surface: None,
+            #[cfg(target_os = "macos")]
+            pipeline_state: None,
+            #[cfg(target_os = "macos")]
+            textured_pipeline_state: None,
+            #[cfg(target_os = "macos")]
+            sampler_state: None,
+            #[cfg(target_os = "macos")]
+            textures: HashMap::new(),
+        }
+    }
+
+    pub fn new_headless() -> Self {
+        Self {
+            state: MetalBackendState::Headless,
+            recorded_commands: Vec::new(),
+            frame_open: false,
+            text_font_source: None,
+            #[cfg(target_os = "macos")]
+            device: None,
+            #[cfg(target_os = "macos")]
+            command_queue: None,
+            #[cfg(target_os = "macos")]
+            surface: None,
+            #[cfg(target_os = "macos")]
+            pipeline_state: None,
+            #[cfg(target_os = "macos")]
+            textured_pipeline_state: None,
+            #[cfg(target_os = "macos")]
+            sampler_state: None,
+            #[cfg(target_os = "macos")]
+            textures: HashMap::new(),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn try_bind_system_default() -> Result<Self, RendererError> {
+        let device = macos::MetalDevice::system_default()?;
+        let command_queue = device.new_command_queue()?;
+        Ok(Self {
+            state: MetalBackendState::Ready,
+            recorded_commands: Vec::new(),
+            frame_open: false,
+            text_font_source: None,
+            device: Some(device),
+            command_queue: Some(command_queue),
+            surface: None,
+            pipeline_state: None,
+            textured_pipeline_state: None,
+            sampler_state: None,
+            textures: HashMap::new(),
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn try_bind_system_default() -> Result<Self, RendererError> {
+        Err(RendererError::Backend(
+            "Metal backend is only available on macOS".to_string(),
+        ))
+    }
+
+    pub fn state(&self) -> MetalBackendState {
+        self.state
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn has_bound_device(&self) -> bool {
+        self.device.is_some()
+            && self
+                .command_queue
+                .as_ref()
+                .map(|queue| {
+                    let _ = queue.as_raw();
+                    true
+                })
+                .unwrap_or(false)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn try_bind_host_surface(&mut self) -> Result<(), RendererError> {
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| RendererError::Backend("Metal device is unavailable".to_string()))?;
+        let surface = macos::MetalSurface::bind_to_host_window(device)?;
+        self.surface = Some(surface);
+        self.state = MetalBackendState::SurfaceBound;
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn try_bind_host_view_surface(
+        &mut self,
+        view: *mut objc2::runtime::AnyObject,
+    ) -> Result<(), RendererError> {
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| RendererError::Backend("Metal device is unavailable".to_string()))?;
+        let surface = macos::MetalSurface::bind_to_view(device, view)?;
+        self.surface = Some(surface);
+        self.state = MetalBackendState::SurfaceBound;
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn try_bind_host_surface(&mut self) -> Result<(), RendererError> {
+        Err(RendererError::Backend(
+            "Metal surfaces are only available on macOS".to_string(),
+        ))
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn has_bound_surface(&self) -> bool {
+        self.surface
+            .as_ref()
+            .map(|surface| {
+                let _ = surface.layer();
+                true
+            })
+            .unwrap_or(false)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn has_bound_surface(&self) -> bool {
+        false
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn has_bound_device(&self) -> bool {
+        false
+    }
+
+    pub fn take_recorded_commands(&mut self) -> Vec<FrameCommand> {
+        std::mem::take(&mut self.recorded_commands)
+    }
+
+    pub fn set_text_font_source(&mut self, source: Option<&str>) {
+        self.text_font_source = source.map(str::to_string);
+    }
+
+    fn frame_clear_color(&self) -> Option<ClearColor> {
+        self.recorded_commands
+            .iter()
+            .rev()
+            .find_map(|command| match command {
+                FrameCommand::Clear { color } => Some(ClearColor {
+                    red: color.r as f64 / 255.0,
+                    green: color.g as f64 / 255.0,
+                    blue: color.b as f64 / 255.0,
+                    alpha: color.a as f64 / 255.0,
+                }),
+                _ => None,
+            })
+    }
+
+    fn frame_solid_rects(&self) -> Vec<SolidRect> {
+        let mut rects = Vec::new();
+        for command in &self.recorded_commands {
+            match command {
+                FrameCommand::FillRect { rect, color } => rects.push(SolidRect {
+                    x: rect.x as f32,
+                    y: rect.y as f32,
+                    width: rect.width as f32,
+                    height: rect.height as f32,
+                    red: color.r as f32 / 255.0,
+                    green: color.g as f32 / 255.0,
+                    blue: color.b as f32 / 255.0,
+                    alpha: color.a as f32 / 255.0,
+                }),
+                FrameCommand::StrokeRect {
+                    rect,
+                    color,
+                    thickness,
+                } => {
+                    let t = (*thickness).max(1) as f32;
+                    let rgba = (
+                        color.r as f32 / 255.0,
+                        color.g as f32 / 255.0,
+                        color.b as f32 / 255.0,
+                        color.a as f32 / 255.0,
+                    );
+                    let push =
+                        |rects: &mut Vec<SolidRect>, x: f32, y: f32, width: f32, height: f32| {
+                            if width > 0.0 && height > 0.0 {
+                                rects.push(SolidRect {
+                                    x,
+                                    y,
+                                    width,
+                                    height,
+                                    red: rgba.0,
+                                    green: rgba.1,
+                                    blue: rgba.2,
+                                    alpha: rgba.3,
+                                });
+                            }
+                        };
+                    push(
+                        &mut rects,
+                        rect.x as f32,
+                        rect.y as f32,
+                        rect.width as f32,
+                        t,
+                    );
+                    push(
+                        &mut rects,
+                        rect.x as f32,
+                        rect.y as f32 + rect.height as f32 - t,
+                        rect.width as f32,
+                        t,
+                    );
+                    push(
+                        &mut rects,
+                        rect.x as f32,
+                        rect.y as f32 + t,
+                        t,
+                        rect.height as f32 - 2.0 * t,
+                    );
+                    push(
+                        &mut rects,
+                        rect.x as f32 + rect.width as f32 - t,
+                        rect.y as f32 + t,
+                        t,
+                        rect.height as f32 - 2.0 * t,
+                    );
+                }
+                _ => {}
+            }
+        }
+        rects
+    }
+
+    fn frame_blit_images(&self) -> Vec<BlitImage> {
+        self.recorded_commands
+            .iter()
+            .filter_map(|command| match command {
+                FrameCommand::Image(request) => Some(BlitImage {
+                    image_key: request.image_key.clone(),
+                    x: request.rect.x as f32,
+                    y: request.rect.y as f32,
+                    width: request.rect.width as f32,
+                    height: request.rect.height as f32,
+                    alpha: request.alpha,
+                    flip_vertical: false,
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn frame_generated_images(&self) -> Result<Vec<GeneratedFrameImage>, RendererError> {
+        let mut images = Vec::new();
+        for command in &self.recorded_commands {
+            match command {
+                FrameCommand::Text(request) => {
+                    if request.text.is_empty() {
+                        continue;
+                    }
+                    let raster = rasterize_text_request(request, self.text_font_source.as_deref())?;
+                    images.push(GeneratedFrameImage {
+                        image: raster.image,
+                        placement: BlitImage {
+                            image_key: "__loadngo_text".to_string(),
+                            x: raster.x,
+                            y: raster.y,
+                            width: raster.metrics.width,
+                            height: raster.metrics.height,
+                            alpha: 1.0,
+                            flip_vertical: true,
+                        },
+                    });
+                }
+                FrameCommand::Line {
+                    from,
+                    to,
+                    color,
+                    thickness,
+                } => {
+                    if let Some(image) = rasterize_line(*from, *to, *color, *thickness) {
+                        images.push(image);
+                    }
+                }
+                FrameCommand::Circle {
+                    center,
+                    radius,
+                    color,
+                } => {
+                    if let Some(image) = rasterize_circle(*center, *radius, *color) {
+                        images.push(image);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(images)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn ensure_image_resources(&mut self) -> Result<(), RendererError> {
+        let renderer = Renderer::new(RendererConfig::default());
+        let FrameResourcePlan { image_keys } =
+            renderer.plan_frame_resources(&self.recorded_commands);
+        for key in image_keys {
+            self.ensure_texture(&key)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn ensure_texture(&mut self, key: &ImageResourceKey) -> Result<(), RendererError> {
+        if self.textures.contains_key(key.as_str()) {
+            return Ok(());
+        }
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| RendererError::Backend("Metal device is unavailable".to_string()))?;
+        let decoded = REGISTERED_IMAGES.with(|images| images.borrow().get(key.as_str()).cloned());
+        let decoded = match decoded {
+            Some(decoded) => decoded,
+            None => decode_image_from_path(std::path::Path::new(key.as_str()))
+                .map_err(RendererError::Backend)?,
+        };
+        let texture = macos::MetalTexture::from_decoded_image(device, key.as_str(), &decoded)?;
+        self.textures.insert(key.as_str().to_string(), texture);
+        Ok(())
+    }
+
+    fn ensure_bound(&self) -> Result<(), RendererError> {
+        match self.state {
+            MetalBackendState::Headless
+            | MetalBackendState::Ready
+            | MetalBackendState::SurfaceBound => Ok(()),
+            MetalBackendState::UnboundSurface => Err(RendererError::Backend(
+                "Metal backend is not bound to a drawable surface".to_string(),
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct RasterizedText {
+    image: DecodedImage,
+    x: f32,
+    y: f32,
+    metrics: RasterMetrics,
+}
+
+fn rasterize_text_request(
+    request: &TextRequest,
+    font_source: Option<&str>,
+) -> Result<RasterizedText, RendererError> {
+    #[cfg(target_os = "macos")]
+    {
+        let raster = macos::rasterize_text(request, font_source)?;
+        let x = if request.style.centered {
+            request.rect.x as f32 + (request.rect.width as f32 - raster.metrics.width) * 0.5
+        } else {
+            request.rect.x as f32
+        };
+        let baseline_y = if request.style.centered {
+            request.rect.y as f32 + (request.rect.height as f32 + raster.metrics.height) * 0.5 - 4.0
+        } else {
+            request.rect.y as f32
+        };
+        Ok(RasterizedText {
+            image: raster.image,
+            x,
+            y: baseline_y - raster.metrics.baseline_from_top + 3.0,
+            metrics: raster.metrics,
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (request, font_source);
+        Err(RendererError::Text(
+            "native text rasterization is unavailable on this platform".to_string(),
+        ))
+    }
+}
+
+fn rasterize_line(
+    from: ui_core::geometry::Point,
+    to: ui_core::geometry::Point,
+    color: Color,
+    thickness: i32,
+) -> Option<GeneratedFrameImage> {
+    let half = (thickness.max(1) as f32) * 0.5;
+    let min_x = from.x.min(to.x) as f32 - half - 1.0;
+    let min_y = from.y.min(to.y) as f32 - half - 1.0;
+    let max_x = from.x.max(to.x) as f32 + half + 1.0;
+    let max_y = from.y.max(to.y) as f32 + half + 1.0;
+    let width = (max_x - min_x).ceil().max(1.0) as u32;
+    let height = (max_y - min_y).ceil().max(1.0) as u32;
+    let mut rgba = vec![0u8; width as usize * height as usize * 4];
+    let ax = from.x as f32 - min_x;
+    let ay = from.y as f32 - min_y;
+    let bx = to.x as f32 - min_x;
+    let by = to.y as f32 - min_y;
+    let radius = half.max(0.5);
+    for y in 0..height {
+        for x in 0..width {
+            let px = x as f32 + 0.5;
+            let py = y as f32 + 0.5;
+            if distance_to_segment(px, py, ax, ay, bx, by) <= radius {
+                write_rgba_pixel(&mut rgba, width, x, y, color);
+            }
+        }
+    }
+    Some(GeneratedFrameImage {
+        image: DecodedImage::new(width, height, rgba),
+        placement: BlitImage {
+            image_key: "__loadngo_line".to_string(),
+            x: min_x,
+            y: min_y,
+            width: width as f32,
+            height: height as f32,
+            alpha: 1.0,
+            flip_vertical: false,
+        },
+    })
+}
+
+fn rasterize_circle(
+    center: ui_core::geometry::Point,
+    radius: i32,
+    color: Color,
+) -> Option<GeneratedFrameImage> {
+    if radius <= 0 {
+        return None;
+    }
+    let min_x = center.x - radius - 1;
+    let min_y = center.y - radius - 1;
+    let width = (radius * 2 + 2).max(1) as u32;
+    let height = (radius * 2 + 2).max(1) as u32;
+    let mut rgba = vec![0u8; width as usize * height as usize * 4];
+    let cx = radius as f32;
+    let cy = radius as f32;
+    let r = radius as f32;
+    for y in 0..height {
+        for x in 0..width {
+            let dx = x as f32 + 0.5 - cx;
+            let dy = y as f32 + 0.5 - cy;
+            if dx * dx + dy * dy <= r * r {
+                write_rgba_pixel(&mut rgba, width, x, y, color);
+            }
+        }
+    }
+    Some(GeneratedFrameImage {
+        image: DecodedImage::new(width, height, rgba),
+        placement: BlitImage {
+            image_key: "__loadngo_circle".to_string(),
+            x: min_x as f32,
+            y: min_y as f32,
+            width: width as f32,
+            height: height as f32,
+            alpha: 1.0,
+            flip_vertical: false,
+        },
+    })
+}
+
+fn write_rgba_pixel(rgba: &mut [u8], width: u32, x: u32, y: u32, color: Color) {
+    let idx = ((y * width + x) * 4) as usize;
+    rgba[idx..idx + 4].copy_from_slice(&[color.r, color.g, color.b, color.a]);
+}
+
+fn distance_to_segment(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+    let abx = bx - ax;
+    let aby = by - ay;
+    let length_sq = abx * abx + aby * aby;
+    if length_sq <= f32::EPSILON {
+        return ((px - ax).powi(2) + (py - ay).powi(2)).sqrt();
+    }
+    let t = (((px - ax) * abx + (py - ay) * aby) / length_sq).clamp(0.0, 1.0);
+    let nearest_x = ax + t * abx;
+    let nearest_y = ay + t * aby;
+    ((px - nearest_x).powi(2) + (py - nearest_y).powi(2)).sqrt()
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::ffi::{c_void, CString};
+
+    use loadngo_host_core::{DecodedImage, TextMetrics};
+    use loadngo_renderer::{RendererError, TextRequest};
+    use objc2::encode::{Encode, Encoding};
+    use objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
+
+    use crate::{BlitImage, ClearColor, RasterMetrics, RasterizedText, SolidRect};
+
+    #[link(name = "AppKit", kind = "framework")]
+    unsafe extern "C" {}
+    #[link(name = "Metal", kind = "framework")]
+    unsafe extern "C" {
+        fn MTLCreateSystemDefaultDevice() -> *mut AnyObject;
+    }
+    #[link(name = "QuartzCore", kind = "framework")]
+    unsafe extern "C" {}
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {}
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {}
+    #[link(name = "CoreText", kind = "framework")]
+    unsafe extern "C" {}
+
+    type CFTypeRef = *const c_void;
+    type CFStringRef = *const c_void;
+    type CFDataRef = *const c_void;
+    type CFDictionaryRef = *const c_void;
+    type CFAttributedStringRef = *const c_void;
+    type CTFontRef = *const c_void;
+    type CTLineRef = *const c_void;
+    type CGContextRef = *mut c_void;
+    type CGColorSpaceRef = *const c_void;
+    type CGDataProviderRef = *const c_void;
+    type CGFontRef = *const c_void;
+
+    #[repr(C)]
+    struct CGRect {
+        origin: CGPoint,
+        size: CGSize,
+    }
+
+    #[repr(C)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+
+    #[repr(C)]
+    struct CGSize {
+        width: f64,
+        height: f64,
+    }
+
+    #[repr(C)]
+    struct CGAffineTransform {
+        a: f64,
+        b: f64,
+        c: f64,
+        d: f64,
+        tx: f64,
+        ty: f64,
+    }
+
+    unsafe extern "C" {
+        static kCTFontAttributeName: CFStringRef;
+        static kCTForegroundColorFromContextAttributeName: CFStringRef;
+        static kCFBooleanTrue: CFTypeRef;
+
+        fn CFStringCreateWithCString(
+            alloc: *const c_void,
+            c_str: *const i8,
+            encoding: u32,
+        ) -> CFStringRef;
+        fn CFDataCreate(alloc: *const c_void, bytes: *const u8, length: isize) -> CFDataRef;
+        fn CFDictionaryCreate(
+            allocator: *const c_void,
+            keys: *const *const c_void,
+            values: *const *const c_void,
+            num_values: isize,
+            key_callbacks: *const c_void,
+            value_callbacks: *const c_void,
+        ) -> CFDictionaryRef;
+        fn CFAttributedStringCreate(
+            alloc: *const c_void,
+            string: CFStringRef,
+            attributes: CFDictionaryRef,
+        ) -> CFAttributedStringRef;
+        fn CFRelease(cf: CFTypeRef);
+
+        fn CGColorSpaceCreateDeviceRGB() -> CGColorSpaceRef;
+        fn CGColorSpaceRelease(space: CGColorSpaceRef);
+        fn CGBitmapContextCreate(
+            data: *mut c_void,
+            width: usize,
+            height: usize,
+            bits_per_component: usize,
+            bytes_per_row: usize,
+            space: CGColorSpaceRef,
+            bitmap_info: u32,
+        ) -> CGContextRef;
+        fn CGContextRelease(context: CGContextRef);
+        fn CGContextTranslateCTM(context: CGContextRef, tx: f64, ty: f64);
+        fn CGContextScaleCTM(context: CGContextRef, sx: f64, sy: f64);
+        fn CGContextSetTextMatrix(context: CGContextRef, transform: CGAffineTransform);
+        fn CGContextSetRGBFillColor(
+            context: CGContextRef,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        );
+        fn CGContextSetTextPosition(context: CGContextRef, x: f64, y: f64);
+        fn CGContextFillRect(context: CGContextRef, rect: CGRect);
+
+        fn CGDataProviderCreateWithCFData(data: CFDataRef) -> CGDataProviderRef;
+        fn CGDataProviderRelease(provider: CGDataProviderRef);
+        fn CGFontCreateWithDataProvider(provider: CGDataProviderRef) -> CGFontRef;
+        fn CGFontRelease(font: CGFontRef);
+
+        fn CTFontCreateWithGraphicsFont(
+            graphics_font: CGFontRef,
+            size: f64,
+            matrix: *const c_void,
+            attributes: *const c_void,
+        ) -> CTFontRef;
+        fn CTFontCreateWithName(name: CFStringRef, size: f64, matrix: *const c_void) -> CTFontRef;
+        fn CTLineCreateWithAttributedString(string: CFAttributedStringRef) -> CTLineRef;
+        fn CTLineGetTypographicBounds(
+            line: CTLineRef,
+            ascent: *mut f64,
+            descent: *mut f64,
+            leading: *mut f64,
+        ) -> f64;
+        fn CTLineDraw(line: CTLineRef, context: CGContextRef);
+    }
+
+    pub struct MetalDevice {
+        raw: Retained<AnyObject>,
+    }
+
+    impl MetalDevice {
+        pub fn system_default() -> Result<Self, RendererError> {
+            let raw = unsafe { Retained::from_raw(MTLCreateSystemDefaultDevice()) }
+                .ok_or_else(|| RendererError::Backend("Metal device is unavailable".to_string()))?;
+            Ok(Self { raw })
+        }
+
+        pub fn new_command_queue(&self) -> Result<MetalCommandQueue, RendererError> {
+            let queue: Option<Retained<AnyObject>> =
+                unsafe { msg_send![&*self.raw, newCommandQueue] };
+            queue.map(|raw| MetalCommandQueue { raw }).ok_or_else(|| {
+                RendererError::Backend("Metal command queue creation failed".to_string())
+            })
+        }
+
+        pub fn as_raw(&self) -> &AnyObject {
+            &self.raw
+        }
+    }
+
+    pub struct MetalCommandQueue {
+        raw: Retained<AnyObject>,
+    }
+
+    impl MetalCommandQueue {
+        pub fn as_raw(&self) -> &AnyObject {
+            &self.raw
+        }
+    }
+
+    pub struct MetalSurface {
+        view: Retained<AnyObject>,
+        layer: Retained<AnyObject>,
+    }
+
+    impl MetalSurface {
+        pub fn bind_to_host_window(device: &MetalDevice) -> Result<Self, RendererError> {
+            let app: *mut AnyObject =
+                unsafe { msg_send![class!(NSApplication), sharedApplication] };
+            if app.is_null() {
+                return Err(RendererError::Backend(
+                    "NSApplication is unavailable".to_string(),
+                ));
+            }
+
+            let mut window: *mut AnyObject = unsafe { msg_send![app, keyWindow] };
+            if window.is_null() {
+                window = unsafe { msg_send![app, mainWindow] };
+            }
+            if window.is_null() {
+                return Err(RendererError::Backend(
+                    "No host macOS window is available for Metal binding".to_string(),
+                ));
+            }
+
+            let view: *mut AnyObject = unsafe { msg_send![window, contentView] };
+            if view.is_null() {
+                return Err(RendererError::Backend(
+                    "Host macOS window has no content view".to_string(),
+                ));
+            }
+            let view = unsafe { Retained::retain(view) }.ok_or_else(|| {
+                RendererError::Backend("Failed to retain host macOS content view".to_string())
+            })?;
+
+            let layer: Retained<AnyObject> = unsafe { msg_send![class!(CAMetalLayer), new] };
+            unsafe {
+                let _: () = msg_send![&*layer, setDevice: device.as_raw()];
+                let _: () = msg_send![&*layer, setFramebufferOnly: false];
+                let _: () = msg_send![&*layer, setOpaque: true];
+            }
+
+            let scale: f64 = unsafe { msg_send![window, backingScaleFactor] };
+            unsafe {
+                let _: () = msg_send![&*layer, setContentsScale: scale];
+                let _: () = msg_send![&*view, setWantsLayer: true];
+                let _: () = msg_send![&*view, setLayer: &*layer];
+            }
+
+            let surface = Self { view, layer };
+            surface.sync_drawable_size()?;
+            Ok(surface)
+        }
+
+        pub fn bind_to_view(device: &MetalDevice, view: *mut AnyObject) -> Result<Self, RendererError> {
+            if view.is_null() {
+                return Err(RendererError::Backend(
+                    "Host macOS content view is unavailable".to_string(),
+                ));
+            }
+            let view = unsafe { Retained::retain(view) }.ok_or_else(|| {
+                RendererError::Backend("Failed to retain host macOS content view".to_string())
+            })?;
+
+            let window: *mut AnyObject = unsafe { msg_send![&*view, window] };
+            if window.is_null() {
+                return Err(RendererError::Backend(
+                    "Host macOS content view has no window".to_string(),
+                ));
+            }
+
+            let layer: Retained<AnyObject> = unsafe { msg_send![class!(CAMetalLayer), new] };
+            unsafe {
+                let _: () = msg_send![&*layer, setDevice: device.as_raw()];
+                let _: () = msg_send![&*layer, setFramebufferOnly: false];
+                let _: () = msg_send![&*layer, setOpaque: true];
+            }
+
+            let scale: f64 = unsafe { msg_send![window, backingScaleFactor] };
+            unsafe {
+                let _: () = msg_send![&*layer, setContentsScale: scale];
+                let _: () = msg_send![&*view, setWantsLayer: true];
+                let _: () = msg_send![&*view, setLayer: &*layer];
+            }
+
+            let surface = Self { view, layer };
+            surface.sync_drawable_size()?;
+            Ok(surface)
+        }
+
+        pub fn layer(&self) -> &AnyObject {
+            &self.layer
+        }
+
+        fn logical_size(&self) -> CGSize {
+            let bounds: CGRect = unsafe { msg_send![&*self.view, bounds] };
+            bounds.size
+        }
+
+        pub fn sync_drawable_size(&self) -> Result<(), RendererError> {
+            let bounds: CGRect = unsafe { msg_send![&*self.view, bounds] };
+            let window: *mut AnyObject = unsafe { msg_send![&*self.view, window] };
+            let scale = if window.is_null() {
+                1.0
+            } else {
+                unsafe { msg_send![window, backingScaleFactor] }
+            };
+            let drawable_size = CGSize {
+                width: (bounds.size.width * scale).max(1.0),
+                height: (bounds.size.height * scale).max(1.0),
+            };
+            unsafe {
+                let _: () = msg_send![&*self.view, setWantsLayer: true];
+                let _: () = msg_send![&*self.view, setLayer: &*self.layer];
+                let _: () = msg_send![&*self.layer, setContentsScale: scale];
+                let _: () = msg_send![&*self.layer, setFrame: bounds];
+                let _: () = msg_send![&*self.layer, setDrawableSize: drawable_size];
+            }
+            Ok(())
+        }
+    }
+
+    pub struct MetalRenderPipelineState {
+        raw: Retained<AnyObject>,
+    }
+
+    impl MetalRenderPipelineState {
+        pub fn new_solid(device: &MetalDevice) -> Result<Self, RendererError> {
+            let library = shader_library(
+                device,
+                r#"
+                #include <metal_stdlib>
+                using namespace metal;
+
+                struct VertexIn {
+                    float2 position;
+                };
+
+                vertex float4 loadngo_vertex_main(
+                    const device VertexIn* vertices [[buffer(0)]],
+                    uint vid [[vertex_id]]
+                ) {
+                    return float4(vertices[vid].position, 0.0, 1.0);
+                }
+
+                fragment float4 loadngo_fragment_main(
+                    const device float4* color [[buffer(0)]]
+                ) {
+                    return color[0];
+                }
+                "#,
+            )?;
+            let vertex_name = ns_string("loadngo_vertex_main")?;
+            let fragment_name = ns_string("loadngo_fragment_main")?;
+            Self::new_common(
+                device,
+                &library,
+                &vertex_name,
+                &fragment_name,
+                MTL_PIXEL_FORMAT_BGRA8_UNORM,
+                true,
+            )
+        }
+
+        pub fn new_textured(device: &MetalDevice) -> Result<Self, RendererError> {
+            let library = shader_library(
+                device,
+                r#"
+                #include <metal_stdlib>
+                using namespace metal;
+
+                struct VertexIn {
+                    float2 position;
+                    float2 uv;
+                };
+
+                struct VertexOut {
+                    float4 position [[position]];
+                    float2 uv;
+                };
+
+                vertex VertexOut loadngo_texture_vertex_main(
+                    const device VertexIn* vertices [[buffer(0)]],
+                    uint vid [[vertex_id]]
+                ) {
+                    VertexOut out;
+                    out.position = float4(vertices[vid].position, 0.0, 1.0);
+                    out.uv = vertices[vid].uv;
+                    return out;
+                }
+
+                fragment float4 loadngo_texture_fragment_main(
+                    VertexOut in [[stage_in]],
+                    texture2d<float> image [[texture(0)]],
+                    sampler image_sampler [[sampler(0)]],
+                    const device float* alpha [[buffer(0)]]
+                ) {
+                    float4 texel = image.sample(image_sampler, in.uv);
+                    texel.a *= alpha[0];
+                    return texel;
+                }
+                "#,
+            )?;
+            let vertex_name = ns_string("loadngo_texture_vertex_main")?;
+            let fragment_name = ns_string("loadngo_texture_fragment_main")?;
+            Self::new_common(
+                device,
+                &library,
+                &vertex_name,
+                &fragment_name,
+                MTL_PIXEL_FORMAT_BGRA8_UNORM,
+                true,
+            )
+        }
+
+        fn new_common(
+            device: &MetalDevice,
+            library: &Retained<AnyObject>,
+            vertex_name: &Retained<AnyObject>,
+            fragment_name: &Retained<AnyObject>,
+            pixel_format: u64,
+            enable_blending: bool,
+        ) -> Result<Self, RendererError> {
+            let vertex_function: *mut AnyObject =
+                unsafe { msg_send![&**library, newFunctionWithName: &**vertex_name] };
+            let fragment_function: *mut AnyObject =
+                unsafe { msg_send![&**library, newFunctionWithName: &**fragment_name] };
+            if vertex_function.is_null() || fragment_function.is_null() {
+                return Err(RendererError::Backend(
+                    "Metal shader entry points were not found".to_string(),
+                ));
+            }
+
+            let descriptor: Retained<AnyObject> =
+                unsafe { msg_send![class!(MTLRenderPipelineDescriptor), new] };
+            unsafe {
+                let _: () = msg_send![&*descriptor, setVertexFunction: vertex_function];
+                let _: () = msg_send![&*descriptor, setFragmentFunction: fragment_function];
+            }
+            let color_attachments: *mut AnyObject =
+                unsafe { msg_send![&*descriptor, colorAttachments] };
+            let color_attachment: *mut AnyObject =
+                unsafe { msg_send![color_attachments, objectAtIndexedSubscript: 0usize] };
+            if color_attachment.is_null() {
+                return Err(RendererError::Backend(
+                    "Metal pipeline color attachment 0 is unavailable".to_string(),
+                ));
+            }
+            unsafe {
+                let _: () = msg_send![color_attachment, setPixelFormat: pixel_format];
+                let _: () = msg_send![color_attachment, setBlendingEnabled: enable_blending];
+                if enable_blending {
+                    let _: () =
+                        msg_send![color_attachment, setRgbBlendOperation: MTL_BLEND_OPERATION_ADD];
+                    let _: () = msg_send![color_attachment, setAlphaBlendOperation: MTL_BLEND_OPERATION_ADD];
+                    let _: () = msg_send![
+                        color_attachment,
+                        setSourceRGBBlendFactor: MTL_BLEND_FACTOR_SOURCE_ALPHA
+                    ];
+                    let _: () = msg_send![
+                        color_attachment,
+                        setSourceAlphaBlendFactor: MTL_BLEND_FACTOR_ONE
+                    ];
+                    let _: () = msg_send![
+                        color_attachment,
+                        setDestinationRGBBlendFactor: MTL_BLEND_FACTOR_ONE_MINUS_SOURCE_ALPHA
+                    ];
+                    let _: () = msg_send![
+                        color_attachment,
+                        setDestinationAlphaBlendFactor: MTL_BLEND_FACTOR_ONE_MINUS_SOURCE_ALPHA
+                    ];
+                }
+            }
+
+            let mut error: *mut AnyObject = std::ptr::null_mut();
+            let raw: Option<Retained<AnyObject>> = unsafe {
+                msg_send![
+                    device.as_raw(),
+                    newRenderPipelineStateWithDescriptor: &*descriptor,
+                    error: &mut error
+                ]
+            };
+            raw.map(|raw| Self { raw })
+                .ok_or_else(|| RendererError::Backend(library_error_message(error)))
+        }
+
+        pub fn as_raw(&self) -> &AnyObject {
+            &self.raw
+        }
+    }
+
+    pub struct MetalSamplerState {
+        raw: Retained<AnyObject>,
+    }
+
+    impl MetalSamplerState {
+        pub fn new_linear(device: &MetalDevice) -> Result<Self, RendererError> {
+            let descriptor: Retained<AnyObject> =
+                unsafe { msg_send![class!(MTLSamplerDescriptor), new] };
+            unsafe {
+                let _: () =
+                    msg_send![&*descriptor, setMinFilter: MTL_SAMPLER_MIN_MAG_FILTER_LINEAR];
+                let _: () =
+                    msg_send![&*descriptor, setMagFilter: MTL_SAMPLER_MIN_MAG_FILTER_LINEAR];
+            }
+            let raw: *mut AnyObject =
+                unsafe { msg_send![device.as_raw(), newSamplerStateWithDescriptor: &*descriptor] };
+            unsafe { Retained::from_raw(raw) }
+                .map(|raw| Self { raw })
+                .ok_or_else(|| RendererError::Backend("Metal sampler creation failed".to_string()))
+        }
+
+        pub fn as_raw(&self) -> &AnyObject {
+            &self.raw
+        }
+    }
+
+    pub struct MetalTexture {
+        raw: Retained<AnyObject>,
+    }
+
+    impl MetalTexture {
+        pub fn from_decoded_image(
+            device: &MetalDevice,
+            image_key: &str,
+            image: &DecodedImage,
+        ) -> Result<Self, RendererError> {
+            image.validate_rgba8().map_err(RendererError::Backend)?;
+            let descriptor: *mut AnyObject = unsafe {
+                msg_send![
+                    class!(MTLTextureDescriptor),
+                    texture2DDescriptorWithPixelFormat: MTL_PIXEL_FORMAT_RGBA8_UNORM,
+                    width: image.width as u64,
+                    height: image.height as u64,
+                    mipmapped: false
+                ]
+            };
+            if descriptor.is_null() {
+                return Err(RendererError::Backend(
+                    "Metal texture descriptor creation failed".to_string(),
+                ));
+            }
+
+            let raw: *mut AnyObject =
+                unsafe { msg_send![device.as_raw(), newTextureWithDescriptor: descriptor] };
+            let raw = unsafe { Retained::from_raw(raw) }.ok_or_else(|| {
+                RendererError::Backend("Metal texture creation failed".to_string())
+            })?;
+
+            let region = MTLRegion {
+                origin: MTLOrigin { x: 0, y: 0, z: 0 },
+                size: MTLSize {
+                    width: image.width as u64,
+                    height: image.height as u64,
+                    depth: 1,
+                },
+            };
+            unsafe {
+                let _: () = msg_send![
+                    &*raw,
+                    replaceRegion: region,
+                    mipmapLevel: 0u64,
+                    withBytes: image.rgba8.as_ptr().cast::<c_void>(),
+                    bytesPerRow: (image.width * 4) as u64
+                ];
+            }
+
+            let _ = image_key;
+            Ok(Self { raw })
+        }
+
+        pub fn as_raw(&self) -> &AnyObject {
+            &self.raw
+        }
+    }
+
+    pub fn measure_text_metrics(
+        text: &str,
+        font_source: Option<&str>,
+        font_size: f32,
+    ) -> Result<TextMetrics, RendererError> {
+        let layout = layout_text(text, font_source, font_size.max(1.0))?;
+        Ok(TextMetrics {
+            width: layout.metrics.width,
+            height: layout.metrics.height,
+        })
+    }
+
+    pub fn rasterize_text(
+        request: &TextRequest,
+        font_source: Option<&str>,
+    ) -> Result<RasterizedText, RendererError> {
+        let color = request.style.color;
+        let layout = layout_text(
+            &request.text,
+            font_source,
+            request.style.font_size.max(1) as f32,
+        )?;
+        let pad_top = (request.style.font_size as f32 * 0.5).ceil().max(4.0);
+        let pad_bottom = (request.style.font_size as f32 * 0.25).ceil().max(2.0);
+        let width = layout.metrics.width.max(1.0).ceil() as usize;
+        let height = (layout.metrics.height + pad_top + pad_bottom)
+            .max(1.0)
+            .ceil() as usize;
+        let mut rgba = vec![0u8; width * height * 4];
+        let color_space = unsafe { CGColorSpaceCreateDeviceRGB() };
+        if color_space.is_null() {
+            return Err(RendererError::Text(
+                "CoreGraphics RGB colorspace was unavailable".to_string(),
+            ));
+        }
+        let bitmap_info = K_CG_IMAGE_ALPHA_PREMULTIPLIED_LAST | K_CG_BITMAP_BYTE_ORDER_32_BIG;
+        let context = unsafe {
+            CGBitmapContextCreate(
+                rgba.as_mut_ptr().cast::<c_void>(),
+                width,
+                height,
+                8,
+                width * 4,
+                color_space,
+                bitmap_info,
+            )
+        };
+        if context.is_null() {
+            unsafe { CGColorSpaceRelease(color_space) };
+            return Err(RendererError::Text(
+                "CoreGraphics bitmap context creation failed".to_string(),
+            ));
+        }
+
+        unsafe {
+            CGContextSetRGBFillColor(context, 0.0, 0.0, 0.0, 0.0);
+            CGContextFillRect(
+                context,
+                CGRect {
+                    origin: CGPoint { x: 0.0, y: 0.0 },
+                    size: CGSize {
+                        width: width as f64,
+                        height: height as f64,
+                    },
+                },
+            );
+            CGContextSetTextMatrix(
+                context,
+                CGAffineTransform {
+                    a: 1.0,
+                    b: 0.0,
+                    c: 0.0,
+                    d: 1.0,
+                    tx: 0.0,
+                    ty: 0.0,
+                },
+            );
+            CGContextTranslateCTM(context, 0.0, height as f64);
+            CGContextScaleCTM(context, 1.0, -1.0);
+            CGContextSetRGBFillColor(
+                context,
+                color.r as f64 / 255.0,
+                color.g as f64 / 255.0,
+                color.b as f64 / 255.0,
+                color.a as f64 / 255.0,
+            );
+            CGContextSetTextPosition(
+                context,
+                0.0,
+                (pad_top + layout.metrics.baseline_from_top) as f64,
+            );
+            CTLineDraw(layout.line, context);
+            CGContextRelease(context);
+            CGColorSpaceRelease(color_space);
+        }
+
+        release_cf(layout.line);
+        release_cf(layout.attributed_string);
+        release_cf(layout.font);
+        release_cf(layout.string);
+
+        Ok(RasterizedText {
+            image: DecodedImage::new(width as u32, height as u32, rgba),
+            x: 0.0,
+            y: 0.0,
+            metrics: RasterMetrics {
+                width: layout.metrics.width,
+                height: height as f32,
+                baseline_from_top: pad_top + layout.metrics.baseline_from_top,
+            },
+        })
+    }
+
+    struct TextLayout {
+        font: CTFontRef,
+        string: CFStringRef,
+        attributed_string: CFAttributedStringRef,
+        line: CTLineRef,
+        metrics: RasterMetrics,
+    }
+
+    fn layout_text(
+        text: &str,
+        font_source: Option<&str>,
+        font_size: f32,
+    ) -> Result<TextLayout, RendererError> {
+        let string = cf_string(text)?;
+        let font = create_font(font_source, font_size)?;
+        let (keys, values) = unsafe {
+            (
+                [
+                    kCTFontAttributeName,
+                    kCTForegroundColorFromContextAttributeName,
+                ],
+                [font.cast::<c_void>(), kCFBooleanTrue],
+            )
+        };
+        let attributes = unsafe {
+            CFDictionaryCreate(
+                std::ptr::null(),
+                keys.as_ptr().cast::<*const c_void>(),
+                values.as_ptr(),
+                keys.len() as isize,
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        if attributes.is_null() {
+            release_cf(font);
+            release_cf(string);
+            return Err(RendererError::Text(
+                "CoreFoundation attribute dictionary creation failed".to_string(),
+            ));
+        }
+        let attributed = unsafe { CFAttributedStringCreate(std::ptr::null(), string, attributes) };
+        if attributed.is_null() {
+            release_cf(attributes);
+            release_cf(font);
+            release_cf(string);
+            return Err(RendererError::Text(
+                "CoreFoundation attributed string creation failed".to_string(),
+            ));
+        }
+        release_cf(attributes);
+        let line = unsafe { CTLineCreateWithAttributedString(attributed) };
+        if line.is_null() {
+            release_cf(attributed);
+            release_cf(font);
+            release_cf(string);
+            return Err(RendererError::Text(
+                "CoreText line creation failed".to_string(),
+            ));
+        }
+
+        let mut ascent = 0.0;
+        let mut descent = 0.0;
+        let mut leading = 0.0;
+        let width =
+            unsafe { CTLineGetTypographicBounds(line, &mut ascent, &mut descent, &mut leading) };
+        let metrics = RasterMetrics {
+            width: width.max(0.0).ceil() as f32,
+            height: (ascent + descent + leading).max(1.0).ceil() as f32,
+            baseline_from_top: ascent.max(0.0).ceil() as f32,
+        };
+        Ok(TextLayout {
+            font,
+            string,
+            attributed_string: attributed,
+            line,
+            metrics,
+        })
+    }
+
+    fn create_font(font_source: Option<&str>, font_size: f32) -> Result<CTFontRef, RendererError> {
+        if let Some(path) = font_source {
+            let bytes = std::fs::read(path).map_err(|err| {
+                RendererError::Text(format!("failed to read font source {path}: {err}"))
+            })?;
+            let data =
+                unsafe { CFDataCreate(std::ptr::null(), bytes.as_ptr(), bytes.len() as isize) };
+            if data.is_null() {
+                return Err(RendererError::Text(
+                    "CoreFoundation font data creation failed".to_string(),
+                ));
+            }
+            let provider = unsafe { CGDataProviderCreateWithCFData(data) };
+            if provider.is_null() {
+                release_cf(data);
+                return Err(RendererError::Text(
+                    "CoreGraphics data provider creation failed".to_string(),
+                ));
+            }
+            let font = unsafe { CGFontCreateWithDataProvider(provider) };
+            unsafe {
+                CGDataProviderRelease(provider);
+                release_cf(data);
+            }
+            if font.is_null() {
+                return Err(RendererError::Text(
+                    "CoreGraphics font creation failed".to_string(),
+                ));
+            }
+            let ct_font = unsafe {
+                CTFontCreateWithGraphicsFont(
+                    font,
+                    font_size as f64,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            };
+            unsafe { CGFontRelease(font) };
+            if ct_font.is_null() {
+                return Err(RendererError::Text(
+                    "CoreText font creation from graphics font failed".to_string(),
+                ));
+            }
+            return Ok(ct_font);
+        }
+
+        let family = cf_string("Helvetica")?;
+        let font = unsafe { CTFontCreateWithName(family, font_size as f64, std::ptr::null()) };
+        release_cf(family);
+        if font.is_null() {
+            return Err(RendererError::Text(
+                "CoreText system font creation failed".to_string(),
+            ));
+        }
+        Ok(font)
+    }
+
+    fn cf_string(value: &str) -> Result<CFStringRef, RendererError> {
+        let cstr = CString::new(value).map_err(|err| {
+            RendererError::Text(format!("failed to build CoreFoundation string: {err}"))
+        })?;
+        let string = unsafe {
+            CFStringCreateWithCString(std::ptr::null(), cstr.as_ptr(), K_CF_STRING_ENCODING_UTF8)
+        };
+        if string.is_null() {
+            return Err(RendererError::Text(
+                "CoreFoundation string creation failed".to_string(),
+            ));
+        }
+        Ok(string)
+    }
+
+    fn release_cf(value: CFTypeRef) {
+        if !value.is_null() {
+            unsafe { CFRelease(value) };
+        }
+    }
+
+    #[repr(C)]
+    struct MTLClearColor {
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    }
+
+    unsafe impl Encode for MTLClearColor {
+        const ENCODING: Encoding = Encoding::Struct(
+            "?",
+            &[f64::ENCODING, f64::ENCODING, f64::ENCODING, f64::ENCODING],
+        );
+    }
+
+    const MTL_LOAD_ACTION_CLEAR: u64 = 2;
+    const MTL_STORE_ACTION_STORE: u64 = 1;
+    const MTL_PIXEL_FORMAT_BGRA8_UNORM: u64 = 80;
+    const MTL_PIXEL_FORMAT_RGBA8_UNORM: u64 = 70;
+    const MTL_PRIMITIVE_TYPE_TRIANGLE: u64 = 3;
+    const MTL_SAMPLER_MIN_MAG_FILTER_LINEAR: u64 = 1;
+    const MTL_BLEND_OPERATION_ADD: u64 = 0;
+    const MTL_BLEND_FACTOR_ONE: u64 = 1;
+    const MTL_BLEND_FACTOR_SOURCE_ALPHA: u64 = 4;
+    const MTL_BLEND_FACTOR_ONE_MINUS_SOURCE_ALPHA: u64 = 5;
+    const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+    const K_CG_IMAGE_ALPHA_PREMULTIPLIED_LAST: u32 = 1;
+    const K_CG_BITMAP_BYTE_ORDER_32_BIG: u32 = 4 << 12;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct MetalVertex {
+        x: f32,
+        y: f32,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct MetalTexturedVertex {
+        x: f32,
+        y: f32,
+        u: f32,
+        v: f32,
+    }
+
+    #[repr(C)]
+    struct MTLOrigin {
+        x: u64,
+        y: u64,
+        z: u64,
+    }
+
+    unsafe impl Encode for MTLOrigin {
+        const ENCODING: Encoding =
+            Encoding::Struct("?", &[u64::ENCODING, u64::ENCODING, u64::ENCODING]);
+    }
+
+    #[repr(C)]
+    struct MTLSize {
+        width: u64,
+        height: u64,
+        depth: u64,
+    }
+
+    unsafe impl Encode for MTLSize {
+        const ENCODING: Encoding =
+            Encoding::Struct("?", &[u64::ENCODING, u64::ENCODING, u64::ENCODING]);
+    }
+
+    #[repr(C)]
+    struct MTLRegion {
+        origin: MTLOrigin,
+        size: MTLSize,
+    }
+
+    unsafe impl Encode for MTLRegion {
+        const ENCODING: Encoding = Encoding::Struct("?", &[MTLOrigin::ENCODING, MTLSize::ENCODING]);
+    }
+
+    unsafe impl Encode for CGPoint {
+        const ENCODING: Encoding = Encoding::Struct("CGPoint", &[f64::ENCODING, f64::ENCODING]);
+    }
+
+    unsafe impl Encode for CGSize {
+        const ENCODING: Encoding = Encoding::Struct("CGSize", &[f64::ENCODING, f64::ENCODING]);
+    }
+
+    unsafe impl Encode for CGRect {
+        const ENCODING: Encoding =
+            Encoding::Struct("CGRect", &[CGPoint::ENCODING, CGSize::ENCODING]);
+    }
+
+    unsafe impl Encode for CGAffineTransform {
+        const ENCODING: Encoding = Encoding::Struct(
+            "?",
+            &[
+                f64::ENCODING,
+                f64::ENCODING,
+                f64::ENCODING,
+                f64::ENCODING,
+                f64::ENCODING,
+                f64::ENCODING,
+            ],
+        );
+    }
+
+    pub fn present_clear(
+        command_queue: &MetalCommandQueue,
+        surface: &MetalSurface,
+        clear: ClearColor,
+    ) -> Result<(), RendererError> {
+        surface.sync_drawable_size()?;
+        let drawable: *mut AnyObject = unsafe { msg_send![surface.layer(), nextDrawable] };
+        if drawable.is_null() {
+            return Err(RendererError::Backend(
+                "CAMetalLayer did not provide a drawable".to_string(),
+            ));
+        }
+
+        let texture: *mut AnyObject = unsafe { msg_send![drawable, texture] };
+        if texture.is_null() {
+            return Err(RendererError::Backend(
+                "Metal drawable did not expose a texture".to_string(),
+            ));
+        }
+
+        let command_buffer: *mut AnyObject =
+            unsafe { msg_send![command_queue.as_raw(), commandBuffer] };
+        if command_buffer.is_null() {
+            return Err(RendererError::Backend(
+                "Metal command buffer creation failed".to_string(),
+            ));
+        }
+
+        let render_pass_descriptor: *mut AnyObject =
+            unsafe { msg_send![class!(MTLRenderPassDescriptor), renderPassDescriptor] };
+        if render_pass_descriptor.is_null() {
+            return Err(RendererError::Backend(
+                "Metal render pass descriptor creation failed".to_string(),
+            ));
+        }
+
+        let color_attachments: *mut AnyObject =
+            unsafe { msg_send![render_pass_descriptor, colorAttachments] };
+        if color_attachments.is_null() {
+            return Err(RendererError::Backend(
+                "Metal render pass color attachments are unavailable".to_string(),
+            ));
+        }
+
+        let color_attachment: *mut AnyObject =
+            unsafe { msg_send![color_attachments, objectAtIndexedSubscript: 0usize] };
+        if color_attachment.is_null() {
+            return Err(RendererError::Backend(
+                "Metal render pass color attachment 0 is unavailable".to_string(),
+            ));
+        }
+
+        let clear_color = MTLClearColor {
+            red: clear.red,
+            green: clear.green,
+            blue: clear.blue,
+            alpha: clear.alpha,
+        };
+        unsafe {
+            let _: () = msg_send![color_attachment, setTexture: texture];
+            let _: () = msg_send![color_attachment, setLoadAction: MTL_LOAD_ACTION_CLEAR];
+            let _: () = msg_send![color_attachment, setStoreAction: MTL_STORE_ACTION_STORE];
+            let _: () = msg_send![color_attachment, setClearColor: clear_color];
+        }
+
+        let encoder: *mut AnyObject = unsafe {
+            msg_send![command_buffer, renderCommandEncoderWithDescriptor: render_pass_descriptor]
+        };
+        if encoder.is_null() {
+            return Err(RendererError::Backend(
+                "Metal render command encoder creation failed".to_string(),
+            ));
+        }
+
+        unsafe {
+            let _: () = msg_send![encoder, endEncoding];
+            let _: () = msg_send![command_buffer, presentDrawable: drawable];
+            let _: () = msg_send![command_buffer, commit];
+        }
+        Ok(())
+    }
+
+    pub fn present_scene(
+        command_queue: &MetalCommandQueue,
+        surface: &MetalSurface,
+        solid_pipeline: Option<&MetalRenderPipelineState>,
+        textured_pipeline: Option<&MetalRenderPipelineState>,
+        sampler: Option<&MetalSamplerState>,
+        clear: ClearColor,
+        file_images: &[(&MetalTexture, BlitImage)],
+        rects: &[SolidRect],
+        overlay_images: &[(&MetalTexture, BlitImage)],
+    ) -> Result<(), RendererError> {
+        surface.sync_drawable_size()?;
+        let drawable: *mut AnyObject = unsafe { msg_send![surface.layer(), nextDrawable] };
+        if drawable.is_null() {
+            return Err(RendererError::Backend(
+                "CAMetalLayer did not provide a drawable".to_string(),
+            ));
+        }
+        let drawable_texture: *mut AnyObject = unsafe { msg_send![drawable, texture] };
+        if drawable_texture.is_null() {
+            return Err(RendererError::Backend(
+                "Metal drawable did not expose a texture".to_string(),
+            ));
+        }
+        let drawable_width: u64 = unsafe { msg_send![drawable_texture, width] };
+        let drawable_height: u64 = unsafe { msg_send![drawable_texture, height] };
+        if drawable_width == 0 || drawable_height == 0 {
+            return Err(RendererError::Backend(
+                "Metal drawable had invalid size".to_string(),
+            ));
+        }
+        let logical_size = surface.logical_size();
+        let surface_width = logical_size.width.max(1.0) as f32;
+        let surface_height = logical_size.height.max(1.0) as f32;
+
+        let command_buffer: *mut AnyObject =
+            unsafe { msg_send![command_queue.as_raw(), commandBuffer] };
+        if command_buffer.is_null() {
+            return Err(RendererError::Backend(
+                "Metal command buffer creation failed".to_string(),
+            ));
+        }
+        let render_pass_descriptor: *mut AnyObject =
+            unsafe { msg_send![class!(MTLRenderPassDescriptor), renderPassDescriptor] };
+        if render_pass_descriptor.is_null() {
+            return Err(RendererError::Backend(
+                "Metal render pass descriptor creation failed".to_string(),
+            ));
+        }
+        let color_attachments: *mut AnyObject =
+            unsafe { msg_send![render_pass_descriptor, colorAttachments] };
+        if color_attachments.is_null() {
+            return Err(RendererError::Backend(
+                "Metal render pass color attachments are unavailable".to_string(),
+            ));
+        }
+        let color_attachment: *mut AnyObject =
+            unsafe { msg_send![color_attachments, objectAtIndexedSubscript: 0usize] };
+        if color_attachment.is_null() {
+            return Err(RendererError::Backend(
+                "Metal render pass color attachment 0 is unavailable".to_string(),
+            ));
+        }
+        let clear_color = MTLClearColor {
+            red: clear.red,
+            green: clear.green,
+            blue: clear.blue,
+            alpha: clear.alpha,
+        };
+        unsafe {
+            let _: () = msg_send![color_attachment, setTexture: drawable_texture];
+            let _: () = msg_send![color_attachment, setLoadAction: MTL_LOAD_ACTION_CLEAR];
+            let _: () = msg_send![color_attachment, setStoreAction: MTL_STORE_ACTION_STORE];
+            let _: () = msg_send![color_attachment, setClearColor: clear_color];
+        }
+
+        let encoder: *mut AnyObject = unsafe {
+            msg_send![command_buffer, renderCommandEncoderWithDescriptor: render_pass_descriptor]
+        };
+        if encoder.is_null() {
+            return Err(RendererError::Backend(
+                "Metal render command encoder creation failed".to_string(),
+            ));
+        }
+
+        if !file_images.is_empty() || !overlay_images.is_empty() {
+            let pipeline = textured_pipeline.ok_or_else(|| {
+                RendererError::Backend(
+                    "Metal textured pipeline was unavailable for image rendering".to_string(),
+                )
+            })?;
+            let sampler = sampler.ok_or_else(|| {
+                RendererError::Backend(
+                    "Metal sampler was unavailable for image rendering".to_string(),
+                )
+            })?;
+            unsafe {
+                let _: () = msg_send![encoder, setRenderPipelineState: pipeline.as_raw()];
+                let _: () =
+                    msg_send![encoder, setFragmentSamplerState: sampler.as_raw(), atIndex: 0usize];
+            }
+
+            for (texture, image) in file_images {
+                let vertices = textured_rect_vertices(image, surface_width, surface_height);
+                let alpha = [image.alpha.clamp(0.0, 1.0)];
+                unsafe {
+                    let _: () = msg_send![
+                        encoder,
+                        setVertexBytes: vertices.as_ptr().cast::<c_void>(),
+                        length: std::mem::size_of_val(&vertices),
+                        atIndex: 0usize
+                    ];
+                    let _: () =
+                        msg_send![encoder, setFragmentTexture: texture.as_raw(), atIndex: 0usize];
+                    let _: () = msg_send![
+                        encoder,
+                        setFragmentBytes: alpha.as_ptr().cast::<c_void>(),
+                        length: std::mem::size_of_val(&alpha),
+                        atIndex: 0usize
+                    ];
+                    let _: () = msg_send![
+                        encoder,
+                        drawPrimitives: MTL_PRIMITIVE_TYPE_TRIANGLE,
+                        vertexStart: 0usize,
+                        vertexCount: vertices.len()
+                    ];
+                }
+            }
+        }
+
+        if !rects.is_empty() {
+            let pipeline = solid_pipeline.ok_or_else(|| {
+                RendererError::Backend(
+                    "Metal solid pipeline was unavailable for rectangle rendering".to_string(),
+                )
+            })?;
+            unsafe {
+                let _: () = msg_send![encoder, setRenderPipelineState: pipeline.as_raw()];
+            }
+
+            for rect in rects {
+                let vertices = rect_vertices(*rect, surface_width, surface_height);
+                let color = [rect.red, rect.green, rect.blue, rect.alpha];
+                unsafe {
+                    let _: () = msg_send![
+                        encoder,
+                        setVertexBytes: vertices.as_ptr().cast::<c_void>(),
+                        length: std::mem::size_of_val(&vertices),
+                        atIndex: 0usize
+                    ];
+                    let _: () = msg_send![
+                        encoder,
+                        setFragmentBytes: color.as_ptr().cast::<c_void>(),
+                        length: std::mem::size_of_val(&color),
+                        atIndex: 0usize
+                    ];
+                    let _: () = msg_send![
+                        encoder,
+                        drawPrimitives: MTL_PRIMITIVE_TYPE_TRIANGLE,
+                        vertexStart: 0usize,
+                        vertexCount: vertices.len()
+                    ];
+                }
+            }
+        }
+
+        if !overlay_images.is_empty() {
+            let pipeline = textured_pipeline.ok_or_else(|| {
+                RendererError::Backend(
+                    "Metal textured pipeline was unavailable for image rendering".to_string(),
+                )
+            })?;
+            let sampler = sampler.ok_or_else(|| {
+                RendererError::Backend(
+                    "Metal sampler was unavailable for image rendering".to_string(),
+                )
+            })?;
+            unsafe {
+                let _: () = msg_send![encoder, setRenderPipelineState: pipeline.as_raw()];
+                let _: () =
+                    msg_send![encoder, setFragmentSamplerState: sampler.as_raw(), atIndex: 0usize];
+            }
+
+            for (texture, image) in overlay_images {
+                let vertices = textured_rect_vertices(image, surface_width, surface_height);
+                let alpha = [image.alpha.clamp(0.0, 1.0)];
+                unsafe {
+                    let _: () = msg_send![
+                        encoder,
+                        setVertexBytes: vertices.as_ptr().cast::<c_void>(),
+                        length: std::mem::size_of_val(&vertices),
+                        atIndex: 0usize
+                    ];
+                    let _: () =
+                        msg_send![encoder, setFragmentTexture: texture.as_raw(), atIndex: 0usize];
+                    let _: () = msg_send![
+                        encoder,
+                        setFragmentBytes: alpha.as_ptr().cast::<c_void>(),
+                        length: std::mem::size_of_val(&alpha),
+                        atIndex: 0usize
+                    ];
+                    let _: () = msg_send![
+                        encoder,
+                        drawPrimitives: MTL_PRIMITIVE_TYPE_TRIANGLE,
+                        vertexStart: 0usize,
+                        vertexCount: vertices.len()
+                    ];
+                }
+            }
+        }
+
+        unsafe {
+            let _: () = msg_send![encoder, endEncoding];
+            let _: () = msg_send![command_buffer, presentDrawable: drawable];
+            let _: () = msg_send![command_buffer, commit];
+        }
+        Ok(())
+    }
+
+    fn rect_vertices(rect: SolidRect, surface_width: f32, surface_height: f32) -> [MetalVertex; 6] {
+        let x0 = clip_x(rect.x, surface_width);
+        let x1 = clip_x(rect.x + rect.width, surface_width);
+        let y0 = clip_y(rect.y, surface_height);
+        let y1 = clip_y(rect.y + rect.height, surface_height);
+        [
+            MetalVertex { x: x0, y: y0 },
+            MetalVertex { x: x1, y: y0 },
+            MetalVertex { x: x0, y: y1 },
+            MetalVertex { x: x1, y: y0 },
+            MetalVertex { x: x1, y: y1 },
+            MetalVertex { x: x0, y: y1 },
+        ]
+    }
+
+    fn textured_rect_vertices(
+        image: &BlitImage,
+        surface_width: f32,
+        surface_height: f32,
+    ) -> [MetalTexturedVertex; 6] {
+        let x0 = clip_x(image.x, surface_width);
+        let x1 = clip_x(image.x + image.width, surface_width);
+        let y0 = clip_y(image.y, surface_height);
+        let y1 = clip_y(image.y + image.height, surface_height);
+        let (v0, v1) = if image.flip_vertical {
+            (1.0, 0.0)
+        } else {
+            (0.0, 1.0)
+        };
+        [
+            MetalTexturedVertex {
+                x: x0,
+                y: y0,
+                u: 0.0,
+                v: v0,
+            },
+            MetalTexturedVertex {
+                x: x1,
+                y: y0,
+                u: 1.0,
+                v: v0,
+            },
+            MetalTexturedVertex {
+                x: x0,
+                y: y1,
+                u: 0.0,
+                v: v1,
+            },
+            MetalTexturedVertex {
+                x: x1,
+                y: y0,
+                u: 1.0,
+                v: v0,
+            },
+            MetalTexturedVertex {
+                x: x1,
+                y: y1,
+                u: 1.0,
+                v: v1,
+            },
+            MetalTexturedVertex {
+                x: x0,
+                y: y1,
+                u: 0.0,
+                v: v1,
+            },
+        ]
+    }
+
+    fn clip_x(x: f32, width: f32) -> f32 {
+        (x / width) * 2.0 - 1.0
+    }
+
+    fn clip_y(y: f32, height: f32) -> f32 {
+        1.0 - (y / height) * 2.0
+    }
+
+    fn ns_string(value: &str) -> Result<Retained<AnyObject>, RendererError> {
+        let cstr = CString::new(value).map_err(|err| {
+            RendererError::Backend(format!("failed to build NSString source: {err}"))
+        })?;
+        let string: *mut AnyObject =
+            unsafe { msg_send![class!(NSString), stringWithUTF8String: cstr.as_ptr()] };
+        unsafe { Retained::retain(string) }
+            .ok_or_else(|| RendererError::Backend("NSString allocation failed".to_string()))
+    }
+
+    fn library_error_message(error: *mut AnyObject) -> String {
+        if error.is_null() {
+            return "Metal shader compilation failed".to_string();
+        }
+        let description: *mut AnyObject = unsafe { msg_send![error, localizedDescription] };
+        if description.is_null() {
+            return "Metal shader compilation failed".to_string();
+        }
+        let utf8: *const i8 = unsafe { msg_send![description, UTF8String] };
+        if utf8.is_null() {
+            return "Metal shader compilation failed".to_string();
+        }
+        unsafe { std::ffi::CStr::from_ptr(utf8) }
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn shader_library(
+        device: &MetalDevice,
+        source_text: &str,
+    ) -> Result<Retained<AnyObject>, RendererError> {
+        let source = ns_string(source_text)?;
+        let mut error: *mut AnyObject = std::ptr::null_mut();
+        let library: Option<Retained<AnyObject>> = unsafe {
+            msg_send![
+                device.as_raw(),
+                newLibraryWithSource: &*source,
+                options: std::ptr::null_mut::<AnyObject>(),
+                error: &mut error
+            ]
+        };
+        library.ok_or_else(|| RendererError::Backend(library_error_message(error)))
+    }
+}
+
+impl GraphicsBackend for MetalBackend {
+    fn begin_frame(&mut self) -> Result<(), RendererError> {
+        self.ensure_bound()?;
+        self.recorded_commands.clear();
+        self.frame_open = true;
+        Ok(())
+    }
+
+    fn submit(&mut self, commands: &[FrameCommand]) -> Result<(), RendererError> {
+        self.ensure_bound()?;
+        if !self.frame_open {
+            return Err(RendererError::Backend(
+                "submit called before begin_frame".to_string(),
+            ));
+        }
+        self.recorded_commands.extend_from_slice(commands);
+        Ok(())
+    }
+
+    fn end_frame(&mut self) -> Result<(), RendererError> {
+        self.ensure_bound()?;
+        if !self.frame_open {
+            return Err(RendererError::Backend(
+                "end_frame called before begin_frame".to_string(),
+            ));
+        }
+        #[cfg(target_os = "macos")]
+        if self.state == MetalBackendState::SurfaceBound {
+            let clear = self.frame_clear_color().unwrap_or(ClearColor {
+                red: 0.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 1.0,
+            });
+            let rects = self.frame_solid_rects();
+            let file_images = self.frame_blit_images();
+            let generated_images = self.frame_generated_images()?;
+            let has_textured_images = !file_images.is_empty() || !generated_images.is_empty();
+            if rects.is_empty() && !has_textured_images {
+                let command_queue = self.command_queue.as_ref().ok_or_else(|| {
+                    RendererError::Backend("Metal command queue is unavailable".to_string())
+                })?;
+                let surface = self.surface.as_ref().ok_or_else(|| {
+                    RendererError::Backend("Metal surface is unavailable".to_string())
+                })?;
+                macos::present_clear(command_queue, surface, clear)?;
+            } else {
+                if self.pipeline_state.is_none() {
+                    let device = self.device.as_ref().ok_or_else(|| {
+                        RendererError::Backend("Metal device is unavailable".to_string())
+                    })?;
+                    self.pipeline_state = Some(macos::MetalRenderPipelineState::new_solid(device)?);
+                }
+                if has_textured_images && self.textured_pipeline_state.is_none() {
+                    let device = self.device.as_ref().ok_or_else(|| {
+                        RendererError::Backend("Metal device is unavailable".to_string())
+                    })?;
+                    self.textured_pipeline_state =
+                        Some(macos::MetalRenderPipelineState::new_textured(device)?);
+                }
+                if has_textured_images && self.sampler_state.is_none() {
+                    let device = self.device.as_ref().ok_or_else(|| {
+                        RendererError::Backend("Metal device is unavailable".to_string())
+                    })?;
+                    self.sampler_state = Some(macos::MetalSamplerState::new_linear(device)?);
+                }
+                self.ensure_image_resources()?;
+                let command_queue = self.command_queue.as_ref().ok_or_else(|| {
+                    RendererError::Backend("Metal command queue is unavailable".to_string())
+                })?;
+                let surface = self.surface.as_ref().ok_or_else(|| {
+                    RendererError::Backend("Metal surface is unavailable".to_string())
+                })?;
+                let bound_images = file_images
+                    .iter()
+                    .map(|image| {
+                        let texture = self.textures.get(&image.image_key).ok_or_else(|| {
+                            RendererError::Backend(format!(
+                                "Metal texture was not loaded for {}",
+                                image.image_key
+                            ))
+                        })?;
+                        Ok((texture, image.clone()))
+                    })
+                    .collect::<Result<Vec<_>, RendererError>>()?;
+                let device = self.device.as_ref().ok_or_else(|| {
+                    RendererError::Backend("Metal device is unavailable".to_string())
+                })?;
+                let transient_textures = generated_images
+                    .iter()
+                    .enumerate()
+                    .map(|(index, image)| {
+                        let key = format!("__loadngo_generated_{index}");
+                        let texture =
+                            macos::MetalTexture::from_decoded_image(device, &key, &image.image)?;
+                        Ok((texture, image.placement.clone()))
+                    })
+                    .collect::<Result<Vec<_>, RendererError>>()?;
+                macos::present_scene(
+                    command_queue,
+                    surface,
+                    self.pipeline_state.as_ref(),
+                    self.textured_pipeline_state.as_ref(),
+                    self.sampler_state.as_ref(),
+                    clear,
+                    &bound_images,
+                    &rects,
+                    &transient_textures
+                        .iter()
+                        .map(|(texture, image)| (texture, image.clone()))
+                        .collect::<Vec<_>>(),
+                )?;
+            }
+        }
+        self.frame_open = false;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use loadngo_renderer::{FrameCommand, Renderer, RendererConfig};
+    use ui_core::geometry::Color;
+
+    #[test]
+    fn unbound_backend_rejects_frames() {
+        let mut backend = MetalBackend::new();
+        let err = backend
+            .begin_frame()
+            .expect_err("unbound backend should reject rendering");
+        match err {
+            RendererError::Backend(message) => {
+                assert!(message.contains("not bound"));
+            }
+            other => panic!("expected backend error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn headless_backend_records_frame_commands() {
+        let renderer = Renderer::new(RendererConfig::default());
+        let commands = vec![FrameCommand::Clear {
+            color: Color::rgba(1, 2, 3, 255),
+        }];
+        let mut backend = MetalBackend::new_headless();
+        renderer
+            .render(&mut backend, &commands)
+            .expect("headless backend should accept commands");
+        assert_eq!(backend.take_recorded_commands(), commands);
+    }
+
+    #[test]
+    fn frame_clear_color_prefers_last_clear_command() {
+        let mut backend = MetalBackend::new_headless();
+        backend.recorded_commands = vec![
+            FrameCommand::Clear {
+                color: Color::rgba(10, 20, 30, 255),
+            },
+            FrameCommand::FillRect {
+                rect: ui_core::geometry::Rect {
+                    x: 0,
+                    y: 0,
+                    width: 10,
+                    height: 10,
+                },
+                color: Color::rgba(255, 0, 0, 255),
+            },
+            FrameCommand::Clear {
+                color: Color::rgba(40, 50, 60, 128),
+            },
+        ];
+        assert_eq!(
+            backend.frame_clear_color(),
+            Some(ClearColor {
+                red: 40.0 / 255.0,
+                green: 50.0 / 255.0,
+                blue: 60.0 / 255.0,
+                alpha: 128.0 / 255.0,
+            })
+        );
+    }
+
+    #[test]
+    fn stroke_rect_expands_to_four_solid_rects() {
+        let mut backend = MetalBackend::new_headless();
+        backend.recorded_commands = vec![FrameCommand::StrokeRect {
+            rect: ui_core::geometry::Rect {
+                x: 10,
+                y: 20,
+                width: 100,
+                height: 40,
+            },
+            color: Color::rgba(255, 255, 255, 255),
+            thickness: 4,
+        }];
+        let rects = backend.frame_solid_rects();
+        assert_eq!(rects.len(), 4);
+        assert!(rects.iter().all(|rect| rect.alpha > 0.0));
+    }
+
+    #[test]
+    fn rasterized_line_generates_pixels() {
+        let image = rasterize_line(
+            ui_core::geometry::Point { x: 0, y: 0 },
+            ui_core::geometry::Point { x: 8, y: 0 },
+            Color::rgba(255, 0, 0, 255),
+            2,
+        )
+        .expect("line should rasterize");
+        assert!(image.image.rgba8.iter().any(|byte| *byte != 0));
+    }
+
+    #[test]
+    fn rasterized_circle_generates_pixels() {
+        let image = rasterize_circle(
+            ui_core::geometry::Point { x: 8, y: 8 },
+            4,
+            Color::rgba(0, 255, 0, 255),
+        )
+        .expect("circle should rasterize");
+        assert!(image.image.rgba8.iter().any(|byte| *byte != 0));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_backend_binds_system_default_device() {
+        let backend = MetalBackend::try_bind_system_default()
+            .expect("macOS should expose a default Metal device");
+        assert_eq!(backend.state(), MetalBackendState::Ready);
+        assert!(backend.has_bound_device());
+    }
+}

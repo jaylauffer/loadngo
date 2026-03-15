@@ -95,7 +95,7 @@ impl ButtonModel {
     pub fn paint(&self, scene: &mut Vec<PaintOp>) {
         scene.push(PaintOp::FillRect {
             rect: self.bounds,
-            color: Color::rgba(0xf0, 0xf0, 0xf0, 0xff),
+            color: Color::rgba(0xf0, 0xf0, 0xf0, 0xd8),
         });
         scene.push(PaintOp::Text {
             rect: self.bounds,
@@ -108,7 +108,7 @@ impl ButtonModel {
         if self.hover || self.focused {
             scene.push(PaintOp::StrokeRect {
                 rect: self.bounds,
-                color: Color::rgba(0x70, 0x70, 0x70, 0xff),
+                color: Color::rgba(0x70, 0x70, 0x70, 0xdc),
             });
         }
     }

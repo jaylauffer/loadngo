@@ -1,0 +1,68 @@
+(
+    novel_font: (
+        family_name: Some("Mechanical Bold Oblique"),
+        asset_rel_paths: [
+            "mechanical-font/MechanicalBoldOblique-aOlo.otf",
+        ],
+        platform_paths: (
+            macos: [
+                "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+                "/System/Library/Fonts/Supplemental/Tahoma.ttf",
+            ],
+            android: [
+                "/system/fonts/NotoSans-Regular.ttf",
+                "/system/fonts/Roboto-Regular.ttf",
+            ],
+            windows: [
+                "C:/Windows/Fonts/arialuni.ttf",
+                "C:/Windows/Fonts/segoeui.ttf",
+            ],
+            linux: [
+                "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+            ],
+        ),
+        platform_families: (
+            macos: [
+                "Hiragino Sans",
+                "PingFang SC",
+                "Arial Unicode MS",
+            ],
+            ios: [
+                "Hiragino Sans",
+                "PingFang SC",
+                "Arial Unicode MS",
+            ],
+            android: [
+                "Noto Sans",
+                "Noto Sans CJK JP",
+                "Noto Sans Arabic",
+                "Noto Sans Devanagari",
+            ],
+            windows: [
+                "Yu Gothic UI",
+                "Segoe UI",
+                "Segoe UI Symbol",
+            ],
+            linux: [
+                "Noto Sans",
+                "Noto Sans CJK JP",
+                "Noto Sans Arabic",
+                "Noto Sans Devanagari",
+            ],
+        ),
+    ),
+    fallback_fonts: [
+        (
+            family_name: Some("Passageway"),
+            asset_rel_paths: [
+                "passageway-font/Passageway-8qzz.otf",
+            ],
+        ),
+        (
+            family_name: Some("Glametrix"),
+            asset_rel_paths: [
+                "glametrix-font/Glametrix-oj9A.otf",
+            ],
+        ),
+    ],
+)

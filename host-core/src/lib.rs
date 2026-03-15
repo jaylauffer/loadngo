@@ -361,19 +361,27 @@ pub enum RenderOp {
     },
 }
 
-pub trait DesktopHostBackend {
-    type FontHandle;
-    type TextureHandle: Clone;
-
+pub trait DesktopPlatformBackend {
     fn launch<F>(window: WindowDescriptor, icon: Option<WindowIconSet>, entry: F)
     where
         F: Future<Output = ()> + 'static;
 
     fn capture_frame() -> HostFrame;
 
+    fn next_frame() -> Pin<Box<dyn Future<Output = ()>>>;
+
+    fn simulate_mouse_with_touch(enabled: bool);
+}
+
+pub trait AssetIoBackend {
     fn load_bytes(path: &str) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>>>>;
 
     fn load_text(path: &str) -> Pin<Box<dyn Future<Output = Result<String, String>>>>;
+}
+
+pub trait DesktopGraphicsBackend {
+    type FontHandle;
+    type TextureHandle: Clone;
 
     fn load_font(path: &str) -> Pin<Box<dyn Future<Output = Result<Self::FontHandle, String>>>>;
 
@@ -389,6 +397,16 @@ pub trait DesktopHostBackend {
     fn upload_texture(image: &DecodedImage) -> Result<Self::TextureHandle, String>;
 
     fn blit_texture(texture: &Self::TextureHandle, rect: Rect, alpha: f32);
+}
+
+pub trait DesktopHostBackend:
+    DesktopPlatformBackend + AssetIoBackend + DesktopGraphicsBackend
+{
+}
+
+impl<T> DesktopHostBackend for T where
+    T: DesktopPlatformBackend + AssetIoBackend + DesktopGraphicsBackend
+{
 }
 
 #[cfg(test)]
