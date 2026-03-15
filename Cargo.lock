@@ -350,6 +350,7 @@ name = "gui-win32"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "loadngo-host-core",
  "tracing",
  "ui-core",
  "windows",
@@ -377,6 +378,7 @@ checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
 name = "host-mac"
 version = "0.1.0"
 dependencies = [
+ "loadngo-host-core",
  "macroquad",
  "ui-core",
 ]
@@ -414,6 +416,7 @@ dependencies = [
  "bytemuck",
  "byteorder",
  "color_quant",
+ "jpeg-decoder",
  "num-traits",
  "png",
 ]
@@ -433,6 +436,12 @@ name = "itoa"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
+
+[[package]]
+name = "jpeg-decoder"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
 
 [[package]]
 name = "js-sys"
@@ -461,6 +470,15 @@ name = "linux-raw-sys"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df1d3c3b53da64cf5760482273a98e575c651a67eec7f77df96b5b642de8f039"
+
+[[package]]
+name = "loadngo-host-core"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "serde",
+ "ui-core",
+]
 
 [[package]]
 name = "log"

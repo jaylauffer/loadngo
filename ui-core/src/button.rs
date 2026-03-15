@@ -3,11 +3,12 @@ use crate::{
     geometry::{Color, Rect},
     input::{Key, PointerButton, UiEvent},
     paint::{PaintOp, TextStyle},
-    widget::WidgetResponse,
+    widget::{WidgetId, WidgetResponse},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ButtonModel {
+    pub widget_id: WidgetId,
     pub bounds: Rect,
     pub text: String,
     pub hover: bool,
@@ -17,7 +18,12 @@ pub struct ButtonModel {
 
 impl ButtonModel {
     pub fn new(text: impl Into<String>, bounds: Rect) -> Self {
+        Self::with_id(WidgetId(0), text, bounds)
+    }
+
+    pub fn with_id(widget_id: WidgetId, text: impl Into<String>, bounds: Rect) -> Self {
         Self {
+            widget_id,
             bounds,
             text: text.into(),
             hover: false,
@@ -64,7 +70,7 @@ impl ButtonModel {
                 let was_pressed = self.pressed;
                 self.pressed = false;
                 if was_pressed && self.bounds.contains(state.position) {
-                    return WidgetResponse::command(0);
+                    return WidgetResponse::activate(self.widget_id);
                 }
                 if was_pressed {
                     return WidgetResponse::redraw();
@@ -81,7 +87,7 @@ impl ButtonModel {
             UiEvent::KeyPressed {
                 key: Key::Enter | Key::Space,
                 ..
-            } => WidgetResponse::command(0),
+            } => WidgetResponse::activate(self.widget_id),
             _ => WidgetResponse::default(),
         }
     }
@@ -118,7 +124,7 @@ impl Button {
     pub fn new(id: i32, text: impl Into<String>, bounds: Rect) -> Self {
         Self {
             id,
-            model: ButtonModel::new(text, bounds),
+            model: ButtonModel::with_id(WidgetId(id as u64), text, bounds),
         }
     }
 
@@ -183,14 +189,16 @@ mod tests {
     };
 
     use super::ButtonModel;
+    use crate::widget::{WidgetAction, WidgetId};
 
     fn pointer(x: i32, y: i32) -> PointerState {
         PointerState::mouse(Point { x, y }, Modifiers::default())
     }
 
     #[test]
-    fn button_click_emits_command() {
-        let mut button = ButtonModel::new(
+    fn button_click_emits_activation() {
+        let mut button = ButtonModel::with_id(
+            WidgetId(7),
             "Run",
             Rect {
                 x: 0,
@@ -214,7 +222,7 @@ mod tests {
             state: pointer(5, 5),
         });
 
-        assert_eq!(response.command, Some(0));
+        assert_eq!(response.action, Some(WidgetAction::Activate(WidgetId(7))));
     }
 
     #[test]

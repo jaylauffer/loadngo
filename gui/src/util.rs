@@ -1,5 +1,9 @@
+use std::collections::HashMap;
 use std::os::windows::ffi::OsStrExt;
+use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
+use loadngo_host_core::{DecodedImage, ImageRegistry};
 use ui_core::{
     geometry::{Color, Point, Rect},
     input::{Key, Modifiers, PointerButton, PointerSource, PointerState},
@@ -8,8 +12,9 @@ use ui_core::{
 use windows::Win32::Foundation::{COLORREF, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
     CreatePen, CreateSolidBrush, DeleteObject, DrawTextW, FillRect, GetStockObject, Rectangle,
-    SelectObject, SetTextColor, DEFAULT_GUI_FONT, DT_CENTER, DT_SINGLELINE, DT_VCENTER, HBRUSH,
-    HDC, PS_SOLID,
+    SelectObject, SetTextColor, StretchDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+    DEFAULT_GUI_FONT, DIB_RGB_COLORS, DT_CENTER, DT_SINGLELINE, DT_VCENTER, HBRUSH, HDC, PS_SOLID,
+    SRCCOPY,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_DOWN, VK_LEFT, VK_RETURN, VK_RIGHT, VK_SPACE, VK_UP,
@@ -89,10 +94,65 @@ pub fn render_paint_ops(dc: HDC, ops: &[PaintOp]) {
                     let _ = SelectObject(dc, old_pen);
                     let _ = DeleteObject(pen);
                 }
-                PaintOp::BlitImage { .. } => {}
+                PaintOp::BlitImage { rect, image_key } => render_image(dc, *rect, image_key),
             }
         }
     }
+}
+
+fn render_image(dc: HDC, rect: Rect, image_key: &str) {
+    let Some(image) = image_for_key(image_key) else {
+        return;
+    };
+
+    let mut bmi = BITMAPINFO::default();
+    bmi.bmiHeader = BITMAPINFOHEADER {
+        biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+        biWidth: image.width as i32,
+        biHeight: -(image.height as i32),
+        biPlanes: 1,
+        biBitCount: 32,
+        biCompression: BI_RGB.0 as u32,
+        biSizeImage: image.rgba8.len() as u32,
+        ..Default::default()
+    };
+
+    unsafe {
+        let _ = StretchDIBits(
+            dc,
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            0,
+            0,
+            image.width as i32,
+            image.height as i32,
+            Some(image.rgba8.as_ptr() as *const _),
+            &bmi,
+            DIB_RGB_COLORS,
+            SRCCOPY,
+        );
+    }
+}
+
+fn image_for_key(image_key: &str) -> Option<DecodedImage> {
+    static REGISTRY: OnceLock<Mutex<ImageRegistry>> = OnceLock::new();
+    let registry = REGISTRY.get_or_init(|| Mutex::new(ImageRegistry::new()));
+    let mut guard = registry.lock().ok()?;
+    if let Some(image) = guard.get(image_key) {
+        return Some(rgba_to_bgra(image.clone()));
+    }
+    let path = Path::new(image_key);
+    let image = guard.load_path(image_key.to_string(), path).ok()?.clone();
+    Some(rgba_to_bgra(image))
+}
+
+fn rgba_to_bgra(mut image: DecodedImage) -> DecodedImage {
+    for px in image.rgba8.chunks_exact_mut(4) {
+        px.swap(0, 2);
+    }
+    image
 }
 
 fn render_text(dc: HDC, rect: Rect, text: &str, style: &TextStyle) {

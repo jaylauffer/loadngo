@@ -6,6 +6,7 @@ members = [
     "gui",
     "gui-win32",
     "host-mac",
+    "host-core",
     "ui-core",
 ]
 resolver = "2"
@@ -49,3 +50,4 @@ serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 chrono = "0.4"
+image = { version = "0.24.9", default-features = false, features = ["png", "jpeg"] }

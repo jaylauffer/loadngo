@@ -49,7 +49,7 @@ pub mod window;
 #[cfg(windows)]
 pub use basic_button::{BasicButton, HitTrackButton};
 #[cfg(windows)]
-pub use bitmap::Bitmap;
+pub use bitmap::Bitmap as NativeBitmap;
 #[cfg(windows)]
 pub use buffered::{BufferedWnd, ImgBuffer, WM_INVALIDATE};
 #[cfg(windows)]

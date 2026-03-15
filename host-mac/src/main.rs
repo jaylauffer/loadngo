@@ -1,7 +1,12 @@
 #[cfg(target_os = "macos")]
+use loadngo_host_core::ImageRegistry;
+#[cfg(target_os = "macos")]
 use macroquad::prelude::*;
 #[cfg(target_os = "macos")]
+use std::collections::HashMap;
+#[cfg(target_os = "macos")]
 use ui_core::{
+    bitmap::BitmapModel,
     button::ButtonModel,
     combo::ListCombo,
     component::Component,
@@ -38,7 +43,44 @@ struct Layout {
 }
 
 #[cfg(target_os = "macos")]
+struct TextureRegistry {
+    textures: HashMap<String, Texture2D>,
+    images: ImageRegistry,
+}
+
+#[cfg(target_os = "macos")]
+impl TextureRegistry {
+    fn new() -> Self {
+        Self {
+            textures: HashMap::new(),
+            images: ImageRegistry::new(),
+        }
+    }
+
+    fn texture_for_key(&mut self, image_key: &str) -> Option<Texture2D> {
+        if let Some(texture) = self.textures.get(image_key) {
+            return Some(texture.clone());
+        }
+
+        let decoded = self
+            .images
+            .load_path(image_key.to_string(), std::path::Path::new(image_key))
+            .ok()?;
+        if decoded.width > u16::MAX as u32 || decoded.height > u16::MAX as u32 {
+            return None;
+        }
+
+        let texture =
+            Texture2D::from_rgba8(decoded.width as u16, decoded.height as u16, &decoded.rgba8);
+        texture.set_filter(FilterMode::Linear);
+        self.textures.insert(image_key.to_string(), texture.clone());
+        Some(texture)
+    }
+}
+
+#[cfg(target_os = "macos")]
 struct MacHostApp {
+    image: BitmapModel,
     button: ButtonModel,
     list_state: ListState,
     list_items: Vec<String>,
@@ -47,6 +89,7 @@ struct MacHostApp {
     tree: TreeControl,
     event_log: Vec<String>,
     focus: FocusTarget,
+    images: TextureRegistry,
 }
 
 #[cfg(target_os = "macos")]
@@ -97,6 +140,15 @@ impl MacHostApp {
         let _ = tree.push_child(backend, "macOS host");
 
         Self {
+            image: BitmapModel::new(
+                "Outline/Web/20080626-loadngo-outline-logo.jpg",
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 220,
+                    height: 140,
+                },
+            ),
             button: ButtonModel::new(
                 "Acknowledge primitive",
                 Rect {
@@ -113,6 +165,7 @@ impl MacHostApp {
             tree,
             event_log: vec!["macOS host backend online".to_string()],
             focus: FocusTarget::Button,
+            images: TextureRegistry::new(),
         }
     }
 
@@ -133,26 +186,33 @@ impl MacHostApp {
             width: right_width,
             height: 44,
         };
-        let tabs_rect = Rect {
+        let image_rect = Rect {
             x: right_x,
             y: 88,
+            width: 240,
+            height: 150,
+        };
+        let tabs_rect = Rect {
+            x: right_x,
+            y: 258,
             width: right_width,
             height: 32,
         };
         let combo_rect = Rect {
             x: right_x,
-            y: 138,
+            y: 308,
             width: 280,
             height: 34,
         };
         let tree_rect = Rect {
             x: right_x,
-            y: 188,
+            y: 358,
             width: right_width,
             height: 180,
         };
 
         self.button.set_bounds(button_rect);
+        self.image.set_bounds(image_rect);
         self.tabs.set_bounds(tabs_rect);
         self.combo.set_bounds(combo_rect);
         self.tree.set_bounds(tree_rect);
@@ -221,9 +281,9 @@ impl MacHostApp {
                 button: PointerButton::Primary,
                 state: pointer,
             });
-            if response.command.is_some() {
+            if response.action.is_some() {
                 self.event_log
-                    .push("button command emitted from ui-core".to_string());
+                    .push("button activation emitted from ui-core".to_string());
             }
 
             let (_, interaction) = self.list_state.handle_event(UiEvent::PointerReleased {
@@ -298,9 +358,9 @@ impl MacHostApp {
                         key: Key::Enter,
                         modifiers: Modifiers::default(),
                     });
-                    if response.command.is_some() {
+                    if response.action.is_some() {
                         self.event_log
-                            .push("keyboard command emitted from ui-core".to_string());
+                            .push("keyboard activation emitted from ui-core".to_string());
                     }
                 }
             }
@@ -378,9 +438,9 @@ impl MacHostApp {
                         button: PointerButton::Primary,
                         state: pointer,
                     });
-                    if response.command.is_some() {
+                    if response.action.is_some() {
                         self.event_log
-                            .push("touch command emitted from ui-core".to_string());
+                            .push("touch activation emitted from ui-core".to_string());
                     }
 
                     let (_, interaction) = self.list_state.handle_event(UiEvent::PointerReleased {
@@ -516,7 +576,7 @@ impl MacHostApp {
         }
     }
 
-    fn draw(&self, layout: &Layout) {
+    fn draw(&mut self, layout: &Layout) {
         clear_background(color_u8!(245, 241, 231, 255));
 
         draw_rectangle(
@@ -536,11 +596,12 @@ impl MacHostApp {
         );
 
         let mut scene = Vec::new();
+        self.image.paint(&mut scene);
         self.button.paint(&mut scene);
         self.tabs.paint(&mut scene);
         self.combo.paint(&mut scene);
         self.tree.paint(&mut scene);
-        render_paint_ops(&scene);
+        render_paint_ops(&scene, &mut self.images);
 
         for (offset, rect) in self.list_state.item_bounds.iter().enumerate() {
             let index = self.list_state.visible_pos + offset;
@@ -632,7 +693,7 @@ impl MacHostApp {
 }
 
 #[cfg(target_os = "macos")]
-fn render_paint_ops(ops: &[PaintOp]) {
+fn render_paint_ops(ops: &[PaintOp], images: &mut TextureRegistry) {
     for op in ops {
         match op {
             PaintOp::FillRect { rect, color } => draw_rectangle(
@@ -659,7 +720,20 @@ fn render_paint_ops(ops: &[PaintOp]) {
                 mq_color(*color),
             ),
             PaintOp::Text { rect, text, style } => draw_text_centered(text, *rect, style),
-            PaintOp::BlitImage { .. } => {}
+            PaintOp::BlitImage { rect, image_key } => {
+                if let Some(texture) = images.texture_for_key(image_key) {
+                    draw_texture_ex(
+                        &texture,
+                        rect.x as f32,
+                        rect.y as f32,
+                        WHITE,
+                        DrawTextureParams {
+                            dest_size: Some(vec2(rect.width as f32, rect.height as f32)),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
         }
     }
 }

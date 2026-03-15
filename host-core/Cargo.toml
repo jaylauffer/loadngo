@@ -1,11 +1,11 @@
 [package]
-name = "host-mac"
+name = "loadngo-host-core"
 version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
 [dependencies]
-macroquad = "0.4"
 ui-core = { path = "../ui-core" }
-loadngo-host-core = { path = "../host-core" }
+serde.workspace = true
+image.workspace = true

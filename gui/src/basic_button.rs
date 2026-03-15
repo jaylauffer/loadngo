@@ -80,7 +80,11 @@ impl BasicButton {
                 bounds,
                 id,
                 listeners: ComponentEventProc::new(),
-                model: ButtonModel::new(text, rect_to_core(bounds)),
+                model: ButtonModel::with_id(
+                    ui_core::WidgetId(id as u64),
+                    text,
+                    rect_to_core(bounds),
+                ),
             };
             SetWindowLongPtrW(hwnd, GWL_USERDATA, &mut btn as *mut _ as isize);
             ShowWindow(hwnd, SW_SHOW);
@@ -104,7 +108,7 @@ impl BasicButton {
         if response.request_redraw {
             self.request_redraw();
         }
-        if response.command.is_some() {
+        if response.action.is_some() {
             self.notify_click();
         }
     }
