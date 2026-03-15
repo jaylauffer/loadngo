@@ -3,6 +3,7 @@
 //! Platform-specific adapters are re-exported behind backend shims.
 
 pub use ui_core::{
+    bitmap::{Bitmap, BitmapModel},
     button::{Button, ButtonModel},
     combo::ListCombo,
     component::Component,
@@ -73,8 +74,8 @@ pub mod window {
 
 #[cfg(windows)]
 pub use gui_win32::{
-    BasicButton, Bitmap, BufferedWnd, ComponentEvent, ComponentEventProc, ComponentListener,
-    Container, ContainerHost, HitTrackButton, HostWindow, HostedComponent, ImgBuffer, ListBox,
+    BasicButton, BufferedWnd, ComponentEvent, ComponentEventProc, ComponentListener, Container,
+    ContainerHost, HitTrackButton, HostWindow, HostedComponent, ImgBuffer, ListBox, NativeBitmap,
     NativeButton, NativeListCombo, NativeTabPage, NativeTabbedContainer, NativeTreeCombo,
     NativeTreeControl, WM_INVALIDATE,
 };

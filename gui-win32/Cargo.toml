@@ -11,3 +11,4 @@ windows.workspace = true
 tracing.workspace = true
 windows-core.workspace = true
 ui-core = { path = "../ui-core" }
+loadngo-host-core = { path = "../host-core" }

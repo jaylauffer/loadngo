@@ -1,3 +1,4 @@
+pub mod bitmap;
 pub mod button;
 pub mod combo;
 pub mod component;
@@ -9,6 +10,7 @@ pub mod tabs;
 pub mod tree;
 pub mod widget;
 
+pub use bitmap::{Bitmap, BitmapModel};
 pub use button::{Button, ButtonModel};
 pub use combo::ListCombo;
 pub use component::Component;
@@ -18,4 +20,4 @@ pub use list::{ListInteraction, ListState};
 pub use paint::{PaintOp, TextStyle};
 pub use tabs::{TabPage, TabbedContainer};
 pub use tree::{TreeCombo, TreeControl, TreeNode};
-pub use widget::{WidgetId, WidgetResponse};
+pub use widget::{WidgetAction, WidgetId, WidgetResponse};
