@@ -1,4 +1,5 @@
-use crate::component::Component;
+use crate::util::{point_to_core, rect_from_core};
+use gui_win32::component::HostedComponent;
 use std::ptr::NonNull;
 use tracing::debug;
 use windows::core::implement;
@@ -22,7 +23,7 @@ const WM_MOUSELEAVE_CONST: u32 = 0x02A3;
 /// Simple container that owns child Components and forwards messages.
 pub struct Container {
     pub hwnd: HWND,
-    pub children: Vec<Box<dyn Component>>,
+    pub children: Vec<Box<dyn HostedComponent>>,
     focus_idx: Option<usize>,
     hover_idx: Option<usize>,
     capturing_idx: Option<usize>,
@@ -47,7 +48,7 @@ impl Container {
         self.hwnd = hwnd;
     }
 
-    pub fn add(&mut self, child: Box<dyn Component>) {
+    pub fn add(&mut self, child: Box<dyn HostedComponent>) {
         self.children.push(child);
     }
 
@@ -86,13 +87,12 @@ impl Container {
         let y = start.y;
         for child in self.children.iter_mut() {
             let mut rc = child.bounds();
-            let w = rc.right - rc.left;
-            let h = rc.bottom - rc.top;
-            rc.left = x;
-            rc.top = y;
-            rc.right = x + w;
-            rc.bottom = y + h;
+            let w = rc.width;
+            let h = rc.height;
+            rc.x = x;
+            rc.y = y;
             child.set_bounds(rc);
+            let rc = rect_from_core(rc);
             unsafe {
                 let _ = MoveWindow(child.hwnd(), rc.left, rc.top, w, h, true);
             }
@@ -245,7 +245,7 @@ impl Container {
                 if msg == WM_LBUTTONUP {
                     self.capturing_idx = None;
                     // Update hover state based on the release point.
-                    if !child.hit_test(pt) {
+                    if !child.hit_test(point_to_core(pt)) {
                         child.mouse_exited();
                         self.hover_idx = None;
                     } else {
@@ -307,7 +307,9 @@ impl Container {
     }
 
     fn hit_test(&self, pt: POINT) -> Option<usize> {
-        self.children.iter().position(|c| c.hit_test(pt))
+        self.children
+            .iter()
+            .position(|c| c.hit_test(point_to_core(pt)))
     }
 
     fn to_client_point(&self, lparam: LPARAM) -> POINT {
@@ -325,7 +327,7 @@ impl Container {
     fn handle_drop(&mut self, files: Vec<String>, pt: POINT) -> bool {
         if let Some(idx) = self.hit_test(pt) {
             if let Some(child) = self.children.get_mut(idx) {
-                return child.drop_files(&files, pt);
+                return child.drop_files(&files, point_to_core(pt));
             }
         }
         false
@@ -334,7 +336,7 @@ impl Container {
     fn handle_drag_over(&mut self, pt: POINT) -> bool {
         if let Some(idx) = self.hit_test(pt) {
             if let Some(child) = self.children.get_mut(idx) {
-                return child.drag_over(pt);
+                return child.drag_over(point_to_core(pt));
             }
         }
         false

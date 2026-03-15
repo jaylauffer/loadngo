@@ -4,6 +4,9 @@ members = [
     "data",
     "network",
     "gui",
+    "gui-win32",
+    "host-mac",
+    "ui-core",
 ]
 resolver = "2"
 

@@ -4,7 +4,6 @@ use std::sync::{Arc, Once};
 use data::{service::Service, task::Task, task_compare::TaskComparator};
 use gui::{
     bitmap::Bitmap,
-    component::Component,
     list::{ListBox, ListBoxItem},
 };
 use windows::{

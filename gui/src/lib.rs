@@ -1,35 +1,80 @@
-//! Minimal GUI base layer extracted from the legacy loadngoGUI components.
-//! This crate provides lightweight wrappers for HWND-backed components,
-//! containers, simple buttons, and bitmap loading. It is intentionally thin
-//! scaffolding to support higher-level Day/Project planner windows.
+//! Platform-agnostic GUI facade for loadngo.
+//! Shared widget state and paint/event primitives live in `ui-core`.
+//! Platform-specific adapters are re-exported behind backend shims.
 
-pub mod basic_button;
-pub mod bitmap;
-pub mod buffered;
+pub use ui_core::{
+    button::{Button, ButtonModel},
+    combo::ListCombo,
+    component::Component,
+    geometry::{Color, Insets, Point, Rect, Size},
+    input::{Key, Modifiers, PointerButton, PointerState, UiEvent},
+    list::{ListInteraction, ListState},
+    paint::{PaintOp, TextStyle},
+    tabs::{TabPage, TabbedContainer},
+    tree::{TreeCombo, TreeControl, TreeNode},
+    widget::{WidgetId, WidgetResponse},
+};
+
 pub mod button;
 pub mod component;
-pub mod container;
-pub mod container_host;
-pub mod event;
-pub mod event_proc;
-pub mod list;
-pub mod listener;
-pub mod tabs;
-pub mod tree;
-pub mod util;
-pub mod window;
 
-pub use basic_button::{BasicButton, HitTrackButton};
-pub use bitmap::Bitmap;
-pub use buffered::{BufferedWnd, ImgBuffer, WM_INVALIDATE};
-pub use button::Button;
-pub use component::Component;
-pub use container::Container;
-pub use container_host::ContainerHost;
-pub use event::ComponentEvent;
-pub use event_proc::ComponentEventProc;
-pub use list::{ListBox, ListCombo};
-pub use listener::ComponentListener;
-pub use tabs::{TabPage, TabbedContainer};
-pub use tree::{TreeCombo, TreeControl};
-pub use window::HostWindow;
+#[cfg(windows)]
+pub mod basic_button {
+    pub use gui_win32::basic_button::*;
+}
+#[cfg(windows)]
+pub mod bitmap {
+    pub use gui_win32::bitmap::*;
+}
+#[cfg(windows)]
+pub mod buffered {
+    pub use gui_win32::buffered::*;
+}
+#[cfg(windows)]
+pub mod container {
+    pub use gui_win32::container::*;
+}
+#[cfg(windows)]
+pub mod container_host {
+    pub use gui_win32::container_host::*;
+}
+#[cfg(windows)]
+pub mod event {
+    pub use gui_win32::event::*;
+}
+#[cfg(windows)]
+pub mod event_proc {
+    pub use gui_win32::event_proc::*;
+}
+#[cfg(windows)]
+pub mod list {
+    pub use gui_win32::list::*;
+}
+#[cfg(windows)]
+pub mod listener {
+    pub use gui_win32::listener::*;
+}
+#[cfg(windows)]
+pub mod tabs {
+    pub use gui_win32::tabs::*;
+}
+#[cfg(windows)]
+pub mod tree {
+    pub use gui_win32::tree::*;
+}
+#[cfg(windows)]
+pub mod util {
+    pub use gui_win32::util::*;
+}
+#[cfg(windows)]
+pub mod window {
+    pub use gui_win32::window::*;
+}
+
+#[cfg(windows)]
+pub use gui_win32::{
+    BasicButton, Bitmap, BufferedWnd, ComponentEvent, ComponentEventProc, ComponentListener,
+    Container, ContainerHost, HitTrackButton, HostWindow, HostedComponent, ImgBuffer, ListBox,
+    NativeButton, NativeListCombo, NativeTabPage, NativeTabbedContainer, NativeTreeCombo,
+    NativeTreeControl, WM_INVALIDATE,
+};
