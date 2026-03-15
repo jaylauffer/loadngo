@@ -7,8 +7,8 @@ use data::model_utils::{generate_id, now_timestamp, UNITS_PER_HOUR};
 use data::service::Service;
 use data::task::{EntryKind, TimeEntry};
 use gui::buffered::BufferedWnd;
-use gui::component::Component;
 use gui::container::Container;
+use gui::{Component, HostedComponent};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{
     COLORREF, FILETIME, HWND, LPARAM, LRESULT, POINT, RECT, SYSTEMTIME, WPARAM,
@@ -154,16 +154,36 @@ impl DayPlanPane {
 }
 
 impl Component for DayPlanPane {
+    fn bounds(&self) -> gui::Rect {
+        gui::Rect {
+            x: self.rect.left,
+            y: self.rect.top,
+            width: self.rect.right - self.rect.left,
+            height: self.rect.bottom - self.rect.top,
+        }
+    }
+
+    fn set_bounds(&mut self, rect: gui::Rect) {
+        self.rect = RECT {
+            left: rect.x,
+            top: rect.y,
+            right: rect.x + rect.width,
+            bottom: rect.y + rect.height,
+        };
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+impl HostedComponent for DayPlanPane {
     fn hwnd(&self) -> HWND {
         self.host_hwnd
-    }
-
-    fn bounds(&self) -> RECT {
-        self.rect
-    }
-
-    fn set_bounds(&mut self, rect: RECT) {
-        self.rect = rect;
     }
 
     fn handle_message(&mut self, msg: u32, _wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -214,14 +234,6 @@ impl Component for DayPlanPane {
             _ => LRESULT(0),
         }
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -271,22 +283,23 @@ impl DayPlanSplitter {
 }
 
 impl Component for DayPlanSplitter {
-    fn hwnd(&self) -> HWND {
-        self.host_hwnd
+    fn bounds(&self) -> gui::Rect {
+        gui::Rect {
+            x: self.rect.left,
+            y: self.rect.top,
+            width: self.rect.right - self.rect.left,
+            height: self.rect.bottom - self.rect.top,
+        }
     }
 
-    fn bounds(&self) -> RECT {
-        self.rect
-    }
-
-    fn set_bounds(&mut self, rect: RECT) {
-        self.rect = rect;
+    fn set_bounds(&mut self, rect: gui::Rect) {
+        self.rect = RECT {
+            left: rect.x,
+            top: rect.y,
+            right: rect.x + rect.width,
+            bottom: rect.y + rect.height,
+        };
         self.update_bar_rect();
-    }
-
-    fn handle_message(&mut self, msg: u32, _wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        let _ = (msg, lparam);
-        LRESULT(0)
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -295,6 +308,17 @@ impl Component for DayPlanSplitter {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+impl HostedComponent for DayPlanSplitter {
+    fn hwnd(&self) -> HWND {
+        self.host_hwnd
+    }
+
+    fn handle_message(&mut self, msg: u32, _wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        let _ = (msg, lparam);
+        LRESULT(0)
     }
 }
 

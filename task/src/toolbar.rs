@@ -49,7 +49,7 @@ use windows::{
 };
 
 use crate::winutil::{to_wstring, MAKELONG};
-use gui::{BufferedWnd, Component, Container};
+use gui::{BufferedWnd, Component, Container, HostedComponent};
 
 pub const TOOLBAR_CLASS: &str = "LNGToolbar";
 
@@ -151,49 +151,22 @@ impl ToolbarButton {
 }
 
 impl Component for ToolbarButton {
-    fn hwnd(&self) -> HWND {
-        self.host_hwnd
-    }
-
-    fn bounds(&self) -> RECT {
-        self.rect
-    }
-
-    fn set_bounds(&mut self, rect: RECT) {
-        self.rect = rect;
-    }
-
-    fn handle_message(&mut self, msg: u32, _wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        let x = GET_X_LPARAM(lparam);
-        let y = GET_Y_LPARAM(lparam);
-        match msg {
-            WM_MOUSEMOVE => LRESULT(0),
-            WM_LBUTTONDOWN => {
-                self.pressed = true;
-                unsafe {
-                    let _ = InvalidateRect(self.host_hwnd, Some(&self.rect), false);
-                    let _ = SetCapture(self.host_hwnd);
-                }
-                LRESULT(1)
-            }
-            WM_LBUTTONUP => {
-                let fire = self.pressed && point_in_rect(x, y, &self.rect);
-                self.pressed = false;
-                unsafe {
-                    let _ = ReleaseCapture();
-                    let _ = InvalidateRect(self.host_hwnd, Some(&self.rect), false);
-                }
-                if fire {
-                    unsafe {
-                        let wp = WPARAM(MAKELONG(2, 3) as usize);
-                        let lp = LPARAM(self.def.id as isize);
-                        let _ = PostMessageW(self.parent_cmd_hwnd, WM_COMMAND, wp, lp);
-                    }
-                }
-                LRESULT(1)
-            }
-            _ => LRESULT(0),
+    fn bounds(&self) -> gui::Rect {
+        gui::Rect {
+            x: self.rect.left,
+            y: self.rect.top,
+            width: self.rect.right - self.rect.left,
+            height: self.rect.bottom - self.rect.top,
         }
+    }
+
+    fn set_bounds(&mut self, rect: gui::Rect) {
+        self.rect = RECT {
+            left: rect.x,
+            top: rect.y,
+            right: rect.x + rect.width,
+            bottom: rect.y + rect.height,
+        };
     }
 
     fn mouse_entered(&mut self) {
@@ -227,6 +200,45 @@ impl Component for ToolbarButton {
     }
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+impl HostedComponent for ToolbarButton {
+    fn hwnd(&self) -> HWND {
+        self.host_hwnd
+    }
+
+    fn handle_message(&mut self, msg: u32, _wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        let x = GET_X_LPARAM(lparam);
+        let y = GET_Y_LPARAM(lparam);
+        match msg {
+            WM_MOUSEMOVE => LRESULT(0),
+            WM_LBUTTONDOWN => {
+                self.pressed = true;
+                unsafe {
+                    let _ = InvalidateRect(self.host_hwnd, Some(&self.rect), false);
+                    let _ = SetCapture(self.host_hwnd);
+                }
+                LRESULT(1)
+            }
+            WM_LBUTTONUP => {
+                let fire = self.pressed && point_in_rect(x, y, &self.rect);
+                self.pressed = false;
+                unsafe {
+                    let _ = ReleaseCapture();
+                    let _ = InvalidateRect(self.host_hwnd, Some(&self.rect), false);
+                }
+                if fire {
+                    unsafe {
+                        let wp = WPARAM(MAKELONG(2, 3) as usize);
+                        let lp = LPARAM(self.def.id as isize);
+                        let _ = PostMessageW(self.parent_cmd_hwnd, WM_COMMAND, wp, lp);
+                    }
+                }
+                LRESULT(1)
+            }
+            _ => LRESULT(0),
+        }
     }
 }
 

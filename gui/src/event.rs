@@ -1,4 +1,4 @@
-use crate::component::Component;
+use ui_core::component::Component;
 
 /// Lightweight event used by components to notify listeners about actions.
 #[derive(Debug, Clone)]

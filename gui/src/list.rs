@@ -1,6 +1,11 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
+use ui_core::{
+    geometry::{Point as CorePoint, Rect as CoreRect},
+    input::UiEvent,
+    list::{ListInteraction, ListState},
+};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -21,8 +26,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::buffered::BufferedWnd;
-use crate::component::Component;
-use crate::util::to_wstring;
+use crate::util::{
+    key_from_wparam, point_from_lparam, pointer_released_event, primary_pointer, to_wstring,
+};
+use gui_win32::component::HostedComponent;
+use ui_core::component::Component;
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
@@ -41,10 +49,7 @@ pub struct ListBox {
     bounds: RECT,
     items: Arc<Mutex<Vec<Box<dyn ListBoxItem>>>>,
     buffer: BufferedWnd,
-    hilite: i32,
-    selected: Option<usize>,
-    visible_pos: i32,
-    visible_count: i32,
+    state: ListState,
     tracking: bool,
     drag_start: Option<POINT>,
     drag_index: Option<usize>,
@@ -79,10 +84,7 @@ impl ListBox {
                 },
                 items: Arc::new(Mutex::new(Vec::new())),
                 buffer: BufferedWnd::new(),
-                hilite: -1,
-                selected: None,
-                visible_pos: 0,
-                visible_count: 0,
+                state: ListState::default(),
                 tracking: false,
                 drag_start: None,
                 drag_index: None,
@@ -117,12 +119,17 @@ impl ListBox {
     }
 
     pub fn set_items(&mut self, items: Vec<Box<dyn ListBoxItem>>) {
+        let heights = items
+            .iter()
+            .map(|item| {
+                let bounds = item.bounds();
+                (bounds.bottom - bounds.top).max(24)
+            })
+            .collect();
         if let Ok(mut guard) = self.items.lock() {
             *guard = items;
         }
-        self.visible_pos = 0;
-        self.hilite = -1;
-        self.selected = None;
+        self.state.set_item_heights(heights);
         self.drag_start = None;
         self.drag_index = None;
         self.invalidate();
@@ -163,24 +170,43 @@ impl ListBox {
         }
         if let Ok(mut items) = self.items.lock() {
             let count = items.len() as i32;
-            self.visible_count = 0;
-            for (i, item) in items.iter_mut().enumerate().skip(self.visible_pos as usize) {
+            self.state.layout(
+                CoreRect {
+                    x: 0,
+                    y: 0,
+                    width,
+                    height,
+                },
+                y,
+            );
+            for (i, item) in items.iter_mut().enumerate().skip(self.state.visible_pos) {
                 if y > height {
                     break;
                 }
-                let i = i as i32;
-                let h = item.draw(dc, width - 6, height - y, self.hilite == i);
-                item.set_bounds(RECT {
+                let h = item.draw(dc, width - 6, height - y, self.state.hover_index == Some(i));
+                let rect = RECT {
                     left: 0,
                     top: y,
                     right: width,
                     bottom: y + h,
-                });
+                };
+                item.set_bounds(rect);
+                if let Some(slot) = self
+                    .state
+                    .item_bounds
+                    .get_mut(i.saturating_sub(self.state.visible_pos))
+                {
+                    *slot = CoreRect {
+                        x: rect.left,
+                        y: rect.top,
+                        width: rect.right - rect.left,
+                        height: rect.bottom - rect.top,
+                    };
+                }
                 y += h;
                 unsafe {
                     let _ = OffsetViewportOrgEx(dc, 0, h, None);
                 }
-                self.visible_count += 1;
             }
             unsafe {
                 let _ = SetViewportOrgEx(dc, orig.x, orig.y, None);
@@ -195,8 +221,8 @@ impl ListBox {
             fMask: SIF_POS | SIF_RANGE | SIF_PAGE,
             nMin: 0,
             nMax: (total - 1).max(0),
-            nPage: self.visible_count.max(1) as u32,
-            nPos: self.visible_pos,
+            nPage: self.state.visible_count.max(1) as u32,
+            nPos: self.state.visible_pos as i32,
             ..Default::default()
         };
         unsafe {
@@ -210,29 +236,12 @@ impl ListBox {
     }
 
     fn hit_test(&self, pt: POINT) -> Option<usize> {
-        if let Ok(items) = self.items.lock() {
-            let total = items.len();
-            let start = self.visible_pos.max(0) as usize;
-            let end = if self.visible_count > 0 {
-                (start + self.visible_count as usize).min(total)
-            } else {
-                total
-            };
-            for (i, item) in items.iter().enumerate().take(end).skip(start) {
-                if item.contains(pt) {
-                    return Some(i);
-                }
-            }
-        }
-        None
+        self.state.hit_test(CorePoint { x: pt.x, y: pt.y })
     }
 
     fn handle_mouse_move(&mut self, lparam: LPARAM) {
         if let (Some(start), Some(idx)) = (self.drag_start, self.drag_index) {
-            let pt = POINT {
-                x: (lparam.0 & 0xffff) as i16 as i32,
-                y: ((lparam.0 >> 16) & 0xffff) as i16 as i32,
-            };
+            let pt = point_from_lparam(lparam);
             let drag_x = unsafe { GetSystemMetrics(SM_CXDRAG) };
             let drag_y = unsafe { GetSystemMetrics(SM_CYDRAG) };
             if (pt.x - start.x).abs() > drag_x || (pt.y - start.y).abs() > drag_y {
@@ -244,20 +253,19 @@ impl ListBox {
             }
         }
         self.start_tracking();
-        let pt = POINT {
-            x: (lparam.0 & 0xffff) as i16 as i32,
-            y: ((lparam.0 >> 16) & 0xffff) as i16 as i32,
-        };
-        let hit = self.hit_test(pt).map(|i| i as i32).unwrap_or(-1);
-        if hit != self.hilite {
-            self.hilite = hit;
+        let (response, _) = self
+            .state
+            .handle_event(UiEvent::PointerMoved(primary_pointer(point_from_lparam(
+                lparam,
+            ))));
+        if response.request_redraw {
             self.invalidate();
         }
     }
 
     fn handle_mouse_leave(&mut self) {
-        if self.hilite != -1 {
-            self.hilite = -1;
+        let (response, _) = self.state.handle_event(UiEvent::PointerLeft);
+        if response.request_redraw {
             self.invalidate();
         }
         self.tracking = false;
@@ -291,14 +299,17 @@ impl ListBox {
                 &mut si,
             );
         }
-        let mut pos = self.visible_pos + delta;
-        let max = si.nMax.saturating_sub(self.visible_count.max(1) as i32) + 1;
+        let mut pos = self.state.visible_pos as i32 + delta;
+        let max = si
+            .nMax
+            .saturating_sub(self.state.visible_count.max(1) as i32)
+            + 1;
         if pos < si.nMin {
             pos = si.nMin;
         } else if pos > max {
             pos = max;
         }
-        self.visible_pos = pos;
+        self.state.visible_pos = pos as usize;
         si.fMask = SIF_POS;
         si.nPos = pos;
         unsafe {
@@ -314,21 +325,32 @@ impl ListBox {
 }
 
 impl Component for ListBox {
-    fn hwnd(&self) -> HWND {
-        self.hwnd
+    fn bounds(&self) -> ui_core::Rect {
+        crate::util::rect_to_core(self.bounds)
     }
 
-    fn bounds(&self) -> RECT {
-        self.bounds
-    }
-
-    fn set_bounds(&mut self, rect: RECT) {
+    fn set_bounds(&mut self, rect: ui_core::Rect) {
+        let rect = crate::util::rect_from_core(rect);
         self.bounds = rect;
         let w = rect.right - rect.left;
         let h = rect.bottom - rect.top;
         unsafe {
             let _ = MoveWindow(self.hwnd, rect.left, rect.top, w, h, true);
         }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+impl HostedComponent for ListBox {
+    fn hwnd(&self) -> HWND {
+        self.hwnd
     }
 
     fn handle_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -367,11 +389,11 @@ impl Component for ListBox {
                 match code {
                     SB_LINEUP => self.scroll(-1),
                     SB_LINEDOWN => self.scroll(1),
-                    SB_PAGEUP => self.scroll(-self.visible_count.max(1)),
-                    SB_PAGEDOWN => self.scroll(self.visible_count.max(1)),
+                    SB_PAGEUP => self.scroll(-(self.state.visible_count.max(1) as i32)),
+                    SB_PAGEDOWN => self.scroll(self.state.visible_count.max(1) as i32),
                     SB_THUMBTRACK => {
                         let pos = ((wparam.0 >> 16) & 0xffff) as i16 as i32;
-                        self.visible_pos = pos;
+                        self.state.visible_pos = pos.max(0) as usize;
                         self.invalidate();
                     }
                     _ => {}
@@ -379,13 +401,10 @@ impl Component for ListBox {
                 LRESULT(0)
             }
             WM_LBUTTONDOWN => {
-                let pt = POINT {
-                    x: (lparam.0 & 0xffff) as i16 as i32,
-                    y: ((lparam.0 >> 16) & 0xffff) as i16 as i32,
-                };
+                let pt = point_from_lparam(lparam);
                 if let Some(idx) = self.hit_test(pt) {
-                    self.selected = Some(idx);
-                    self.hilite = idx as i32;
+                    self.state.selected_index = Some(idx);
+                    self.state.hover_index = Some(idx);
                     self.drag_start = Some(pt);
                     self.drag_index = Some(idx);
                     self.invalidate();
@@ -396,20 +415,18 @@ impl Component for ListBox {
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
+                let (response, interaction) = self
+                    .state
+                    .handle_event(pointer_released_event(point_from_lparam(lparam)));
+                if response.request_redraw || matches!(interaction, ListInteraction::Selected(_)) {
+                    self.invalidate();
+                }
                 self.drag_start = None;
                 self.drag_index = None;
                 LRESULT(0)
             }
             _ => unsafe { DefWindowProcW(self.hwnd, msg, wparam, lparam) },
         }
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 }
 
@@ -445,12 +462,12 @@ impl ListBox {
 }
 
 /// Thin wrapper over the Win32 COMBOBOX control (unchanged).
-pub struct ListCombo {
+pub struct NativeListCombo {
     hwnd: HWND,
-    bounds: RECT,
+    widget: ui_core::ListCombo,
 }
 
-impl ListCombo {
+impl NativeListCombo {
     pub fn create(parent: HWND) -> Result<Self> {
         unsafe {
             let cls = to_wstring("COMBOBOX");
@@ -470,17 +487,18 @@ impl ListCombo {
             )?;
             Ok(Self {
                 hwnd,
-                bounds: RECT {
-                    left: 0,
-                    top: 0,
-                    right: 140,
-                    bottom: 24,
-                },
+                widget: ui_core::ListCombo::new(ui_core::Rect {
+                    x: 0,
+                    y: 0,
+                    width: 140,
+                    height: 24,
+                }),
             })
         }
     }
 
-    pub fn add_item(&self, text: &str) {
+    pub fn add_item(&mut self, text: &str) {
+        self.widget.add_item(text);
         let w = to_wstring(text);
         unsafe {
             let _ = windows::Win32::UI::WindowsAndMessaging::SendMessageW(
@@ -492,7 +510,8 @@ impl ListCombo {
         }
     }
 
-    pub fn clear(&self) {
+    pub fn clear(&mut self) {
+        self.widget.clear();
         unsafe {
             let _ = windows::Win32::UI::WindowsAndMessaging::SendMessageW(
                 self.hwnd,
@@ -502,28 +521,37 @@ impl ListCombo {
             );
         }
     }
+
+    fn sync_selection(&self) {
+        let selection = self
+            .widget
+            .selected_index
+            .map(|index| index as usize)
+            .unwrap_or(usize::MAX);
+        unsafe {
+            let _ = windows::Win32::UI::WindowsAndMessaging::SendMessageW(
+                self.hwnd,
+                windows::Win32::UI::WindowsAndMessaging::CB_SETCURSEL,
+                WPARAM(selection),
+                LPARAM(0),
+            );
+        }
+    }
 }
 
-impl Component for ListCombo {
-    fn hwnd(&self) -> HWND {
-        self.hwnd
+impl Component for NativeListCombo {
+    fn bounds(&self) -> ui_core::Rect {
+        self.widget.bounds
     }
 
-    fn bounds(&self) -> RECT {
-        self.bounds
-    }
-
-    fn set_bounds(&mut self, rect: RECT) {
-        self.bounds = rect;
+    fn set_bounds(&mut self, rect: ui_core::Rect) {
+        self.widget.set_bounds(rect);
+        let rect = crate::util::rect_from_core(rect);
         let w = rect.right - rect.left;
         let h = rect.bottom - rect.top;
         unsafe {
             let _ = MoveWindow(self.hwnd, rect.left, rect.top, w, h, true);
         }
-    }
-
-    fn handle_message(&mut self, _msg: u32, _wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
-        LRESULT(0)
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -532,5 +560,40 @@ impl Component for ListCombo {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+impl HostedComponent for NativeListCombo {
+    fn hwnd(&self) -> HWND {
+        self.hwnd
+    }
+
+    fn handle_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        match msg {
+            windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONUP => {
+                let response = self
+                    .widget
+                    .handle_event(pointer_released_event(point_from_lparam(lparam)));
+                if response.request_redraw {
+                    self.sync_selection();
+                    return LRESULT(1);
+                }
+                LRESULT(0)
+            }
+            windows::Win32::UI::WindowsAndMessaging::WM_KEYDOWN => {
+                if let Some(key) = key_from_wparam(wparam.0) {
+                    let response = self.widget.handle_event(UiEvent::KeyPressed {
+                        key,
+                        modifiers: Default::default(),
+                    });
+                    if response.request_redraw {
+                        self.sync_selection();
+                        return LRESULT(1);
+                    }
+                }
+                LRESULT(0)
+            }
+            _ => LRESULT(0),
+        }
     }
 }
