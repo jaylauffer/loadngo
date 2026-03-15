@@ -1,0 +1,18 @@
+[package]
+name = "loadngo-host-desktop"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+loadngo-gfx-metal = { path = "../gfx-metal" }
+loadngo-host-core = { path = "../host-core" }
+loadngo-renderer = { path = "../renderer" }
+ui-core = { path = "../ui-core" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+macroquad = "0.4"

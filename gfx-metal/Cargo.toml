@@ -1,0 +1,12 @@
+[package]
+name = "loadngo-gfx-metal"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+loadngo-host-core = { path = "../host-core" }
+loadngo-renderer = { path = "../renderer" }
+objc2 = "0.6.4"
+ui-core = { path = "../ui-core" }

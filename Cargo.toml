@@ -5,8 +5,11 @@ members = [
     "network",
     "gui",
     "gui-win32",
+    "gfx-metal",
+    "host-desktop",
     "host-mac",
     "host-core",
+    "renderer",
     "ui-core",
 ]
 resolver = "2"
