@@ -137,6 +137,12 @@ enum ReactorMessage {
     Stop,
 }
 
+enum InputThreadMessage {
+    AttachQueue(usize),
+    DetachQueue,
+    Stop,
+}
+
 struct AndroidAppState {
     activity_ptr: Option<usize>,
     asset_manager_ptr: Option<usize>,
@@ -153,6 +159,9 @@ struct AndroidAppState {
     runtime_entry: Option<fn()>,
     reactor_running: bool,
     looper_ptr: Option<usize>,
+    choreographer_ptr: Option<usize>,
+    input_thread_running: bool,
+    input_looper_ptr: Option<usize>,
     window_ptr: Option<usize>,
     window: Option<NativeWindow>,
     input_queue_ptr: Option<usize>,
@@ -170,6 +179,7 @@ struct AndroidAppState {
     last_backend_used: DesktopRenderBackendKind,
     backend_detail: String,
     control_messages: VecDeque<ReactorMessage>,
+    input_thread_messages: VecDeque<InputThreadMessage>,
 }
 
 impl Default for AndroidAppState {
@@ -195,6 +205,9 @@ impl Default for AndroidAppState {
             runtime_entry: None,
             reactor_running: false,
             looper_ptr: None,
+            choreographer_ptr: None,
+            input_thread_running: false,
+            input_looper_ptr: None,
             window_ptr: None,
             window: None,
             input_queue_ptr: None,
@@ -212,6 +225,7 @@ impl Default for AndroidAppState {
             last_backend_used: DesktopRenderBackendKind::Unavailable,
             backend_detail: "Android host waiting for the first frame".to_string(),
             control_messages: VecDeque::new(),
+            input_thread_messages: VecDeque::new(),
         }
     }
 }
@@ -224,7 +238,6 @@ thread_local! {
 }
 unsafe extern "C" {
     fn __android_log_write(prio: i32, tag: *const c_char, text: *const c_char) -> i32;
-    fn sng_android_set_getauxval_passthrough(enabled: bool);
 }
 
 const ANDROID_LOG_INFO: i32 = 4;
@@ -332,6 +345,16 @@ fn ensure_main_thread_reactor_initialized() -> bool {
     }
     state.reactor_running = true;
     state.looper_ptr = Some(looper as usize);
+    if state.choreographer_ptr.is_none() {
+        let choreographer = unsafe { ndk_sys::AChoreographer_getInstance() };
+        if choreographer.is_null() {
+            android_log_error("Android reactor failed: AChoreographer_getInstance returned null");
+            state.reactor_running = false;
+            state.looper_ptr = None;
+            return false;
+        }
+        state.choreographer_ptr = Some(choreographer as usize);
+    }
     if let Some(window_ptr) = state.window_ptr {
         state
             .control_messages
@@ -347,28 +370,39 @@ fn ensure_main_thread_reactor_initialized() -> bool {
 }
 
 fn request_frame_callback() {
-    let should_schedule = {
+    let choreographer_ptr = {
         let mut state = app_state().lock().expect("android app state poisoned");
         if state.frame_callback_scheduled || !state.runtime_started || state.runtime_completed {
-            false
-        } else {
-            state.frame_callback_scheduled = true;
-            true
+            return;
+        }
+        if state.choreographer_ptr.is_none() {
+            let current_looper = unsafe { ndk_sys::ALooper_forThread() };
+            if current_looper.is_null() || Some(current_looper as usize) != state.looper_ptr {
+                android_log_error(
+                    "Android reactor failed: main-thread choreographer unavailable for frame callback",
+                );
+                return;
+            }
+            let choreographer = unsafe { ndk_sys::AChoreographer_getInstance() };
+            if choreographer.is_null() {
+                android_log_error("Android reactor failed: AChoreographer_getInstance returned null");
+                return;
+            }
+            state.choreographer_ptr = Some(choreographer as usize);
+        }
+        state.frame_callback_scheduled = true;
+        match state.choreographer_ptr {
+            Some(ptr) => ptr,
+            None => {
+                state.frame_callback_scheduled = false;
+                android_log_error("Android reactor failed: choreographer pointer missing");
+                return;
+            }
         }
     };
-    if !should_schedule {
-        return;
-    }
-    let choreographer = unsafe { ndk_sys::AChoreographer_getInstance() };
-    if choreographer.is_null() {
-        let mut state = app_state().lock().expect("android app state poisoned");
-        state.frame_callback_scheduled = false;
-        android_log_error("Android reactor failed: AChoreographer_getInstance returned null");
-        return;
-    }
     unsafe {
         ndk_sys::AChoreographer_postFrameCallback64(
-            choreographer,
+            choreographer_ptr as *mut ndk_sys::AChoreographer,
             Some(on_frame_callback),
             std::ptr::null_mut(),
         );
@@ -381,12 +415,146 @@ fn wake_next_frame_waiters(state: &mut AndroidAppState) {
     }
 }
 
+fn wake_input_thread() {
+    let looper_ptr = {
+        let state = app_state().lock().expect("android app state poisoned");
+        state.input_looper_ptr
+    };
+    if let Some(looper_ptr) = looper_ptr {
+        unsafe {
+            ndk_sys::ALooper_wake(looper_ptr as *mut ndk_sys::ALooper);
+        }
+    }
+}
+
+fn process_input_thread_messages() -> bool {
+    let mut attached_queue_ptr = {
+        let state = app_state().lock().expect("android app state poisoned");
+        state.attached_input_queue_ptr
+    };
+    let mut should_stop = false;
+    while let Some(message) = {
+        let mut state = app_state().lock().expect("android app state poisoned");
+        state.input_thread_messages.pop_front()
+    } {
+        match message {
+            InputThreadMessage::AttachQueue(queue_ptr) => {
+                if let Some(existing_ptr) = attached_queue_ptr.take() {
+                    unsafe {
+                        ndk_sys::AInputQueue_detachLooper(existing_ptr as *mut ndk_sys::AInputQueue);
+                    }
+                }
+                let looper_ptr = {
+                    let state = app_state().lock().expect("android app state poisoned");
+                    state.input_looper_ptr
+                };
+                let Some(looper_ptr) = looper_ptr else {
+                    let mut state = app_state().lock().expect("android app state poisoned");
+                    state
+                        .input_thread_messages
+                        .push_front(InputThreadMessage::AttachQueue(queue_ptr));
+                    break;
+                };
+                let queue = queue_ptr as *mut ndk_sys::AInputQueue;
+                if !queue.is_null() {
+                    unsafe {
+                        ndk_sys::AInputQueue_attachLooper(
+                            queue,
+                            looper_ptr as *mut ndk_sys::ALooper,
+                            INPUT_QUEUE_IDENT,
+                            Some(on_input_queue_looper_event),
+                            queue.cast(),
+                        );
+                    }
+                    attached_queue_ptr = Some(queue_ptr);
+                }
+            }
+            InputThreadMessage::DetachQueue => {
+                if let Some(existing_ptr) = attached_queue_ptr.take() {
+                    unsafe {
+                        ndk_sys::AInputQueue_detachLooper(existing_ptr as *mut ndk_sys::AInputQueue);
+                    }
+                }
+            }
+            InputThreadMessage::Stop => {
+                should_stop = true;
+                break;
+            }
+        }
+    }
+    let mut state = app_state().lock().expect("android app state poisoned");
+    state.attached_input_queue_ptr = attached_queue_ptr;
+    should_stop
+}
+
+fn start_input_thread_if_needed() -> bool {
+    {
+        let state = app_state().lock().expect("android app state poisoned");
+        if state.input_thread_running {
+            return true;
+        }
+    }
+
+    {
+        let mut state = app_state().lock().expect("android app state poisoned");
+        state.input_thread_running = true;
+        state.input_looper_ptr = None;
+    }
+
+    match std::thread::Builder::new().spawn(|| {
+        let looper =
+            unsafe { ndk_sys::ALooper_prepare(ndk_sys::ALOOPER_PREPARE_ALLOW_NON_CALLBACKS as i32) };
+        if looper.is_null() {
+            android_log_error("Android input thread failed: ALooper_prepare returned null");
+            let mut state = app_state().lock().expect("android app state poisoned");
+            state.input_thread_running = false;
+            state.input_looper_ptr = None;
+            return;
+        }
+
+        {
+            let mut state = app_state().lock().expect("android app state poisoned");
+            state.input_looper_ptr = Some(looper as usize);
+        }
+        android_log_info("Android dedicated input thread started");
+        unsafe {
+            ndk_sys::ALooper_wake(looper);
+        }
+
+        loop {
+            if process_input_thread_messages() {
+                break;
+            }
+            unsafe {
+                ndk_sys::ALooper_pollOnce(-1, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
+            }
+        }
+
+        let mut state = app_state().lock().expect("android app state poisoned");
+        state.input_thread_running = false;
+        state.input_looper_ptr = None;
+        state.attached_input_queue_ptr = None;
+        android_log_info("Android dedicated input thread exited");
+    }) {
+        Ok(handle) => {
+            std::mem::forget(handle);
+            true
+        }
+        Err(err) => {
+            let mut state = app_state().lock().expect("android app state poisoned");
+            state.input_thread_running = false;
+            state.input_looper_ptr = None;
+            android_log_error(&format!("Android dedicated input thread spawn failed: {err}"));
+            false
+        }
+    }
+}
+
 unsafe extern "C" fn on_input_queue_looper_event(_fd: i32, _events: i32, data: *mut c_void) -> i32 {
     let queue = data.cast::<ndk_sys::AInputQueue>();
     if !queue.is_null() {
         drain_input_queue(queue);
     }
-    pump_main_thread_reactor(false);
     1
 }
 
@@ -436,45 +604,30 @@ fn process_control_messages() -> (bool, bool) {
                 state.gles_backend = None;
             }
             ReactorMessage::InputQueueCreated(queue_ptr) => {
-                let mut state = app_state().lock().expect("android app state poisoned");
-                let Some(looper_ptr) = state.looper_ptr else {
+                if !start_input_thread_if_needed() {
+                    android_log_error("Android input queue setup failed: input thread unavailable");
+                } else {
+                    let mut state = app_state().lock().expect("android app state poisoned");
                     state
-                        .control_messages
-                        .push_front(ReactorMessage::InputQueueCreated(queue_ptr));
-                    break;
-                };
-                if let Some(existing_ptr) = state.attached_input_queue_ptr.take() {
-                    unsafe {
-                        ndk_sys::AInputQueue_detachLooper(
-                            existing_ptr as *mut ndk_sys::AInputQueue,
-                        );
-                    }
-                }
-                let queue = queue_ptr as *mut ndk_sys::AInputQueue;
-                if !queue.is_null() {
-                    unsafe {
-                        ndk_sys::AInputQueue_attachLooper(
-                            queue,
-                            looper_ptr as *mut ndk_sys::ALooper,
-                            INPUT_QUEUE_IDENT,
-                            Some(on_input_queue_looper_event),
-                            queue.cast(),
-                        );
-                    }
-                    state.attached_input_queue_ptr = Some(queue_ptr);
+                        .input_thread_messages
+                        .push_back(InputThreadMessage::AttachQueue(queue_ptr));
+                    drop(state);
+                    wake_input_thread();
                 }
             }
             ReactorMessage::InputQueueDestroyed => {
                 let mut state = app_state().lock().expect("android app state poisoned");
-                if let Some(existing_ptr) = state.attached_input_queue_ptr.take() {
-                    unsafe {
-                        ndk_sys::AInputQueue_detachLooper(
-                            existing_ptr as *mut ndk_sys::AInputQueue,
-                        );
-                    }
-                }
+                state
+                    .input_thread_messages
+                    .push_back(InputThreadMessage::DetachQueue);
+                drop(state);
+                wake_input_thread();
             }
             ReactorMessage::Stop => {
+                let mut state = app_state().lock().expect("android app state poisoned");
+                state.input_thread_messages.push_back(InputThreadMessage::Stop);
+                drop(state);
+                wake_input_thread();
                 should_stop = true;
                 break;
             }
@@ -1389,8 +1542,8 @@ fn prepare_gles_frame(
                             rect: UiRect {
                                 x: request.rect.x,
                                 y: request.rect.y,
-                                width: texture.width as i32,
-                                height: texture.height as i32,
+                                width: texture.width as f32,
+                                height: texture.height as f32,
                             },
                             image_key,
                             alpha: 1.0,
@@ -1449,8 +1602,8 @@ fn generated_text_cache_key(
     let mut hasher = DefaultHasher::new();
     (Arc::as_ptr(&font.inner) as usize).hash(&mut hasher);
     request.text.hash(&mut hasher);
-    request.rect.width.hash(&mut hasher);
-    request.rect.height.hash(&mut hasher);
+    request.rect.width.to_bits().hash(&mut hasher);
+    request.rect.height.to_bits().hash(&mut hasher);
     request.style.font_size.hash(&mut hasher);
     request.style.centered.hash(&mut hasher);
     request.style.color.r.hash(&mut hasher);
@@ -1473,26 +1626,26 @@ fn rasterize_text_command(
         request.style.font_size,
         1.0,
     );
-    let padding_x = 4;
-    let padding_y = 6;
+    let padding_x = 4.0;
+    let padding_y = 6.0;
     let width = request
         .rect
         .width
-        .max(measured.width.ceil() as i32 + padding_x * 2)
-        .max(1);
+        .max(measured.width.ceil() + padding_x * 2.0)
+        .max(1.0);
     let height = request
         .rect
         .height
-        .max(measured.height.ceil() as i32 + padding_y * 2)
-        .max(request.style.font_size as i32 + padding_y * 2)
-        .max(1);
-    let mut surface = OwnedSoftwareSurface::new(width as usize, height as usize);
+        .max(measured.height.ceil() + padding_y * 2.0)
+        .max(request.style.font_size as f32 + padding_y * 2.0)
+        .max(1.0);
+    let mut surface = OwnedSoftwareSurface::new(width.ceil() as usize, height.ceil() as usize);
     let mut local_request = request.clone();
     local_request.rect = UiRect {
         x: padding_x,
         y: padding_y,
-        width: width - padding_x * 2,
-        height: height - padding_y * 2,
+        width: (width - padding_x * 2.0).max(1.0),
+        height: (height - padding_y * 2.0).max(1.0),
     };
     surface.draw_text(&local_request, Some(font));
     Some(surface.into_texture())
@@ -1506,17 +1659,18 @@ fn rasterize_line_command(
     index: usize,
 ) -> Option<(String, UiRect, SoftwareTexture)> {
     let thickness = thickness.max(1);
-    let min_x = from.x.min(to.x) - thickness;
-    let min_y = from.y.min(to.y) - thickness;
-    let max_x = from.x.max(to.x) + thickness;
-    let max_y = from.y.max(to.y) + thickness;
+    let thickness_f = thickness as f32;
+    let min_x = from.x.min(to.x) - thickness_f;
+    let min_y = from.y.min(to.y) - thickness_f;
+    let max_x = from.x.max(to.x) + thickness_f;
+    let max_y = from.y.max(to.y) + thickness_f;
     let rect = UiRect {
         x: min_x,
         y: min_y,
-        width: (max_x - min_x).max(1),
-        height: (max_y - min_y).max(1),
+        width: (max_x - min_x).max(1.0),
+        height: (max_y - min_y).max(1.0),
     };
-    let mut surface = OwnedSoftwareSurface::new(rect.width as usize, rect.height as usize);
+    let mut surface = OwnedSoftwareSurface::new(rect.width.ceil() as usize, rect.height.ceil() as usize);
     surface.line(
         ui_core::geometry::Point {
             x: from.x - rect.x,
@@ -1545,14 +1699,17 @@ fn rasterize_circle_command(
     if radius <= 0 {
         return None;
     }
+    let radius = radius as f32;
     let rect = UiRect {
         x: center.x - radius,
         y: center.y - radius,
-        width: radius * 2,
-        height: radius * 2,
+        width: radius * 2.0,
+        height: radius * 2.0,
     };
-    let mut surface =
-        OwnedSoftwareSurface::new(rect.width.max(1) as usize, rect.height.max(1) as usize);
+    let mut surface = OwnedSoftwareSurface::new(
+        rect.width.max(1.0).ceil() as usize,
+        rect.height.max(1.0).ceil() as usize,
+    );
     surface.circle(radius, radius, radius, color);
     Some((
         format!("generated://circle/{index}"),
@@ -1602,16 +1759,16 @@ impl OwnedSoftwareSurface {
         };
         let layout = software_text_line_layout(Some(font), request.style.font_size, 1.0);
         let px = layout.px;
-        let line_height = layout.line_height.max(1);
+        let line_height = layout.line_height.max(1) as f32;
         let lines: Vec<&str> = request.text.split('\n').collect();
-        let mut total_height = (line_height * lines.len() as i32).max(line_height);
-        if total_height <= 0 {
+        let mut total_height = (line_height * lines.len() as f32).max(line_height);
+        if total_height <= 0.0 {
             total_height = line_height;
         }
 
-        let mut origin_y = 0;
+        let mut origin_y = 0.0;
         if request.style.centered && request.rect.height > total_height {
-            origin_y += (request.rect.height - total_height) / 2;
+            origin_y += (request.rect.height - total_height) * 0.5;
         }
 
         for (line_index, line) in lines.iter().enumerate() {
@@ -1624,25 +1781,25 @@ impl OwnedSoftwareSurface {
                 request.style.font_size,
                 1.0,
             );
-            let mut cursor_x = 0;
-            if request.style.centered && request.rect.width > 0 {
-                cursor_x +=
-                    ((request.rect.width as f32 - line_metrics.width).max(0.0) * 0.5) as i32;
+            let mut cursor_x = 0.0;
+            if request.style.centered && request.rect.width > 0.0 {
+                cursor_x += (request.rect.width - line_metrics.width).max(0.0) * 0.5;
             }
-            let baseline_y = origin_y + line_index as i32 * line_height + layout.baseline_offset;
+            let baseline_y =
+                origin_y + line_index as f32 * line_height + layout.baseline_offset as f32;
             for ch in line.chars() {
                 if ch == ' ' {
                     let metrics = font.inner.metrics(ch, px);
-                    cursor_x += metrics.advance_width.max(px * 0.3).round() as i32;
+                    cursor_x += metrics.advance_width.max(px * 0.3);
                     continue;
                 }
                 let (metrics, bitmap) = font.inner.rasterize(ch, px);
                 if metrics.width == 0 || metrics.height == 0 || bitmap.is_empty() {
-                    cursor_x += metrics.advance_width.round() as i32;
+                    cursor_x += metrics.advance_width;
                     continue;
                 }
-                let glyph_x = cursor_x + metrics.xmin;
-                let glyph_y = baseline_y - metrics.height as i32 - metrics.ymin;
+                let glyph_x = cursor_x + metrics.xmin as f32;
+                let glyph_y = baseline_y - metrics.height as f32 - metrics.ymin as f32;
                 for row in 0..metrics.height {
                     for col in 0..metrics.width {
                         let coverage = bitmap[row * metrics.width + col];
@@ -1655,10 +1812,15 @@ impl OwnedSoftwareSurface {
                             request.style.color.b,
                             coverage,
                         );
-                        self.write_pixel(glyph_x + col as i32, glyph_y + row as i32, color, 1.0);
+                        self.write_pixel(
+                            (glyph_x + col as f32).round() as i32,
+                            (glyph_y + row as f32).round() as i32,
+                            color,
+                            1.0,
+                        );
                     }
                 }
-                cursor_x += metrics.advance_width.round() as i32;
+                cursor_x += metrics.advance_width;
             }
         }
     }
@@ -1670,19 +1832,19 @@ impl OwnedSoftwareSurface {
         color: UiColor,
         thickness: i32,
     ) {
-        let thickness = thickness.max(1);
-        let mut x0 = from.x;
-        let mut y0 = from.y;
-        let x1 = to.x;
-        let y1 = to.y;
+        let thickness = thickness.max(1) as f32;
+        let mut x0 = from.x.round();
+        let mut y0 = from.y.round();
+        let x1 = to.x.round();
+        let y1 = to.y.round();
         let dx = (x1 - x0).abs();
-        let sx = if x0 < x1 { 1 } else { -1 };
+        let sx = if x0 < x1 { 1.0 } else { -1.0 };
         let dy = -(y1 - y0).abs();
-        let sy = if y0 < y1 { 1 } else { -1 };
+        let sy = if y0 < y1 { 1.0 } else { -1.0 };
         let mut err = dx + dy;
 
         loop {
-            let half = thickness / 2;
+            let half = thickness * 0.5;
             self.fill_rect(
                 UiRect {
                     x: x0 - half,
@@ -1695,7 +1857,7 @@ impl OwnedSoftwareSurface {
             if x0 == x1 && y0 == y1 {
                 break;
             }
-            let e2 = err * 2;
+            let e2 = err * 2.0;
             if e2 >= dy {
                 err += dy;
                 x0 += sx;
@@ -1707,43 +1869,36 @@ impl OwnedSoftwareSurface {
         }
     }
 
-    fn circle(&mut self, center_x: i32, center_y: i32, radius: i32, color: UiColor) {
-        if radius <= 0 {
+    fn circle(&mut self, center_x: f32, center_y: f32, radius: f32, color: UiColor) {
+        if radius <= 0.0 {
             return;
         }
+        let radius_i = radius.ceil() as i32;
         let r2 = radius * radius;
-        for y in -radius..=radius {
-            for x in -radius..=radius {
-                if x * x + y * y <= r2 {
-                    self.write_pixel(center_x + x, center_y + y, color, 1.0);
+        let cx = center_x.round() as i32;
+        let cy = center_y.round() as i32;
+        for y in -radius_i..=radius_i {
+            for x in -radius_i..=radius_i {
+                if (x * x + y * y) as f32 <= r2 {
+                    self.write_pixel(cx + x, cy + y, color, 1.0);
                 }
             }
         }
     }
 
     fn fill_rect(&mut self, rect: UiRect, color: UiColor) {
-        let clipped = self.clip_rect(rect);
-        if clipped.width <= 0 || clipped.height <= 0 {
+        let Some((x0, y0, x1, y1)) = self.clip_rect(rect) else {
             return;
-        }
-        for y in clipped.y..clipped.bottom() {
-            for x in clipped.x..clipped.right() {
+        };
+        for y in y0..y1 {
+            for x in x0..x1 {
                 self.write_pixel(x, y, color, 1.0);
             }
         }
     }
 
-    fn clip_rect(&self, rect: UiRect) -> UiRect {
-        let x0 = rect.x.max(0).min(self.width as i32);
-        let y0 = rect.y.max(0).min(self.height as i32);
-        let x1 = rect.right().max(0).min(self.width as i32);
-        let y1 = rect.bottom().max(0).min(self.height as i32);
-        UiRect {
-            x: x0,
-            y: y0,
-            width: (x1 - x0).max(0),
-            height: (y1 - y0).max(0),
-        }
+    fn clip_rect(&self, rect: UiRect) -> Option<(i32, i32, i32, i32)> {
+        clip_rect_to_surface(rect, self.width, self.height)
     }
 
     fn write_pixel(&mut self, x: i32, y: i32, color: UiColor, extra_alpha: f32) {
@@ -1772,6 +1927,18 @@ impl OwnedSoftwareSurface {
         self.bytes[index + 2] =
             (color.b as f32 * alpha + self.bytes[index + 2] as f32 * inv).round() as u8;
         self.bytes[index + 3] = 255;
+    }
+}
+
+fn clip_rect_to_surface(rect: UiRect, width: usize, height: usize) -> Option<(i32, i32, i32, i32)> {
+    let x0 = rect.x.max(0.0).floor().min(width as f32) as i32;
+    let y0 = rect.y.max(0.0).floor().min(height as f32) as i32;
+    let x1 = rect.right().max(0.0).ceil().min(width as f32) as i32;
+    let y1 = rect.bottom().max(0.0).ceil().min(height as f32) as i32;
+    if x1 <= x0 || y1 <= y0 {
+        None
+    } else {
+        Some((x0, y0, x1, y1))
     }
 }
 
@@ -1841,39 +2008,45 @@ unsafe fn handle_key_event(event: *const ndk_sys::AInputEvent) -> bool {
         return false;
     }
 
-    let mut state = app_state().lock().expect("android app state poisoned");
-    let input = &mut state.input;
-    let handled = match key_code {
-        x if x == AKEYCODE_BACK_I32 || x == AKEYCODE_ESCAPE_I32 => {
-            input.escape_pressed = is_down;
-            true
+    let handled = {
+        let mut state = app_state().lock().expect("android app state poisoned");
+        let input = &mut state.input;
+        let handled = match key_code {
+            x if x == AKEYCODE_BACK_I32 || x == AKEYCODE_ESCAPE_I32 => {
+                input.escape_pressed = is_down;
+                true
+            }
+            x if x == AKEYCODE_SPACE_I32 || x == AKEYCODE_DPAD_CENTER_I32 => {
+                input.space_pressed = is_down;
+                input.space_down = is_down;
+                true
+            }
+            x if x == AKEYCODE_F3_I32 => {
+                input.f3_pressed = is_down;
+                true
+            }
+            x if x == AKEYCODE_R_I32 => {
+                input.r_pressed = is_down;
+                true
+            }
+            x if x == AKEYCODE_DPAD_UP_I32 => {
+                input.up_pressed = is_down;
+                true
+            }
+            x if x == AKEYCODE_DPAD_DOWN_I32 => {
+                input.down_pressed = is_down;
+                true
+            }
+            _ => false,
+        };
+        if handled {
+            state.event_epoch = state.event_epoch.saturating_add(1);
+            wake_next_frame_waiters(&mut state);
         }
-        x if x == AKEYCODE_SPACE_I32 || x == AKEYCODE_DPAD_CENTER_I32 => {
-            input.space_pressed = is_down;
-            input.space_down = is_down;
-            true
-        }
-        x if x == AKEYCODE_F3_I32 => {
-            input.f3_pressed = is_down;
-            true
-        }
-        x if x == AKEYCODE_R_I32 => {
-            input.r_pressed = is_down;
-            true
-        }
-        x if x == AKEYCODE_DPAD_UP_I32 => {
-            input.up_pressed = is_down;
-            true
-        }
-        x if x == AKEYCODE_DPAD_DOWN_I32 => {
-            input.down_pressed = is_down;
-            true
-        }
-        _ => false,
+        handled
     };
     if handled {
-        state.event_epoch = state.event_epoch.saturating_add(1);
-        wake_next_frame_waiters(&mut state);
+        request_frame_callback();
     }
     handled
 }
@@ -1883,52 +2056,55 @@ unsafe fn handle_motion_event(event: *const ndk_sys::AInputEvent) {
     let action_masked = action & AMOTION_EVENT_ACTION_MASK;
     let pointer_count = unsafe { ndk_sys::AMotionEvent_getPointerCount(event) }.min(8);
 
-    let mut state = app_state().lock().expect("android app state poisoned");
-    let input = &mut state.input;
-    input.touches = [None; 8];
+    {
+        let mut state = app_state().lock().expect("android app state poisoned");
+        let input = &mut state.input;
+        input.touches = [None; 8];
 
-    for index in 0..pointer_count {
-        let x = unsafe { ndk_sys::AMotionEvent_getX(event, index) };
-        let y = unsafe { ndk_sys::AMotionEvent_getY(event, index) };
-        let id = unsafe { ndk_sys::AMotionEvent_getPointerId(event, index) as u64 };
-        let phase = match action_masked {
-            x if x == AMOTION_EVENT_ACTION_DOWN_I32
-                || x == AMOTION_EVENT_ACTION_POINTER_DOWN_I32 =>
-            {
-                TouchPhase::Started
+        for index in 0..pointer_count {
+            let x = unsafe { ndk_sys::AMotionEvent_getX(event, index) };
+            let y = unsafe { ndk_sys::AMotionEvent_getY(event, index) };
+            let id = unsafe { ndk_sys::AMotionEvent_getPointerId(event, index) as u64 };
+            let phase = match action_masked {
+                x if x == AMOTION_EVENT_ACTION_DOWN_I32
+                    || x == AMOTION_EVENT_ACTION_POINTER_DOWN_I32 =>
+                {
+                    TouchPhase::Started
+                }
+                x if x == AMOTION_EVENT_ACTION_UP_I32 || x == AMOTION_EVENT_ACTION_POINTER_UP_I32 => {
+                    TouchPhase::Ended
+                }
+                x if x == AMOTION_EVENT_ACTION_CANCEL_I32 => TouchPhase::Cancelled,
+                x if x == AMOTION_EVENT_ACTION_MOVE_I32 => TouchPhase::Moved,
+                _ => TouchPhase::Stationary,
+            };
+            input.touches[index] = Some(TouchPoint { id, x, y, phase });
+            if index == 0 {
+                input.mouse_x = x;
+                input.mouse_y = y;
             }
-            x if x == AMOTION_EVENT_ACTION_UP_I32 || x == AMOTION_EVENT_ACTION_POINTER_UP_I32 => {
-                TouchPhase::Ended
-            }
-            x if x == AMOTION_EVENT_ACTION_CANCEL_I32 => TouchPhase::Cancelled,
-            x if x == AMOTION_EVENT_ACTION_MOVE_I32 => TouchPhase::Moved,
-            _ => TouchPhase::Stationary,
-        };
-        input.touches[index] = Some(TouchPoint { id, x, y, phase });
-        if index == 0 {
-            input.mouse_x = x;
-            input.mouse_y = y;
         }
-    }
 
-    let pointer_active = !matches!(
-        action_masked,
-        x if x == AMOTION_EVENT_ACTION_UP_I32 || x == AMOTION_EVENT_ACTION_CANCEL_I32
-    );
-    input.mouse_pressed = matches!(
-        action_masked,
-        x if x == AMOTION_EVENT_ACTION_DOWN_I32
-            || x == AMOTION_EVENT_ACTION_POINTER_DOWN_I32
-    );
-    input.mouse_released = matches!(
-        action_masked,
-        x if x == AMOTION_EVENT_ACTION_UP_I32
-            || x == AMOTION_EVENT_ACTION_POINTER_UP_I32
-            || x == AMOTION_EVENT_ACTION_CANCEL_I32
-    );
-    input.mouse_down = pointer_active;
-    state.event_epoch = state.event_epoch.saturating_add(1);
-    wake_next_frame_waiters(&mut state);
+        let pointer_active = !matches!(
+            action_masked,
+            x if x == AMOTION_EVENT_ACTION_UP_I32 || x == AMOTION_EVENT_ACTION_CANCEL_I32
+        );
+        input.mouse_pressed = matches!(
+            action_masked,
+            x if x == AMOTION_EVENT_ACTION_DOWN_I32
+                || x == AMOTION_EVENT_ACTION_POINTER_DOWN_I32
+        );
+        input.mouse_released = matches!(
+            action_masked,
+            x if x == AMOTION_EVENT_ACTION_UP_I32
+                || x == AMOTION_EVENT_ACTION_POINTER_UP_I32
+                || x == AMOTION_EVENT_ACTION_CANCEL_I32
+        );
+        input.mouse_down = pointer_active;
+        state.event_epoch = state.event_epoch.saturating_add(1);
+        wake_next_frame_waiters(&mut state);
+    }
+    request_frame_callback();
 }
 
 struct NextFrameFuture {
@@ -1991,6 +2167,20 @@ pub fn capture_frame() -> HostFrame {
         surface: state.surface,
         input: state.input,
     };
+    for touch in &mut state.input.touches {
+        match touch {
+            Some(point) => match point.phase {
+                TouchPhase::Started | TouchPhase::Moved => {
+                    point.phase = TouchPhase::Stationary;
+                }
+                TouchPhase::Ended | TouchPhase::Cancelled => {
+                    *touch = None;
+                }
+                TouchPhase::Stationary => {}
+            },
+            None => {}
+        }
+    }
     state.input.mouse_pressed = false;
     state.input.mouse_released = false;
     state.input.escape_pressed = false;
@@ -2203,19 +2393,18 @@ impl<'a> SoftwareFramebuffer<'a> {
     }
 
     fn fill_rect(&mut self, rect: UiRect, color: UiColor) {
-        let clipped = self.clip_rect(rect);
-        if clipped.width <= 0 || clipped.height <= 0 {
+        let Some((x0, y0, x1, y1)) = self.clip_rect(rect) else {
             return;
-        }
-        for y in clipped.y..clipped.bottom() {
-            for x in clipped.x..clipped.right() {
+        };
+        for y in y0..y1 {
+            for x in x0..x1 {
                 self.write_pixel(x, y, color, 1.0);
             }
         }
     }
 
     fn stroke_rect(&mut self, rect: UiRect, color: UiColor, thickness: i32) {
-        let thickness = thickness.max(1);
+        let thickness = thickness.max(1) as f32;
         self.fill_rect(
             UiRect {
                 x: rect.x,
@@ -2261,19 +2450,19 @@ impl<'a> SoftwareFramebuffer<'a> {
         color: UiColor,
         thickness: i32,
     ) {
-        let thickness = thickness.max(1);
-        let mut x0 = from.x;
-        let mut y0 = from.y;
-        let x1 = to.x;
-        let y1 = to.y;
+        let thickness = thickness.max(1) as f32;
+        let mut x0 = from.x.round();
+        let mut y0 = from.y.round();
+        let x1 = to.x.round();
+        let y1 = to.y.round();
         let dx = (x1 - x0).abs();
-        let sx = if x0 < x1 { 1 } else { -1 };
+        let sx = if x0 < x1 { 1.0 } else { -1.0 };
         let dy = -(y1 - y0).abs();
-        let sy = if y0 < y1 { 1 } else { -1 };
+        let sy = if y0 < y1 { 1.0 } else { -1.0 };
         let mut err = dx + dy;
 
         loop {
-            let half = thickness / 2;
+            let half = thickness * 0.5;
             self.fill_rect(
                 UiRect {
                     x: x0 - half,
@@ -2286,7 +2475,7 @@ impl<'a> SoftwareFramebuffer<'a> {
             if x0 == x1 && y0 == y1 {
                 break;
             }
-            let e2 = err * 2;
+            let e2 = err * 2.0;
             if e2 >= dy {
                 err += dy;
                 x0 += sx;
@@ -2298,15 +2487,17 @@ impl<'a> SoftwareFramebuffer<'a> {
         }
     }
 
-    fn circle(&mut self, center_x: i32, center_y: i32, radius: i32, color: UiColor) {
+    fn circle(&mut self, center_x: f32, center_y: f32, radius: i32, color: UiColor) {
         if radius <= 0 {
             return;
         }
         let r2 = radius * radius;
+        let cx = center_x.round() as i32;
+        let cy = center_y.round() as i32;
         for y in -radius..=radius {
             for x in -radius..=radius {
                 if x * x + y * y <= r2 {
-                    self.write_pixel(center_x + x, center_y + y, color, 1.0);
+                    self.write_pixel(cx + x, cy + y, color, 1.0);
                 }
             }
         }
@@ -2329,16 +2520,16 @@ impl<'a> SoftwareFramebuffer<'a> {
         };
         let layout = software_text_line_layout(Some(font), request.style.font_size, 1.0);
         let px = layout.px;
-        let line_height = layout.line_height.max(1);
+        let line_height = layout.line_height.max(1) as f32;
         let lines: Vec<&str> = request.text.split('\n').collect();
-        let mut total_height = (line_height * lines.len() as i32).max(line_height);
-        if total_height <= 0 {
+        let mut total_height = (line_height * lines.len() as f32).max(line_height);
+        if total_height <= 0.0 {
             total_height = line_height;
         }
 
         let mut origin_y = request.rect.y;
         if request.style.centered && request.rect.height > total_height {
-            origin_y += (request.rect.height - total_height) / 2;
+            origin_y += (request.rect.height - total_height) * 0.5;
         }
 
         for (line_index, line) in lines.iter().enumerate() {
@@ -2352,24 +2543,24 @@ impl<'a> SoftwareFramebuffer<'a> {
                 1.0,
             );
             let mut cursor_x = request.rect.x;
-            if request.style.centered && request.rect.width > 0 {
-                cursor_x +=
-                    ((request.rect.width as f32 - line_metrics.width).max(0.0) * 0.5) as i32;
+            if request.style.centered && request.rect.width > 0.0 {
+                cursor_x += (request.rect.width - line_metrics.width).max(0.0) * 0.5;
             }
-            let baseline_y = origin_y + line_index as i32 * line_height + layout.baseline_offset;
+            let baseline_y =
+                origin_y + line_index as f32 * line_height + layout.baseline_offset as f32;
             for ch in line.chars() {
                 if ch == ' ' {
                     let metrics = font.inner.metrics(ch, px);
-                    cursor_x += metrics.advance_width.max(px * 0.3).round() as i32;
+                    cursor_x += metrics.advance_width.max(px * 0.3);
                     continue;
                 }
                 let (metrics, bitmap) = font.inner.rasterize(ch, px);
                 if metrics.width == 0 || metrics.height == 0 || bitmap.is_empty() {
-                    cursor_x += metrics.advance_width.round() as i32;
+                    cursor_x += metrics.advance_width;
                     continue;
                 }
-                let glyph_x = cursor_x + metrics.xmin;
-                let glyph_y = baseline_y - metrics.height as i32 - metrics.ymin;
+                let glyph_x = cursor_x + metrics.xmin as f32;
+                let glyph_y = baseline_y - metrics.height as f32 - metrics.ymin as f32;
                 for row in 0..metrics.height {
                     for col in 0..metrics.width {
                         let coverage = bitmap[row * metrics.width + col];
@@ -2382,29 +2573,33 @@ impl<'a> SoftwareFramebuffer<'a> {
                             request.style.color.b,
                             coverage,
                         );
-                        self.write_pixel(glyph_x + col as i32, glyph_y + row as i32, color, 1.0);
+                        self.write_pixel(
+                            (glyph_x + col as f32).round() as i32,
+                            (glyph_y + row as f32).round() as i32,
+                            color,
+                            1.0,
+                        );
                     }
                 }
-                cursor_x += metrics.advance_width.round() as i32;
+                cursor_x += metrics.advance_width;
             }
         }
     }
 
     fn blit_software_texture(&mut self, texture: &SoftwareTexture, rect: UiRect, alpha: f32) {
-        if texture.is_empty() || rect.width <= 0 || rect.height <= 0 {
+        if texture.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
             return;
         }
-        let clipped = self.clip_rect(rect);
-        if clipped.width <= 0 || clipped.height <= 0 {
+        let Some((x0, y0, x1, y1)) = self.clip_rect(rect) else {
             return;
-        }
+        };
 
-        for y in clipped.y..clipped.bottom() {
-            let src_y = (((y - rect.y) as f32 / rect.height as f32) * texture.height as f32)
+        for y in y0..y1 {
+            let src_y = (((y as f32 - rect.y) / rect.height) * texture.height as f32)
                 .floor()
                 .clamp(0.0, (texture.height - 1) as f32) as usize;
-            for x in clipped.x..clipped.right() {
-                let src_x = (((x - rect.x) as f32 / rect.width as f32) * texture.width as f32)
+            for x in x0..x1 {
+                let src_x = (((x as f32 - rect.x) / rect.width) * texture.width as f32)
                     .floor()
                     .clamp(0.0, (texture.width - 1) as f32) as usize;
                 let src_index = (src_y * texture.width + src_x) * 4;
@@ -2419,17 +2614,8 @@ impl<'a> SoftwareFramebuffer<'a> {
         }
     }
 
-    fn clip_rect(&self, rect: UiRect) -> UiRect {
-        let x0 = rect.x.max(0).min(self.width as i32);
-        let y0 = rect.y.max(0).min(self.height as i32);
-        let x1 = rect.right().max(0).min(self.width as i32);
-        let y1 = rect.bottom().max(0).min(self.height as i32);
-        UiRect {
-            x: x0,
-            y: y0,
-            width: (x1 - x0).max(0),
-            height: (y1 - y0).max(0),
-        }
+    fn clip_rect(&self, rect: UiRect) -> Option<(i32, i32, i32, i32)> {
+        clip_rect_to_surface(rect, self.width, self.height)
     }
 
     fn write_pixel(&mut self, x: i32, y: i32, color: UiColor, extra_alpha: f32) {
@@ -2478,10 +2664,10 @@ pub fn render_text_lines(
         if !line.is_empty() {
             ops.push(RenderOp::Text {
                 rect: UiRect {
-                    x: x as i32,
-                    y: current_y as i32,
-                    width: 0,
-                    height: font_size as i32,
+                    x,
+                    y: current_y,
+                    width: 0.0,
+                    height: font_size as f32,
                 },
                 text: line.clone(),
                 style: loadngo_host_core::RenderTextStyle {
@@ -2529,10 +2715,10 @@ pub fn draw_plain_text(text: &str, _x: f32, _y: f32, size: f32, _color: UiColor)
     let metrics = measure_text_metrics(text, None, font_size, font_scale);
     queue_commands([FrameCommand::Text(loadngo_renderer::TextRequest {
         rect: UiRect {
-            x: _x as i32,
-            y: _y as i32,
-            width: 0,
-            height: font_size as i32,
+            x: _x,
+            y: _y,
+            width: 0.0,
+            height: font_size as f32,
         },
         text: text.to_string(),
         style: loadngo_host_core::RenderTextStyle {
@@ -2606,10 +2792,10 @@ pub fn draw_texture_fit(texture: &DesktopTexture, x: f32, y: f32, width: f32, he
     blit_texture(
         texture,
         UiRect {
-            x: x.round() as i32,
-            y: y.round() as i32,
-            width: width.round() as i32,
-            height: height.round() as i32,
+            x: x.round(),
+            y: y.round(),
+            width: width.round(),
+            height: height.round(),
         },
         1.0,
     );
@@ -2618,10 +2804,10 @@ pub fn draw_texture_fit(texture: &DesktopTexture, x: f32, y: f32, width: f32, he
 pub fn draw_rectangle(x: f32, y: f32, w: f32, h: f32, color: UiColor) {
     queue_commands([FrameCommand::FillRect {
         rect: UiRect {
-            x: x.round() as i32,
-            y: y.round() as i32,
-            width: w.round().max(0.0) as i32,
-            height: h.round().max(0.0) as i32,
+            x: x.round(),
+            y: y.round(),
+            width: w.round().max(0.0),
+            height: h.round().max(0.0),
         },
         color,
     }]);
@@ -2630,10 +2816,10 @@ pub fn draw_rectangle(x: f32, y: f32, w: f32, h: f32, color: UiColor) {
 pub fn draw_rectangle_lines(x: f32, y: f32, w: f32, h: f32, thickness: f32, color: UiColor) {
     queue_commands([FrameCommand::StrokeRect {
         rect: UiRect {
-            x: x.round() as i32,
-            y: y.round() as i32,
-            width: w.round().max(0.0) as i32,
-            height: h.round().max(0.0) as i32,
+            x: x.round(),
+            y: y.round(),
+            width: w.round().max(0.0),
+            height: h.round().max(0.0),
         },
         color,
         thickness: thickness.round().max(1.0) as i32,
