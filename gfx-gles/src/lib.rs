@@ -809,7 +809,7 @@ mod android {
             }
 
             for (rect, color) in rects {
-                if rect.width <= 0 || rect.height <= 0 {
+                if rect.width <= 0.0 || rect.height <= 0.0 {
                     continue;
                 }
                 let vertices = rect_vertices(*rect, width, height);
