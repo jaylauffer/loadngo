@@ -13,8 +13,8 @@ use loadngo_gfx_metal::{
     measure_text_metrics as metal_measure_text_metrics, register_image_resource, MetalBackend,
 };
 use loadngo_host_core::{
-    AssetIoBackend, DecodedImage, DesktopGraphicsBackend, DesktopPlatformBackend, FrameTiming,
-    HostFrame, InputSnapshot, RenderOp, RenderTextStyle, SurfaceInfo, TextMetrics,
+    AssetIoBackend, DecodedImage, DesktopGraphicsBackend, DesktopPlatformBackend, FrameDemand,
+    FrameTiming, HostFrame, InputSnapshot, RenderOp, RenderTextStyle, SurfaceInfo, TextMetrics,
     WindowDescriptor, WindowIconSet,
 };
 use loadngo_proactor::{CompletionKind, KqueuePort, Proactor, ProactorHandle, RunReport};
@@ -219,7 +219,8 @@ struct AppState {
     timing: FrameTiming,
     surface: SurfaceInfo,
     last_tick: Instant,
-    frame_counter: u64,
+    frame_epoch: u64,
+    event_epoch: u64,
     next_frame_wakers: Vec<Waker>,
     entry_future: Option<Pin<Box<dyn Future<Output = ()>>>>,
     should_close: bool,
@@ -258,8 +259,6 @@ const KEYCODE_R: u16 = 15;
 const KEYCODE_F3: u16 = 99;
 const KEYCODE_UP: u16 = 126;
 const KEYCODE_DOWN: u16 = 125;
-const FRAME_INTERVAL: Duration = Duration::from_millis(16);
-
 struct MacProactor {
     proactor: Proactor<KqueuePort>,
     handle: ProactorHandle<KqueuePort>,
@@ -301,8 +300,8 @@ impl DesktopPlatformBackend for LoadngoPlatformHost {
         capture_frame()
     }
 
-    fn next_frame() -> Pin<Box<dyn Future<Output = ()>>> {
-        Box::pin(NextFrameFuture::new())
+    fn next_frame(demand: FrameDemand) -> Pin<Box<dyn Future<Output = ()>>> {
+        Box::pin(NextFrameFuture::new(demand))
     }
 
     fn simulate_mouse_with_touch(enabled: bool) {
@@ -373,8 +372,8 @@ impl DesktopPlatformBackend for LoadngoDesktopHost {
         LoadngoPlatformHost::capture_frame()
     }
 
-    fn next_frame() -> Pin<Box<dyn Future<Output = ()>>> {
-        LoadngoPlatformHost::next_frame()
+    fn next_frame(demand: FrameDemand) -> Pin<Box<dyn Future<Output = ()>>> {
+        LoadngoPlatformHost::next_frame(demand)
     }
 
     fn simulate_mouse_with_touch(enabled: bool) {
@@ -476,7 +475,8 @@ pub fn launch(
             },
             surface,
             last_tick: Instant::now(),
-            frame_counter: 0,
+            frame_epoch: 0,
+            event_epoch: 0,
             next_frame_wakers: Vec::new(),
             entry_future: Some(Box::pin(entry)),
             should_close: false,
@@ -769,8 +769,8 @@ pub fn measure_text(text: &str, _font: Option<()>, font_size: u16, font_scale: f
     measure_text_metrics(text, None, font_size, font_scale)
 }
 
-pub async fn next_frame() {
-    NextFrameFuture::new().await;
+pub async fn next_frame(demand: FrameDemand) {
+    NextFrameFuture::new(demand).await;
 }
 
 pub fn simulate_mouse_with_touch(_enabled: bool) {}
@@ -1084,6 +1084,10 @@ fn handle_event(event: *mut AnyObject) {
             }
             _ => {}
         }
+        state.event_epoch = state.event_epoch.saturating_add(1);
+        for waker in state.next_frame_wakers.drain(..) {
+            waker.wake();
+        }
     });
 }
 
@@ -1111,18 +1115,18 @@ fn advance_frame_clock() {
         state.timing = FrameTiming {
             delta_seconds: if dt > 0.0 { dt } else { 1.0 / 60.0 },
         };
-        state.frame_counter = state.frame_counter.saturating_add(1);
+        state.frame_epoch = state.frame_epoch.saturating_add(1);
         for waker in state.next_frame_wakers.drain(..) {
             waker.wake();
         }
     });
 }
 
-fn schedule_next_frame_tick() {
+fn schedule_next_frame_tick(delay: Duration) {
     with_mac_proactor(|proactor| {
         let _ = proactor
             .handle
-            .defer_for(FRAME_INTERVAL, CompletionKind::Timer, 0, |_| {
+            .defer_for(delay, CompletionKind::Timer, 0, |_| {
                 advance_frame_clock()
             });
     });
@@ -1157,22 +1161,26 @@ fn poll_entry_future() -> bool {
 }
 
 struct NextFrameFuture {
-    target_frame: u64,
+    demand: FrameDemand,
+    observed_event_epoch: u64,
+    target_frame_epoch: u64,
     flushed: bool,
     scheduled: bool,
 }
 
 impl NextFrameFuture {
-    fn new() -> Self {
-        let target_frame = APP_STATE.with(|state| {
+    fn new(demand: FrameDemand) -> Self {
+        let (observed_event_epoch, target_frame_epoch) = APP_STATE.with(|state| {
             state
                 .borrow()
                 .as_ref()
-                .map(|state| state.frame_counter.saturating_add(1))
-                .unwrap_or(1)
+                .map(|state| (state.event_epoch, state.frame_epoch.saturating_add(1)))
+                .unwrap_or((0, 1))
         });
         Self {
-            target_frame,
+            demand,
+            observed_event_epoch,
+            target_frame_epoch,
             flushed: false,
             scheduled: false,
         }
@@ -1183,28 +1191,42 @@ impl Future for NextFrameFuture {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if !self.flushed {
+            flush_selected_backend();
+            self.flushed = true;
+        }
         let ready = APP_STATE.with(|state| {
             let mut state = state.borrow_mut();
             let Some(state) = state.as_mut() else {
                 return true;
             };
-            if state.frame_counter >= self.target_frame {
-                true
-            } else {
-                state.next_frame_wakers.push(cx.waker().clone());
-                false
+            match self.demand {
+                FrameDemand::Idle => {
+                    if state.event_epoch > self.observed_event_epoch {
+                        true
+                    } else {
+                        state.next_frame_wakers.push(cx.waker().clone());
+                        false
+                    }
+                }
+                FrameDemand::After(_) => {
+                    if state.frame_epoch >= self.target_frame_epoch {
+                        true
+                    } else {
+                        state.next_frame_wakers.push(cx.waker().clone());
+                        false
+                    }
+                }
             }
         });
         if !ready {
             if !self.scheduled {
-                schedule_next_frame_tick();
-                self.scheduled = true;
+                if let FrameDemand::After(delay) = self.demand {
+                    schedule_next_frame_tick(delay);
+                    self.scheduled = true;
+                }
             }
             return Poll::Pending;
-        }
-        if !self.flushed {
-            flush_selected_backend();
-            self.flushed = true;
         }
         Poll::Ready(())
     }

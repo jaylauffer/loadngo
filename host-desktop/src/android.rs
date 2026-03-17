@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 
 use loadngo_gfx_gles::{GlesBackend, GlesBackendState};
 use loadngo_host_core::{
-    DecodedImage, FrameTiming, HostFrame, InputSnapshot, RenderOp, SurfaceInfo, TextMetrics,
-    TouchPhase, TouchPoint, WindowDescriptor, WindowIconSet,
+    DecodedImage, FrameDemand, FrameTiming, HostFrame, InputSnapshot, RenderOp, SurfaceInfo,
+    TextMetrics, TouchPhase, TouchPoint, WindowDescriptor, WindowIconSet,
 };
 use loadngo_renderer::{FrameCommand, ImageRequest, Renderer, RendererConfig};
 use ndk::asset::AssetManager;
@@ -146,6 +146,7 @@ struct AndroidAppState {
     timing: FrameTiming,
     last_tick: Instant,
     frame_counter: u64,
+    event_epoch: u64,
     next_frame_wakers: Vec<Waker>,
     runtime_started: bool,
     runtime_completed: bool,
@@ -187,6 +188,7 @@ impl Default for AndroidAppState {
             },
             last_tick: Instant::now(),
             frame_counter: 0,
+            event_epoch: 0,
             next_frame_wakers: Vec::new(),
             runtime_started: false,
             runtime_completed: false,
@@ -373,11 +375,18 @@ fn request_frame_callback() {
     }
 }
 
+fn wake_next_frame_waiters(state: &mut AndroidAppState) {
+    for waker in state.next_frame_wakers.drain(..) {
+        waker.wake();
+    }
+}
+
 unsafe extern "C" fn on_input_queue_looper_event(_fd: i32, _events: i32, data: *mut c_void) -> i32 {
     let queue = data.cast::<ndk_sys::AInputQueue>();
     if !queue.is_null() {
         drain_input_queue(queue);
     }
+    pump_main_thread_reactor(false);
     1
 }
 
@@ -392,10 +401,12 @@ unsafe extern "C" fn on_frame_callback(_frame_time_nanos: i64, _data: *mut c_voi
 fn process_control_messages() -> (bool, bool) {
     let mut launched_future = false;
     let mut should_stop = false;
+    let mut processed_message = false;
     while let Some(message) = {
         let mut state = app_state().lock().expect("android app state poisoned");
         state.control_messages.pop_front()
     } {
+        processed_message = true;
         match message {
             ReactorMessage::LaunchFactory(factory) => {
                 MAIN_THREAD_RUNTIME_FUTURE.with(|slot| {
@@ -469,6 +480,11 @@ fn process_control_messages() -> (bool, bool) {
             }
         }
     }
+    if processed_message {
+        let mut state = app_state().lock().expect("android app state poisoned");
+        state.event_epoch = state.event_epoch.saturating_add(1);
+        wake_next_frame_waiters(&mut state);
+    }
     (launched_future, should_stop)
 }
 
@@ -514,9 +530,7 @@ fn pump_main_thread_reactor(frame_tick: bool) {
         let state = app_state().lock().expect("android app state poisoned");
         state.runtime_started && !state.runtime_completed
     };
-    if should_continue {
-        request_frame_callback();
-    }
+    let _ = should_continue;
 }
 
 fn requested_render_backend() -> DesktopRenderBackendKind {
@@ -1776,9 +1790,7 @@ fn advance_frame_clock() {
         };
     }
     state.frame_counter = state.frame_counter.saturating_add(1);
-    for waker in state.next_frame_wakers.drain(..) {
-        waker.wake();
-    }
+    wake_next_frame_waiters(&mut state);
 }
 
 fn poll_entry_future(mut future: Pin<&mut dyn Future<Output = ()>>) -> bool {
@@ -1831,7 +1843,7 @@ unsafe fn handle_key_event(event: *const ndk_sys::AInputEvent) -> bool {
 
     let mut state = app_state().lock().expect("android app state poisoned");
     let input = &mut state.input;
-    match key_code {
+    let handled = match key_code {
         x if x == AKEYCODE_BACK_I32 || x == AKEYCODE_ESCAPE_I32 => {
             input.escape_pressed = is_down;
             true
@@ -1858,7 +1870,12 @@ unsafe fn handle_key_event(event: *const ndk_sys::AInputEvent) -> bool {
             true
         }
         _ => false,
+    };
+    if handled {
+        state.event_epoch = state.event_epoch.saturating_add(1);
+        wake_next_frame_waiters(&mut state);
     }
+    handled
 }
 
 unsafe fn handle_motion_event(event: *const ndk_sys::AInputEvent) {
@@ -1910,31 +1927,58 @@ unsafe fn handle_motion_event(event: *const ndk_sys::AInputEvent) {
             || x == AMOTION_EVENT_ACTION_CANCEL_I32
     );
     input.mouse_down = pointer_active;
+    state.event_epoch = state.event_epoch.saturating_add(1);
+    wake_next_frame_waiters(&mut state);
 }
 
 struct NextFrameFuture {
+    demand: FrameDemand,
+    observed_event_epoch: u64,
     target_frame: u64,
+    flushed: bool,
+    scheduled: bool,
 }
 
 impl NextFrameFuture {
-    fn new() -> Self {
-        let target_frame = {
+    fn new(demand: FrameDemand) -> Self {
+        let (observed_event_epoch, target_frame) = {
             let state = app_state().lock().expect("android app state poisoned");
-            state.frame_counter.saturating_add(1)
+            (state.event_epoch, state.frame_counter.saturating_add(1))
         };
-        Self { target_frame }
+        Self {
+            demand,
+            observed_event_epoch,
+            target_frame,
+            flushed: false,
+            scheduled: false,
+        }
     }
 }
 
 impl Future for NextFrameFuture {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if !self.flushed {
+            flush_queued_frame();
+            self.flushed = true;
+        }
         let mut state = app_state().lock().expect("android app state poisoned");
-        if state.frame_counter >= self.target_frame {
+        let ready = match self.demand {
+            FrameDemand::Idle => state.event_epoch > self.observed_event_epoch,
+            FrameDemand::After(_) => state.frame_counter >= self.target_frame,
+        };
+        if ready {
             Poll::Ready(())
         } else {
             state.next_frame_wakers.push(cx.waker().clone());
+            drop(state);
+            if !self.scheduled {
+                if let FrameDemand::After(_) = self.demand {
+                    request_frame_callback();
+                    self.scheduled = true;
+                }
+            }
             Poll::Pending
         }
     }
@@ -2604,8 +2648,8 @@ pub fn measure_text(text: &str, _font: Option<()>, font_size: u16, font_scale: f
     approximate_text_metrics(text, font_size, font_scale)
 }
 
-pub async fn next_frame() {
-    NextFrameFuture::new().await;
+pub async fn next_frame(demand: FrameDemand) {
+    NextFrameFuture::new(demand).await;
 }
 
 pub fn simulate_mouse_with_touch(enabled: bool) {

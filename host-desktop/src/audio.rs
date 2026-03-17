@@ -531,6 +531,17 @@ mod imp {
         pub fn active_track(&self) -> Option<&str> {
             self.active_track.as_deref()
         }
+
+        pub fn frame_demand(&self) -> Option<Duration> {
+            if self.player.is_some()
+                && (self.playlist_mode_active
+                    || self.resume_playlist_after_cue
+                    || self.loop_current_track)
+            {
+                return Some(Duration::from_millis(100));
+            }
+            None
+        }
     }
 
     pub struct VoiceController {
@@ -606,6 +617,18 @@ mod imp {
 
         pub fn is_enabled(&self) -> bool {
             self.enabled
+        }
+
+        pub fn frame_demand(&self) -> Option<Duration> {
+            if self.enabled
+                && self
+                    .player
+                    .as_ref()
+                    .is_some_and(|player| player.is_playing())
+            {
+                return Some(Duration::from_millis(100));
+            }
+            None
         }
     }
 }
@@ -1009,6 +1032,22 @@ mod imp {
         pub fn active_track(&self) -> Option<&str> {
             self.active_track.as_deref()
         }
+
+        pub fn frame_demand(&self) -> Option<Duration> {
+            let fading = self
+                .tracks
+                .values()
+                .any(|state| (state.current_volume - state.target_volume).abs() > 0.001);
+            if fading {
+                return Some(Duration::from_millis(16));
+            }
+            if self.active_track.is_some()
+                && (self.playlist_mode_active || self.resume_playlist_after_cue)
+            {
+                return Some(Duration::from_millis(100));
+            }
+            None
+        }
     }
 
     pub struct VoiceController {
@@ -1106,6 +1145,18 @@ mod imp {
 
         pub fn is_enabled(&self) -> bool {
             self.enabled
+        }
+
+        pub fn frame_demand(&self) -> Option<Duration> {
+            if self.enabled
+                && self
+                    .sink
+                    .as_ref()
+                    .is_some_and(|sink| !sink.empty())
+            {
+                return Some(Duration::from_millis(100));
+            }
+            None
         }
     }
 }

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
+use std::time::Duration;
 
 use image::DynamicImage;
 use serde::{Deserialize, Serialize};
@@ -136,6 +137,22 @@ pub fn resize_rgba(source: &[u8], src_w: usize, src_h: usize, target: usize) -> 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct FrameTiming {
     pub delta_seconds: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameDemand {
+    Idle,
+    After(Duration),
+}
+
+impl FrameDemand {
+    pub const fn idle() -> Self {
+        Self::Idle
+    }
+
+    pub fn after(duration: Duration) -> Self {
+        Self::After(duration)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -368,7 +385,7 @@ pub trait DesktopPlatformBackend {
 
     fn capture_frame() -> HostFrame;
 
-    fn next_frame() -> Pin<Box<dyn Future<Output = ()>>>;
+    fn next_frame(demand: FrameDemand) -> Pin<Box<dyn Future<Output = ()>>>;
 
     fn simulate_mouse_with_touch(enabled: bool);
 }
