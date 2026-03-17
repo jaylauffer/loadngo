@@ -8,14 +8,20 @@ pub struct ScrollRegionModel {
     pub viewport: Rect,
     pub offset: f32,
     pub content_height: f32,
+    content_height_known: bool,
 }
 
 impl ScrollRegionModel {
+    const INDICATOR_WIDTH: f32 = 6.0;
+    const INDICATOR_RIGHT_INSET: f32 = 8.0;
+    const MIN_THUMB_HEIGHT: f32 = 24.0;
+
     pub fn new(viewport: Rect, offset: f32) -> Self {
         Self {
             viewport,
             offset: offset.max(0.0),
             content_height: viewport.height,
+            content_height_known: false,
         }
     }
 
@@ -26,12 +32,17 @@ impl ScrollRegionModel {
 
     pub fn set_content_height(&mut self, content_height: f32) {
         self.content_height = content_height.max(self.viewport.height);
+        self.content_height_known = true;
         self.clamp_offset();
     }
 
     pub fn apply_scroll_delta(&mut self, delta: f32) {
         self.offset += delta;
-        self.clamp_offset();
+        if self.content_height_known {
+            self.clamp_offset();
+        } else {
+            self.offset = self.offset.max(0.0);
+        }
     }
 
     pub fn max_offset(&self) -> f32 {
@@ -48,40 +59,77 @@ impl ScrollRegionModel {
         y + height >= view_top && y <= view_bottom
     }
 
-    pub fn paint_indicator(&self, scene: &mut Vec<PaintOp>, color: Color) {
+    pub fn indicator_track_rect(&self) -> Option<Rect> {
+        if !self.is_scrollable() {
+            return None;
+        }
+        Some(Rect {
+            x: self.viewport.x + self.viewport.width - Self::INDICATOR_RIGHT_INSET,
+            y: self.viewport.y,
+            width: Self::INDICATOR_WIDTH,
+            height: self.viewport.height,
+        })
+    }
+
+    pub fn indicator_thumb_rect(&self) -> Option<Rect> {
+        let track = self.indicator_track_rect()?;
+        let max_offset = self.max_offset();
+        let thumb_h = self.thumb_height(track.height, max_offset);
+        let t = if max_offset > 0.0 {
+            (self.offset / max_offset).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let thumb_y = track.y + (track.height - thumb_h) * t;
+        Some(Rect {
+            x: track.x,
+            y: thumb_y,
+            width: track.width,
+            height: thumb_h,
+        })
+    }
+
+    pub fn scroll_to_indicator_position(&mut self, pointer_y: f32) {
+        let Some(track) = self.indicator_track_rect() else {
+            return;
+        };
         let max_offset = self.max_offset();
         if max_offset <= 0.0 {
+            self.offset = 0.0;
             return;
         }
-        let x = self.viewport.x + self.viewport.width - 8.0;
-        let y = self.viewport.y;
-        let height = self.viewport.height;
+        let thumb_h = self.thumb_height(track.height, max_offset);
+        let travel = (track.height - thumb_h).max(0.0);
+        let local_y = (pointer_y - track.y - thumb_h * 0.5).clamp(0.0, travel);
+        let t = if travel > 0.0 { local_y / travel } else { 0.0 };
+        self.offset = max_offset * t;
+        self.clamp_offset();
+    }
+
+    pub fn paint_indicator(&self, scene: &mut Vec<PaintOp>, color: Color) {
+        let Some(track) = self.indicator_track_rect() else {
+            return;
+        };
         scene.push(PaintOp::FillRect {
-            rect: Rect {
-                x,
-                y,
-                width: 6.0,
-                height,
-            },
+            rect: track,
             color: Color::rgba(30, 36, 52, 220),
         });
-        let ratio = (height / (height + max_offset)).clamp(0.12, 1.0);
-        let thumb_h = (height * ratio).clamp(24.0, height);
-        let t = (self.offset / max_offset).clamp(0.0, 1.0);
-        let thumb_y = y + (height - thumb_h) * t;
-        scene.push(PaintOp::FillRect {
-            rect: Rect {
-                x,
-                y: thumb_y,
-                width: 6.0,
-                height: thumb_h,
-            },
-            color,
-        });
+        if let Some(thumb) = self.indicator_thumb_rect() {
+            scene.push(PaintOp::FillRect { rect: thumb, color });
+        }
     }
 
     fn clamp_offset(&mut self) {
         self.offset = self.offset.clamp(0.0, self.max_offset());
+    }
+
+    fn is_scrollable(&self) -> bool {
+        self.content_height_known && self.max_offset() > 0.0
+    }
+
+    fn thumb_height(&self, track_height: f32, max_offset: f32) -> f32 {
+        let ratio = (track_height / (track_height + max_offset)).clamp(0.12, 1.0);
+        (track_height * ratio).clamp(Self::MIN_THUMB_HEIGHT, track_height)
     }
 }
 
@@ -145,5 +193,43 @@ mod tests {
         assert_eq!(ops.len(), 2);
         assert!(matches!(ops[0], PaintOp::FillRect { .. }));
         assert!(matches!(ops[1], PaintOp::FillRect { .. }));
+    }
+
+    #[test]
+    fn scroll_region_preserves_pre_layout_delta_until_content_height_is_known() {
+        let mut region = ScrollRegionModel::new(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 200.0,
+            },
+            0.0,
+        );
+        region.apply_scroll_delta(48.0);
+        assert_eq!(region.offset, 48.0);
+        region.set_content_height(350.0);
+        assert_eq!(region.offset, 48.0);
+    }
+
+    #[test]
+    fn scroll_region_indicator_position_updates_offset() {
+        let mut region = ScrollRegionModel::new(
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 180.0,
+                height: 120.0,
+            },
+            0.0,
+        );
+        region.set_content_height(360.0);
+        let track = region.indicator_track_rect().unwrap();
+        region.scroll_to_indicator_position(track.y + track.height);
+        assert!(region.offset > 0.0);
+        assert_eq!(region.offset, region.max_offset());
+        let thumb = region.indicator_thumb_rect().unwrap();
+        assert!(thumb.y >= track.y);
+        assert!(thumb.bottom() <= track.bottom());
     }
 }
