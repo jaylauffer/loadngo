@@ -903,6 +903,14 @@ fn runtime_assets_root() -> Result<PathBuf, String> {
         .ok_or_else(|| "Android internal data path is unavailable".to_string())
 }
 
+fn runtime_writable_root() -> Result<PathBuf, String> {
+    let state = app_state().lock().expect("android app state poisoned");
+    state
+        .internal_data_path
+        .clone()
+        .ok_or_else(|| "Android internal data path is unavailable".to_string())
+}
+
 fn extract_packaged_assets() -> Result<PathBuf, String> {
     let output_root = runtime_assets_root()?;
     let stamp_path = output_root.join(".assets-ready");
@@ -918,7 +926,7 @@ fn extract_packaged_assets() -> Result<PathBuf, String> {
     }
 
     if stamp_path.exists() && manifest_path.exists() {
-        configure_runtime_asset_env(&output_root);
+        configure_runtime_env(&output_root);
         return Ok(output_root);
     }
 
@@ -937,11 +945,16 @@ fn extract_packaged_assets() -> Result<PathBuf, String> {
     extract_asset_subtree(&manager, "", &output_root)?;
     std::fs::write(&stamp_path, b"ok")
         .map_err(|err| format!("failed to write Android asset extraction stamp: {err}"))?;
-    configure_runtime_asset_env(&output_root);
+    configure_runtime_env(&output_root);
     Ok(output_root)
 }
 
-fn configure_runtime_asset_env(output_root: &Path) {
+fn configure_runtime_env(output_root: &Path) {
+    if let Ok(writable_root) = runtime_writable_root() {
+        unsafe {
+            env::set_var("SNG_WRITABLE_ROOT", writable_root);
+        }
+    }
     unsafe {
         env::set_var("SNG_ASSETS_ROOT", output_root);
         env::set_var("LOADNGO_ASSETS_ROOT", output_root.join("loadngo/assets"));
@@ -1081,6 +1094,22 @@ pub(crate) fn ensure_materialized_asset_path(path: &str) -> Result<String, Strin
     let manager = current_asset_manager()?;
     materialize_asset_file(&manager, &asset_rel, &output_path)?;
     Ok(output_path.to_string_lossy().into_owned())
+}
+
+pub fn asset_exists(path: &str) -> bool {
+    let candidate = PathBuf::from(path);
+    if candidate.exists() {
+        return true;
+    }
+
+    let Ok(manager) = current_asset_manager() else {
+        return false;
+    };
+    let asset_rel = resolve_asset_rel_for_path(path);
+    let Ok(asset_name) = CString::new(asset_rel.as_str()) else {
+        return false;
+    };
+    manager.open(asset_name.as_c_str()).is_some()
 }
 
 pub fn desktop_render_backend_status() -> DesktopRenderBackendStatus {

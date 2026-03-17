@@ -5,13 +5,8 @@ mod imp {
         objects::{GlobalRef, JObject, JValue},
         JNIEnv, JavaVM,
     };
-    use lewton::inside_ogg::OggStreamReader;
     use ndk_context::android_context;
-    use std::{
-        fs::File,
-        io::BufReader,
-        time::{Duration, Instant},
-    };
+    use std::time::{Duration, Instant};
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum MusicCueMode {
@@ -112,199 +107,81 @@ mod imp {
             .map_err(|err| format!("Android MediaPlayer::{name} return decode failed: {err}"))
     }
 
-    fn call_int(
-        env: &mut JNIEnv,
-        obj: &GlobalRef,
-        name: &str,
-        sig: &str,
-        args: &[JValue],
-    ) -> Result<i32, String> {
-        let value = match env.call_method(obj.as_obj(), name, sig, args) {
-            Ok(value) => value,
-            Err(err) => {
-                let detail = take_java_exception(env)
-                    .map(|detail| format!(" ({detail})"))
-                    .unwrap_or_default();
-                return Err(format!("Android call {name} failed: {err}{detail}"));
-            }
-        };
-        if let Some(detail) = take_java_exception(env) {
-            return Err(format!(
-                "Android call {name} raised Java exception: {detail}"
-            ));
-        }
-        value
-            .i()
-            .map_err(|err| format!("Android call {name} return decode failed: {err}"))
+    struct MediaPlayerHandle {
+        player: GlobalRef,
     }
 
-    struct DecodedPcmClip {
-        pcm_bytes: Vec<u8>,
-        sample_rate_hz: i32,
-        channel_mask: i32,
-        duration: Duration,
-    }
-
-    fn decode_ogg_clip(path: &str, kind: &str) -> Result<DecodedPcmClip, String> {
-        let file = File::open(path).map_err(|err| format!("Missing voice clip {path}: {err}"))?;
-        let mut reader = OggStreamReader::new(BufReader::new(file))
-            .map_err(|err| format!("Failed to decode {kind} clip {path}: {err}"))?;
-        let channels = reader.ident_hdr.audio_channels as usize;
-        let channel_mask = match channels {
-            1 => 4,
-            2 => 12,
-            other => {
-                return Err(format!(
-                    "Unsupported {kind} channel count {other} for {path}"
-                ))
-            }
-        };
-        let sample_rate_hz = i32::try_from(reader.ident_hdr.audio_sample_rate)
-            .map_err(|_| format!("{kind} sample rate out of range for {path}"))?;
-        let mut samples = Vec::<i16>::new();
-        while let Some(packet) = reader
-            .read_dec_packet_itl()
-            .map_err(|err| format!("Failed to read decoded {kind} packet for {path}: {err}"))?
-        {
-            samples.extend(packet);
-        }
-        let pcm_bytes: Vec<u8> = samples
-            .iter()
-            .flat_map(|sample| sample.to_le_bytes())
-            .collect();
-        let frames = samples.len() / channels.max(1);
-        let duration = if sample_rate_hz > 0 {
-            Duration::from_secs_f64(frames as f64 / sample_rate_hz as f64)
-        } else {
-            Duration::from_secs(0)
-        };
-        Ok(DecodedPcmClip {
-            pcm_bytes,
-            sample_rate_hz,
-            channel_mask,
-            duration,
-        })
-    }
-
-    struct AudioTrackHandle {
-        track: GlobalRef,
-        duration: Duration,
-        started_at: Option<Instant>,
-    }
-
-    impl AudioTrackHandle {
-        fn create_from_clip(clip: DecodedPcmClip) -> Result<Self, String> {
+    impl MediaPlayerHandle {
+        fn create(path: &str, looped: bool) -> Result<Self, String> {
             with_env(|env| {
-                let bytes_per_frame = match clip.channel_mask {
-                    4 => 2usize,
-                    12 => 4usize,
-                    _ => 4usize,
-                };
-                let min_frames = (clip.sample_rate_hz.max(8000) as usize / 8).max(2048);
-                let min_buffer_bytes = min_frames.saturating_mul(bytes_per_frame);
-                let buffer_size = clip.pcm_bytes.len().max(min_buffer_bytes);
-                let track = env
-                    .new_object(
-                        "android/media/AudioTrack",
-                        "(IIIIII)V",
-                        &[
-                            JValue::Int(3),
-                            JValue::Int(clip.sample_rate_hz),
-                            JValue::Int(clip.channel_mask),
-                            JValue::Int(2),
-                            JValue::Int(buffer_size as i32),
-                            JValue::Int(0),
-                        ],
-                    )
-                    .map_err(|err| format!("Failed to allocate AudioTrack: {err}"))?;
-                let bytes = env
-                    .byte_array_from_slice(&clip.pcm_bytes)
-                    .map_err(|err| format!("Failed to build AudioTrack PCM buffer: {err}"))?;
-                let bytes_obj = JObject::from(bytes);
-                let written = call_int(
-                    env,
-                    &env.new_global_ref(&track).map_err(|err| {
-                        format!("Failed to globalize temporary AudioTrack: {err}")
-                    })?,
-                    "write",
-                    "([BII)I",
-                    &[
-                        JValue::Object(&bytes_obj),
-                        JValue::Int(0),
-                        JValue::Int(clip.pcm_bytes.len() as i32),
-                    ],
-                )?;
-                if written < 0 {
-                    return Err(format!("AudioTrack::write failed with code {written}"));
-                }
+                let player = env
+                    .new_object("android/media/MediaPlayer", "()V", &[])
+                    .map_err(|err| format!("Failed to allocate MediaPlayer: {err}"))?;
                 let global = env
-                    .new_global_ref(track)
-                    .map_err(|err| format!("Failed to globalize AudioTrack: {err}"))?;
-                Ok(Self {
-                    track: global,
-                    duration: clip.duration,
-                    started_at: None,
-                })
+                    .new_global_ref(player)
+                    .map_err(|err| format!("Failed to globalize MediaPlayer: {err}"))?;
+                let path_string = env
+                    .new_string(path)
+                    .map_err(|err| format!("Failed to create MediaPlayer data source: {err}"))?;
+                let path_obj = JObject::from(path_string);
+                call_void(env, &global, "setAudioStreamType", "(I)V", &[JValue::Int(3)])?;
+                call_void(
+                    env,
+                    &global,
+                    "setDataSource",
+                    "(Ljava/lang/String;)V",
+                    &[JValue::Object(&path_obj)],
+                )?;
+                call_void(
+                    env,
+                    &global,
+                    "setLooping",
+                    "(Z)V",
+                    &[JValue::Bool(u8::from(looped))],
+                )?;
+                call_void(env, &global, "prepare", "()V", &[])?;
+                Ok(Self { player: global })
             })
-        }
-
-        fn create_for_voice(clip: DecodedPcmClip) -> Result<Self, String> {
-            Self::create_from_clip(clip)
-        }
-
-        fn create_for_music(clip: DecodedPcmClip) -> Result<Self, String> {
-            Self::create_from_clip(clip)
         }
 
         fn set_volume(&mut self, volume: f32) -> Result<(), String> {
             let volume = volume.clamp(0.0, 2.0);
             with_env(|env| {
-                let result = call_int(
+                call_void(
                     env,
-                    &self.track,
-                    "setStereoVolume",
-                    "(FF)I",
+                    &self.player,
+                    "setVolume",
+                    "(FF)V",
                     &[JValue::Float(volume), JValue::Float(volume)],
-                )?;
-                if result != 0 {
-                    return Err(format!(
-                        "AudioTrack::setStereoVolume failed with code {result}"
-                    ));
-                }
-                Ok(())
+                )
             })
         }
 
         fn play(&mut self) -> Result<(), String> {
-            with_env(|env| call_void(env, &self.track, "play", "()V", &[]))?;
-            self.started_at = Some(Instant::now());
-            Ok(())
+            with_env(|env| call_void(env, &self.player, "start", "()V", &[]))
         }
 
         fn stop(&mut self) -> Result<(), String> {
-            with_env(|env| call_void(env, &self.track, "stop", "()V", &[]))?;
-            self.started_at = None;
-            Ok(())
+            with_env(|env| call_void(env, &self.player, "stop", "()V", &[]))
         }
 
         fn is_playing(&self) -> bool {
-            self.started_at
-                .is_some_and(|started_at| started_at.elapsed() < self.duration)
+            with_env(|env| call_bool(env, &self.player, "isPlaying", "()Z", &[])).unwrap_or(false)
         }
 
         fn release(&mut self) -> Result<(), String> {
-            with_env(|env| call_void(env, &self.track, "release", "()V", &[]))
+            with_env(|env| call_void(env, &self.player, "release", "()V", &[]))
         }
     }
 
-    impl Drop for AudioTrackHandle {
+    impl Drop for MediaPlayerHandle {
         fn drop(&mut self) {
             let _ = self.release();
         }
     }
 
     pub struct MusicController {
-        player: Option<AudioTrackHandle>,
+        player: Option<MediaPlayerHandle>,
         mix_volume: f32,
         bass_boost: f32,
         active_track: Option<String>,
@@ -390,8 +267,7 @@ mod imp {
                 let _ = player.stop();
                 let _ = player.release();
             }
-            let clip = decode_ogg_clip(&selected_path, "music")?;
-            let mut player = AudioTrackHandle::create_for_music(clip)?;
+            let mut player = MediaPlayerHandle::create(&selected_path, looped)?;
             player.set_volume(volume)?;
             player.play()?;
             android::android_log_info(&format!(
@@ -442,7 +318,11 @@ mod imp {
             self.resume_playlist_after_cue = false;
             self.resume_playlist_from_next_track = false;
             android::android_log_info("Android music playlist start");
-            self.play_playlist_current(fade)
+            let result = self.play_playlist_current(fade);
+            if let Err(err) = &result {
+                android::android_log_error(&format!("Android music playlist start failed: {err}"));
+            }
+            result
         }
 
         pub fn fade_to_path(&mut self, path: &str, fade: f32) -> Result<(), String> {
@@ -451,7 +331,13 @@ mod imp {
             self.playlist_mode_active = false;
             let looped = self.playlist_tracks.is_empty() && self.cue_mode == MusicCueMode::Loop;
             android::android_log_info(&format!("Android music cue {} looped={}", path, looped));
-            self.play_track_path(path, fade, looped)
+            let result = self.play_track_path(path, fade, looped);
+            if let Err(err) = &result {
+                android::android_log_error(&format!(
+                    "Android music cue playback failed for {path}: {err}"
+                ));
+            }
+            result
         }
 
         pub fn update(&mut self, _dt: f32) {
@@ -547,7 +433,7 @@ mod imp {
     pub struct VoiceController {
         enabled: bool,
         volume: f32,
-        player: Option<AudioTrackHandle>,
+        player: Option<MediaPlayerHandle>,
     }
 
     impl VoiceController {
@@ -565,17 +451,26 @@ mod imp {
             if !self.enabled {
                 return Ok(());
             }
-            let path = android::ensure_materialized_asset_path(path)?;
-            if let Some(player) = self.player.as_mut() {
-                let _ = player.release();
+            let result = (|| {
+                let path = android::ensure_materialized_asset_path(path)?;
+                if let Some(player) = self.player.as_mut() {
+                    let _ = player.stop();
+                    let _ = player.release();
+                }
+                let mut player = MediaPlayerHandle::create(&path, false)?;
+                let volume = self.volume;
+                player.set_volume(volume)?;
+                player.play()?;
+                self.player = Some(player);
+                android::android_log_info(&format!("Android voice playing {path}"));
+                Ok(())
+            })();
+            if let Err(err) = &result {
+                android::android_log_error(&format!(
+                    "Android voice playback failed for {path}: {err}"
+                ));
             }
-            let clip = decode_ogg_clip(&path, "voice")?;
-            let mut player = AudioTrackHandle::create_for_voice(clip)?;
-            let volume = self.volume;
-            player.set_volume(volume)?;
-            player.play()?;
-            self.player = Some(player);
-            Ok(())
+            result
         }
 
         pub fn set_volume(&mut self, volume: f32) {

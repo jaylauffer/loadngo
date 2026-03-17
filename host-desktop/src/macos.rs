@@ -3,6 +3,7 @@ use std::{
     env,
     ffi::CString,
     future::Future,
+    path::Path,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll, Wake, Waker},
@@ -536,6 +537,10 @@ pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
 
 pub async fn load_text(path: &str) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|err| format!("failed to read text {path}: {err}"))
+}
+
+pub fn asset_exists(path: &str) -> bool {
+    Path::new(path).exists()
 }
 
 pub async fn load_font(path: &str) -> Result<DesktopFont, String> {
