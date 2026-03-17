@@ -561,8 +561,8 @@ fn rasterize_circle(
     if radius <= 0 {
         return None;
     }
-    let min_x = center.x - radius - 1;
-    let min_y = center.y - radius - 1;
+    let min_x = center.x - radius as f32 - 1.0;
+    let min_y = center.y - radius as f32 - 1.0;
     let width = (radius * 2 + 2).max(1) as u32;
     let height = (radius * 2 + 2).max(1) as u32;
     let mut rgba = vec![0u8; width as usize * height as usize * 4];

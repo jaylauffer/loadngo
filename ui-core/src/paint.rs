@@ -17,7 +17,7 @@ impl Default for TextStyle {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PaintOp {
     FillRect {
         rect: Rect,

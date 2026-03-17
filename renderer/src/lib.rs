@@ -241,7 +241,7 @@ impl FontCatalogManifest {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextRequest {
     pub rect: Rect,
     pub text: String,

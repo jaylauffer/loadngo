@@ -14,7 +14,7 @@ pub use bitmap::{Bitmap, BitmapModel};
 pub use button::{Button, ButtonModel};
 pub use combo::ListCombo;
 pub use component::Component;
-pub use geometry::{Color, Insets, Point, Rect, Size};
+pub use geometry::{Color, Insets, Point, Rect, Scalar, Size};
 pub use input::{Key, Modifiers, PointerButton, PointerSource, PointerState, UiEvent};
 pub use list::{ListInteraction, ListState};
 pub use paint::{PaintOp, TextStyle};

@@ -10,37 +10,37 @@ pub enum ListInteraction {
     Selected(usize),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ListState {
-    pub item_heights: Vec<i32>,
+    pub item_heights: Vec<f32>,
     pub item_bounds: Vec<Rect>,
     pub hover_index: Option<usize>,
     pub selected_index: Option<usize>,
     pub visible_pos: usize,
     pub visible_count: usize,
-    pub content_height: i32,
+    pub content_height: f32,
 }
 
 impl ListState {
-    pub fn set_item_heights(&mut self, item_heights: Vec<i32>) {
+    pub fn set_item_heights(&mut self, item_heights: Vec<f32>) {
         self.item_heights = item_heights;
         self.item_bounds.clear();
         self.hover_index = None;
         self.selected_index = None;
         self.visible_pos = 0;
         self.visible_count = 0;
-        self.content_height = 0;
+        self.content_height = 0.0;
     }
 
-    pub fn layout(&mut self, viewport: Rect, origin_y: i32) {
+    pub fn layout(&mut self, viewport: Rect, origin_y: f32) {
         self.item_bounds.clear();
         let mut y = origin_y;
         self.visible_count = 0;
-        self.content_height = 0;
+        self.content_height = 0.0;
 
         for height in self.item_heights.iter().skip(self.visible_pos) {
             let rect = Rect {
-                x: 0,
+                x: 0.0,
                 y,
                 width: viewport.width,
                 height: *height,
@@ -110,49 +110,68 @@ mod tests {
 
     use super::{ListInteraction, ListState};
 
-    fn pointer(x: i32, y: i32) -> PointerState {
+    fn pointer(x: f32, y: f32) -> PointerState {
         PointerState::mouse(Point { x, y }, Modifiers::default())
     }
 
     #[test]
     fn layout_and_hit_test_track_visible_items() {
         let mut state = ListState::default();
-        state.set_item_heights(vec![20, 25, 30]);
+        state.set_item_heights(vec![20.0, 25.0, 30.0]);
         state.layout(
             Rect {
-                x: 0,
-                y: 0,
-                width: 120,
-                height: 120,
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 120.0,
             },
-            5,
+            5.0,
         );
 
         assert_eq!(state.visible_count, 3);
-        assert_eq!(state.hit_test(Point { x: 5, y: 10 }), Some(0));
-        assert_eq!(state.hit_test(Point { x: 5, y: 55 }), Some(2));
+        assert_eq!(state.hit_test(Point { x: 5.0, y: 10.0 }), Some(0));
+        assert_eq!(state.hit_test(Point { x: 5.0, y: 55.0 }), Some(2));
     }
 
     #[test]
     fn pointer_release_selects_item() {
         let mut state = ListState::default();
-        state.set_item_heights(vec![20, 20]);
+        state.set_item_heights(vec![20.0, 20.0]);
         state.layout(
             Rect {
-                x: 0,
-                y: 0,
-                width: 120,
-                height: 120,
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 120.0,
             },
-            0,
+            0.0,
         );
 
         let (_, interaction) = state.handle_event(UiEvent::PointerReleased {
             button: PointerButton::Primary,
-            state: pointer(10, 25),
+            state: pointer(10.0, 25.0),
         });
 
         assert_eq!(interaction, ListInteraction::Selected(1));
         assert_eq!(state.selected_index, Some(1));
+    }
+
+    #[test]
+    fn layout_preserves_fractional_origin_and_content_height() {
+        let mut state = ListState::default();
+        state.set_item_heights(vec![12.5, 17.25, 8.75]);
+        state.layout(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 120.0,
+            },
+            3.5,
+        );
+
+        assert!((state.item_bounds[0].y - 3.5).abs() < f32::EPSILON);
+        assert!((state.item_bounds[1].y - 16.0).abs() < 0.001);
+        assert!((state.content_height - 38.5).abs() < 0.001);
     }
 }

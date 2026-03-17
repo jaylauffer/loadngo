@@ -295,7 +295,7 @@ fn stroke_rects(
     color: Color,
     thickness: i32,
 ) -> [(ui_core::geometry::Rect, Color); 4] {
-    let thickness = thickness.max(1);
+    let thickness = thickness.max(1) as f32;
     [
         (
             ui_core::geometry::Rect {

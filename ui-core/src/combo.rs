@@ -6,7 +6,7 @@ use crate::{
     widget::WidgetResponse,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ListCombo {
     pub bounds: Rect,
     pub items: Vec<String>,
@@ -100,35 +100,35 @@ impl ListCombo {
         });
         scene.push(PaintOp::Text {
             rect: Rect {
-                x: self.bounds.x + 10,
+                x: self.bounds.x + 10.0,
                 y: self.bounds.y,
-                width: self.bounds.width - 34,
+                width: self.bounds.width - 34.0,
                 height: self.bounds.height,
             },
             text: self.selected_item().unwrap_or("Select...").to_string(),
             style: TextStyle::default(),
         });
-        let arrow_x = self.bounds.right() - 18;
-        let center_y = self.bounds.y + self.bounds.height / 2;
+        let arrow_x = self.bounds.right() - 18.0;
+        let center_y = self.bounds.y + self.bounds.height / 2.0;
         scene.push(PaintOp::Line {
             from: Point {
-                x: arrow_x - 6,
-                y: center_y - 3,
+                x: arrow_x - 6.0,
+                y: center_y - 3.0,
             },
             to: Point {
                 x: arrow_x,
-                y: center_y + 3,
+                y: center_y + 3.0,
             },
             color: Color::rgba(0x55, 0x55, 0x55, 0xff),
         });
         scene.push(PaintOp::Line {
             from: Point {
                 x: arrow_x,
-                y: center_y + 3,
+                y: center_y + 3.0,
             },
             to: Point {
-                x: arrow_x + 6,
-                y: center_y - 3,
+                x: arrow_x + 6.0,
+                y: center_y - 3.0,
             },
             color: Color::rgba(0x55, 0x55, 0x55, 0xff),
         });
@@ -161,10 +161,10 @@ mod tests {
     #[test]
     fn selecting_item_tracks_selected_text() {
         let mut combo = ListCombo::new(Rect {
-            x: 0,
-            y: 0,
-            width: 120,
-            height: 24,
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 24.0,
         });
         combo.add_item("alpha");
         combo.add_item("beta");
@@ -177,17 +177,17 @@ mod tests {
     #[test]
     fn combo_pointer_release_cycles_selection() {
         let mut combo = ListCombo::new(Rect {
-            x: 0,
-            y: 0,
-            width: 120,
-            height: 24,
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 24.0,
         });
         combo.add_item("alpha");
         combo.add_item("beta");
 
         let response = combo.handle_event(UiEvent::PointerReleased {
             button: PointerButton::Primary,
-            state: PointerState::mouse(crate::Point { x: 5, y: 5 }, Modifiers::default()),
+            state: PointerState::mouse(crate::Point { x: 5.0, y: 5.0 }, Modifiers::default()),
         });
 
         assert!(response.request_redraw);

@@ -6,7 +6,7 @@ use crate::{
     widget::{WidgetId, WidgetResponse},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ButtonModel {
     pub widget_id: WidgetId,
     pub bounds: Rect,
@@ -126,7 +126,7 @@ impl ButtonModel {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Button {
     pub id: i32,
     pub model: ButtonModel,
@@ -203,7 +203,7 @@ mod tests {
     use super::ButtonModel;
     use crate::widget::{WidgetAction, WidgetId};
 
-    fn pointer(x: i32, y: i32) -> PointerState {
+    fn pointer(x: f32, y: f32) -> PointerState {
         PointerState::mouse(Point { x, y }, Modifiers::default())
     }
 
@@ -213,10 +213,10 @@ mod tests {
             WidgetId(7),
             "Run",
             Rect {
-                x: 0,
-                y: 0,
-                width: 80,
-                height: 24,
+                x: 0.0,
+                y: 0.0,
+                width: 80.0,
+                height: 24.0,
             },
         );
 
@@ -224,14 +224,14 @@ mod tests {
             button
                 .handle_event(UiEvent::PointerPressed {
                     button: PointerButton::Primary,
-                    state: pointer(5, 5),
+                    state: pointer(5.0, 5.0),
                 })
                 .input_consumed
         );
 
         let response = button.handle_event(UiEvent::PointerReleased {
             button: PointerButton::Primary,
-            state: pointer(5, 5),
+            state: pointer(5.0, 5.0),
         });
 
         assert_eq!(response.action, Some(WidgetAction::Activate(WidgetId(7))));
@@ -243,10 +243,10 @@ mod tests {
         let button = ButtonModel::new(
             "Run",
             Rect {
-                x: 0,
-                y: 0,
-                width: 80,
-                height: 24,
+                x: 0.0,
+                y: 0.0,
+                width: 80.0,
+                height: 24.0,
             },
         );
         let mut scene = Vec::new();
@@ -268,21 +268,21 @@ mod tests {
             WidgetId(9),
             "Run",
             Rect {
-                x: 0,
-                y: 0,
-                width: 80,
-                height: 24,
+                x: 0.0,
+                y: 0.0,
+                width: 80.0,
+                height: 24.0,
             },
         );
         let press = button.handle_event(UiEvent::PointerPressed {
             button: PointerButton::Primary,
-            state: pointer(5, 5),
+            state: pointer(5.0, 5.0),
         });
         assert!(press.input_consumed);
 
         let release = button.handle_event(UiEvent::PointerReleased {
             button: PointerButton::Primary,
-            state: pointer(200, 200),
+            state: pointer(200.0, 200.0),
         });
         assert!(release.request_redraw);
         assert!(release.input_consumed);

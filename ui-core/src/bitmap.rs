@@ -1,6 +1,6 @@
 use crate::{component::Component, geometry::Rect, paint::PaintOp};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BitmapModel {
     pub bounds: Rect,
     pub image_key: String,
@@ -30,7 +30,7 @@ impl BitmapModel {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Bitmap {
     pub id: i32,
     pub model: BitmapModel,
@@ -81,10 +81,10 @@ mod tests {
         let model = BitmapModel::new(
             "scene/title.png",
             Rect {
-                x: 10,
-                y: 20,
-                width: 200,
-                height: 120,
+                x: 10.0,
+                y: 20.0,
+                width: 200.0,
+                height: 120.0,
             },
         );
 
@@ -104,27 +104,27 @@ mod tests {
             4,
             "scene/title.png",
             Rect {
-                x: 0,
-                y: 0,
-                width: 32,
-                height: 32,
+                x: 0.0,
+                y: 0.0,
+                width: 32.0,
+                height: 32.0,
             },
         );
 
         bitmap.set_bounds(Rect {
-            x: 5,
-            y: 6,
-            width: 64,
-            height: 48,
+            x: 5.0,
+            y: 6.0,
+            width: 64.0,
+            height: 48.0,
         });
 
         assert_eq!(
             bitmap.bounds(),
             Rect {
-                x: 5,
-                y: 6,
-                width: 64,
-                height: 48,
+                x: 5.0,
+                y: 6.0,
+                width: 64.0,
+                height: 48.0,
             }
         );
     }
@@ -134,18 +134,18 @@ mod tests {
         let mut model = BitmapModel::new(
             "scene/title.png",
             Rect {
-                x: 10,
-                y: 20,
-                width: 200,
-                height: 120,
+                x: 10.0,
+                y: 20.0,
+                width: 200.0,
+                height: 120.0,
             },
         );
         model.set_image_key("scene/updated.png");
         model.set_bounds(Rect {
-            x: 30,
-            y: 40,
-            width: 300,
-            height: 180,
+            x: 30.0,
+            y: 40.0,
+            width: 300.0,
+            height: 180.0,
         });
 
         let mut ops = Vec::new();
@@ -155,10 +155,10 @@ mod tests {
             ops,
             vec![PaintOp::BlitImage {
                 rect: Rect {
-                    x: 30,
-                    y: 40,
-                    width: 300,
-                    height: 180,
+                    x: 30.0,
+                    y: 40.0,
+                    width: 300.0,
+                    height: 180.0,
                 },
                 image_key: "scene/updated.png".to_string(),
             }]
@@ -171,10 +171,10 @@ mod tests {
             9,
             "scene/logo.png",
             Rect {
-                x: 2,
-                y: 4,
-                width: 16,
-                height: 18,
+                x: 2.0,
+                y: 4.0,
+                width: 16.0,
+                height: 18.0,
             },
         );
 
@@ -185,10 +185,10 @@ mod tests {
             ops,
             vec![PaintOp::BlitImage {
                 rect: Rect {
-                    x: 2,
-                    y: 4,
-                    width: 16,
-                    height: 18,
+                    x: 2.0,
+                    y: 4.0,
+                    width: 16.0,
+                    height: 18.0,
                 },
                 image_key: "scene/logo.png".to_string(),
             }]
