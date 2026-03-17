@@ -59,7 +59,7 @@ impl ButtonModel {
             } => {
                 if self.bounds.contains(state.position) {
                     self.pressed = true;
-                    return WidgetResponse::redraw();
+                    return WidgetResponse::redraw_consumed();
                 }
                 WidgetResponse::default()
             }
@@ -73,7 +73,7 @@ impl ButtonModel {
                     return WidgetResponse::activate(self.widget_id);
                 }
                 if was_pressed {
-                    return WidgetResponse::redraw();
+                    return WidgetResponse::redraw_consumed();
                 }
                 WidgetResponse::default()
             }
@@ -226,7 +226,7 @@ mod tests {
                     button: PointerButton::Primary,
                     state: pointer(5, 5),
                 })
-                .request_redraw
+                .input_consumed
         );
 
         let response = button.handle_event(UiEvent::PointerReleased {
@@ -235,6 +235,7 @@ mod tests {
         });
 
         assert_eq!(response.action, Some(WidgetAction::Activate(WidgetId(7))));
+        assert!(response.input_consumed);
     }
 
     #[test]
@@ -252,7 +253,39 @@ mod tests {
 
         button.paint(&mut scene);
 
-        assert!(matches!(scene[0], PaintOp::FillRect { .. }));
-        assert!(matches!(scene[1], PaintOp::Text { .. }));
+        assert!(scene
+            .iter()
+            .any(|op| matches!(op, PaintOp::FillRect { .. })));
+        assert!(scene
+            .iter()
+            .any(|op| matches!(op, PaintOp::StrokeRect { .. })));
+        assert!(scene.iter().any(|op| matches!(op, PaintOp::Text { .. })));
+    }
+
+    #[test]
+    fn button_release_outside_consumes_press_without_activation() {
+        let mut button = ButtonModel::with_id(
+            WidgetId(9),
+            "Run",
+            Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let press = button.handle_event(UiEvent::PointerPressed {
+            button: PointerButton::Primary,
+            state: pointer(5, 5),
+        });
+        assert!(press.input_consumed);
+
+        let release = button.handle_event(UiEvent::PointerReleased {
+            button: PointerButton::Primary,
+            state: pointer(200, 200),
+        });
+        assert!(release.request_redraw);
+        assert!(release.input_consumed);
+        assert_eq!(release.action, None);
     }
 }

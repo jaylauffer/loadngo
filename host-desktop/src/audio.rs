@@ -1148,12 +1148,7 @@ mod imp {
         }
 
         pub fn frame_demand(&self) -> Option<Duration> {
-            if self.enabled
-                && self
-                    .sink
-                    .as_ref()
-                    .is_some_and(|sink| !sink.empty())
-            {
+            if self.enabled && self.sink.as_ref().is_some_and(|sink| !sink.empty()) {
                 return Some(Duration::from_millis(100));
             }
             None

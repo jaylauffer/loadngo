@@ -1126,9 +1126,7 @@ fn schedule_next_frame_tick(delay: Duration) {
     with_mac_proactor(|proactor| {
         let _ = proactor
             .handle
-            .defer_for(delay, CompletionKind::Timer, 0, |_| {
-                advance_frame_clock()
-            });
+            .defer_for(delay, CompletionKind::Timer, 0, |_| advance_frame_clock());
     });
 }
 
