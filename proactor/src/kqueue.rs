@@ -1,7 +1,7 @@
 use crate::{CompletionEnvelope, CompletionPort, PollEvent};
 use libc::{
-    c_int, close, kevent, kqueue, timespec, EV_ADD, EV_CLEAR, EV_ENABLE, EV_ERROR, EV_RECEIPT,
-    EVFILT_USER, NOTE_TRIGGER,
+    c_int, close, kevent, kqueue, timespec, EVFILT_USER, EV_ADD, EV_CLEAR, EV_ENABLE, EV_ERROR,
+    EV_RECEIPT, NOTE_TRIGGER,
 };
 use std::collections::VecDeque;
 use std::io;
@@ -45,22 +45,9 @@ impl KqueuePort {
     }
 
     fn register_user_event(&self, ident: usize) -> io::Result<()> {
-        let change = Self::user_event(
-            ident,
-            EV_ADD | EV_ENABLE | EV_CLEAR | EV_RECEIPT,
-            0,
-        );
+        let change = Self::user_event(ident, EV_ADD | EV_ENABLE | EV_CLEAR | EV_RECEIPT, 0);
         let mut receipt = Self::empty_event();
-        let result = unsafe {
-            kevent(
-                self.kq,
-                &change,
-                1,
-                &mut receipt,
-                1,
-                ptr::null(),
-            )
-        };
+        let result = unsafe { kevent(self.kq, &change, 1, &mut receipt, 1, ptr::null()) };
         if result == -1 {
             return Err(io::Error::last_os_error());
         }
@@ -70,16 +57,7 @@ impl KqueuePort {
     fn trigger_user_event(&self, ident: usize) -> io::Result<()> {
         let change = Self::user_event(ident, EV_ADD | EV_RECEIPT, NOTE_TRIGGER);
         let mut receipt = Self::empty_event();
-        let result = unsafe {
-            kevent(
-                self.kq,
-                &change,
-                1,
-                &mut receipt,
-                1,
-                ptr::null(),
-            )
-        };
+        let result = unsafe { kevent(self.kq, &change, 1, &mut receipt, 1, ptr::null()) };
         if result == -1 {
             return Err(io::Error::last_os_error());
         }

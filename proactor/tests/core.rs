@@ -11,13 +11,17 @@ fn dispatches_enqueued_work() {
 
     handle
         .enqueue_work(move |completion: Completion| {
-            tx.send((completion.kind, completion.bytes_transferred)).unwrap();
+            tx.send((completion.kind, completion.bytes_transferred))
+                .unwrap();
         })
         .unwrap();
 
     let report = proactor.run_once().unwrap();
     assert_eq!(report.dispatched_completions, 1);
-    assert_eq!(rx.recv_timeout(Duration::from_millis(50)).unwrap(), (CompletionKind::Job, 0));
+    assert_eq!(
+        rx.recv_timeout(Duration::from_millis(50)).unwrap(),
+        (CompletionKind::Job, 0)
+    );
 }
 
 #[test]
@@ -32,7 +36,8 @@ fn dispatches_deferred_work_after_deadline() {
             CompletionKind::Timer,
             7,
             move |completion: Completion| {
-            tx.send((completion.kind, completion.bytes_transferred)).unwrap();
+                tx.send((completion.kind, completion.bytes_transferred))
+                    .unwrap();
             },
         )
         .unwrap();
@@ -62,14 +67,24 @@ fn preserves_deferred_insertion_order_for_equal_deadlines() {
     let tx_second = tx.clone();
 
     handle
-        .defer_until(when, CompletionKind::Timer, 1, move |_completion: Completion| {
-            tx_first.send(1u8).unwrap();
-        })
+        .defer_until(
+            when,
+            CompletionKind::Timer,
+            1,
+            move |_completion: Completion| {
+                tx_first.send(1u8).unwrap();
+            },
+        )
         .unwrap();
     handle
-        .defer_until(when, CompletionKind::Timer, 2, move |_completion: Completion| {
-            tx_second.send(2u8).unwrap();
-        })
+        .defer_until(
+            when,
+            CompletionKind::Timer,
+            2,
+            move |_completion: Completion| {
+                tx_second.send(2u8).unwrap();
+            },
+        )
         .unwrap();
 
     let start = Instant::now();

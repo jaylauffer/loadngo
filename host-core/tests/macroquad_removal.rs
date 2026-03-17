@@ -77,7 +77,10 @@ fn core_workspace_crates_remain_macroquad_free() {
 fn backend_crates_no_longer_reference_macroquad() {
     let root = workspace_root();
     let mut paths = Vec::new();
-    for path in [root.join("host-desktop/Cargo.toml"), root.join("host-mac/Cargo.toml")] {
+    for path in [
+        root.join("host-desktop/Cargo.toml"),
+        root.join("host-mac/Cargo.toml"),
+    ] {
         if path.exists() {
             paths.push(path);
         }

@@ -165,7 +165,9 @@ impl GlesBackend {
     }
 
     #[cfg(target_os = "android")]
-    pub fn try_bind_native_window(window: &ndk::native_window::NativeWindow) -> Result<Self, RendererError> {
+    pub fn try_bind_native_window(
+        window: &ndk::native_window::NativeWindow,
+    ) -> Result<Self, RendererError> {
         let (display, context, surface) = android::bind_native_window(window)?;
         Ok(Self {
             state: GlesBackendState::SurfaceBound,
@@ -276,7 +278,8 @@ impl GraphicsBackend for GlesBackend {
                 #[cfg(not(target_os = "android"))]
                 {
                     Err(RendererError::Backend(
-                        "Android GLES surface rendering is unavailable on this platform".to_string(),
+                        "Android GLES surface rendering is unavailable on this platform"
+                            .to_string(),
                     ))
                 }
             }
@@ -393,7 +396,8 @@ mod android {
     #[link(name = "EGL")]
     unsafe extern "C" {
         fn eglGetDisplay(display_id: *mut c_void) -> EglDisplay;
-        fn eglInitialize(display: EglDisplay, major: *mut EglInt, minor: *mut EglInt) -> EglBoolean;
+        fn eglInitialize(display: EglDisplay, major: *mut EglInt, minor: *mut EglInt)
+            -> EglBoolean;
         fn eglChooseConfig(
             display: EglDisplay,
             attrib_list: *const EglInt,
@@ -435,12 +439,7 @@ mod android {
         fn glEnable(cap: u32);
         fn glBlendFunc(sfactor: u32, dfactor: u32);
         fn glCreateShader(shader_type: u32) -> u32;
-        fn glShaderSource(
-            shader: u32,
-            count: i32,
-            string: *const *const i8,
-            length: *const i32,
-        );
+        fn glShaderSource(shader: u32, count: i32, string: *const *const i8, length: *const i32);
         fn glCompileShader(shader: u32);
         fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32);
         fn glGetShaderInfoLog(shader: u32, buf_size: i32, length: *mut i32, info_log: *mut i8);
@@ -542,12 +541,8 @@ mod android {
                 return Err(last_egl_error("eglCreateContext"));
             }
 
-            let surface = eglCreateWindowSurface(
-                display,
-                config,
-                window.ptr().as_ptr().cast(),
-                ptr::null(),
-            );
+            let surface =
+                eglCreateWindowSurface(display, config, window.ptr().as_ptr().cast(), ptr::null());
             if surface == EGL_NO_SURFACE {
                 let _ = eglDestroyContext(display, context);
                 let _ = eglTerminate(display);
@@ -886,7 +881,8 @@ mod android {
                 let Some(resource) = image_resources.get(request.image_key.as_str()) else {
                     continue;
                 };
-                let texture = ensure_gpu_texture(request.image_key.as_str(), resource, gpu_textures)?;
+                let texture =
+                    ensure_gpu_texture(request.image_key.as_str(), resource, gpu_textures)?;
                 let vertices = textured_rect_vertices(request.rect, width, height);
                 glBufferData(
                     GL_ARRAY_BUFFER,
@@ -983,12 +979,8 @@ mod android {
         let bottom = to_clip_y(y1);
 
         [
-            left, top, 0.0, 0.0,
-            right, top, 1.0, 0.0,
-            left, bottom, 0.0, 1.0,
-            left, bottom, 0.0, 1.0,
-            right, top, 1.0, 0.0,
-            right, bottom, 1.0, 1.0,
+            left, top, 0.0, 0.0, right, top, 1.0, 0.0, left, bottom, 0.0, 1.0, left, bottom, 0.0,
+            1.0, right, top, 1.0, 0.0, right, bottom, 1.0, 1.0,
         ]
     }
 
@@ -996,9 +988,7 @@ mod android {
         unsafe {
             let shader = glCreateShader(shader_type);
             if shader == 0 {
-                return Err(RendererError::Backend(
-                    "glCreateShader failed".to_string(),
-                ));
+                return Err(RendererError::Backend("glCreateShader failed".to_string()));
             }
             let source_ptr = source.as_ptr().cast::<i8>();
             glShaderSource(shader, 1, &source_ptr, ptr::null());

@@ -168,14 +168,11 @@ impl FontFaceManifest {
         }
     }
 
-    pub fn candidate_paths(
-        &self,
-        assets_root: &Path,
-        platform: RuntimePlatform,
-    ) -> Vec<PathBuf> {
+    pub fn candidate_paths(&self, assets_root: &Path, platform: RuntimePlatform) -> Vec<PathBuf> {
         let mut candidates = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        let prefer_platform_fonts = matches!(platform, RuntimePlatform::Android | RuntimePlatform::Ios);
+        let prefer_platform_fonts =
+            matches!(platform, RuntimePlatform::Android | RuntimePlatform::Ios);
 
         if prefer_platform_fonts {
             self.push_platform_candidates(platform, &mut seen, &mut candidates);
@@ -189,7 +186,9 @@ impl FontFaceManifest {
     }
 
     pub fn resolve_path(&self, assets_root: &Path, platform: RuntimePlatform) -> Option<PathBuf> {
-        self.candidate_paths(assets_root, platform).into_iter().next()
+        self.candidate_paths(assets_root, platform)
+            .into_iter()
+            .next()
     }
 }
 

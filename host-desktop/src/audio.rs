@@ -42,9 +42,13 @@ mod imp {
                                     let string = jni::objects::JString::from(obj);
                                     env.get_string(&string)
                                         .map(|value| value.to_string_lossy().into_owned())
-                                        .unwrap_or_else(|_| "Java exception (failed to decode message)".to_string())
+                                        .unwrap_or_else(|_| {
+                                            "Java exception (failed to decode message)".to_string()
+                                        })
                                 }
-                                Err(_) => "Java exception (failed to read message object)".to_string(),
+                                Err(_) => {
+                                    "Java exception (failed to read message object)".to_string()
+                                }
                             },
                             Err(_) => "Java exception (failed to stringify throwable)".to_string(),
                         }
@@ -75,7 +79,9 @@ mod imp {
             return Err(format!("Android MediaPlayer::{name} failed: {err}{detail}"));
         }
         if let Some(detail) = take_java_exception(env) {
-            return Err(format!("Android MediaPlayer::{name} raised Java exception: {detail}"));
+            return Err(format!(
+                "Android MediaPlayer::{name} raised Java exception: {detail}"
+            ));
         }
         Ok(())
     }
@@ -97,7 +103,9 @@ mod imp {
             }
         };
         if let Some(detail) = take_java_exception(env) {
-            return Err(format!("Android MediaPlayer::{name} raised Java exception: {detail}"));
+            return Err(format!(
+                "Android MediaPlayer::{name} raised Java exception: {detail}"
+            ));
         }
         value
             .z()
@@ -121,7 +129,9 @@ mod imp {
             }
         };
         if let Some(detail) = take_java_exception(env) {
-            return Err(format!("Android call {name} raised Java exception: {detail}"));
+            return Err(format!(
+                "Android call {name} raised Java exception: {detail}"
+            ));
         }
         value
             .i()
@@ -143,7 +153,11 @@ mod imp {
         let channel_mask = match channels {
             1 => 4,
             2 => 12,
-            other => return Err(format!("Unsupported {kind} channel count {other} for {path}")),
+            other => {
+                return Err(format!(
+                    "Unsupported {kind} channel count {other} for {path}"
+                ))
+            }
         };
         let sample_rate_hz = i32::try_from(reader.ident_hdr.audio_sample_rate)
             .map_err(|_| format!("{kind} sample rate out of range for {path}"))?;
@@ -154,7 +168,10 @@ mod imp {
         {
             samples.extend(packet);
         }
-        let pcm_bytes: Vec<u8> = samples.iter().flat_map(|sample| sample.to_le_bytes()).collect();
+        let pcm_bytes: Vec<u8> = samples
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect();
         let frames = samples.len() / channels.max(1);
         let duration = if sample_rate_hz > 0 {
             Duration::from_secs_f64(frames as f64 / sample_rate_hz as f64)
@@ -206,8 +223,9 @@ mod imp {
                 let bytes_obj = JObject::from(bytes);
                 let written = call_int(
                     env,
-                    &env.new_global_ref(&track)
-                        .map_err(|err| format!("Failed to globalize temporary AudioTrack: {err}"))?,
+                    &env.new_global_ref(&track).map_err(|err| {
+                        format!("Failed to globalize temporary AudioTrack: {err}")
+                    })?,
                     "write",
                     "([BII)I",
                     &[
@@ -249,7 +267,9 @@ mod imp {
                     &[JValue::Float(volume), JValue::Float(volume)],
                 )?;
                 if result != 0 {
-                    return Err(format!("AudioTrack::setStereoVolume failed with code {result}"));
+                    return Err(format!(
+                        "AudioTrack::setStereoVolume failed with code {result}"
+                    ));
                 }
                 Ok(())
             })
@@ -324,7 +344,11 @@ mod imp {
         }
 
         fn align_playlist_to_track(&mut self, path: &str) {
-            if let Some(idx) = self.playlist_tracks.iter().position(|candidate| candidate == path) {
+            if let Some(idx) = self
+                .playlist_tracks
+                .iter()
+                .position(|candidate| candidate == path)
+            {
                 self.playlist_index = idx;
             }
         }
@@ -337,7 +361,12 @@ mod imp {
             Some(self.playlist_tracks[self.playlist_index].clone())
         }
 
-        pub fn play_track_path(&mut self, path: &str, _fade: f32, looped: bool) -> Result<(), String> {
+        pub fn play_track_path(
+            &mut self,
+            path: &str,
+            _fade: f32,
+            looped: bool,
+        ) -> Result<(), String> {
             let selected_path = if path.trim().is_empty() {
                 self.boot_track_path.clone()
             } else {
@@ -345,7 +374,10 @@ mod imp {
             };
             let selected_path = android::ensure_materialized_asset_path(&selected_path)?;
             if self.active_track.as_deref() == Some(selected_path.as_str())
-                && self.player.as_ref().is_some_and(|player| player.is_playing())
+                && self
+                    .player
+                    .as_ref()
+                    .is_some_and(|player| player.is_playing())
             {
                 android::android_log_info(&format!(
                     "Android music ignoring duplicate active track {}",
@@ -418,25 +450,22 @@ mod imp {
             self.resume_playlist_from_next_track = self.playlist_mode_active;
             self.playlist_mode_active = false;
             let looped = self.playlist_tracks.is_empty() && self.cue_mode == MusicCueMode::Loop;
-            android::android_log_info(&format!(
-                "Android music cue {} looped={}",
-                path, looped
-            ));
+            android::android_log_info(&format!("Android music cue {} looped={}", path, looped));
             self.play_track_path(path, fade, looped)
         }
 
         pub fn update(&mut self, _dt: f32) {
-            let finished = self.player.as_ref().is_some_and(|player| !player.is_playing());
+            let finished = self
+                .player
+                .as_ref()
+                .is_some_and(|player| !player.is_playing());
             if !finished {
                 return;
             }
 
             if self.loop_current_track {
                 if let Some(active) = self.active_track.clone() {
-                    android::android_log_info(&format!(
-                        "Android music loop restart {}",
-                        active
-                    ));
+                    android::android_log_info(&format!("Android music loop restart {}", active));
                     if let Err(err) = self.play_track_path(&active, 0.0, true) {
                         eprintln!("Android loop restart failed for {active}: {err}");
                     }
@@ -454,7 +483,9 @@ mod imp {
                             eprintln!("Android playlist resume failed: {err}");
                         }
                     } else {
-                        android::android_log_info("Android music resuming playlist at current track");
+                        android::android_log_info(
+                            "Android music resuming playlist at current track",
+                        );
                         if let Err(err) = self.play_playlist_current(0.1) {
                             eprintln!("Android playlist resume failed: {err}");
                         }
@@ -757,7 +788,11 @@ mod imp {
         }
 
         fn align_playlist_to_track(&mut self, path: &str) {
-            if let Some(idx) = self.playlist_tracks.iter().position(|candidate| candidate == path) {
+            if let Some(idx) = self
+                .playlist_tracks
+                .iter()
+                .position(|candidate| candidate == path)
+            {
                 self.playlist_index = idx;
             }
         }
@@ -770,7 +805,12 @@ mod imp {
             Some(self.playlist_tracks[self.playlist_index].clone())
         }
 
-        pub fn play_track_path(&mut self, path: &str, fade: f32, looped: bool) -> Result<(), String> {
+        pub fn play_track_path(
+            &mut self,
+            path: &str,
+            fade: f32,
+            looped: bool,
+        ) -> Result<(), String> {
             if self.stream.is_none() {
                 return Err("Audio backend unavailable".to_string());
             }
@@ -796,7 +836,8 @@ mod imp {
             };
 
             if !self.tracks.contains_key(&selected_path) {
-                let state = TrackState::new(stream_handle, &selected_path, looped, self.bass_boost)?;
+                let state =
+                    TrackState::new(stream_handle, &selected_path, looped, self.bass_boost)?;
                 self.tracks.insert(selected_path.clone(), state);
             } else if self
                 .tracks
@@ -916,7 +957,9 @@ mod imp {
                             };
                             self.resume_playlist_from_next_track = false;
                             if let Err(err) = resume_result {
-                                eprintln!("Playlist resume failed after direct cue {active_name}: {err}");
+                                eprintln!(
+                                    "Playlist resume failed after direct cue {active_name}: {err}"
+                                );
                             }
                         }
                         return;
@@ -997,7 +1040,8 @@ mod imp {
                 sink.stop();
             }
 
-            let file = File::open(path).map_err(|err| format!("Missing voice clip {path}: {err}"))?;
+            let file =
+                File::open(path).map_err(|err| format!("Missing voice clip {path}: {err}"))?;
             let source = Decoder::new(BufReader::new(file))
                 .map_err(|err| format!("Failed to decode voice clip {path}: {err}"))?;
             let Some(stream_handle) = self.stream_handle.as_ref() else {

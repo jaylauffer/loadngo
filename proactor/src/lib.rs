@@ -1,6 +1,8 @@
 mod channel;
 mod deferred;
 mod error;
+#[cfg(windows)]
+mod iocp;
 #[cfg(any(
     target_os = "macos",
     target_os = "ios",
@@ -21,6 +23,8 @@ use std::time::{Duration, Instant};
 
 pub use channel::ChannelPort;
 pub use error::ProactorError;
+#[cfg(windows)]
+pub use iocp::IocpPort;
 #[cfg(any(
     target_os = "macos",
     target_os = "ios",
@@ -137,9 +141,16 @@ pub struct Proactor<P> {
     shared: Arc<Shared<P>>,
 }
 
-#[derive(Clone)]
 pub struct ProactorHandle<P> {
     shared: Arc<Shared<P>>,
+}
+
+impl<P> Clone for ProactorHandle<P> {
+    fn clone(&self) -> Self {
+        Self {
+            shared: Arc::clone(&self.shared),
+        }
+    }
 }
 
 impl<P> Proactor<P>
@@ -173,7 +184,11 @@ where
         }
 
         let timeout = {
-            let deferred = self.shared.deferred.lock().expect("deferred queue poisoned");
+            let deferred = self
+                .shared
+                .deferred
+                .lock()
+                .expect("deferred queue poisoned");
             deferred.time_until_next_deadline(Instant::now())
         };
 
@@ -203,9 +218,47 @@ where
         Ok(())
     }
 
+    pub fn run_ready(&self) -> io::Result<RunReport> {
+        let mut report = RunReport::idle(!self.shared.running.load(Ordering::Acquire));
+        report.dispatched_deferred += self.dispatch_ready_deferred(Instant::now())?;
+
+        if !self.shared.running.load(Ordering::Acquire) {
+            report.stopped = true;
+            return Ok(report);
+        }
+
+        match self.shared.port.poll(Some(Duration::ZERO))? {
+            PollEvent::Completion(envelope) => {
+                envelope.dispatch();
+                report.dispatched_completions += 1;
+            }
+            PollEvent::Wake => {
+                report.woke = true;
+            }
+            PollEvent::Timeout => {}
+        }
+
+        report.dispatched_deferred += self.dispatch_ready_deferred(Instant::now())?;
+        report.stopped = !self.shared.running.load(Ordering::Acquire);
+        Ok(report)
+    }
+
+    pub fn next_deadline(&self) -> Option<Instant> {
+        let deferred = self
+            .shared
+            .deferred
+            .lock()
+            .expect("deferred queue poisoned");
+        deferred.next_deadline()
+    }
+
     fn dispatch_ready_deferred(&self, now: Instant) -> io::Result<usize> {
         let ready = {
-            let mut deferred = self.shared.deferred.lock().expect("deferred queue poisoned");
+            let mut deferred = self
+                .shared
+                .deferred
+                .lock()
+                .expect("deferred queue poisoned");
             deferred.take_ready(now)
         };
 
@@ -244,7 +297,11 @@ where
         handler: impl CompletionHandler,
     ) -> io::Result<()> {
         {
-            let mut deferred = self.shared.deferred.lock().expect("deferred queue poisoned");
+            let mut deferred = self
+                .shared
+                .deferred
+                .lock()
+                .expect("deferred queue poisoned");
             deferred.push(
                 self.shared.allocate_sequence(),
                 when,

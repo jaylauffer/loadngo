@@ -60,11 +60,9 @@ impl CompletionPort for ChannelPort {
                     ))
                 }
             },
-            None => Some(
-                receiver
-                    .recv()
-                    .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "channel port disconnected"))?,
-            ),
+            None => Some(receiver.recv().map_err(|_| {
+                io::Error::new(io::ErrorKind::BrokenPipe, "channel port disconnected")
+            })?),
         };
 
         Ok(match message {

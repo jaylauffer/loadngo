@@ -237,8 +237,7 @@ const AMOTION_EVENT_ACTION_MOVE_I32: i32 = ndk_sys::AMOTION_EVENT_ACTION_MOVE as
 const AMOTION_EVENT_ACTION_CANCEL_I32: i32 = ndk_sys::AMOTION_EVENT_ACTION_CANCEL as i32;
 const AMOTION_EVENT_ACTION_POINTER_DOWN_I32: i32 =
     ndk_sys::AMOTION_EVENT_ACTION_POINTER_DOWN as i32;
-const AMOTION_EVENT_ACTION_POINTER_UP_I32: i32 =
-    ndk_sys::AMOTION_EVENT_ACTION_POINTER_UP as i32;
+const AMOTION_EVENT_ACTION_POINTER_UP_I32: i32 = ndk_sys::AMOTION_EVENT_ACTION_POINTER_UP as i32;
 const AKEYCODE_BACK_I32: i32 = ndk_sys::AKEYCODE_BACK as i32;
 const AKEYCODE_ESCAPE_I32: i32 = ndk_sys::AKEYCODE_ESCAPE as i32;
 const AKEYCODE_SPACE_I32: i32 = ndk_sys::AKEYCODE_SPACE as i32;
@@ -365,7 +364,7 @@ fn request_frame_callback() {
         android_log_error("Android reactor failed: AChoreographer_getInstance returned null");
         return;
     }
-unsafe {
+    unsafe {
         ndk_sys::AChoreographer_postFrameCallback64(
             choreographer,
             Some(on_frame_callback),
@@ -374,11 +373,7 @@ unsafe {
     }
 }
 
-unsafe extern "C" fn on_input_queue_looper_event(
-    _fd: i32,
-    _events: i32,
-    data: *mut c_void,
-) -> i32 {
+unsafe extern "C" fn on_input_queue_looper_event(_fd: i32, _events: i32, data: *mut c_void) -> i32 {
     let queue = data.cast::<ndk_sys::AInputQueue>();
     if !queue.is_null() {
         drain_input_queue(queue);
@@ -386,10 +381,7 @@ unsafe extern "C" fn on_input_queue_looper_event(
     1
 }
 
-unsafe extern "C" fn on_frame_callback(
-    _frame_time_nanos: i64,
-    _data: *mut c_void,
-) {
+unsafe extern "C" fn on_frame_callback(_frame_time_nanos: i64, _data: *mut c_void) {
     {
         let mut state = app_state().lock().expect("android app state poisoned");
         state.frame_callback_scheduled = false;
@@ -442,7 +434,9 @@ fn process_control_messages() -> (bool, bool) {
                 };
                 if let Some(existing_ptr) = state.attached_input_queue_ptr.take() {
                     unsafe {
-                        ndk_sys::AInputQueue_detachLooper(existing_ptr as *mut ndk_sys::AInputQueue);
+                        ndk_sys::AInputQueue_detachLooper(
+                            existing_ptr as *mut ndk_sys::AInputQueue,
+                        );
                     }
                 }
                 let queue = queue_ptr as *mut ndk_sys::AInputQueue;
@@ -463,7 +457,9 @@ fn process_control_messages() -> (bool, bool) {
                 let mut state = app_state().lock().expect("android app state poisoned");
                 if let Some(existing_ptr) = state.attached_input_queue_ptr.take() {
                     unsafe {
-                        ndk_sys::AInputQueue_detachLooper(existing_ptr as *mut ndk_sys::AInputQueue);
+                        ndk_sys::AInputQueue_detachLooper(
+                            existing_ptr as *mut ndk_sys::AInputQueue,
+                        );
                     }
                 }
             }
@@ -687,7 +683,8 @@ fn load_default_android_system_font() -> Option<SoftwareFont> {
         let Ok(bytes) = std::fs::read(candidate) else {
             continue;
         };
-        let Ok(font) = fontdue::Font::from_bytes(bytes.as_slice(), fontdue::FontSettings::default())
+        let Ok(font) =
+            fontdue::Font::from_bytes(bytes.as_slice(), fontdue::FontSettings::default())
         else {
             continue;
         };
@@ -845,7 +842,10 @@ fn normalize_asset_path(path: &str) -> String {
     if let Some(stripped) = trimmed.strip_prefix("../loadngo/assets/") {
         return format!("loadngo/assets/{stripped}");
     }
-    trimmed.strip_prefix("assets/").unwrap_or(trimmed).to_string()
+    trimmed
+        .strip_prefix("assets/")
+        .unwrap_or(trimmed)
+        .to_string()
 }
 
 fn resolve_asset_rel_for_path(path: &str) -> String {
@@ -886,8 +886,12 @@ fn materialize_asset_file(
             )
         })?;
     }
-    std::fs::write(output_path, bytes)
-        .map_err(|err| format!("failed to materialize Android asset {}: {err}", output_path.display()))
+    std::fs::write(output_path, bytes).map_err(|err| {
+        format!(
+            "failed to materialize Android asset {}: {err}",
+            output_path.display()
+        )
+    })
 }
 
 pub(crate) fn ensure_materialized_asset_path(path: &str) -> Result<String, String> {
@@ -1043,7 +1047,9 @@ unsafe extern "C" fn on_native_window_destroyed(
     };
     state.gles_backend = None;
     if state.reactor_running {
-        state.control_messages.push_back(ReactorMessage::WindowDestroyed);
+        state
+            .control_messages
+            .push_back(ReactorMessage::WindowDestroyed);
     }
     drop(state);
     pump_main_thread_reactor(false);
@@ -1114,7 +1120,9 @@ pub fn launch(
     state.runtime_started = true;
     state
         .control_messages
-        .push_back(ReactorMessage::LaunchFactory(Box::new(move || Box::pin(entry))));
+        .push_back(ReactorMessage::LaunchFactory(Box::new(move || {
+            Box::pin(entry)
+        })));
     drop(state);
     pump_main_thread_reactor(false);
     android_log_info("Android runtime loop starting");
@@ -1134,9 +1142,11 @@ pub fn launch_with_factory<E, F>(
         return;
     }
     state.runtime_started = true;
-    state.control_messages.push_back(ReactorMessage::LaunchFactory(Box::new(
-        move || Box::pin(entry_factory()),
-    )));
+    state
+        .control_messages
+        .push_back(ReactorMessage::LaunchFactory(Box::new(move || {
+            Box::pin(entry_factory())
+        })));
     drop(state);
     pump_main_thread_reactor(false);
     android_log_info("Android runtime loop starting from entry factory");
@@ -1527,7 +1537,8 @@ fn rasterize_circle_command(
         width: radius * 2,
         height: radius * 2,
     };
-    let mut surface = OwnedSoftwareSurface::new(rect.width.max(1) as usize, rect.height.max(1) as usize);
+    let mut surface =
+        OwnedSoftwareSurface::new(rect.width.max(1) as usize, rect.height.max(1) as usize);
     surface.circle(radius, radius, radius, color);
     Some((
         format!("generated://circle/{index}"),
@@ -1601,10 +1612,10 @@ impl OwnedSoftwareSurface {
             );
             let mut cursor_x = 0;
             if request.style.centered && request.rect.width > 0 {
-                cursor_x += ((request.rect.width as f32 - line_metrics.width).max(0.0) * 0.5) as i32;
+                cursor_x +=
+                    ((request.rect.width as f32 - line_metrics.width).max(0.0) * 0.5) as i32;
             }
-            let baseline_y =
-                origin_y + line_index as i32 * line_height + layout.baseline_offset;
+            let baseline_y = origin_y + line_index as i32 * line_height + layout.baseline_offset;
             for ch in line.chars() {
                 if ch == ' ' {
                     let metrics = font.inner.metrics(ch, px);
@@ -1869,9 +1880,7 @@ unsafe fn handle_motion_event(event: *const ndk_sys::AInputEvent) {
             {
                 TouchPhase::Started
             }
-            x if x == AMOTION_EVENT_ACTION_UP_I32
-                || x == AMOTION_EVENT_ACTION_POINTER_UP_I32 =>
-            {
+            x if x == AMOTION_EVENT_ACTION_UP_I32 || x == AMOTION_EVENT_ACTION_POINTER_UP_I32 => {
                 TouchPhase::Ended
             }
             x if x == AMOTION_EVENT_ACTION_CANCEL_I32 => TouchPhase::Cancelled,
@@ -1992,9 +2001,7 @@ pub async fn load_font(path: &str) -> Result<DesktopFont, String> {
                 attempted.push((*candidate).to_string());
                 match load_software_font_from_path(candidate).await {
                     Ok(font) => {
-                        android_log_info(&format!(
-                            "Android font fallback selected: {candidate}"
-                        ));
+                        android_log_info(&format!("Android font fallback selected: {candidate}"));
                         fallback_font = Some((candidate.to_string(), font));
                         break;
                     }
@@ -2268,7 +2275,11 @@ impl<'a> SoftwareFramebuffer<'a> {
         self.blit_software_texture(texture, request.rect, request.alpha);
     }
 
-    fn draw_text(&mut self, request: &loadngo_renderer::TextRequest, current_font: Option<&SoftwareFont>) {
+    fn draw_text(
+        &mut self,
+        request: &loadngo_renderer::TextRequest,
+        current_font: Option<&SoftwareFont>,
+    ) {
         let Some(font) = current_font else {
             return;
         };
@@ -2298,10 +2309,10 @@ impl<'a> SoftwareFramebuffer<'a> {
             );
             let mut cursor_x = request.rect.x;
             if request.style.centered && request.rect.width > 0 {
-                cursor_x += ((request.rect.width as f32 - line_metrics.width).max(0.0) * 0.5) as i32;
+                cursor_x +=
+                    ((request.rect.width as f32 - line_metrics.width).max(0.0) * 0.5) as i32;
             }
-            let baseline_y =
-                origin_y + line_index as i32 * line_height + layout.baseline_offset;
+            let baseline_y = origin_y + line_index as i32 * line_height + layout.baseline_offset;
             for ch in line.chars() {
                 if ch == ' ' {
                     let metrics = font.inner.metrics(ch, px);
@@ -2503,20 +2514,30 @@ pub fn blit_texture(texture: &DesktopTexture, rect: UiRect, alpha: f32) {
     }
 
     let mut state = app_state().lock().expect("android app state poisoned");
-    let image_key = format!("inline://{}x{}:{}", texture.width as i32, texture.height as i32, state.texture_registry.len());
+    let image_key = format!(
+        "inline://{}x{}:{}",
+        texture.width as i32,
+        texture.height as i32,
+        state.texture_registry.len()
+    );
     state
         .texture_registry
         .insert(image_key.clone(), texture.software_texture.clone());
-    state.queued_commands.push(FrameCommand::Image(ImageRequest {
-        rect,
-        image_key,
-        alpha,
-    }));
+    state
+        .queued_commands
+        .push(FrameCommand::Image(ImageRequest {
+            rect,
+            image_key,
+            alpha,
+        }));
 }
 
 pub fn upload_texture(image: &DecodedImage) -> Result<DesktopTexture, String> {
     image.validate_rgba8()?;
-    Ok(DesktopTexture::new(None, SoftwareTexture::from_decoded_image(image)))
+    Ok(DesktopTexture::new(
+        None,
+        SoftwareTexture::from_decoded_image(image),
+    ))
 }
 
 pub fn upload_texture_with_image_key(
@@ -2562,14 +2583,7 @@ pub fn draw_rectangle(x: f32, y: f32, w: f32, h: f32, color: UiColor) {
     }]);
 }
 
-pub fn draw_rectangle_lines(
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    thickness: f32,
-    color: UiColor,
-) {
+pub fn draw_rectangle_lines(x: f32, y: f32, w: f32, h: f32, thickness: f32, color: UiColor) {
     queue_commands([FrameCommand::StrokeRect {
         rect: UiRect {
             x: x.round() as i32,
@@ -2586,12 +2600,7 @@ pub fn draw_text(text: &str, x: f32, y: f32, size: f32, color: UiColor) {
     let _ = draw_plain_text(text, x, y, size, color);
 }
 
-pub fn measure_text(
-    text: &str,
-    _font: Option<()>,
-    font_size: u16,
-    font_scale: f32,
-) -> TextMetrics {
+pub fn measure_text(text: &str, _font: Option<()>, font_size: u16, font_scale: f32) -> TextMetrics {
     approximate_text_metrics(text, font_size, font_scale)
 }
 

@@ -13,6 +13,7 @@ ui-core = { path = "../ui-core" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 loadngo-gfx-metal = { path = "../gfx-metal" }
+loadngo-proactor = { path = "../proactor" }
 objc2 = "0.6.4"
 
 [target.'cfg(target_os = "android")'.dependencies]

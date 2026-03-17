@@ -39,7 +39,7 @@ This keeps `IOCP`, `kqueue`, `epoll`, `ALooper`, or `eventfd` details out of the
 Backend status:
 
 - BSD/macOS: `kqueue` backend implemented in `loadngo-proactor`
-- Windows: `IOCP` backend still to port
+- Windows: `IOCP` backend implemented in `loadngo-proactor`
 - Linux: `epoll` + wake fd still to port
 - Android: `ALooper` integration still to port onto this core
 
@@ -55,3 +55,21 @@ The proactor core is the first step toward:
 - deferred scene/resource work
 - host wakeups on input, timers, I/O, and task completion
 - removal of fixed-sleep frame loops
+
+## Scheduling policy
+
+The proactor supports two legitimate presentation modes:
+
+- frame-paced mode
+  - schedule another frame at the next presentation interval while animation is active
+- dirty-driven mode
+  - schedule another frame only when state changed or a deferred deadline requires it
+
+For the VN runtime, the right policy is mixed:
+
+- animated scenes, transitions, particles, text reveal, or active drag: frame-paced
+- static scenes and menus: dirty-driven
+
+The important architectural point is that both modes should be driven by deferred work and invalidation, not by a fixed host sleep loop.
+
+See `docs/PROACTOR_WINDOWS_AGENT.md` for the Windows validation runbook.
