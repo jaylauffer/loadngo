@@ -23,7 +23,7 @@ pub use geometry::{Color, Insets, Point, Rect, Scalar, Size};
 pub use input::{Key, Modifiers, PointerButton, PointerSource, PointerState, UiEvent};
 pub use list::{ListInteraction, ListState};
 pub use paint::{PaintOp, TextStyle};
-pub use scroll::ScrollRegionModel;
+pub use scroll::{ScrollRegionModel, ScrollThumbDragState};
 pub use slider::SliderModel;
 pub use stepper::StepperModel;
 pub use tabs::{TabPage, TabbedContainer};
