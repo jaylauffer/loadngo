@@ -3,6 +3,11 @@ use crate::{
     paint::PaintOp,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrollThumbDragState {
+    pub pointer_offset_y: f32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScrollRegionModel {
     pub viewport: Rect,
@@ -93,17 +98,25 @@ impl ScrollRegionModel {
         let Some(track) = self.indicator_track_rect() else {
             return;
         };
-        let max_offset = self.max_offset();
-        if max_offset <= 0.0 {
-            self.offset = 0.0;
-            return;
+        let thumb_h = self.thumb_height(track.height, self.max_offset());
+        self.set_offset_from_thumb_top(pointer_y - track.y - thumb_h * 0.5);
+    }
+
+    pub fn begin_indicator_drag(&self, pointer_y: f32) -> Option<ScrollThumbDragState> {
+        let thumb = self.indicator_thumb_rect()?;
+        if pointer_y < thumb.y || pointer_y > thumb.y + thumb.height {
+            return None;
         }
-        let thumb_h = self.thumb_height(track.height, max_offset);
-        let travel = (track.height - thumb_h).max(0.0);
-        let local_y = (pointer_y - track.y - thumb_h * 0.5).clamp(0.0, travel);
-        let t = if travel > 0.0 { local_y / travel } else { 0.0 };
-        self.offset = max_offset * t;
-        self.clamp_offset();
+        Some(ScrollThumbDragState {
+            pointer_offset_y: pointer_y - thumb.y,
+        })
+    }
+
+    pub fn drag_indicator_to(&mut self, pointer_y: f32, drag_state: ScrollThumbDragState) {
+        let Some(track) = self.indicator_track_rect() else {
+            return;
+        };
+        self.set_offset_from_thumb_top(pointer_y - track.y - drag_state.pointer_offset_y);
     }
 
     pub fn paint_indicator(&self, scene: &mut Vec<PaintOp>, color: Color) {
@@ -131,6 +144,23 @@ impl ScrollRegionModel {
         let ratio = (track_height / (track_height + max_offset)).clamp(0.12, 1.0);
         (track_height * ratio).clamp(Self::MIN_THUMB_HEIGHT, track_height)
     }
+
+    fn set_offset_from_thumb_top(&mut self, thumb_top: f32) {
+        let Some(track) = self.indicator_track_rect() else {
+            return;
+        };
+        let max_offset = self.max_offset();
+        if max_offset <= 0.0 {
+            self.offset = 0.0;
+            return;
+        }
+        let thumb_h = self.thumb_height(track.height, max_offset);
+        let travel = (track.height - thumb_h).max(0.0);
+        let local_y = thumb_top.clamp(0.0, travel);
+        let t = if travel > 0.0 { local_y / travel } else { 0.0 };
+        self.offset = max_offset * t;
+        self.clamp_offset();
+    }
 }
 
 #[cfg(test)]
@@ -140,7 +170,7 @@ mod tests {
         paint::PaintOp,
     };
 
-    use super::ScrollRegionModel;
+    use super::{ScrollRegionModel, ScrollThumbDragState};
 
     #[test]
     fn scroll_region_clamps_offset_to_content_bounds() {
@@ -231,5 +261,48 @@ mod tests {
         let thumb = region.indicator_thumb_rect().unwrap();
         assert!(thumb.y >= track.y);
         assert!(thumb.bottom() <= track.bottom());
+    }
+
+    #[test]
+    fn scroll_region_thumb_drag_tracks_pointer_delta() {
+        let mut region = ScrollRegionModel::new(
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 180.0,
+                height: 120.0,
+            },
+            0.0,
+        );
+        region.set_content_height(360.0);
+        let thumb = region.indicator_thumb_rect().unwrap();
+        let drag = region
+            .begin_indicator_drag(thumb.y + 8.0)
+            .expect("thumb press should begin drag");
+        assert_eq!(
+            drag,
+            ScrollThumbDragState {
+                pointer_offset_y: 8.0
+            }
+        );
+        region.drag_indicator_to(thumb.y + 48.0, drag);
+        assert!(region.offset > 0.0);
+    }
+
+    #[test]
+    fn scroll_region_thumb_drag_requires_press_inside_thumb() {
+        let mut region = ScrollRegionModel::new(
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 180.0,
+                height: 120.0,
+            },
+            0.0,
+        );
+        region.set_content_height(360.0);
+        let thumb = region.indicator_thumb_rect().unwrap();
+        assert!(region.begin_indicator_drag(thumb.y - 1.0).is_none());
+        assert!(region.begin_indicator_drag(thumb.bottom() + 1.0).is_none());
     }
 }
