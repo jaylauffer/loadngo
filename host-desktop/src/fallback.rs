@@ -1,8 +1,8 @@
 use std::{env, future::Future, pin::Pin};
 
 use loadngo_host_core::{
-    AssetIoBackend, DecodedImage, DesktopGraphicsBackend, DesktopPlatformBackend, FrameTiming,
-    HostFrame, InputSnapshot, RenderOp, RenderTextStyle, SurfaceInfo, TextMetrics,
+    AssetIoBackend, DecodedImage, DesktopGraphicsBackend, DesktopPlatformBackend, FrameDemand,
+    FrameTiming, HostFrame, InputSnapshot, RenderOp, RenderTextStyle, SurfaceInfo, TextMetrics,
     WindowDescriptor, WindowIconSet,
 };
 use loadngo_renderer::{FrameCommand, Renderer, RendererConfig};
@@ -121,7 +121,7 @@ impl DesktopPlatformBackend for LoadngoPlaceholderPlatformHost {
         }
     }
 
-    fn next_frame() -> Pin<Box<dyn Future<Output = ()>>> {
+    fn next_frame(_demand: FrameDemand) -> Pin<Box<dyn Future<Output = ()>>> {
         Box::pin(async {})
     }
 
@@ -192,8 +192,8 @@ impl DesktopPlatformBackend for LoadngoPlaceholderDesktopHost {
         LoadngoPlaceholderPlatformHost::capture_frame()
     }
 
-    fn next_frame() -> Pin<Box<dyn Future<Output = ()>>> {
-        LoadngoPlaceholderPlatformHost::next_frame()
+    fn next_frame(demand: FrameDemand) -> Pin<Box<dyn Future<Output = ()>>> {
+        LoadngoPlaceholderPlatformHost::next_frame(demand)
     }
 
     fn simulate_mouse_with_touch(enabled: bool) {
@@ -429,8 +429,8 @@ pub fn measure_text(text: &str, _font: Option<()>, font_size: u16, font_scale: f
     approximate_text_metrics(text, font_size, font_scale)
 }
 
-pub async fn next_frame() {
-    LoadngoPlaceholderPlatformHost::next_frame().await;
+pub async fn next_frame(demand: FrameDemand) {
+    LoadngoPlaceholderPlatformHost::next_frame(demand).await;
 }
 
 pub fn simulate_mouse_with_touch(_enabled: bool) {}
