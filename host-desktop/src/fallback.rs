@@ -1,4 +1,4 @@
-use std::{env, future::Future, pin::Pin};
+use std::{env, future::Future, path::Path, pin::Pin};
 
 use loadngo_host_core::{
     AssetIoBackend, DecodedImage, DesktopGraphicsBackend, DesktopPlatformBackend, FrameDemand,
@@ -291,6 +291,10 @@ pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
 
 pub async fn load_text(path: &str) -> Result<String, String> {
     LoadngoPlaceholderAssetIo::load_text(path).await
+}
+
+pub fn asset_exists(path: &str) -> bool {
+    Path::new(path).exists()
 }
 
 pub async fn load_font(path: &str) -> Result<DesktopFont, String> {
