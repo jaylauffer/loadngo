@@ -26,6 +26,23 @@ It does not mean the visual novel runtime owns per-widget mouse and touch rules.
 - widget input consumption
 - widget redraw demand
 
+## Coordinate Model
+
+Widget and layout space should use logical coordinates, not integer pixel space.
+
+Current policy:
+- widget geometry uses `f32`
+- pointer positions use `f32`
+- paint/layout bounds use `f32`
+- backend rasterization may quantize if needed at the final execution boundary
+
+This keeps:
+- DPI scaling sane
+- host/runtime geometry consistent
+- hit-testing and layout free from premature snapping
+
+Integer snapping belongs at the backend/raster edge, not in the widget model.
+
 In practical terms:
 - `sng-rusty` builds models such as `RuntimeGlobalMenuModel`
 - `loadngo`-owned hosts/composition layers turn those models into:
@@ -52,6 +69,14 @@ Contract:
 - `input_consumed=true` means the event must not bleed into higher-level runtime actions
 - `action=Some(...)` means the widget emitted a semantic action
 
+Discrete widgets such as buttons can usually express their semantic result as an
+action.
+
+Continuous widgets such as sliders are different:
+- the widget still owns interaction semantics and paint generation
+- the composition host reports value changes upward
+- the runtime should consume those value changes as data, not fake them as button actions
+
 Examples:
 - button press inside bounds:
   - consumes input
@@ -64,6 +89,11 @@ Examples:
   - consumes input
   - requests redraw
   - emits no activation
+- slider drag:
+  - consumes input
+  - requests redraw
+  - updates the widget-owned value continuously
+  - reports changed values upward through the composition host
 
 ## Redraw Policy
 
@@ -125,6 +155,8 @@ The minimum useful test coverage is:
   - action aggregation
   - input consumption aggregation
   - redraw aggregation
+  - fractional-rect hit testing
+  - half-open edge behavior
   - desktop and touch interaction paths
 - runtime model tests
   - widget-key/action round-trips
