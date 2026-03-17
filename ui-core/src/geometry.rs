@@ -1,23 +1,25 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub type Scalar = f32;
+
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Point {
-    pub x: i32,
-    pub y: i32,
+    pub x: Scalar,
+    pub y: Scalar,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Size {
-    pub width: i32,
-    pub height: i32,
+    pub width: Scalar,
+    pub height: Scalar,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Rect {
-    pub x: i32,
-    pub y: i32,
-    pub width: i32,
-    pub height: i32,
+    pub x: Scalar,
+    pub y: Scalar,
+    pub width: Scalar,
+    pub height: Scalar,
 }
 
 impl Rect {
@@ -28,21 +30,21 @@ impl Rect {
             && point.y < self.y + self.height
     }
 
-    pub fn right(self) -> i32 {
+    pub fn right(self) -> Scalar {
         self.x + self.width
     }
 
-    pub fn bottom(self) -> i32 {
+    pub fn bottom(self) -> Scalar {
         self.y + self.height
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Insets {
-    pub left: i32,
-    pub top: i32,
-    pub right: i32,
-    pub bottom: i32,
+    pub left: Scalar,
+    pub top: Scalar,
+    pub right: Scalar,
+    pub bottom: Scalar,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,15 +68,43 @@ mod tests {
     #[test]
     fn rect_contains_uses_half_open_edges() {
         let rect = Rect {
-            x: 10,
-            y: 20,
-            width: 30,
-            height: 40,
+            x: 10.0,
+            y: 20.0,
+            width: 30.0,
+            height: 40.0,
         };
 
-        assert!(rect.contains(Point { x: 10, y: 20 }));
-        assert!(rect.contains(Point { x: 39, y: 59 }));
-        assert!(!rect.contains(Point { x: 40, y: 59 }));
-        assert!(!rect.contains(Point { x: 39, y: 60 }));
+        assert!(rect.contains(Point { x: 10.0, y: 20.0 }));
+        assert!(rect.contains(Point { x: 39.0, y: 59.0 }));
+        assert!(!rect.contains(Point { x: 40.0, y: 59.0 }));
+        assert!(!rect.contains(Point { x: 39.0, y: 60.0 }));
+    }
+
+    #[test]
+    fn rect_right_and_bottom_use_logical_extents() {
+        let rect = Rect {
+            x: 12.5,
+            y: 7.25,
+            width: 33.5,
+            height: 18.75,
+        };
+
+        assert_eq!(rect.right(), 46.0);
+        assert_eq!(rect.bottom(), 26.0);
+    }
+
+    #[test]
+    fn rect_contains_fractional_points_without_integer_rounding() {
+        let rect = Rect {
+            x: 0.25,
+            y: 0.5,
+            width: 10.5,
+            height: 4.25,
+        };
+
+        assert!(rect.contains(Point { x: 0.25, y: 0.5 }));
+        assert!(rect.contains(Point { x: 10.74, y: 4.74 }));
+        assert!(!rect.contains(Point { x: 10.75, y: 4.74 }));
+        assert!(!rect.contains(Point { x: 10.74, y: 4.75 }));
     }
 }

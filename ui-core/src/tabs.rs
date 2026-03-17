@@ -6,13 +6,13 @@ use crate::{
     widget::WidgetResponse,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TabPage {
     pub title: String,
     pub content_id: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TabbedContainer {
     pub bounds: Rect,
     pub pages: Vec<TabPage>,
@@ -52,15 +52,15 @@ impl TabbedContainer {
         if self.pages.is_empty() {
             return Vec::new();
         }
-        let width = (self.bounds.width / self.pages.len() as i32).max(1);
+        let width = (self.bounds.width / self.pages.len() as f32).max(1.0);
         self.pages
             .iter()
             .enumerate()
             .map(|(index, _)| Rect {
-                x: self.bounds.x + (index as i32 * width),
+                x: self.bounds.x + (index as f32 * width),
                 y: self.bounds.y,
                 width,
-                height: 32,
+                height: 32.0,
             })
             .collect()
     }
@@ -154,10 +154,10 @@ mod tests {
     #[test]
     fn tab_selection_tracks_selected_page() {
         let mut tabs = TabbedContainer::new(Rect {
-            x: 0,
-            y: 0,
-            width: 200,
-            height: 200,
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 200.0,
         });
         tabs.add_page("one", Some(1));
         tabs.add_page("two", Some(2));
@@ -173,20 +173,40 @@ mod tests {
     #[test]
     fn tab_pointer_release_selects_clicked_tab() {
         let mut tabs = TabbedContainer::new(Rect {
-            x: 0,
-            y: 0,
-            width: 200,
-            height: 200,
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 200.0,
         });
         tabs.add_page("one", Some(1));
         tabs.add_page("two", Some(2));
 
         let response = tabs.handle_event(UiEvent::PointerReleased {
             button: PointerButton::Primary,
-            state: PointerState::mouse(crate::Point { x: 150, y: 10 }, Modifiers::default()),
+            state: PointerState::mouse(crate::Point { x: 150.0, y: 10.0 }, Modifiers::default()),
         });
 
         assert!(response.request_redraw);
         assert_eq!(tabs.selected, 1);
+    }
+
+    #[test]
+    fn tab_rects_split_width_in_logical_space() {
+        let mut tabs = TabbedContainer::new(Rect {
+            x: 5.5,
+            y: 7.0,
+            width: 101.0,
+            height: 48.0,
+        });
+        tabs.add_page("one", Some(1));
+        tabs.add_page("two", Some(2));
+        tabs.add_page("three", Some(3));
+
+        let rects = tabs.tab_rects();
+        assert_eq!(rects.len(), 3);
+        assert!((rects[0].x - 5.5).abs() < f32::EPSILON);
+        assert!((rects[1].x - (5.5 + 101.0 / 3.0)).abs() < 0.001);
+        assert!((rects[2].x - (5.5 + 2.0 * 101.0 / 3.0)).abs() < 0.001);
+        assert!((rects[0].width - 101.0 / 3.0).abs() < 0.001);
     }
 }

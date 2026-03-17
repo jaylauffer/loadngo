@@ -6,7 +6,7 @@ use crate::{
     widget::WidgetResponse,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TreeNode {
     pub text: String,
     pub children: Vec<TreeNode>,
@@ -21,7 +21,7 @@ impl TreeNode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TreeControl {
     pub bounds: Rect,
     pub roots: Vec<TreeNode>,
@@ -91,7 +91,7 @@ impl TreeControl {
                 if !self.bounds.contains(state.position) {
                     return WidgetResponse::default();
                 }
-                let row = ((state.position.y - self.bounds.y) / 28).max(0) as usize;
+                let row = ((state.position.y - self.bounds.y) / 28.0).max(0.0) as usize;
                 if let Some(path) = row_paths.get(row) {
                     if self.select_path(path) {
                         return WidgetResponse::redraw();
@@ -144,9 +144,9 @@ impl TreeControl {
         for (row_index, (path, depth, node)) in self.visible_rows().into_iter().enumerate() {
             let row_rect = Rect {
                 x: self.bounds.x,
-                y: self.bounds.y + (row_index as i32 * 28),
+                y: self.bounds.y + (row_index as f32 * 28.0),
                 width: self.bounds.width,
-                height: 28,
+                height: 28.0,
             };
             if self.selected_path.as_ref() == Some(&path) {
                 scene.push(PaintOp::FillRect {
@@ -156,9 +156,9 @@ impl TreeControl {
             }
             scene.push(PaintOp::Text {
                 rect: Rect {
-                    x: row_rect.x + 12 + (depth as i32 * 18),
+                    x: row_rect.x + 12.0 + (depth as f32 * 18.0),
                     y: row_rect.y,
-                    width: row_rect.width - 12,
+                    width: row_rect.width - 12.0,
                     height: row_rect.height,
                 },
                 text: node.text.clone(),
@@ -186,7 +186,7 @@ impl Component for TreeControl {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TreeCombo {
     pub bounds: Rect,
     pub tree: TreeControl,
@@ -236,10 +236,10 @@ mod tests {
     #[test]
     fn tree_tracks_inserted_nodes_and_selection() {
         let mut tree = TreeControl::new(Rect {
-            x: 0,
-            y: 0,
-            width: 200,
-            height: 200,
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 200.0,
         });
 
         let root = tree.push_root("root");
@@ -254,10 +254,10 @@ mod tests {
     #[test]
     fn tree_combo_owns_shared_tree_model() {
         let combo = TreeCombo::new(Rect {
-            x: 0,
-            y: 0,
-            width: 160,
-            height: 26,
+            x: 0.0,
+            y: 0.0,
+            width: 160.0,
+            height: 26.0,
         });
 
         assert!(combo.tree.roots.is_empty());
@@ -266,17 +266,17 @@ mod tests {
     #[test]
     fn tree_pointer_release_selects_row() {
         let mut tree = TreeControl::new(Rect {
-            x: 0,
-            y: 0,
-            width: 200,
-            height: 200,
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 200.0,
         });
         let root = tree.push_root("root");
         assert!(tree.push_child(root, "child"));
 
         let response = tree.handle_event(UiEvent::PointerReleased {
             button: PointerButton::Primary,
-            state: PointerState::mouse(crate::Point { x: 10, y: 35 }, Modifiers::default()),
+            state: PointerState::mouse(crate::Point { x: 10.0, y: 35.0 }, Modifiers::default()),
         });
 
         assert!(response.request_redraw);

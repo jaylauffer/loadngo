@@ -614,10 +614,10 @@ pub fn render_text_lines(
         if !line.is_empty() {
             ops.push(RenderOp::Text {
                 rect: ui_core::geometry::Rect {
-                    x: x as i32,
-                    y: current_y as i32,
-                    width: 0,
-                    height: font_size as i32,
+                    x,
+                    y: current_y,
+                    width: 0.0,
+                    height: font_size as f32,
                 },
                 text: line.clone(),
                 style: RenderTextStyle {
@@ -654,10 +654,10 @@ pub fn draw_plain_text(text: &str, x: f32, y: f32, size: f32, color: UiColor) ->
     render_commands(
         &[FrameCommand::Text(loadngo_renderer::TextRequest {
             rect: ui_core::geometry::Rect {
-                x: x as i32,
-                y: y as i32,
-                width: 0,
-                height: font_size as i32,
+                x,
+                y,
+                width: 0.0,
+                height: font_size as f32,
             },
             text: text.to_string(),
             style: RenderTextStyle {
@@ -721,10 +721,10 @@ pub fn draw_texture_fit(texture: &DesktopTexture, x: f32, y: f32, width: f32, he
     blit_texture(
         texture,
         UiRect {
-            x: draw_x as i32,
-            y: draw_y as i32,
-            width: draw_w as i32,
-            height: draw_h as i32,
+            x: draw_x,
+            y: draw_y,
+            width: draw_w,
+            height: draw_h,
         },
         1.0,
     );
@@ -734,10 +734,10 @@ pub fn draw_rectangle(x: f32, y: f32, w: f32, h: f32, color: UiColor) {
     render_commands(
         &[FrameCommand::FillRect {
             rect: UiRect {
-                x: x as i32,
-                y: y as i32,
-                width: w as i32,
-                height: h as i32,
+                x,
+                y,
+                width: w,
+                height: h,
             },
             color,
         }],
@@ -749,10 +749,10 @@ pub fn draw_rectangle_lines(x: f32, y: f32, w: f32, h: f32, thickness: f32, colo
     render_commands(
         &[FrameCommand::StrokeRect {
             rect: UiRect {
-                x: x as i32,
-                y: y as i32,
-                width: w as i32,
-                height: h as i32,
+                x,
+                y,
+                width: w,
+                height: h,
             },
             color,
             thickness: thickness.max(1.0).round() as i32,

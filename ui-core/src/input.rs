@@ -25,7 +25,7 @@ pub struct Modifiers {
     pub meta: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PointerState {
     pub id: u64,
     pub position: Point,
@@ -80,7 +80,7 @@ pub enum Key {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum UiEvent {
     PointerMoved(PointerState),
     PointerLeft,
@@ -109,14 +109,14 @@ mod tests {
 
     #[test]
     fn mouse_pointer_uses_stable_primary_id() {
-        let pointer = PointerState::mouse(Point { x: 4, y: 7 }, Modifiers::default());
+        let pointer = PointerState::mouse(Point { x: 4.0, y: 7.0 }, Modifiers::default());
         assert_eq!(pointer.id, 0);
         assert_eq!(pointer.source, PointerSource::Mouse);
     }
 
     #[test]
     fn touch_pointer_preserves_contact_id() {
-        let pointer = PointerState::touch(42, Point { x: 12, y: 18 });
+        let pointer = PointerState::touch(42, Point { x: 12.0, y: 18.0 });
         assert_eq!(pointer.id, 42);
         assert_eq!(pointer.source, PointerSource::Touch);
     }
