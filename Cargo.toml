@@ -1,13 +1,15 @@
 [workspace]
 members = [
     "task",
+    "touch",
     "data",
+    "proactor",
     "network",
     "gui",
     "gui-win32",
+    "gfx-gles",
     "gfx-metal",
     "host-desktop",
-    "host-mac",
     "host-core",
     "renderer",
     "ui-core",

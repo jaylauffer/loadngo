@@ -140,22 +140,56 @@ pub struct FontFaceManifest {
 }
 
 impl FontFaceManifest {
-    pub fn resolve_path(&self, assets_root: &Path, platform: RuntimePlatform) -> Option<PathBuf> {
+    fn push_asset_candidates(
+        &self,
+        assets_root: &Path,
+        seen: &mut std::collections::HashSet<PathBuf>,
+        out: &mut Vec<PathBuf>,
+    ) {
         for rel_path in &self.asset_rel_paths {
             let candidate = assets_root.join("fonts").join(rel_path);
-            if candidate.exists() {
-                return Some(candidate);
+            if candidate.exists() && seen.insert(candidate.clone()) {
+                out.push(candidate);
             }
         }
+    }
 
+    fn push_platform_candidates(
+        &self,
+        platform: RuntimePlatform,
+        seen: &mut std::collections::HashSet<PathBuf>,
+        out: &mut Vec<PathBuf>,
+    ) {
         for platform_path in self.platform_paths.for_platform(platform) {
             let candidate = PathBuf::from(platform_path);
-            if candidate.exists() {
-                return Some(candidate);
+            if candidate.exists() && seen.insert(candidate.clone()) {
+                out.push(candidate);
             }
         }
+    }
 
-        None
+    pub fn candidate_paths(
+        &self,
+        assets_root: &Path,
+        platform: RuntimePlatform,
+    ) -> Vec<PathBuf> {
+        let mut candidates = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let prefer_platform_fonts = matches!(platform, RuntimePlatform::Android | RuntimePlatform::Ios);
+
+        if prefer_platform_fonts {
+            self.push_platform_candidates(platform, &mut seen, &mut candidates);
+            self.push_asset_candidates(assets_root, &mut seen, &mut candidates);
+        } else {
+            self.push_asset_candidates(assets_root, &mut seen, &mut candidates);
+            self.push_platform_candidates(platform, &mut seen, &mut candidates);
+        }
+
+        candidates
+    }
+
+    pub fn resolve_path(&self, assets_root: &Path, platform: RuntimePlatform) -> Option<PathBuf> {
+        self.candidate_paths(assets_root, platform).into_iter().next()
     }
 }
 
@@ -170,12 +204,41 @@ pub struct FontCatalogManifest {
 }
 
 impl FontCatalogManifest {
+    pub fn resolve_novel_font_paths(
+        &self,
+        assets_root: &Path,
+        platform: RuntimePlatform,
+    ) -> Vec<PathBuf> {
+        let mut candidates = self.novel_font.candidate_paths(assets_root, platform);
+        let mut seen: std::collections::HashSet<PathBuf> = candidates.iter().cloned().collect();
+
+        if let Some(ui_font) = &self.ui_font {
+            for candidate in ui_font.candidate_paths(assets_root, platform) {
+                if seen.insert(candidate.clone()) {
+                    candidates.push(candidate);
+                }
+            }
+        }
+
+        for fallback in &self.fallback_fonts {
+            for candidate in fallback.candidate_paths(assets_root, platform) {
+                if seen.insert(candidate.clone()) {
+                    candidates.push(candidate);
+                }
+            }
+        }
+
+        candidates
+    }
+
     pub fn resolve_novel_font_path(
         &self,
         assets_root: &Path,
         platform: RuntimePlatform,
     ) -> Option<PathBuf> {
-        self.novel_font.resolve_path(assets_root, platform)
+        self.resolve_novel_font_paths(assets_root, platform)
+            .into_iter()
+            .next()
     }
 }
 
