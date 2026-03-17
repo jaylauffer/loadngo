@@ -6,13 +6,21 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-loadngo-gfx-metal = { path = "../gfx-metal" }
 loadngo-host-core = { path = "../host-core" }
 loadngo-renderer = { path = "../renderer" }
+rodio = { version = "0.17", features = ["vorbis"] }
 ui-core = { path = "../ui-core" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+loadngo-gfx-metal = { path = "../gfx-metal" }
 objc2 = "0.6.4"
 
-[target.'cfg(not(target_os = "macos"))'.dependencies]
-macroquad = "0.4"
+[target.'cfg(target_os = "android")'.dependencies]
+fontdue = "0.9.3"
+jni = "0.21.1"
+libc = "0.2"
+lewton = "0.10"
+loadngo-gfx-gles = { path = "../gfx-gles" }
+ndk = { version = "0.8", default-features = false }
+ndk-context = "0.1"
+ndk-sys = "0.5"

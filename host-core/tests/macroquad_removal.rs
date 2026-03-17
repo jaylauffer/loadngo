@@ -74,15 +74,19 @@ fn core_workspace_crates_remain_macroquad_free() {
 }
 
 #[test]
-#[ignore = "enable once desktop backend crates are no longer Macroquad-based"]
 fn backend_crates_no_longer_reference_macroquad() {
     let root = workspace_root();
-    let mut paths = vec![
-        root.join("host-desktop/Cargo.toml"),
-        root.join("host-mac/Cargo.toml"),
-    ];
+    let mut paths = Vec::new();
+    for path in [root.join("host-desktop/Cargo.toml"), root.join("host-mac/Cargo.toml")] {
+        if path.exists() {
+            paths.push(path);
+        }
+    }
     for crate_dir in ["host-desktop/src", "host-mac/src"] {
-        paths.extend(rust_source_files(&root.join(crate_dir)));
+        let path = root.join(crate_dir);
+        if path.exists() {
+            paths.extend(rust_source_files(&path));
+        }
     }
     assert_paths_do_not_contain(&paths, "macroquad");
 }

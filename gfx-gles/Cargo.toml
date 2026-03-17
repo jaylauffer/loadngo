@@ -1,0 +1,13 @@
+[package]
+name = "loadngo-gfx-gles"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+loadngo-renderer = { path = "../renderer" }
+ui-core = { path = "../ui-core" }
+
+[target.'cfg(target_os = "android")'.dependencies]
+ndk = { version = "0.8", default-features = false }

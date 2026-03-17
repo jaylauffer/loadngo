@@ -1,41 +1,38 @@
 # Macroquad Removal Status
 
-Date: 2026-03-15
+Date: 2026-03-16
 
 ## Current state
 
-### In `loadngo`
-- `macroquad` is currently used by loadngo backend implementations:
-  - `host-desktop` (shared desktop backend crate)
-  - [`host-mac/Cargo.toml`](../host-mac/Cargo.toml)
-  - [`host-mac/src/main.rs`](../host-mac/src/main.rs)
-- `ui-core`, `host-core`, `gui`, and `gui-win32` do not depend on `macroquad`.
-- Conclusion: `loadngo` core abstractions are backend-agnostic; Macroquad is isolated to backend crates.
+### Completed
+- `sng-rusty` no longer depends on `macroquad`, `macroquad_macro`, or `miniquad`.
+- `loadngo-host-desktop` no longer depends on `macroquad`.
+- The obsolete `host-mac` crate has been removed from the workspace.
+- macOS now runs through a `loadngo`-owned AppKit + Metal host path.
+- `ui-core`, `host-core`, `renderer`, `gui`, and `gui-win32` remain backend-agnostic.
 
-### In `sng-rusty` (consumer)
-- Runtime/editor host shims now delegate to `loadngo-host-desktop`.
-- `sng-rusty/src` no longer imports `macroquad` directly.
-- Direct `macroquad` dependency has been removed from `sng-rusty/Cargo.toml`.
+### In progress
+- Non-mac desktop targets now compile against a `loadngo` placeholder host path instead of a hidden Macroquad fallback.
+- Android now exports a `loadngo`-owned `android_main` placeholder in `sng-rusty/src/lib.rs`; the remaining work is replacing that placeholder with a real mobile host.
 
 ## What has already been completed
-- Input snapshots, touch model, and key polling are in `loadngo-host-core`.
-- Pointer helper primitives are now centralized in `loadngo-host-core` (`pointer_in_rect`, `pointer_pressed_in_rect`, `pointer_released`).
-- Image decode/registry and texture upload seams are defined in `loadngo-host-core`.
-- `sng-rusty` has moved script/image file loading through host seams.
+- Input snapshots, touch model, and key polling live in `loadngo-host-core`.
+- `loadngo-renderer` owns command encoding and frame resource planning.
+- `loadngo-gfx-metal` owns the active macOS render path, including text and image presentation.
+- `sng-rusty` runtime/editor host shims now delegate to `loadngo-host-desktop`.
+- Shared font assets and the active font manifest now live under `loadngo/assets/fonts/`.
 
-## Remaining work to fully remove Macroquad
-1. Replace Macroquad inside backend crates (`loadngo-host-desktop`, `host-mac`) with non-Macroquad platform backends.
-2. Introduce backend selection for desktop targets (macOS/Linux/Windows) without changing app/runtime code.
-3. Remove Android `quad_main` dependency path in `sng-rusty` with equivalent host bootstrap.
+## Remaining work
+1. Implement `loadngo`-owned native hosts for Windows, Linux, iOS, and Android.
+2. Replace the temporary non-mac placeholder backend in `loadngo-host-desktop/src/fallback.rs` with real platform backends.
+3. Replace the temporary Android `android_main` placeholder with a real `loadngo` mobile bootstrap.
 
-## Recommended acceptance checks
-- `rg -n "macroquad" sng-rusty loadngo --glob '!**/target/**'` returns no runtime/editor/backend usage except intentionally transitional crates.
-- `cargo check` and test suites pass for:
-  - `loadngo-host-core`
-  - `ui-core`
-  - `sng-rusty` runtime/editor binaries
-- Manual validation confirms:
-  - Button hover/click behavior
-  - Menu/submenu navigation
-  - Mouse + touch interaction parity
-  - Text/font and image rendering parity
+## Acceptance checks
+- `cargo tree -p sng-rusty | rg "macroquad|miniquad"` returns no matches on macOS.
+- `cargo test -q -p loadngo-host-core --test macroquad_removal` passes.
+- `cargo test -q dependency_tests` in `sng-rusty` passes, with the Android `quad_main` removal check now enabled.
+- Manual validation on macOS confirms:
+  - startup and frame presentation
+  - menu interaction
+  - font/text rendering
+  - Dock icon and cursor ownership

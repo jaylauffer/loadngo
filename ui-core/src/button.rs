@@ -93,9 +93,27 @@ impl ButtonModel {
     }
 
     pub fn paint(&self, scene: &mut Vec<PaintOp>) {
+        let fill = if self.pressed {
+            Color::rgba(0xd4, 0xdd, 0xef, 0xf2)
+        } else if self.hover || self.focused {
+            Color::rgba(0xe8, 0xee, 0xf8, 0xec)
+        } else {
+            Color::rgba(0xf0, 0xf0, 0xf0, 0xd8)
+        };
+        let border = if self.pressed {
+            Color::rgba(0x4d, 0x68, 0x9a, 0xf0)
+        } else if self.hover || self.focused {
+            Color::rgba(0x70, 0x70, 0x70, 0xdc)
+        } else {
+            Color::rgba(0x86, 0x8d, 0xa0, 0xd4)
+        };
         scene.push(PaintOp::FillRect {
             rect: self.bounds,
-            color: Color::rgba(0xf0, 0xf0, 0xf0, 0xd8),
+            color: fill,
+        });
+        scene.push(PaintOp::StrokeRect {
+            rect: self.bounds,
+            color: border,
         });
         scene.push(PaintOp::Text {
             rect: self.bounds,
@@ -105,12 +123,6 @@ impl ButtonModel {
                 ..TextStyle::default()
             },
         });
-        if self.hover || self.focused {
-            scene.push(PaintOp::StrokeRect {
-                rect: self.bounds,
-                color: Color::rgba(0x70, 0x70, 0x70, 0xdc),
-            });
-        }
     }
 }
 
