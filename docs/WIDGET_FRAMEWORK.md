@@ -21,6 +21,7 @@ It does not mean the visual novel runtime owns per-widget mouse and touch rules.
 
 `loadngo` should own:
 - buttons, menus, sliders, lists, tabs
+- scroll regions and scroll indicators
 - desktop vs touch interaction behavior
 - widget paint output
 - widget input consumption
@@ -76,6 +77,12 @@ Continuous widgets such as sliders are different:
 - the widget still owns interaction semantics and paint generation
 - the composition host reports value changes upward
 - the runtime should consume those value changes as data, not fake them as button actions
+
+Scroll regions follow the same principle:
+- the widget owns viewport/content/offset math
+- the runtime supplies scroll deltas and content extent
+- the widget reports clamped state and paint ops for indicators
+- the runtime should not reimplement scrollbar math per panel
 
 Examples:
 - button press inside bounds:
