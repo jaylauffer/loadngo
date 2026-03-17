@@ -4,7 +4,8 @@ use std::{
     ffi::CString,
     future::Future,
     pin::Pin,
-    task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
+    sync::Arc,
+    task::{Context, Poll, Wake, Waker},
     time::{Duration, Instant},
 };
 
@@ -16,6 +17,7 @@ use loadngo_host_core::{
     HostFrame, InputSnapshot, RenderOp, RenderTextStyle, SurfaceInfo, TextMetrics,
     WindowDescriptor, WindowIconSet,
 };
+use loadngo_proactor::{CompletionKind, KqueuePort, Proactor, ProactorHandle, RunReport};
 use loadngo_renderer::{FrameCommand, Renderer, RendererConfig};
 use objc2::{
     class,
@@ -226,6 +228,7 @@ struct AppState {
 thread_local! {
     static DESKTOP_BACKEND_RUNTIME: RefCell<Option<DesktopBackendRuntime>> = const { RefCell::new(None) };
     static APP_STATE: RefCell<Option<AppState>> = const { RefCell::new(None) };
+    static MAC_PROACTOR: RefCell<Option<MacProactor>> = const { RefCell::new(None) };
     static TEXTURE_COUNTER: RefCell<u64> = const { RefCell::new(0) };
 }
 
@@ -255,6 +258,36 @@ const KEYCODE_R: u16 = 15;
 const KEYCODE_F3: u16 = 99;
 const KEYCODE_UP: u16 = 126;
 const KEYCODE_DOWN: u16 = 125;
+const FRAME_INTERVAL: Duration = Duration::from_millis(16);
+
+struct MacProactor {
+    proactor: Proactor<KqueuePort>,
+    handle: ProactorHandle<KqueuePort>,
+}
+
+impl MacProactor {
+    fn new() -> Self {
+        let proactor =
+            Proactor::new(KqueuePort::new().expect("failed to create macOS kqueue port"));
+        let handle = proactor.handle();
+        Self { proactor, handle }
+    }
+}
+
+#[derive(Clone)]
+struct RuntimeWakeSignal {
+    handle: ProactorHandle<KqueuePort>,
+}
+
+impl Wake for RuntimeWakeSignal {
+    fn wake(self: Arc<Self>) {
+        let _ = self.handle.wake();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        let _ = self.handle.wake();
+    }
+}
 
 impl DesktopPlatformBackend for LoadngoPlatformHost {
     fn launch<F>(window: WindowDescriptor, icon: Option<WindowIconSet>, entry: F)
@@ -406,11 +439,32 @@ pub fn desktop_render_backend_status() -> DesktopRenderBackendStatus {
     with_desktop_backend_runtime(|runtime| runtime.status())
 }
 
+fn with_mac_proactor<R>(f: impl FnOnce(&MacProactor) -> R) -> R {
+    MAC_PROACTOR.with(|proactor| {
+        let proactor = proactor.borrow();
+        let proactor = proactor
+            .as_ref()
+            .expect("macOS proactor is not initialized for loadngo host-desktop");
+        f(proactor)
+    })
+}
+
+fn runtime_waker() -> Waker {
+    with_mac_proactor(|proactor| {
+        Waker::from(Arc::new(RuntimeWakeSignal {
+            handle: proactor.handle.clone(),
+        }))
+    })
+}
+
 pub fn launch(
     window: WindowDescriptor,
     icon: Option<WindowIconSet>,
     entry: impl Future<Output = ()> + 'static,
 ) {
+    MAC_PROACTOR.with(|proactor| {
+        *proactor.borrow_mut() = Some(MacProactor::new());
+    });
     let (window_obj, view_obj, surface) = create_window(&window, icon.as_ref());
     APP_STATE.with(|state| {
         *state.borrow_mut() = Some(AppState {
@@ -444,9 +498,19 @@ pub fn launch(
             });
         }
     });
+    if poll_entry_future() {
+        APP_STATE.with(|state| {
+            if let Some(state) = state.borrow_mut().as_mut() {
+                state.should_close = true;
+            }
+        });
+    }
     run_event_loop();
     APP_STATE.with(|state| {
         state.borrow_mut().take();
+    });
+    MAC_PROACTOR.with(|proactor| {
+        proactor.borrow_mut().take();
     });
 }
 
@@ -832,11 +896,7 @@ fn promote_process_to_foreground() {
     }
 }
 
-fn ns_image_from_rgba(
-    rgba: &[u8],
-    width: usize,
-    height: usize,
-) -> Option<Retained<AnyObject>> {
+fn ns_image_from_rgba(rgba: &[u8], width: usize, height: usize) -> Option<Retained<AnyObject>> {
     if rgba.len() != width * height * 4 {
         return None;
     }
@@ -895,8 +955,14 @@ fn run_event_loop() {
         if should_break {
             break;
         }
-        pump_events();
-        advance_frame_clock();
+        let timeout = with_mac_proactor(|proactor| {
+            proactor
+                .proactor
+                .next_deadline()
+                .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+        });
+        pump_events_until(timeout);
+        drain_proactor();
         if poll_entry_future() {
             APP_STATE.with(|state| {
                 if let Some(state) = state.borrow_mut().as_mut() {
@@ -904,28 +970,39 @@ fn run_event_loop() {
                 }
             });
         }
-        std::thread::sleep(Duration::from_millis(8));
     }
 }
 
-fn pump_events() {
+fn pump_events_until(timeout: Option<Duration>) {
     unsafe {
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
         let mode = ns_string("kCFRunLoopDefaultMode");
-        let distant_past: *mut AnyObject = msg_send![class!(NSDate), distantPast];
-        loop {
-            let event: *mut AnyObject = msg_send![
-                app,
-                nextEventMatchingMask: NSEVENT_MASK_ANY,
-                untilDate: distant_past,
-                inMode: &*mode,
-                dequeue: true
-            ];
-            if event.is_null() {
-                break;
-            }
+        let first_wait = ns_date_for_timeout(timeout);
+        let event: *mut AnyObject = msg_send![
+            app,
+            nextEventMatchingMask: NSEVENT_MASK_ANY,
+            untilDate: &*first_wait,
+            inMode: &*mode,
+            dequeue: true
+        ];
+        if !event.is_null() {
             handle_event(event);
             let _: () = msg_send![app, sendEvent: event];
+            let distant_past: *mut AnyObject = msg_send![class!(NSDate), distantPast];
+            loop {
+                let event: *mut AnyObject = msg_send![
+                    app,
+                    nextEventMatchingMask: NSEVENT_MASK_ANY,
+                    untilDate: distant_past,
+                    inMode: &*mode,
+                    dequeue: true
+                ];
+                if event.is_null() {
+                    break;
+                }
+                handle_event(event);
+                let _: () = msg_send![app, sendEvent: event];
+            }
         }
         let _: () = msg_send![app, updateWindows];
     }
@@ -943,6 +1020,18 @@ fn pump_events() {
             let _: () =
                 unsafe { msg_send![&*state.window, invalidateCursorRectsForView: &*state.view] };
             update_window_cursor(&state.window);
+        }
+    });
+}
+
+fn drain_proactor() {
+    with_mac_proactor(|proactor| loop {
+        let report = proactor
+            .proactor
+            .run_ready()
+            .expect("failed to drain macOS proactor");
+        if !proactor_report_has_activity(report) {
+            break;
         }
     });
 }
@@ -1029,8 +1118,18 @@ fn advance_frame_clock() {
     });
 }
 
+fn schedule_next_frame_tick() {
+    with_mac_proactor(|proactor| {
+        let _ = proactor
+            .handle
+            .defer_for(FRAME_INTERVAL, CompletionKind::Timer, 0, |_| {
+                advance_frame_clock()
+            });
+    });
+}
+
 fn poll_entry_future() -> bool {
-    let waker = noop_waker();
+    let waker = runtime_waker();
     let mut cx = Context::from_waker(&waker);
     let mut future = APP_STATE.with(|state| {
         let mut state = state.borrow_mut();
@@ -1060,6 +1159,7 @@ fn poll_entry_future() -> bool {
 struct NextFrameFuture {
     target_frame: u64,
     flushed: bool,
+    scheduled: bool,
 }
 
 impl NextFrameFuture {
@@ -1074,6 +1174,7 @@ impl NextFrameFuture {
         Self {
             target_frame,
             flushed: false,
+            scheduled: false,
         }
     }
 }
@@ -1095,6 +1196,10 @@ impl Future for NextFrameFuture {
             }
         });
         if !ready {
+            if !self.scheduled {
+                schedule_next_frame_tick();
+                self.scheduled = true;
+            }
             return Poll::Pending;
         }
         if !self.flushed {
@@ -1110,16 +1215,33 @@ fn ns_string(value: &str) -> Retained<AnyObject> {
     unsafe { msg_send![class!(NSString), stringWithUTF8String: cstr.as_ptr()] }
 }
 
-fn noop_waker() -> Waker {
-    unsafe fn clone(_: *const ()) -> RawWaker {
-        RawWaker::new(std::ptr::null(), &VTABLE)
+fn proactor_report_has_activity(report: RunReport) -> bool {
+    report.dispatched_completions > 0
+        || report.dispatched_deferred > 0
+        || report.woke
+        || report.stopped
+}
+
+fn ns_date_for_timeout(timeout: Option<Duration>) -> Retained<AnyObject> {
+    unsafe {
+        match timeout {
+            Some(duration) if duration.is_zero() => {
+                let date: *mut AnyObject = msg_send![class!(NSDate), distantPast];
+                Retained::retain(date).expect("NSDate distantPast should be retainable")
+            }
+            Some(duration) => {
+                let seconds = duration.as_secs_f64();
+                let date: *mut AnyObject =
+                    msg_send![class!(NSDate), dateWithTimeIntervalSinceNow: seconds];
+                Retained::retain(date)
+                    .expect("NSDate dateWithTimeIntervalSinceNow should be retainable")
+            }
+            None => {
+                let date: *mut AnyObject = msg_send![class!(NSDate), distantFuture];
+                Retained::retain(date).expect("NSDate distantFuture should be retainable")
+            }
+        }
     }
-    unsafe fn wake(_: *const ()) {}
-    unsafe fn wake_by_ref(_: *const ()) {}
-    unsafe fn drop(_: *const ()) {}
-    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
-    let raw = RawWaker::new(std::ptr::null(), &VTABLE);
-    unsafe { Waker::from_raw(raw) }
 }
 
 fn update_window_cursor(window: &Retained<AnyObject>) {

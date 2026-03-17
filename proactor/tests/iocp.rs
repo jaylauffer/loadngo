@@ -1,20 +1,13 @@
-#![cfg(any(
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "freebsd",
-    target_os = "openbsd",
-    target_os = "netbsd",
-    target_os = "dragonfly"
-))]
+#![cfg(windows)]
 
-use loadngo_proactor::{Completion, CompletionKind, KqueuePort, Proactor};
+use loadngo_proactor::{Completion, CompletionKind, IocpPort, Proactor};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 #[test]
-fn kqueue_dispatches_enqueued_work() {
-    let proactor = Proactor::new(KqueuePort::new().unwrap());
+fn iocp_dispatches_enqueued_work() {
+    let proactor = Proactor::new(IocpPort::new().unwrap());
     let handle = proactor.handle();
     let (tx, rx) = mpsc::channel();
 
@@ -34,8 +27,8 @@ fn kqueue_dispatches_enqueued_work() {
 }
 
 #[test]
-fn kqueue_wake_interrupts_blocking_poll() {
-    let proactor = Proactor::new(KqueuePort::new().unwrap());
+fn iocp_wake_interrupts_blocking_poll() {
+    let proactor = Proactor::new(IocpPort::new().unwrap());
     let handle = proactor.handle();
 
     let worker = thread::spawn(move || {

@@ -837,7 +837,10 @@ mod macos {
             Ok(surface)
         }
 
-        pub fn bind_to_view(device: &MetalDevice, view: *mut AnyObject) -> Result<Self, RendererError> {
+        pub fn bind_to_view(
+            device: &MetalDevice,
+            view: *mut AnyObject,
+        ) -> Result<Self, RendererError> {
             if view.is_null() {
                 return Err(RendererError::Backend(
                     "Host macOS content view is unavailable".to_string(),

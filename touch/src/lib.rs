@@ -126,8 +126,10 @@ pub fn menu_button_rect(screen_w: f32, screen_h: f32) -> TouchRect {
     let insets = safe_insets(screen_w, screen_h);
     let button_w = (screen_w * 0.5).clamp(340.0, 500.0);
     let button_h = 136.0;
-    let x = ((screen_w - button_w) * 0.5)
-        .clamp(insets.left, (screen_w - insets.right - button_w).max(insets.left));
+    let x = ((screen_w - button_w) * 0.5).clamp(
+        insets.left,
+        (screen_w - insets.right - button_w).max(insets.left),
+    );
     let y = insets.top + (screen_h * 0.11).clamp(220.0, 320.0);
     TouchRect::new(x, y, button_w, button_h)
 }
@@ -145,9 +147,9 @@ pub fn overlay_panel_rect(screen_w: f32, screen_h: f32, kind: TouchOverlayKind) 
     let panel_w = (safe_w * 0.94).clamp(380.0, 900.0).min(safe_w);
     let panel_h = match kind {
         TouchOverlayKind::GlobalMenu => (safe_h * 0.8).clamp(560.0, 860.0),
-        TouchOverlayKind::SaveLoad | TouchOverlayKind::SoundSettings | TouchOverlayKind::InputSettings => {
-            (safe_h * 0.88).clamp(420.0, 900.0)
-        }
+        TouchOverlayKind::SaveLoad
+        | TouchOverlayKind::SoundSettings
+        | TouchOverlayKind::InputSettings => (safe_h * 0.88).clamp(420.0, 900.0),
     }
     .min(safe_h);
 
@@ -167,8 +169,8 @@ pub fn global_menu_button_rects(panel: TouchRect, button_count: usize) -> Vec<To
     let bottom_y = panel.y + panel.height - 36.0;
     let gap = 24.0;
     let available_h = (bottom_y - top_y).max(140.0);
-    let button_h =
-        ((available_h - gap * (button_count as f32 - 1.0)) / button_count as f32).clamp(112.0, 148.0);
+    let button_h = ((available_h - gap * (button_count as f32 - 1.0)) / button_count as f32)
+        .clamp(112.0, 148.0);
     let used_h = button_h * button_count as f32 + gap * (button_count as f32 - 1.0);
     let mut button_y = top_y + ((available_h - used_h) * 0.5).max(0.0);
     let mut rects = Vec::with_capacity(button_count);
@@ -297,13 +299,13 @@ pub fn overlay_style(kind: TouchOverlayKind) -> TouchOverlayStyle {
             panel_border: RgbaColor::rgba(234, 240, 252, 248),
             panel_border_thickness: 4,
         },
-        TouchOverlayKind::SaveLoad | TouchOverlayKind::SoundSettings | TouchOverlayKind::InputSettings => {
-            TouchOverlayStyle {
-                scrim: RgbaColor::rgba(4, 6, 10, 175),
-                panel_fill: RgbaColor::rgba(12, 16, 24, 214),
-                panel_border: RgbaColor::rgba(180, 188, 212, 220),
-                panel_border_thickness: 4,
-            }
-        }
+        TouchOverlayKind::SaveLoad
+        | TouchOverlayKind::SoundSettings
+        | TouchOverlayKind::InputSettings => TouchOverlayStyle {
+            scrim: RgbaColor::rgba(4, 6, 10, 175),
+            panel_fill: RgbaColor::rgba(12, 16, 24, 214),
+            panel_border: RgbaColor::rgba(180, 188, 212, 220),
+            panel_border_thickness: 4,
+        },
     }
 }

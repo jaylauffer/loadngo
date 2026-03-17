@@ -2,8 +2,8 @@ use std::{env, future::Future, pin::Pin};
 
 use loadngo_host_core::{
     AssetIoBackend, DecodedImage, DesktopGraphicsBackend, DesktopPlatformBackend, FrameTiming,
-    HostFrame, InputSnapshot, RenderOp, RenderTextStyle, SurfaceInfo, TextMetrics, WindowDescriptor,
-    WindowIconSet,
+    HostFrame, InputSnapshot, RenderOp, RenderTextStyle, SurfaceInfo, TextMetrics,
+    WindowDescriptor, WindowIconSet,
 };
 use loadngo_renderer::{FrameCommand, Renderer, RendererConfig};
 use ui_core::{
@@ -131,13 +131,16 @@ impl DesktopPlatformBackend for LoadngoPlaceholderPlatformHost {
 impl AssetIoBackend for LoadngoPlaceholderAssetIo {
     fn load_bytes(path: &str) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>>>> {
         let path = path.to_string();
-        Box::pin(async move { std::fs::read(&path).map_err(|err| format!("failed to read {path}: {err}")) })
+        Box::pin(async move {
+            std::fs::read(&path).map_err(|err| format!("failed to read {path}: {err}"))
+        })
     }
 
     fn load_text(path: &str) -> Pin<Box<dyn Future<Output = Result<String, String>>>> {
         let path = path.to_string();
         Box::pin(async move {
-            std::fs::read_to_string(&path).map_err(|err| format!("failed to read text {path}: {err}"))
+            std::fs::read_to_string(&path)
+                .map_err(|err| format!("failed to read text {path}: {err}"))
         })
     }
 }
@@ -418,15 +421,7 @@ pub fn draw_texture_fit(texture: &DesktopTexture, _x: f32, _y: f32, width: f32, 
 
 pub fn draw_rectangle(_x: f32, _y: f32, _w: f32, _h: f32, _color: UiColor) {}
 
-pub fn draw_rectangle_lines(
-    _x: f32,
-    _y: f32,
-    _w: f32,
-    _h: f32,
-    _thickness: f32,
-    _color: UiColor,
-) {
-}
+pub fn draw_rectangle_lines(_x: f32, _y: f32, _w: f32, _h: f32, _thickness: f32, _color: UiColor) {}
 
 pub fn draw_text(_text: &str, _x: f32, _y: f32, _size: f32, _color: UiColor) {}
 

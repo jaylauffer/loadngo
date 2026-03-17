@@ -723,6 +723,7 @@ dependencies = [
  "loadngo-gfx-gles",
  "loadngo-gfx-metal",
  "loadngo-host-core",
+ "loadngo-proactor",
  "loadngo-renderer",
  "ndk",
  "ndk-context",
@@ -738,6 +739,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "thiserror 1.0.69",
+ "windows 0.58.0",
 ]
 
 [[package]]

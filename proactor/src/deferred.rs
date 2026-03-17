@@ -18,11 +18,7 @@ impl DeferredQueue {
 
     pub fn take_ready(&mut self, now: Instant) -> Vec<CompletionEnvelope> {
         let mut ready = Vec::new();
-        while self
-            .heap
-            .peek()
-            .is_some_and(|entry| entry.when <= now)
-        {
+        while self.heap.peek().is_some_and(|entry| entry.when <= now) {
             if let Some(entry) = self.heap.pop() {
                 ready.push(entry.envelope);
             }
@@ -38,6 +34,10 @@ impl DeferredQueue {
                 entry.when.saturating_duration_since(now)
             }
         })
+    }
+
+    pub fn next_deadline(&self) -> Option<Instant> {
+        self.heap.peek().map(|entry| entry.when)
     }
 }
 
