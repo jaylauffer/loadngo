@@ -11,9 +11,13 @@ pub use ui_core::{
     input::{Key, Modifiers, PointerButton, PointerState, UiEvent},
     label::{Label, LabelModel},
     list::{ListInteraction, ListState},
+    list_row::{ListRow, ListRowModel},
     paint::{HorizontalAlign, PaintOp, TextLayoutMode, TextOverflow, TextStyle, VerticalAlign},
     panel::{Panel, PanelModel},
+    scroll_container::{ScrollContainer, ScrollContainerModel},
+    stack::{VerticalStack, VerticalStackModel},
     tabs::{TabPage, TabbedContainer},
+    text_block::{TextBlock, TextBlockModel},
     tree::{TreeCombo, TreeControl, TreeNode},
     widget::{WidgetId, WidgetResponse},
 };

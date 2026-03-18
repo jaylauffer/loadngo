@@ -74,6 +74,23 @@ Recommended usage:
   - `MultiLine`
   - usually `Left`/`Top`
 
+Current core text widgets:
+- `LabelModel`
+  - single-line or compact text inside a bounded rect
+- `TextBlockModel`
+  - multiline static text inside a bounded rect
+  - callers may pre-wrap by inserting `\n` until shared width-aware wrapping exists
+
+Current core composition widgets:
+- `PanelModel`
+  - panel chrome plus content bounds
+- `VerticalStackModel`
+  - vertical child slot layout with padding and gap
+- `ScrollContainerModel`
+  - padded scroll viewport plus shared scrollbar indicator
+- `ListRowModel`
+  - reusable row chrome and content-slot layout for richer list items
+
 This is the boundary that desktop backends must preserve so editor and runtime UI
 do not drift into separate text-layout worlds.
 
