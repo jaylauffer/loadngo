@@ -36,20 +36,24 @@ impl ListState {
         self.item_bounds.clear();
         let mut y = origin_y;
         self.visible_count = 0;
-        self.content_height = 0.0;
+        self.content_height = self.item_heights.iter().sum();
+        let view_top = viewport.y;
+        let view_bottom = viewport.y + viewport.height;
 
         for height in self.item_heights.iter().skip(self.visible_pos) {
             let rect = Rect {
-                x: 0.0,
+                x: viewport.x,
                 y,
                 width: viewport.width,
                 height: *height,
             };
-            self.item_bounds.push(rect);
-            y += *height;
-            self.content_height += *height;
-            if y <= viewport.height {
+            if rect.y + rect.height >= view_top && rect.y <= view_bottom {
+                self.item_bounds.push(rect);
                 self.visible_count += 1;
+            }
+            y += *height;
+            if rect.y > view_bottom {
+                break;
             }
         }
     }
@@ -87,7 +91,10 @@ impl ListState {
             }
             UiEvent::ScrollLines { delta } => {
                 let current = self.visible_pos as i32;
-                let max_pos = self.item_heights.len().saturating_sub(1) as i32;
+                let max_pos = self
+                    .item_heights
+                    .len()
+                    .saturating_sub(self.visible_count.max(1)) as i32;
                 let next = (current - delta).clamp(0, max_pos) as usize;
                 if next != self.visible_pos {
                     self.visible_pos = next;
@@ -173,5 +180,23 @@ mod tests {
         assert!((state.item_bounds[0].y - 3.5).abs() < f32::EPSILON);
         assert!((state.item_bounds[1].y - 16.0).abs() < 0.001);
         assert!((state.content_height - 38.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn layout_uses_viewport_origin_for_item_bounds() {
+        let mut state = ListState::default();
+        state.set_item_heights(vec![20.0, 20.0]);
+        state.layout(
+            Rect {
+                x: 40.0,
+                y: 50.0,
+                width: 120.0,
+                height: 80.0,
+            },
+            55.0,
+        );
+
+        assert_eq!(state.hit_test(Point { x: 45.0, y: 60.0 }), Some(0));
+        assert_eq!(state.hit_test(Point { x: 45.0, y: 80.0 }), Some(1));
     }
 }

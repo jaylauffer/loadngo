@@ -141,6 +141,7 @@ impl CheckboxModel {
             text: self.text.clone(),
             style: TextStyle {
                 color: Color::rgba(255, 255, 255, 255),
+                font_size: 18,
                 centered: false,
             },
         });

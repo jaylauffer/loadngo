@@ -117,6 +117,7 @@ impl StepperModel {
             text: self.text.clone(),
             style: TextStyle {
                 color: Color::rgba(235, 235, 245, 255),
+                font_size: 18,
                 centered: false,
             },
         });
@@ -140,6 +141,7 @@ impl StepperModel {
             text: self.value_text.clone(),
             style: TextStyle {
                 color: Color::rgba(255, 255, 255, 255),
+                font_size: 18,
                 centered: true,
             },
         });
@@ -167,6 +169,7 @@ impl StepperModel {
             text: label.to_string(),
             style: TextStyle {
                 color: Color::rgba(255, 255, 255, 255),
+                font_size: 18,
                 centered: true,
             },
         });
