@@ -2,8 +2,8 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     sync::{
-        OnceLock,
         atomic::{AtomicUsize, Ordering},
+        OnceLock,
     },
 };
 
@@ -442,9 +442,12 @@ impl MetalBackend {
                     let image_width = raster.image.width as f32;
                     let image_height = raster.image.height as f32;
                     trace_widgets_log(format!(
-                        "text request='{}' centered={} rect=({}, {}, {}, {}) logical=({}, {}) baseline={} image=({}, {}) content_top={} logical_top_display={} opaque_top_display={} opaque_height={} placement=({}, {})",
+                        "text request='{}' h_align={:?} v_align={:?} mode={:?} overflow={:?} rect=({}, {}, {}, {}) logical=({}, {}) baseline={} image=({}, {}) content_top={} logical_top_display={} opaque_top_display={} opaque_height={} placement=({}, {})",
                         request.text,
-                        request.style.centered,
+                        request.style.horizontal_align,
+                        request.style.vertical_align,
+                        request.style.layout_mode,
+                        request.style.overflow,
                         request.rect.x,
                         request.rect.y,
                         request.rect.width,
@@ -589,9 +592,12 @@ impl MetalBackend {
                     let image_width = raster.image.width as f32;
                     let image_height = raster.image.height as f32;
                     trace_widgets_log(format!(
-                        "text request='{}' centered={} rect=({}, {}, {}, {}) logical=({}, {}) baseline={} image=({}, {}) content_top={} logical_top_display={} placement=({}, {})",
+                        "text request='{}' h_align={:?} v_align={:?} mode={:?} overflow={:?} rect=({}, {}, {}, {}) logical=({}, {}) baseline={} image=({}, {}) content_top={} logical_top_display={} placement=({}, {})",
                         request.text,
-                        request.style.centered,
+                        request.style.horizontal_align,
+                        request.style.vertical_align,
+                        request.style.layout_mode,
+                        request.style.overflow,
                         request.rect.x,
                         request.rect.y,
                         request.rect.width,
@@ -711,9 +717,23 @@ fn rasterize_text_request(
 ) -> Result<RasterizedText, RendererError> {
     #[cfg(target_os = "macos")]
     {
-        let raster = macos::rasterize_text(request, font_source)?;
-        let (opaque_top_in_image, opaque_bottom_in_image) =
-            opaque_alpha_bounds(&raster.image).unwrap_or_else(|| {
+        let mut request = request.clone();
+        if matches!(
+            request.style.layout_mode,
+            loadngo_host_core::RenderTextLayoutMode::SingleLine
+        ) && request.rect.width > 0.0
+        {
+            request.text = apply_single_line_overflow(
+                &request.text,
+                request.rect.width as f32,
+                font_source,
+                request.style.font_size as f32,
+                &request.style.overflow,
+            )?;
+        }
+        let raster = macos::rasterize_text(&request, font_source)?;
+        let (opaque_top_in_image, opaque_bottom_in_image) = opaque_alpha_bounds(&raster.image)
+            .unwrap_or_else(|| {
                 let top = raster.content_top_in_image.max(0.0).floor() as u32;
                 let bottom = (raster.content_top_in_image + raster.metrics.height)
                     .max(0.0)
@@ -723,29 +743,34 @@ fn rasterize_text_request(
                 (top, bottom)
             });
         let opaque_height = (opaque_bottom_in_image + 1).saturating_sub(opaque_top_in_image) as f32;
-        let logical_top_in_display =
-            (raster.image.height as f32 - (raster.content_top_in_image + raster.metrics.height))
-                .max(0.0);
+        let logical_top_in_display = (raster.image.height as f32
+            - (raster.content_top_in_image + raster.metrics.height))
+            .max(0.0);
         let opaque_top_in_display =
             raster.image.height as f32 - 1.0 - opaque_bottom_in_image as f32;
-        let text_x = if request.style.centered {
-            request.rect.x as f32 + (request.rect.width as f32 - raster.metrics.width) * 0.5
-        } else {
-            request.rect.x as f32
+        let text_x = match request.style.horizontal_align {
+            loadngo_host_core::RenderTextHorizontalAlign::Left => request.rect.x as f32,
+            loadngo_host_core::RenderTextHorizontalAlign::Center => {
+                request.rect.x as f32
+                    + (request.rect.width as f32 - raster.metrics.width).max(0.0) * 0.5
+            }
+            loadngo_host_core::RenderTextHorizontalAlign::Right => {
+                request.rect.x as f32 + (request.rect.width as f32 - raster.metrics.width).max(0.0)
+            }
         };
-        let visible_top = if request.style.centered {
-            request.rect.y as f32 + (request.rect.height as f32 - opaque_height).max(0.0) * 0.5
-        } else {
-            request.rect.y as f32
+        let visible_top = match request.style.vertical_align {
+            loadngo_host_core::RenderTextVerticalAlign::Top => request.rect.y as f32,
+            loadngo_host_core::RenderTextVerticalAlign::Middle => {
+                request.rect.y as f32 + (request.rect.height as f32 - opaque_height).max(0.0) * 0.5
+            }
+            loadngo_host_core::RenderTextVerticalAlign::Bottom => {
+                request.rect.y as f32 + (request.rect.height as f32 - opaque_height).max(0.0)
+            }
         };
         Ok(RasterizedText {
             image: raster.image,
             x: text_x,
-            y: if request.style.centered {
-                visible_top - opaque_top_in_display
-            } else {
-                visible_top - logical_top_in_display
-            },
+            y: visible_top - opaque_top_in_display,
             metrics: raster.metrics,
             content_top_in_image: raster.content_top_in_image,
             logical_top_in_display,
@@ -787,6 +812,115 @@ fn opaque_alpha_bounds(image: &DecodedImage) -> Option<(u32, u32)> {
         (Some(top), Some(bottom)) => Some((top, bottom)),
         _ => None,
     }
+}
+
+fn apply_single_line_overflow(
+    text: &str,
+    max_width: f32,
+    font_source: Option<&str>,
+    font_size: f32,
+    overflow: &loadngo_host_core::RenderTextOverflow,
+) -> Result<String, RendererError> {
+    let normalized = text.replace('\n', " ");
+    if normalized.is_empty() || max_width <= 0.0 {
+        return Ok(String::new());
+    }
+    if measure_text_metrics(&normalized, font_source, font_size)?.width <= max_width {
+        return Ok(normalized);
+    }
+
+    match overflow {
+        loadngo_host_core::RenderTextOverflow::Clip => {
+            fit_single_line_prefix(&normalized, "", max_width, font_source, font_size)
+        }
+        loadngo_host_core::RenderTextOverflow::EllipsisEnd => {
+            fit_single_line_prefix(&normalized, "...", max_width, font_source, font_size)
+        }
+        loadngo_host_core::RenderTextOverflow::EllipsisMiddle => {
+            fit_single_line_middle(&normalized, max_width, font_source, font_size)
+        }
+    }
+}
+
+fn fit_single_line_prefix(
+    text: &str,
+    suffix: &str,
+    max_width: f32,
+    font_source: Option<&str>,
+    font_size: f32,
+) -> Result<String, RendererError> {
+    if !suffix.is_empty() && measure_text_metrics(suffix, font_source, font_size)?.width > max_width
+    {
+        return Ok(String::new());
+    }
+
+    let mut fitted = String::new();
+    for ch in text.chars() {
+        let mut candidate = fitted.clone();
+        candidate.push(ch);
+        let rendered = if suffix.is_empty() {
+            candidate.clone()
+        } else {
+            format!("{candidate}{suffix}")
+        };
+        if measure_text_metrics(&rendered, font_source, font_size)?.width <= max_width {
+            fitted = candidate;
+        } else {
+            break;
+        }
+    }
+
+    if suffix.is_empty() || fitted.chars().count() == text.chars().count() {
+        Ok(fitted)
+    } else if fitted.is_empty() {
+        Ok(suffix.to_string())
+    } else {
+        Ok(format!("{fitted}{suffix}"))
+    }
+}
+
+fn fit_single_line_middle(
+    text: &str,
+    max_width: f32,
+    font_source: Option<&str>,
+    font_size: f32,
+) -> Result<String, RendererError> {
+    let ellipsis = "...";
+    if measure_text_metrics(ellipsis, font_source, font_size)?.width > max_width {
+        return Ok(String::new());
+    }
+
+    let chars: Vec<char> = text.chars().collect();
+    let mut prefix = String::new();
+    let mut suffix = String::new();
+    let mut left = 0usize;
+    let mut right = chars.len();
+
+    while left < right {
+        let try_prefix = format!("{prefix}{}", chars[left]);
+        let candidate = format!("{try_prefix}{ellipsis}{suffix}");
+        if measure_text_metrics(&candidate, font_source, font_size)?.width <= max_width {
+            prefix = try_prefix;
+            left += 1;
+        } else {
+            break;
+        }
+
+        if left >= right {
+            break;
+        }
+
+        let try_suffix = format!("{}{}", chars[right - 1], suffix);
+        let candidate = format!("{prefix}{ellipsis}{try_suffix}");
+        if measure_text_metrics(&candidate, font_source, font_size)?.width <= max_width {
+            suffix = try_suffix;
+            right -= 1;
+        } else {
+            break;
+        }
+    }
+
+    Ok(format!("{prefix}{ellipsis}{suffix}"))
 }
 
 fn rasterize_line(
@@ -1457,17 +1591,44 @@ mod macos {
         font_source: Option<&str>,
     ) -> Result<RasterizedText, RendererError> {
         let color = request.style.color;
-        let layout = layout_text(
-            &request.text,
-            font_source,
-            request.style.font_size.max(1) as f32,
-        )?;
-        let pad_top = (request.style.font_size as f32 * 0.5).ceil().max(4.0);
-        let pad_bottom = (request.style.font_size as f32 * 0.25).ceil().max(2.0);
-        let width = layout.metrics.width.max(1.0).ceil() as usize;
-        let height = (layout.metrics.height + pad_top + pad_bottom)
-            .max(1.0)
-            .ceil() as usize;
+        let lines: Vec<String> = match request.style.layout_mode {
+            loadngo_host_core::RenderTextLayoutMode::SingleLine => vec![request.text.clone()],
+            loadngo_host_core::RenderTextLayoutMode::MultiLine => {
+                let mut lines: Vec<String> = request.text.split('\n').map(str::to_string).collect();
+                if lines.is_empty() {
+                    lines.push(String::new());
+                }
+                lines
+            }
+        };
+        let mut layouts = Vec::with_capacity(lines.len().max(1));
+        for line in &lines {
+            layouts.push(layout_text(
+                line,
+                font_source,
+                request.style.font_size.max(1) as f32,
+            )?);
+        }
+        let logical_width = layouts
+            .iter()
+            .map(|layout| layout.metrics.width)
+            .fold(1.0f32, f32::max);
+        let line_height = layouts
+            .iter()
+            .map(|layout| layout.metrics.height)
+            .fold(1.0f32, f32::max);
+        let baseline_from_top = layouts
+            .iter()
+            .map(|layout| layout.metrics.baseline_from_top)
+            .fold(1.0f32, f32::max);
+        let logical_height = (line_height * lines.len() as f32).max(1.0);
+        // CoreText can draw a few pixels above the typographic ascent on macOS.
+        // Keep extra headroom in the offscreen raster so editor/runtime labels do
+        // not lose their top edge before alignment is applied.
+        let pad_top = (request.style.font_size as f32 * 0.5).ceil().max(4.0) + 4.0;
+        let pad_bottom = (request.style.font_size as f32 * 0.25).ceil().max(2.0) + 2.0;
+        let width = logical_width.max(1.0).ceil() as usize;
+        let height = (logical_height + pad_top + pad_bottom).max(1.0).ceil() as usize;
         let mut rgba = vec![0u8; width * height * 4];
         let color_space = unsafe { CGColorSpaceCreateDeviceRGB() };
         if color_space.is_null() {
@@ -1526,34 +1687,38 @@ mod macos {
                 color.b as f64 / 255.0,
                 color.a as f64 / 255.0,
             );
-            CGContextSetTextPosition(
-                context,
-                0.0,
-                (pad_top + layout.metrics.baseline_from_top) as f64,
-            );
-            CTLineDraw(layout.line, context);
+            for (index, layout) in layouts.iter().enumerate() {
+                CGContextSetTextPosition(
+                    context,
+                    0.0,
+                    (pad_top + baseline_from_top + line_height * index as f32) as f64,
+                );
+                CTLineDraw(layout.line, context);
+            }
             CGContextRelease(context);
             CGColorSpaceRelease(color_space);
         }
 
-        release_cf(layout.line);
-        release_cf(layout.attributed_string);
-        release_cf(layout.font);
-        release_cf(layout.string);
+        for layout in layouts {
+            release_cf(layout.line);
+            release_cf(layout.attributed_string);
+            release_cf(layout.font);
+            release_cf(layout.string);
+        }
 
         Ok(RasterizedText {
             image: DecodedImage::new(width as u32, height as u32, rgba),
             x: 0.0,
             y: 0.0,
             metrics: RasterMetrics {
-                width: layout.metrics.width,
-                height: layout.metrics.height,
-                baseline_from_top: layout.metrics.baseline_from_top,
+                width: logical_width,
+                height: logical_height,
+                baseline_from_top,
             },
             content_top_in_image: pad_top,
             logical_top_in_display: pad_bottom,
             opaque_top_in_display: 0.0,
-            opaque_height: layout.metrics.height,
+            opaque_height: logical_height,
         })
     }
 
@@ -2015,7 +2180,8 @@ mod macos {
                             )
                         })?;
                         unsafe {
-                            let _: () = msg_send![encoder, setRenderPipelineState: pipeline.as_raw()];
+                            let _: () =
+                                msg_send![encoder, setRenderPipelineState: pipeline.as_raw()];
                         }
                         active_pipeline = Some(ActivePipeline::Solid);
                     }
@@ -2057,7 +2223,8 @@ mod macos {
                             )
                         })?;
                         unsafe {
-                            let _: () = msg_send![encoder, setRenderPipelineState: pipeline.as_raw()];
+                            let _: () =
+                                msg_send![encoder, setRenderPipelineState: pipeline.as_raw()];
                             let _: () = msg_send![
                                 encoder,
                                 setFragmentSamplerState: sampler.as_raw(),
@@ -2075,8 +2242,7 @@ mod macos {
                             length: std::mem::size_of_val(&vertices),
                             atIndex: 0usize
                         ];
-                        let _: () =
-                            msg_send![encoder, setFragmentTexture: texture.as_raw(), atIndex: 0usize];
+                        let _: () = msg_send![encoder, setFragmentTexture: texture.as_raw(), atIndex: 0usize];
                         let _: () = msg_send![
                             encoder,
                             setFragmentBytes: alpha.as_ptr().cast::<c_void>(),
@@ -2371,9 +2537,9 @@ impl GraphicsBackend for MetalBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use loadngo_renderer::{FrameCommand, Renderer, RendererConfig};
     #[cfg(target_os = "macos")]
     use loadngo_renderer::TextRequest;
+    use loadngo_renderer::{FrameCommand, Renderer, RendererConfig};
     use ui_core::geometry::Color;
 
     #[test]
@@ -2517,14 +2683,26 @@ mod tests {
                 },
                 text: text.to_string(),
                 style: loadngo_host_core::RenderTextStyle {
-                    centered,
+                    horizontal_align: if centered {
+                        loadngo_host_core::RenderTextHorizontalAlign::Center
+                    } else {
+                        loadngo_host_core::RenderTextHorizontalAlign::Left
+                    },
+                    vertical_align: if centered {
+                        loadngo_host_core::RenderTextVerticalAlign::Middle
+                    } else {
+                        loadngo_host_core::RenderTextVerticalAlign::Top
+                    },
+                    layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+                    overflow: loadngo_host_core::RenderTextOverflow::Clip,
                     ..Default::default()
                 },
                 direction: loadngo_renderer::TextDirection::Auto,
                 script: loadngo_renderer::TextScript::Auto,
                 language: None,
             };
-            let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
+            let raster =
+                rasterize_text_request(&request, None).expect("text raster should succeed");
             let top_rows = row_alpha_counts(&raster.image, 8);
             let mut all_rows = row_alpha_counts(&raster.image, raster.image.height as usize);
             all_rows.reverse();
@@ -2553,7 +2731,10 @@ mod tests {
             },
             text: "Menu".to_string(),
             style: loadngo_host_core::RenderTextStyle {
-                centered: true,
+                horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Center,
+                vertical_align: loadngo_host_core::RenderTextVerticalAlign::Middle,
+                layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+                overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 ..Default::default()
             },
             direction: loadngo_renderer::TextDirection::Auto,
@@ -2575,7 +2756,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn non_centered_text_aligns_logical_top_to_rect_top() {
+    fn top_aligned_text_aligns_visible_top_to_rect_top() {
         let request = TextRequest {
             rect: ui_core::geometry::Rect {
                 x: 0.0,
@@ -2585,7 +2766,10 @@ mod tests {
             },
             text: "Labels".to_string(),
             style: loadngo_host_core::RenderTextStyle {
-                centered: false,
+                horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Left,
+                vertical_align: loadngo_host_core::RenderTextVerticalAlign::Top,
+                layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+                overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 ..Default::default()
             },
             direction: loadngo_renderer::TextDirection::Auto,
@@ -2593,10 +2777,153 @@ mod tests {
             language: None,
         };
         let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
-        let displayed_logical_top = raster.y + raster.logical_top_in_display;
+        let displayed_visible_top = raster.y + raster.opaque_top_in_display;
         assert!(
-            displayed_logical_top.abs() < 0.5,
-            "expected logical text top to align with rect top, got {displayed_logical_top}"
+            displayed_visible_top.abs() < 0.5,
+            "expected visible text top to align with rect top, got {displayed_visible_top}"
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn middle_aligned_text_centers_visible_text_in_rect() {
+        let request = TextRequest {
+            rect: ui_core::geometry::Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 220.0,
+                height: 60.0,
+            },
+            text: "Menu".to_string(),
+            style: loadngo_host_core::RenderTextStyle {
+                horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Center,
+                vertical_align: loadngo_host_core::RenderTextVerticalAlign::Middle,
+                layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+                overflow: loadngo_host_core::RenderTextOverflow::Clip,
+                ..Default::default()
+            },
+            direction: loadngo_renderer::TextDirection::Auto,
+            script: loadngo_renderer::TextScript::Auto,
+            language: None,
+        };
+        let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
+        let expected_x =
+            request.rect.x + (request.rect.width - raster.metrics.width).max(0.0) * 0.5;
+        let displayed_visible_top = raster.y + raster.opaque_top_in_display;
+        let expected_top =
+            request.rect.y + (request.rect.height - raster.opaque_height).max(0.0) * 0.5;
+        assert!((raster.x - expected_x).abs() < 0.5);
+        assert!((displayed_visible_top - expected_top).abs() < 0.5);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bottom_aligned_text_positions_visible_bottom_at_rect_bottom() {
+        let request = TextRequest {
+            rect: ui_core::geometry::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 220.0,
+                height: 48.0,
+            },
+            text: "Inspector".to_string(),
+            style: loadngo_host_core::RenderTextStyle {
+                horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Left,
+                vertical_align: loadngo_host_core::RenderTextVerticalAlign::Bottom,
+                layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+                overflow: loadngo_host_core::RenderTextOverflow::Clip,
+                ..Default::default()
+            },
+            direction: loadngo_renderer::TextDirection::Auto,
+            script: loadngo_renderer::TextScript::Auto,
+            language: None,
+        };
+        let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
+        let displayed_visible_bottom =
+            raster.y + raster.opaque_top_in_display + raster.opaque_height;
+        assert!((displayed_visible_bottom - request.rect.height).abs() < 0.5);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn single_line_overflow_policies_fit_within_requested_width() {
+        let max_width = 84.0;
+        let clip = apply_single_line_overflow(
+            "TallahasseeDawnPreviewLabel",
+            max_width,
+            None,
+            18.0,
+            &loadngo_host_core::RenderTextOverflow::Clip,
+        )
+        .expect("clip overflow should succeed");
+        let ellipsis_end = apply_single_line_overflow(
+            "TallahasseeDawnPreviewLabel",
+            max_width,
+            None,
+            18.0,
+            &loadngo_host_core::RenderTextOverflow::EllipsisEnd,
+        )
+        .expect("end overflow should succeed");
+        let ellipsis_middle = apply_single_line_overflow(
+            "TallahasseeDawnPreviewLabel",
+            max_width,
+            None,
+            18.0,
+            &loadngo_host_core::RenderTextOverflow::EllipsisMiddle,
+        )
+        .expect("middle overflow should succeed");
+
+        assert!(!clip.contains("..."));
+        assert!(ellipsis_end.ends_with("..."));
+        assert!(ellipsis_middle.contains("..."));
+        assert!(!ellipsis_middle.starts_with("..."));
+        assert!(!ellipsis_middle.ends_with("..."));
+
+        for rendered in [clip, ellipsis_end, ellipsis_middle] {
+            let measured = measure_text_metrics(&rendered, None, 18.0)
+                .expect("overflow result should be measurable");
+            assert!(
+                measured.width <= max_width + 0.5,
+                "rendered='{rendered}' width={}",
+                measured.width
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn multiline_text_reports_taller_logical_height_than_single_line() {
+        let single = TextRequest {
+            rect: ui_core::geometry::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 80.0,
+            },
+            text: "Silver and Gold".to_string(),
+            style: loadngo_host_core::RenderTextStyle {
+                layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+                overflow: loadngo_host_core::RenderTextOverflow::Clip,
+                ..Default::default()
+            },
+            direction: loadngo_renderer::TextDirection::Auto,
+            script: loadngo_renderer::TextScript::Auto,
+            language: None,
+        };
+        let multi = TextRequest {
+            text: "Silver\nand\nGold".to_string(),
+            style: loadngo_host_core::RenderTextStyle {
+                layout_mode: loadngo_host_core::RenderTextLayoutMode::MultiLine,
+                overflow: loadngo_host_core::RenderTextOverflow::Clip,
+                ..Default::default()
+            },
+            ..single.clone()
+        };
+
+        let single_raster =
+            rasterize_text_request(&single, None).expect("single line should rasterize");
+        let multi_raster =
+            rasterize_text_request(&multi, None).expect("multi line should rasterize");
+        assert!(multi_raster.metrics.height > single_raster.metrics.height);
     }
 }

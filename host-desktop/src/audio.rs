@@ -124,7 +124,13 @@ mod imp {
                     .new_string(path)
                     .map_err(|err| format!("Failed to create MediaPlayer data source: {err}"))?;
                 let path_obj = JObject::from(path_string);
-                call_void(env, &global, "setAudioStreamType", "(I)V", &[JValue::Int(3)])?;
+                call_void(
+                    env,
+                    &global,
+                    "setAudioStreamType",
+                    "(I)V",
+                    &[JValue::Int(3)],
+                )?;
                 call_void(
                     env,
                     &global,

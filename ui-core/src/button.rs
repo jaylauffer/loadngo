@@ -2,7 +2,7 @@ use crate::{
     component::Component,
     geometry::{Color, Rect},
     input::{Key, PointerButton, UiEvent},
-    paint::{PaintOp, TextStyle},
+    paint::{HorizontalAlign, PaintOp, TextLayoutMode, TextStyle, VerticalAlign},
     widget::{WidgetId, WidgetResponse},
 };
 
@@ -119,7 +119,9 @@ impl ButtonModel {
             rect: self.bounds,
             text: self.text.clone(),
             style: TextStyle {
-                centered: true,
+                horizontal_align: HorizontalAlign::Center,
+                vertical_align: VerticalAlign::Middle,
+                layout_mode: TextLayoutMode::SingleLine,
                 ..TextStyle::default()
             },
         });
@@ -197,7 +199,7 @@ mod tests {
     use crate::{
         geometry::{Point, Rect},
         input::{Modifiers, PointerButton, PointerState, UiEvent},
-        paint::PaintOp,
+        paint::{HorizontalAlign, PaintOp, TextLayoutMode, VerticalAlign},
     };
 
     use super::ButtonModel;
@@ -260,6 +262,35 @@ mod tests {
             .iter()
             .any(|op| matches!(op, PaintOp::StrokeRect { .. })));
         assert!(scene.iter().any(|op| matches!(op, PaintOp::Text { .. })));
+    }
+
+    #[test]
+    fn paint_centers_button_text_with_shared_text_contract() {
+        let button = ButtonModel::new(
+            "Menu",
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 108.0,
+                height: 44.0,
+            },
+        );
+        let mut scene = Vec::new();
+
+        button.paint(&mut scene);
+
+        let text = scene
+            .into_iter()
+            .find_map(|op| match op {
+                PaintOp::Text { rect, text, style } => Some((rect, text, style)),
+                _ => None,
+            })
+            .expect("button paint should emit text");
+        assert_eq!(text.0, button.bounds);
+        assert_eq!(text.1, "Menu");
+        assert_eq!(text.2.horizontal_align, HorizontalAlign::Center);
+        assert_eq!(text.2.vertical_align, VerticalAlign::Middle);
+        assert_eq!(text.2.layout_mode, TextLayoutMode::SingleLine);
     }
 
     #[test]

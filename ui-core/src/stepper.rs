@@ -1,7 +1,7 @@
 use crate::{
     geometry::{Color, Rect},
     input::{PointerButton, UiEvent},
-    paint::{PaintOp, TextStyle},
+    paint::{HorizontalAlign, PaintOp, TextLayoutMode, TextStyle, VerticalAlign},
     widget::{WidgetId, WidgetResponse},
 };
 
@@ -118,7 +118,10 @@ impl StepperModel {
             style: TextStyle {
                 color: Color::rgba(235, 235, 245, 255),
                 font_size: 18,
-                centered: false,
+                horizontal_align: HorizontalAlign::Left,
+                vertical_align: VerticalAlign::Top,
+                layout_mode: TextLayoutMode::SingleLine,
+                overflow: crate::TextOverflow::Clip,
             },
         });
 
@@ -142,7 +145,10 @@ impl StepperModel {
             style: TextStyle {
                 color: Color::rgba(255, 255, 255, 255),
                 font_size: 18,
-                centered: true,
+                horizontal_align: HorizontalAlign::Center,
+                vertical_align: VerticalAlign::Middle,
+                layout_mode: TextLayoutMode::SingleLine,
+                overflow: crate::TextOverflow::Clip,
             },
         });
         self.paint_button(
@@ -170,7 +176,10 @@ impl StepperModel {
             style: TextStyle {
                 color: Color::rgba(255, 255, 255, 255),
                 font_size: 18,
-                centered: true,
+                horizontal_align: HorizontalAlign::Center,
+                vertical_align: VerticalAlign::Middle,
+                layout_mode: TextLayoutMode::SingleLine,
+                overflow: crate::TextOverflow::Clip,
             },
         });
     }

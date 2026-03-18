@@ -385,7 +385,9 @@ fn request_frame_callback() {
             }
             let choreographer = unsafe { ndk_sys::AChoreographer_getInstance() };
             if choreographer.is_null() {
-                android_log_error("Android reactor failed: AChoreographer_getInstance returned null");
+                android_log_error(
+                    "Android reactor failed: AChoreographer_getInstance returned null",
+                );
                 return;
             }
             state.choreographer_ptr = Some(choreographer as usize);
@@ -441,7 +443,9 @@ fn process_input_thread_messages() -> bool {
             InputThreadMessage::AttachQueue(queue_ptr) => {
                 if let Some(existing_ptr) = attached_queue_ptr.take() {
                     unsafe {
-                        ndk_sys::AInputQueue_detachLooper(existing_ptr as *mut ndk_sys::AInputQueue);
+                        ndk_sys::AInputQueue_detachLooper(
+                            existing_ptr as *mut ndk_sys::AInputQueue,
+                        );
                     }
                 }
                 let looper_ptr = {
@@ -472,7 +476,9 @@ fn process_input_thread_messages() -> bool {
             InputThreadMessage::DetachQueue => {
                 if let Some(existing_ptr) = attached_queue_ptr.take() {
                     unsafe {
-                        ndk_sys::AInputQueue_detachLooper(existing_ptr as *mut ndk_sys::AInputQueue);
+                        ndk_sys::AInputQueue_detachLooper(
+                            existing_ptr as *mut ndk_sys::AInputQueue,
+                        );
                     }
                 }
             }
@@ -502,8 +508,9 @@ fn start_input_thread_if_needed() -> bool {
     }
 
     match std::thread::Builder::new().spawn(|| {
-        let looper =
-            unsafe { ndk_sys::ALooper_prepare(ndk_sys::ALOOPER_PREPARE_ALLOW_NON_CALLBACKS as i32) };
+        let looper = unsafe {
+            ndk_sys::ALooper_prepare(ndk_sys::ALOOPER_PREPARE_ALLOW_NON_CALLBACKS as i32)
+        };
         if looper.is_null() {
             android_log_error("Android input thread failed: ALooper_prepare returned null");
             let mut state = app_state().lock().expect("android app state poisoned");
@@ -526,7 +533,12 @@ fn start_input_thread_if_needed() -> bool {
                 break;
             }
             unsafe {
-                ndk_sys::ALooper_pollOnce(-1, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
+                ndk_sys::ALooper_pollOnce(
+                    -1,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                );
             }
         }
 
@@ -544,7 +556,9 @@ fn start_input_thread_if_needed() -> bool {
             let mut state = app_state().lock().expect("android app state poisoned");
             state.input_thread_running = false;
             state.input_looper_ptr = None;
-            android_log_error(&format!("Android dedicated input thread spawn failed: {err}"));
+            android_log_error(&format!(
+                "Android dedicated input thread spawn failed: {err}"
+            ));
             false
         }
     }
@@ -625,7 +639,9 @@ fn process_control_messages() -> (bool, bool) {
             }
             ReactorMessage::Stop => {
                 let mut state = app_state().lock().expect("android app state poisoned");
-                state.input_thread_messages.push_back(InputThreadMessage::Stop);
+                state
+                    .input_thread_messages
+                    .push_back(InputThreadMessage::Stop);
                 drop(state);
                 wake_input_thread();
                 should_stop = true;
@@ -1634,7 +1650,10 @@ fn generated_text_cache_key(
     request.rect.width.to_bits().hash(&mut hasher);
     request.rect.height.to_bits().hash(&mut hasher);
     request.style.font_size.hash(&mut hasher);
-    request.style.centered.hash(&mut hasher);
+    request.style.horizontal_align.hash(&mut hasher);
+    request.style.vertical_align.hash(&mut hasher);
+    request.style.layout_mode.hash(&mut hasher);
+    request.style.overflow.hash(&mut hasher);
     request.style.color.r.hash(&mut hasher);
     request.style.color.g.hash(&mut hasher);
     request.style.color.b.hash(&mut hasher);
@@ -1699,7 +1718,8 @@ fn rasterize_line_command(
         width: (max_x - min_x).max(1.0),
         height: (max_y - min_y).max(1.0),
     };
-    let mut surface = OwnedSoftwareSurface::new(rect.width.ceil() as usize, rect.height.ceil() as usize);
+    let mut surface =
+        OwnedSoftwareSurface::new(rect.width.ceil() as usize, rect.height.ceil() as usize);
     surface.line(
         ui_core::geometry::Point {
             x: from.x - rect.x,
@@ -1789,16 +1809,26 @@ impl OwnedSoftwareSurface {
         let layout = software_text_line_layout(Some(font), request.style.font_size, 1.0);
         let px = layout.px;
         let line_height = layout.line_height.max(1) as f32;
-        let lines: Vec<&str> = request.text.split('\n').collect();
+        let normalized_text = match request.style.layout_mode {
+            loadngo_host_core::RenderTextLayoutMode::SingleLine => request.text.replace('\n', " "),
+            loadngo_host_core::RenderTextLayoutMode::MultiLine => request.text.clone(),
+        };
+        let lines: Vec<&str> = normalized_text.split('\n').collect();
         let mut total_height = (line_height * lines.len() as f32).max(line_height);
         if total_height <= 0.0 {
             total_height = line_height;
         }
 
         let mut origin_y = 0.0;
-        if request.style.centered && request.rect.height > total_height {
-            origin_y += (request.rect.height - total_height) * 0.5;
-        }
+        origin_y += match request.style.vertical_align {
+            loadngo_host_core::RenderTextVerticalAlign::Top => 0.0,
+            loadngo_host_core::RenderTextVerticalAlign::Middle => {
+                (request.rect.height - total_height).max(0.0) * 0.5
+            }
+            loadngo_host_core::RenderTextVerticalAlign::Bottom => {
+                (request.rect.height - total_height).max(0.0)
+            }
+        };
 
         for (line_index, line) in lines.iter().enumerate() {
             let line_metrics = font_text_metrics(
@@ -1811,9 +1841,15 @@ impl OwnedSoftwareSurface {
                 1.0,
             );
             let mut cursor_x = 0.0;
-            if request.style.centered && request.rect.width > 0.0 {
-                cursor_x += (request.rect.width - line_metrics.width).max(0.0) * 0.5;
-            }
+            cursor_x += match request.style.horizontal_align {
+                loadngo_host_core::RenderTextHorizontalAlign::Left => 0.0,
+                loadngo_host_core::RenderTextHorizontalAlign::Center => {
+                    (request.rect.width - line_metrics.width).max(0.0) * 0.5
+                }
+                loadngo_host_core::RenderTextHorizontalAlign::Right => {
+                    (request.rect.width - line_metrics.width).max(0.0)
+                }
+            };
             let baseline_y =
                 origin_y + line_index as f32 * line_height + layout.baseline_offset as f32;
             for ch in line.chars() {
@@ -2100,7 +2136,9 @@ unsafe fn handle_motion_event(event: *const ndk_sys::AInputEvent) {
                 {
                     TouchPhase::Started
                 }
-                x if x == AMOTION_EVENT_ACTION_UP_I32 || x == AMOTION_EVENT_ACTION_POINTER_UP_I32 => {
+                x if x == AMOTION_EVENT_ACTION_UP_I32
+                    || x == AMOTION_EVENT_ACTION_POINTER_UP_I32 =>
+                {
                     TouchPhase::Ended
                 }
                 x if x == AMOTION_EVENT_ACTION_CANCEL_I32 => TouchPhase::Cancelled,
@@ -2550,16 +2588,26 @@ impl<'a> SoftwareFramebuffer<'a> {
         let layout = software_text_line_layout(Some(font), request.style.font_size, 1.0);
         let px = layout.px;
         let line_height = layout.line_height.max(1) as f32;
-        let lines: Vec<&str> = request.text.split('\n').collect();
+        let normalized_text = match request.style.layout_mode {
+            loadngo_host_core::RenderTextLayoutMode::SingleLine => request.text.replace('\n', " "),
+            loadngo_host_core::RenderTextLayoutMode::MultiLine => request.text.clone(),
+        };
+        let lines: Vec<&str> = normalized_text.split('\n').collect();
         let mut total_height = (line_height * lines.len() as f32).max(line_height);
         if total_height <= 0.0 {
             total_height = line_height;
         }
 
         let mut origin_y = request.rect.y;
-        if request.style.centered && request.rect.height > total_height {
-            origin_y += (request.rect.height - total_height) * 0.5;
-        }
+        origin_y += match request.style.vertical_align {
+            loadngo_host_core::RenderTextVerticalAlign::Top => 0.0,
+            loadngo_host_core::RenderTextVerticalAlign::Middle => {
+                (request.rect.height - total_height).max(0.0) * 0.5
+            }
+            loadngo_host_core::RenderTextVerticalAlign::Bottom => {
+                (request.rect.height - total_height).max(0.0)
+            }
+        };
 
         for (line_index, line) in lines.iter().enumerate() {
             let line_metrics = font_text_metrics(
@@ -2572,9 +2620,15 @@ impl<'a> SoftwareFramebuffer<'a> {
                 1.0,
             );
             let mut cursor_x = request.rect.x;
-            if request.style.centered && request.rect.width > 0.0 {
-                cursor_x += (request.rect.width - line_metrics.width).max(0.0) * 0.5;
-            }
+            cursor_x += match request.style.horizontal_align {
+                loadngo_host_core::RenderTextHorizontalAlign::Left => 0.0,
+                loadngo_host_core::RenderTextHorizontalAlign::Center => {
+                    (request.rect.width - line_metrics.width).max(0.0) * 0.5
+                }
+                loadngo_host_core::RenderTextHorizontalAlign::Right => {
+                    (request.rect.width - line_metrics.width).max(0.0)
+                }
+            };
             let baseline_y =
                 origin_y + line_index as f32 * line_height + layout.baseline_offset as f32;
             for ch in line.chars() {
@@ -2702,7 +2756,10 @@ pub fn render_text_lines(
                 style: loadngo_host_core::RenderTextStyle {
                     color,
                     font_size,
-                    centered: false,
+                    horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Left,
+                    vertical_align: loadngo_host_core::RenderTextVerticalAlign::Top,
+                    layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+                    overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 },
             });
         }
@@ -2753,7 +2810,10 @@ pub fn draw_plain_text(text: &str, _x: f32, _y: f32, size: f32, _color: UiColor)
         style: loadngo_host_core::RenderTextStyle {
             color: _color,
             font_size,
-            centered: false,
+            horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Left,
+            vertical_align: loadngo_host_core::RenderTextVerticalAlign::Top,
+            layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+            overflow: loadngo_host_core::RenderTextOverflow::Clip,
         },
         direction: loadngo_renderer::TextDirection::Auto,
         script: loadngo_renderer::TextScript::Auto,

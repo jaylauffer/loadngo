@@ -487,7 +487,47 @@ impl Renderer {
                     let render_style = RenderTextStyle {
                         color: style.color,
                         font_size: style.font_size,
-                        centered: style.centered,
+                        horizontal_align: match style.horizontal_align {
+                            ui_core::HorizontalAlign::Left => {
+                                loadngo_host_core::RenderTextHorizontalAlign::Left
+                            }
+                            ui_core::HorizontalAlign::Center => {
+                                loadngo_host_core::RenderTextHorizontalAlign::Center
+                            }
+                            ui_core::HorizontalAlign::Right => {
+                                loadngo_host_core::RenderTextHorizontalAlign::Right
+                            }
+                        },
+                        vertical_align: match style.vertical_align {
+                            ui_core::VerticalAlign::Top => {
+                                loadngo_host_core::RenderTextVerticalAlign::Top
+                            }
+                            ui_core::VerticalAlign::Middle => {
+                                loadngo_host_core::RenderTextVerticalAlign::Middle
+                            }
+                            ui_core::VerticalAlign::Bottom => {
+                                loadngo_host_core::RenderTextVerticalAlign::Bottom
+                            }
+                        },
+                        layout_mode: match style.layout_mode {
+                            ui_core::TextLayoutMode::SingleLine => {
+                                loadngo_host_core::RenderTextLayoutMode::SingleLine
+                            }
+                            ui_core::TextLayoutMode::MultiLine => {
+                                loadngo_host_core::RenderTextLayoutMode::MultiLine
+                            }
+                        },
+                        overflow: match style.overflow {
+                            ui_core::TextOverflow::Clip => {
+                                loadngo_host_core::RenderTextOverflow::Clip
+                            }
+                            ui_core::TextOverflow::EllipsisEnd => {
+                                loadngo_host_core::RenderTextOverflow::EllipsisEnd
+                            }
+                            ui_core::TextOverflow::EllipsisMiddle => {
+                                loadngo_host_core::RenderTextOverflow::EllipsisMiddle
+                            }
+                        },
                     };
                     FrameCommand::Text(self.text_request(*rect, text.clone(), render_style))
                 }
@@ -570,10 +610,10 @@ mod tests {
         let renderer = Renderer::new(RendererConfig::default());
         let commands = renderer.encode_paint_ops(&[PaintOp::BlitImage {
             rect: Rect {
-                x: 10,
-                y: 20,
-                width: 30,
-                height: 40,
+                x: 10.0,
+                y: 20.0,
+                width: 30.0,
+                height: 40.0,
             },
             image_key: "scene/title.png".to_string(),
         }]);
@@ -581,10 +621,10 @@ mod tests {
             commands,
             vec![FrameCommand::Image(ImageRequest {
                 rect: Rect {
-                    x: 10,
-                    y: 20,
-                    width: 30,
-                    height: 40,
+                    x: 10.0,
+                    y: 20.0,
+                    width: 30.0,
+                    height: 40.0,
                 },
                 image_key: "scene/title.png".to_string(),
                 alpha: 1.0,
@@ -602,16 +642,19 @@ mod tests {
         });
         let commands = renderer.encode_render_ops(&[RenderOp::Text {
             rect: Rect {
-                x: 0,
-                y: 0,
-                width: 200,
-                height: 40,
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 40.0,
             },
             text: "銀と金".to_string(),
             style: RenderTextStyle {
                 color: Color::rgba(255, 255, 255, 255),
                 font_size: 24,
-                centered: true,
+                horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Center,
+                vertical_align: loadngo_host_core::RenderTextVerticalAlign::Middle,
+                layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+                overflow: loadngo_host_core::RenderTextOverflow::Clip,
             },
         }]);
         match &commands[0] {
@@ -622,6 +665,49 @@ mod tests {
                 );
                 assert_eq!(request.direction, TextDirection::LeftToRight);
                 assert_eq!(request.script, TextScript::Han);
+            }
+            other => panic!("expected text request, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_paint_ops_preserves_text_alignment_and_overflow() {
+        let renderer = Renderer::new(RendererConfig::default());
+        let commands = renderer.encode_paint_ops(&[PaintOp::Text {
+            rect: Rect {
+                x: 4.0,
+                y: 6.0,
+                width: 120.0,
+                height: 28.0,
+            },
+            text: "preview".to_string(),
+            style: ui_core::TextStyle {
+                color: Color::rgba(255, 255, 255, 255),
+                font_size: 18,
+                horizontal_align: ui_core::HorizontalAlign::Right,
+                vertical_align: ui_core::VerticalAlign::Bottom,
+                layout_mode: ui_core::TextLayoutMode::SingleLine,
+                overflow: ui_core::TextOverflow::EllipsisMiddle,
+            },
+        }]);
+        match &commands[0] {
+            FrameCommand::Text(request) => {
+                assert_eq!(
+                    request.style.horizontal_align,
+                    loadngo_host_core::RenderTextHorizontalAlign::Right
+                );
+                assert_eq!(
+                    request.style.vertical_align,
+                    loadngo_host_core::RenderTextVerticalAlign::Bottom
+                );
+                assert_eq!(
+                    request.style.layout_mode,
+                    loadngo_host_core::RenderTextLayoutMode::SingleLine
+                );
+                assert_eq!(
+                    request.style.overflow,
+                    loadngo_host_core::RenderTextOverflow::EllipsisMiddle
+                );
             }
             other => panic!("expected text request, got {other:?}"),
         }
@@ -647,30 +733,30 @@ mod tests {
         let plan = renderer.plan_frame_resources(&[
             FrameCommand::Image(ImageRequest {
                 rect: Rect {
-                    x: 0,
-                    y: 0,
-                    width: 10,
-                    height: 10,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 10.0,
+                    height: 10.0,
                 },
                 image_key: "scene/a.png".to_string(),
                 alpha: 1.0,
             }),
             FrameCommand::Image(ImageRequest {
                 rect: Rect {
-                    x: 20,
-                    y: 20,
-                    width: 10,
-                    height: 10,
+                    x: 20.0,
+                    y: 20.0,
+                    width: 10.0,
+                    height: 10.0,
                 },
                 image_key: "scene/a.png".to_string(),
                 alpha: 0.5,
             }),
             FrameCommand::Image(ImageRequest {
                 rect: Rect {
-                    x: 30,
-                    y: 30,
-                    width: 10,
-                    height: 10,
+                    x: 30.0,
+                    y: 30.0,
+                    width: 10.0,
+                    height: 10.0,
                 },
                 image_key: "scene/b.png".to_string(),
                 alpha: 1.0,

@@ -11,7 +11,7 @@ pub use ui_core::{
     input::{Key, Modifiers, PointerButton, PointerState, UiEvent},
     label::{Label, LabelModel},
     list::{ListInteraction, ListState},
-    paint::{PaintOp, TextStyle},
+    paint::{HorizontalAlign, PaintOp, TextLayoutMode, TextOverflow, TextStyle, VerticalAlign},
     panel::{Panel, PanelModel},
     tabs::{TabPage, TabbedContainer},
     tree::{TreeCombo, TreeControl, TreeNode},

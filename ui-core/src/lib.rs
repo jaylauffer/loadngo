@@ -25,7 +25,7 @@ pub use geometry::{Color, Insets, Point, Rect, Scalar, Size};
 pub use input::{Key, Modifiers, PointerButton, PointerSource, PointerState, UiEvent};
 pub use label::{Label, LabelModel};
 pub use list::{ListInteraction, ListState};
-pub use paint::{PaintOp, TextStyle};
+pub use paint::{HorizontalAlign, PaintOp, TextLayoutMode, TextOverflow, TextStyle, VerticalAlign};
 pub use panel::{Panel, PanelModel};
 pub use scroll::{ScrollRegionModel, ScrollThumbDragState};
 pub use slider::SliderModel;

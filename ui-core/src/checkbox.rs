@@ -1,7 +1,7 @@
 use crate::{
     geometry::{Color, Rect},
     input::{PointerButton, UiEvent},
-    paint::{PaintOp, TextStyle},
+    paint::{HorizontalAlign, PaintOp, TextLayoutMode, TextStyle, VerticalAlign},
     widget::{WidgetId, WidgetResponse},
 };
 
@@ -142,7 +142,10 @@ impl CheckboxModel {
             style: TextStyle {
                 color: Color::rgba(255, 255, 255, 255),
                 font_size: 18,
-                centered: false,
+                horizontal_align: HorizontalAlign::Left,
+                vertical_align: VerticalAlign::Middle,
+                layout_mode: TextLayoutMode::SingleLine,
+                overflow: crate::TextOverflow::Clip,
             },
         });
     }

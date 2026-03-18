@@ -2,7 +2,7 @@ use crate::{
     component::Component,
     geometry::{Color, Point, Rect},
     input::{Key, UiEvent},
-    paint::{PaintOp, TextStyle},
+    paint::{HorizontalAlign, PaintOp, TextLayoutMode, TextStyle, VerticalAlign},
     widget::WidgetResponse,
 };
 
@@ -106,7 +106,12 @@ impl ListCombo {
                 height: self.bounds.height,
             },
             text: self.selected_item().unwrap_or("Select...").to_string(),
-            style: TextStyle::default(),
+            style: TextStyle {
+                horizontal_align: HorizontalAlign::Left,
+                vertical_align: VerticalAlign::Middle,
+                layout_mode: TextLayoutMode::SingleLine,
+                ..TextStyle::default()
+            },
         });
         let arrow_x = self.bounds.right() - 18.0;
         let center_y = self.bounds.y + self.bounds.height / 2.0;
