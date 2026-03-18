@@ -1,4 +1,11 @@
-use std::{cell::RefCell, collections::HashMap};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    sync::{
+        OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use loadngo_host_core::{decode_image_from_path, DecodedImage, TextMetrics};
 use loadngo_renderer::{
@@ -9,6 +16,29 @@ use ui_core::geometry::Color;
 
 thread_local! {
     static REGISTERED_IMAGES: RefCell<HashMap<String, DecodedImage>> = RefCell::new(HashMap::new());
+}
+
+fn trace_widgets_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("LOADNGO_TRACE_WIDGETS")
+            .map(|value| {
+                let value = value.trim().to_ascii_lowercase();
+                value == "1" || value == "true" || value == "yes" || value == "on"
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn trace_widgets_log(message: impl AsRef<str>) {
+    static LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
+    if !trace_widgets_enabled() {
+        return;
+    }
+    let count = LOG_COUNT.fetch_add(1, Ordering::Relaxed);
+    if count < 400 {
+        eprintln!("[loadngo-trace] {}", message.as_ref());
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +105,13 @@ struct BlitImage {
 struct GeneratedFrameImage {
     image: DecodedImage,
     placement: BlitImage,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum FrameVisual {
+    SolidRect(SolidRect),
+    RegisteredImage(BlitImage),
+    GeneratedImage(GeneratedFrameImage),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -285,6 +322,7 @@ impl MetalBackend {
             })
     }
 
+    #[allow(dead_code)]
     fn frame_solid_rects(&self) -> Vec<SolidRect> {
         let mut rects = Vec::new();
         for command in &self.recorded_commands {
@@ -361,24 +399,37 @@ impl MetalBackend {
         rects
     }
 
+    #[allow(dead_code)]
     fn frame_blit_images(&self) -> Vec<BlitImage> {
         self.recorded_commands
             .iter()
             .filter_map(|command| match command {
-                FrameCommand::Image(request) => Some(BlitImage {
-                    image_key: request.image_key.clone(),
-                    x: request.rect.x as f32,
-                    y: request.rect.y as f32,
-                    width: request.rect.width as f32,
-                    height: request.rect.height as f32,
-                    alpha: request.alpha,
-                    flip_vertical: false,
-                }),
+                FrameCommand::Image(request) => {
+                    trace_widgets_log(format!(
+                        "image request key='{}' rect=({}, {}, {}, {}) alpha={}",
+                        request.image_key,
+                        request.rect.x,
+                        request.rect.y,
+                        request.rect.width,
+                        request.rect.height,
+                        request.alpha
+                    ));
+                    Some(BlitImage {
+                        image_key: request.image_key.clone(),
+                        x: request.rect.x as f32,
+                        y: request.rect.y as f32,
+                        width: request.rect.width as f32,
+                        height: request.rect.height as f32,
+                        alpha: request.alpha,
+                        flip_vertical: false,
+                    })
+                }
                 _ => None,
             })
             .collect()
     }
 
+    #[allow(dead_code)]
     fn frame_generated_images(&self) -> Result<Vec<GeneratedFrameImage>, RendererError> {
         let mut images = Vec::new();
         for command in &self.recorded_commands {
@@ -388,14 +439,33 @@ impl MetalBackend {
                         continue;
                     }
                     let raster = rasterize_text_request(request, self.text_font_source.as_deref())?;
+                    let image_width = raster.image.width as f32;
+                    let image_height = raster.image.height as f32;
+                    trace_widgets_log(format!(
+                        "text request='{}' centered={} rect=({}, {}, {}, {}) logical=({}, {}) baseline={} image=({}, {}) content_top={} placement=({}, {})",
+                        request.text,
+                        request.style.centered,
+                        request.rect.x,
+                        request.rect.y,
+                        request.rect.width,
+                        request.rect.height,
+                        raster.metrics.width,
+                        raster.metrics.height,
+                        raster.metrics.baseline_from_top,
+                        image_width,
+                        image_height,
+                        raster.content_top_in_image,
+                        raster.x,
+                        raster.y,
+                    ));
                     images.push(GeneratedFrameImage {
                         image: raster.image,
                         placement: BlitImage {
                             image_key: "__loadngo_text".to_string(),
                             x: raster.x,
                             y: raster.y,
-                            width: raster.metrics.width,
-                            height: raster.metrics.height,
+                            width: image_width,
+                            height: image_height,
                             alpha: 1.0,
                             flip_vertical: true,
                         },
@@ -426,6 +496,150 @@ impl MetalBackend {
         Ok(images)
     }
 
+    fn frame_visuals(&self) -> Result<Vec<FrameVisual>, RendererError> {
+        let mut visuals = Vec::new();
+        for command in &self.recorded_commands {
+            match command {
+                FrameCommand::FillRect { rect, color } => {
+                    visuals.push(FrameVisual::SolidRect(SolidRect {
+                        x: rect.x as f32,
+                        y: rect.y as f32,
+                        width: rect.width as f32,
+                        height: rect.height as f32,
+                        red: color.r as f32 / 255.0,
+                        green: color.g as f32 / 255.0,
+                        blue: color.b as f32 / 255.0,
+                        alpha: color.a as f32 / 255.0,
+                    }));
+                }
+                FrameCommand::StrokeRect {
+                    rect,
+                    color,
+                    thickness,
+                } => {
+                    let t = (*thickness).max(1) as f32;
+                    let rgba = (
+                        color.r as f32 / 255.0,
+                        color.g as f32 / 255.0,
+                        color.b as f32 / 255.0,
+                        color.a as f32 / 255.0,
+                    );
+                    let mut push = |x: f32, y: f32, width: f32, height: f32| {
+                        if width > 0.0 && height > 0.0 {
+                            visuals.push(FrameVisual::SolidRect(SolidRect {
+                                x,
+                                y,
+                                width,
+                                height,
+                                red: rgba.0,
+                                green: rgba.1,
+                                blue: rgba.2,
+                                alpha: rgba.3,
+                            }));
+                        }
+                    };
+                    push(rect.x as f32, rect.y as f32, rect.width as f32, t);
+                    push(
+                        rect.x as f32,
+                        rect.y as f32 + rect.height as f32 - t,
+                        rect.width as f32,
+                        t,
+                    );
+                    push(
+                        rect.x as f32,
+                        rect.y as f32 + t,
+                        t,
+                        rect.height as f32 - 2.0 * t,
+                    );
+                    push(
+                        rect.x as f32 + rect.width as f32 - t,
+                        rect.y as f32 + t,
+                        t,
+                        rect.height as f32 - 2.0 * t,
+                    );
+                }
+                FrameCommand::Image(request) => {
+                    trace_widgets_log(format!(
+                        "image request key='{}' rect=({}, {}, {}, {}) alpha={}",
+                        request.image_key,
+                        request.rect.x,
+                        request.rect.y,
+                        request.rect.width,
+                        request.rect.height,
+                        request.alpha
+                    ));
+                    visuals.push(FrameVisual::RegisteredImage(BlitImage {
+                        image_key: request.image_key.clone(),
+                        x: request.rect.x as f32,
+                        y: request.rect.y as f32,
+                        width: request.rect.width as f32,
+                        height: request.rect.height as f32,
+                        alpha: request.alpha,
+                        flip_vertical: false,
+                    }));
+                }
+                FrameCommand::Text(request) => {
+                    if request.text.is_empty() {
+                        continue;
+                    }
+                    let raster = rasterize_text_request(request, self.text_font_source.as_deref())?;
+                    let image_width = raster.image.width as f32;
+                    let image_height = raster.image.height as f32;
+                    trace_widgets_log(format!(
+                        "text request='{}' centered={} rect=({}, {}, {}, {}) logical=({}, {}) baseline={} image=({}, {}) content_top={} placement=({}, {})",
+                        request.text,
+                        request.style.centered,
+                        request.rect.x,
+                        request.rect.y,
+                        request.rect.width,
+                        request.rect.height,
+                        raster.metrics.width,
+                        raster.metrics.height,
+                        raster.metrics.baseline_from_top,
+                        image_width,
+                        image_height,
+                        raster.content_top_in_image,
+                        raster.x,
+                        raster.y,
+                    ));
+                    visuals.push(FrameVisual::GeneratedImage(GeneratedFrameImage {
+                        image: raster.image,
+                        placement: BlitImage {
+                            image_key: "__loadngo_text".to_string(),
+                            x: raster.x,
+                            y: raster.y,
+                            width: image_width,
+                            height: image_height,
+                            alpha: 1.0,
+                            flip_vertical: true,
+                        },
+                    }));
+                }
+                FrameCommand::Line {
+                    from,
+                    to,
+                    color,
+                    thickness,
+                } => {
+                    if let Some(image) = rasterize_line(*from, *to, *color, *thickness) {
+                        visuals.push(FrameVisual::GeneratedImage(image));
+                    }
+                }
+                FrameCommand::Circle {
+                    center,
+                    radius,
+                    color,
+                } => {
+                    if let Some(image) = rasterize_circle(*center, *radius, *color) {
+                        visuals.push(FrameVisual::GeneratedImage(image));
+                    }
+                }
+                FrameCommand::Clear { .. } => {}
+            }
+        }
+        Ok(visuals)
+    }
+
     #[cfg(target_os = "macos")]
     fn ensure_image_resources(&mut self) -> Result<(), RendererError> {
         let renderer = Renderer::new(RendererConfig::default());
@@ -452,6 +666,12 @@ impl MetalBackend {
             None => decode_image_from_path(std::path::Path::new(key.as_str()))
                 .map_err(RendererError::Backend)?,
         };
+        trace_widgets_log(format!(
+            "ensure_texture key='{}' decoded=({}, {})",
+            key.as_str(),
+            decoded.width,
+            decoded.height
+        ));
         let texture = macos::MetalTexture::from_decoded_image(device, key.as_str(), &decoded)?;
         self.textures.insert(key.as_str().to_string(), texture);
         Ok(())
@@ -475,6 +695,7 @@ struct RasterizedText {
     x: f32,
     y: f32,
     metrics: RasterMetrics,
+    content_top_in_image: f32,
 }
 
 fn rasterize_text_request(
@@ -484,21 +705,24 @@ fn rasterize_text_request(
     #[cfg(target_os = "macos")]
     {
         let raster = macos::rasterize_text(request, font_source)?;
-        let x = if request.style.centered {
-            request.rect.x as f32 + (request.rect.width as f32 - raster.image.width as f32) * 0.5
+        let displayed_content_top =
+            raster.image.height as f32 - raster.content_top_in_image - raster.metrics.height;
+        let text_x = if request.style.centered {
+            request.rect.x as f32 + (request.rect.width as f32 - raster.metrics.width) * 0.5
         } else {
             request.rect.x as f32
         };
-        let y = if request.style.centered {
-            request.rect.y as f32 + (request.rect.height as f32 - raster.image.height as f32) * 0.5
+        let text_y = if request.style.centered {
+            request.rect.y as f32 + (request.rect.height as f32 - raster.metrics.height) * 0.5
         } else {
             request.rect.y as f32
         };
         Ok(RasterizedText {
             image: raster.image,
-            x,
-            y,
+            x: text_x,
+            y: text_y - displayed_content_top,
             metrics: raster.metrics,
+            content_top_in_image: raster.content_top_in_image,
         })
     }
 
@@ -1269,9 +1493,10 @@ mod macos {
             y: 0.0,
             metrics: RasterMetrics {
                 width: layout.metrics.width,
-                height: height as f32,
-                baseline_from_top: pad_top + layout.metrics.baseline_from_top,
+                height: layout.metrics.height,
+                baseline_from_top: layout.metrics.baseline_from_top,
             },
+            content_top_in_image: pad_top,
         })
     }
 
@@ -1621,16 +1846,26 @@ mod macos {
         Ok(())
     }
 
-    pub fn present_scene(
+    pub enum PreparedVisual<'a> {
+        SolidRect(SolidRect),
+        RegisteredImage {
+            texture: &'a MetalTexture,
+            image: BlitImage,
+        },
+        GeneratedImage {
+            texture: &'a MetalTexture,
+            image: BlitImage,
+        },
+    }
+
+    pub fn present_scene_ordered(
         command_queue: &MetalCommandQueue,
         surface: &MetalSurface,
         solid_pipeline: Option<&MetalRenderPipelineState>,
         textured_pipeline: Option<&MetalRenderPipelineState>,
         sampler: Option<&MetalSamplerState>,
         clear: ClearColor,
-        file_images: &[(&MetalTexture, BlitImage)],
-        rects: &[SolidRect],
-        overlay_images: &[(&MetalTexture, BlitImage)],
+        visuals: &[PreparedVisual<'_>],
     ) -> Result<(), RendererError> {
         surface.sync_drawable_size()?;
         let drawable: *mut AnyObject = unsafe { msg_send![surface.layer(), nextDrawable] };
@@ -1706,128 +1941,98 @@ mod macos {
             ));
         }
 
-        if !file_images.is_empty() || !overlay_images.is_empty() {
-            let pipeline = textured_pipeline.ok_or_else(|| {
-                RendererError::Backend(
-                    "Metal textured pipeline was unavailable for image rendering".to_string(),
-                )
-            })?;
-            let sampler = sampler.ok_or_else(|| {
-                RendererError::Backend(
-                    "Metal sampler was unavailable for image rendering".to_string(),
-                )
-            })?;
-            unsafe {
-                let _: () = msg_send![encoder, setRenderPipelineState: pipeline.as_raw()];
-                let _: () =
-                    msg_send![encoder, setFragmentSamplerState: sampler.as_raw(), atIndex: 0usize];
-            }
-
-            for (texture, image) in file_images {
-                let vertices = textured_rect_vertices(image, surface_width, surface_height);
-                let alpha = [image.alpha.clamp(0.0, 1.0)];
-                unsafe {
-                    let _: () = msg_send![
-                        encoder,
-                        setVertexBytes: vertices.as_ptr().cast::<c_void>(),
-                        length: std::mem::size_of_val(&vertices),
-                        atIndex: 0usize
-                    ];
-                    let _: () =
-                        msg_send![encoder, setFragmentTexture: texture.as_raw(), atIndex: 0usize];
-                    let _: () = msg_send![
-                        encoder,
-                        setFragmentBytes: alpha.as_ptr().cast::<c_void>(),
-                        length: std::mem::size_of_val(&alpha),
-                        atIndex: 0usize
-                    ];
-                    let _: () = msg_send![
-                        encoder,
-                        drawPrimitives: MTL_PRIMITIVE_TYPE_TRIANGLE,
-                        vertexStart: 0usize,
-                        vertexCount: vertices.len()
-                    ];
-                }
-            }
+        enum ActivePipeline {
+            Solid,
+            Textured,
         }
 
-        if !rects.is_empty() {
-            let pipeline = solid_pipeline.ok_or_else(|| {
-                RendererError::Backend(
-                    "Metal solid pipeline was unavailable for rectangle rendering".to_string(),
-                )
-            })?;
-            unsafe {
-                let _: () = msg_send![encoder, setRenderPipelineState: pipeline.as_raw()];
-            }
-
-            for rect in rects {
-                let vertices = rect_vertices(*rect, surface_width, surface_height);
-                let color = [rect.red, rect.green, rect.blue, rect.alpha];
-                unsafe {
-                    let _: () = msg_send![
-                        encoder,
-                        setVertexBytes: vertices.as_ptr().cast::<c_void>(),
-                        length: std::mem::size_of_val(&vertices),
-                        atIndex: 0usize
-                    ];
-                    let _: () = msg_send![
-                        encoder,
-                        setFragmentBytes: color.as_ptr().cast::<c_void>(),
-                        length: std::mem::size_of_val(&color),
-                        atIndex: 0usize
-                    ];
-                    let _: () = msg_send![
-                        encoder,
-                        drawPrimitives: MTL_PRIMITIVE_TYPE_TRIANGLE,
-                        vertexStart: 0usize,
-                        vertexCount: vertices.len()
-                    ];
+        let mut active_pipeline = None;
+        for visual in visuals {
+            match visual {
+                PreparedVisual::SolidRect(rect) => {
+                    if !matches!(active_pipeline, Some(ActivePipeline::Solid)) {
+                        let pipeline = solid_pipeline.ok_or_else(|| {
+                            RendererError::Backend(
+                                "Metal solid pipeline was unavailable for rectangle rendering"
+                                    .to_string(),
+                            )
+                        })?;
+                        unsafe {
+                            let _: () = msg_send![encoder, setRenderPipelineState: pipeline.as_raw()];
+                        }
+                        active_pipeline = Some(ActivePipeline::Solid);
+                    }
+                    let vertices = rect_vertices(*rect, surface_width, surface_height);
+                    let color = [rect.red, rect.green, rect.blue, rect.alpha];
+                    unsafe {
+                        let _: () = msg_send![
+                            encoder,
+                            setVertexBytes: vertices.as_ptr().cast::<c_void>(),
+                            length: std::mem::size_of_val(&vertices),
+                            atIndex: 0usize
+                        ];
+                        let _: () = msg_send![
+                            encoder,
+                            setFragmentBytes: color.as_ptr().cast::<c_void>(),
+                            length: std::mem::size_of_val(&color),
+                            atIndex: 0usize
+                        ];
+                        let _: () = msg_send![
+                            encoder,
+                            drawPrimitives: MTL_PRIMITIVE_TYPE_TRIANGLE,
+                            vertexStart: 0usize,
+                            vertexCount: vertices.len()
+                        ];
+                    }
                 }
-            }
-        }
-
-        if !overlay_images.is_empty() {
-            let pipeline = textured_pipeline.ok_or_else(|| {
-                RendererError::Backend(
-                    "Metal textured pipeline was unavailable for image rendering".to_string(),
-                )
-            })?;
-            let sampler = sampler.ok_or_else(|| {
-                RendererError::Backend(
-                    "Metal sampler was unavailable for image rendering".to_string(),
-                )
-            })?;
-            unsafe {
-                let _: () = msg_send![encoder, setRenderPipelineState: pipeline.as_raw()];
-                let _: () =
-                    msg_send![encoder, setFragmentSamplerState: sampler.as_raw(), atIndex: 0usize];
-            }
-
-            for (texture, image) in overlay_images {
-                let vertices = textured_rect_vertices(image, surface_width, surface_height);
-                let alpha = [image.alpha.clamp(0.0, 1.0)];
-                unsafe {
-                    let _: () = msg_send![
-                        encoder,
-                        setVertexBytes: vertices.as_ptr().cast::<c_void>(),
-                        length: std::mem::size_of_val(&vertices),
-                        atIndex: 0usize
-                    ];
-                    let _: () =
-                        msg_send![encoder, setFragmentTexture: texture.as_raw(), atIndex: 0usize];
-                    let _: () = msg_send![
-                        encoder,
-                        setFragmentBytes: alpha.as_ptr().cast::<c_void>(),
-                        length: std::mem::size_of_val(&alpha),
-                        atIndex: 0usize
-                    ];
-                    let _: () = msg_send![
-                        encoder,
-                        drawPrimitives: MTL_PRIMITIVE_TYPE_TRIANGLE,
-                        vertexStart: 0usize,
-                        vertexCount: vertices.len()
-                    ];
+                PreparedVisual::RegisteredImage { texture, image }
+                | PreparedVisual::GeneratedImage { texture, image } => {
+                    if !matches!(active_pipeline, Some(ActivePipeline::Textured)) {
+                        let pipeline = textured_pipeline.ok_or_else(|| {
+                            RendererError::Backend(
+                                "Metal textured pipeline was unavailable for image rendering"
+                                    .to_string(),
+                            )
+                        })?;
+                        let sampler = sampler.ok_or_else(|| {
+                            RendererError::Backend(
+                                "Metal sampler was unavailable for image rendering".to_string(),
+                            )
+                        })?;
+                        unsafe {
+                            let _: () = msg_send![encoder, setRenderPipelineState: pipeline.as_raw()];
+                            let _: () = msg_send![
+                                encoder,
+                                setFragmentSamplerState: sampler.as_raw(),
+                                atIndex: 0usize
+                            ];
+                        }
+                        active_pipeline = Some(ActivePipeline::Textured);
+                    }
+                    let vertices = textured_rect_vertices(image, surface_width, surface_height);
+                    let alpha = [image.alpha.clamp(0.0, 1.0)];
+                    unsafe {
+                        let _: () = msg_send![
+                            encoder,
+                            setVertexBytes: vertices.as_ptr().cast::<c_void>(),
+                            length: std::mem::size_of_val(&vertices),
+                            atIndex: 0usize
+                        ];
+                        let _: () =
+                            msg_send![encoder, setFragmentTexture: texture.as_raw(), atIndex: 0usize];
+                        let _: () = msg_send![
+                            encoder,
+                            setFragmentBytes: alpha.as_ptr().cast::<c_void>(),
+                            length: std::mem::size_of_val(&alpha),
+                            atIndex: 0usize
+                        ];
+                        let _: () = msg_send![
+                            encoder,
+                            drawPrimitives: MTL_PRIMITIVE_TYPE_TRIANGLE,
+                            vertexStart: 0usize,
+                            vertexCount: vertices.len()
+                        ];
+                    }
                 }
             }
         }
@@ -1996,11 +2201,14 @@ impl GraphicsBackend for MetalBackend {
                 blue: 0.0,
                 alpha: 1.0,
             });
-            let rects = self.frame_solid_rects();
-            let file_images = self.frame_blit_images();
-            let generated_images = self.frame_generated_images()?;
-            let has_textured_images = !file_images.is_empty() || !generated_images.is_empty();
-            if rects.is_empty() && !has_textured_images {
+            let visuals = self.frame_visuals()?;
+            let has_textured_images = visuals.iter().any(|visual| {
+                matches!(
+                    visual,
+                    FrameVisual::RegisteredImage(_) | FrameVisual::GeneratedImage(_)
+                )
+            });
+            if visuals.is_empty() {
                 let command_queue = self.command_queue.as_ref().ok_or_else(|| {
                     RendererError::Backend("Metal command queue is unavailable".to_string())
                 })?;
@@ -2035,21 +2243,16 @@ impl GraphicsBackend for MetalBackend {
                 let surface = self.surface.as_ref().ok_or_else(|| {
                     RendererError::Backend("Metal surface is unavailable".to_string())
                 })?;
-                let bound_images = file_images
-                    .iter()
-                    .map(|image| {
-                        let texture = self.textures.get(&image.image_key).ok_or_else(|| {
-                            RendererError::Backend(format!(
-                                "Metal texture was not loaded for {}",
-                                image.image_key
-                            ))
-                        })?;
-                        Ok((texture, image.clone()))
-                    })
-                    .collect::<Result<Vec<_>, RendererError>>()?;
                 let device = self.device.as_ref().ok_or_else(|| {
                     RendererError::Backend("Metal device is unavailable".to_string())
                 })?;
+                let generated_images = visuals
+                    .iter()
+                    .filter_map(|visual| match visual {
+                        FrameVisual::GeneratedImage(image) => Some(image.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
                 let transient_textures = generated_images
                     .iter()
                     .enumerate()
@@ -2060,19 +2263,46 @@ impl GraphicsBackend for MetalBackend {
                         Ok((texture, image.placement.clone()))
                     })
                     .collect::<Result<Vec<_>, RendererError>>()?;
-                macos::present_scene(
+                let mut generated_index = 0usize;
+                let prepared_visuals = visuals
+                    .iter()
+                    .map(|visual| match visual {
+                        FrameVisual::SolidRect(rect) => Ok(macos::PreparedVisual::SolidRect(*rect)),
+                        FrameVisual::RegisteredImage(image) => {
+                            let texture = self.textures.get(&image.image_key).ok_or_else(|| {
+                                RendererError::Backend(format!(
+                                    "Metal texture was not loaded for {}",
+                                    image.image_key
+                                ))
+                            })?;
+                            Ok(macos::PreparedVisual::RegisteredImage {
+                                texture,
+                                image: image.clone(),
+                            })
+                        }
+                        FrameVisual::GeneratedImage(_) => {
+                            let (texture, image) =
+                                transient_textures.get(generated_index).ok_or_else(|| {
+                                    RendererError::Backend(
+                                        "generated texture ordering mismatch".to_string(),
+                                    )
+                                })?;
+                            generated_index += 1;
+                            Ok(macos::PreparedVisual::GeneratedImage {
+                                texture,
+                                image: image.clone(),
+                            })
+                        }
+                    })
+                    .collect::<Result<Vec<_>, RendererError>>()?;
+                macos::present_scene_ordered(
                     command_queue,
                     surface,
                     self.pipeline_state.as_ref(),
                     self.textured_pipeline_state.as_ref(),
                     self.sampler_state.as_ref(),
                     clear,
-                    &bound_images,
-                    &rects,
-                    &transient_textures
-                        .iter()
-                        .map(|(texture, image)| (texture, image.clone()))
-                        .collect::<Vec<_>>(),
+                    &prepared_visuals,
                 )?;
             }
         }
