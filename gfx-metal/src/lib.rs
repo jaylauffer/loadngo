@@ -442,7 +442,7 @@ impl MetalBackend {
                     let image_width = raster.image.width as f32;
                     let image_height = raster.image.height as f32;
                     trace_widgets_log(format!(
-                        "text request='{}' centered={} rect=({}, {}, {}, {}) logical=({}, {}) baseline={} image=({}, {}) content_top={} opaque_top_display={} opaque_height={} placement=({}, {})",
+                        "text request='{}' centered={} rect=({}, {}, {}, {}) logical=({}, {}) baseline={} image=({}, {}) content_top={} logical_top_display={} opaque_top_display={} opaque_height={} placement=({}, {})",
                         request.text,
                         request.style.centered,
                         request.rect.x,
@@ -455,6 +455,7 @@ impl MetalBackend {
                         image_width,
                         image_height,
                         raster.content_top_in_image,
+                        raster.logical_top_in_display,
                         raster.opaque_top_in_display,
                         raster.opaque_height,
                         raster.x,
@@ -588,7 +589,7 @@ impl MetalBackend {
                     let image_width = raster.image.width as f32;
                     let image_height = raster.image.height as f32;
                     trace_widgets_log(format!(
-                        "text request='{}' centered={} rect=({}, {}, {}, {}) logical=({}, {}) baseline={} image=({}, {}) content_top={} placement=({}, {})",
+                        "text request='{}' centered={} rect=({}, {}, {}, {}) logical=({}, {}) baseline={} image=({}, {}) content_top={} logical_top_display={} placement=({}, {})",
                         request.text,
                         request.style.centered,
                         request.rect.x,
@@ -601,6 +602,7 @@ impl MetalBackend {
                         image_width,
                         image_height,
                         raster.content_top_in_image,
+                        raster.logical_top_in_display,
                         raster.x,
                         raster.y,
                     ));
@@ -698,6 +700,7 @@ struct RasterizedText {
     y: f32,
     metrics: RasterMetrics,
     content_top_in_image: f32,
+    logical_top_in_display: f32,
     opaque_top_in_display: f32,
     opaque_height: f32,
 }
@@ -720,6 +723,9 @@ fn rasterize_text_request(
                 (top, bottom)
             });
         let opaque_height = (opaque_bottom_in_image + 1).saturating_sub(opaque_top_in_image) as f32;
+        let logical_top_in_display =
+            (raster.image.height as f32 - (raster.content_top_in_image + raster.metrics.height))
+                .max(0.0);
         let opaque_top_in_display =
             raster.image.height as f32 - 1.0 - opaque_bottom_in_image as f32;
         let text_x = if request.style.centered {
@@ -735,9 +741,14 @@ fn rasterize_text_request(
         Ok(RasterizedText {
             image: raster.image,
             x: text_x,
-            y: visible_top - opaque_top_in_display,
+            y: if request.style.centered {
+                visible_top - opaque_top_in_display
+            } else {
+                visible_top - logical_top_in_display
+            },
             metrics: raster.metrics,
             content_top_in_image: raster.content_top_in_image,
+            logical_top_in_display,
             opaque_top_in_display,
             opaque_height,
         })
@@ -1540,6 +1551,7 @@ mod macos {
                 baseline_from_top: layout.metrics.baseline_from_top,
             },
             content_top_in_image: pad_top,
+            logical_top_in_display: pad_bottom,
             opaque_top_in_display: 0.0,
             opaque_height: layout.metrics.height,
         })
@@ -2559,5 +2571,32 @@ mod tests {
             })
             .expect("expected generated text image");
         assert!(text_visual.placement.flip_vertical);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn non_centered_text_aligns_logical_top_to_rect_top() {
+        let request = TextRequest {
+            rect: ui_core::geometry::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 300.0,
+                height: 24.0,
+            },
+            text: "Labels".to_string(),
+            style: loadngo_host_core::RenderTextStyle {
+                centered: false,
+                ..Default::default()
+            },
+            direction: loadngo_renderer::TextDirection::Auto,
+            script: loadngo_renderer::TextScript::Auto,
+            language: None,
+        };
+        let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
+        let displayed_logical_top = raster.y + raster.logical_top_in_display;
+        assert!(
+            displayed_logical_top.abs() < 0.5,
+            "expected logical text top to align with rect top, got {displayed_logical_top}"
+        );
     }
 }

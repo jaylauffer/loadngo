@@ -169,6 +169,7 @@ impl SliderModel {
             text: self.text.clone(),
             style: TextStyle {
                 color: Color::rgba(0xeb, 0xeb, 0xf5, 0xff),
+                font_size: 18,
                 centered: false,
             },
         });

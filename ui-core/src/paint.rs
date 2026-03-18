@@ -5,6 +5,7 @@ use crate::geometry::{Color, Point, Rect};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextStyle {
     pub color: Color,
+    pub font_size: u16,
     pub centered: bool,
 }
 
@@ -12,6 +13,7 @@ impl Default for TextStyle {
     fn default() -> Self {
         Self {
             color: Color::rgba(0x20, 0x20, 0x20, 0xff),
+            font_size: 18,
             centered: false,
         }
     }

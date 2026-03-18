@@ -486,7 +486,7 @@ impl Renderer {
                 PaintOp::Text { rect, text, style } => {
                     let render_style = RenderTextStyle {
                         color: style.color,
-                        font_size: self.config.widget_font_size,
+                        font_size: style.font_size,
                         centered: style.centered,
                     };
                     FrameCommand::Text(self.text_request(*rect, text.clone(), render_style))
