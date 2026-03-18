@@ -485,19 +485,19 @@ fn rasterize_text_request(
     {
         let raster = macos::rasterize_text(request, font_source)?;
         let x = if request.style.centered {
-            request.rect.x as f32 + (request.rect.width as f32 - raster.metrics.width) * 0.5
+            request.rect.x as f32 + (request.rect.width as f32 - raster.image.width as f32) * 0.5
         } else {
             request.rect.x as f32
         };
-        let baseline_y = if request.style.centered {
-            request.rect.y as f32 + (request.rect.height as f32 + raster.metrics.height) * 0.5 - 4.0
+        let y = if request.style.centered {
+            request.rect.y as f32 + (request.rect.height as f32 - raster.image.height as f32) * 0.5
         } else {
             request.rect.y as f32
         };
         Ok(RasterizedText {
             image: raster.image,
             x,
-            y: baseline_y - raster.metrics.baseline_from_top + 3.0,
+            y,
             metrics: raster.metrics,
         })
     }
