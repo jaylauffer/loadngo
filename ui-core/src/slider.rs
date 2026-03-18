@@ -1,7 +1,7 @@
 use crate::{
     geometry::{Color, Rect},
     input::{Key, PointerButton, UiEvent},
-    paint::{PaintOp, TextStyle},
+    paint::{HorizontalAlign, PaintOp, TextLayoutMode, TextStyle, VerticalAlign},
     widget::{WidgetId, WidgetResponse},
 };
 
@@ -170,7 +170,10 @@ impl SliderModel {
             style: TextStyle {
                 color: Color::rgba(0xeb, 0xeb, 0xf5, 0xff),
                 font_size: 18,
-                centered: false,
+                horizontal_align: HorizontalAlign::Left,
+                vertical_align: VerticalAlign::Top,
+                layout_mode: TextLayoutMode::SingleLine,
+                overflow: crate::TextOverflow::Clip,
             },
         });
         scene.push(PaintOp::FillRect {

@@ -324,11 +324,41 @@ impl InputSnapshot {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RenderTextHorizontalAlign {
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RenderTextVerticalAlign {
+    Top,
+    Middle,
+    Bottom,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RenderTextLayoutMode {
+    SingleLine,
+    MultiLine,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RenderTextOverflow {
+    Clip,
+    EllipsisEnd,
+    EllipsisMiddle,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenderTextStyle {
     pub color: Color,
     pub font_size: u16,
-    pub centered: bool,
+    pub horizontal_align: RenderTextHorizontalAlign,
+    pub vertical_align: RenderTextVerticalAlign,
+    pub layout_mode: RenderTextLayoutMode,
+    pub overflow: RenderTextOverflow,
 }
 
 impl Default for RenderTextStyle {
@@ -336,7 +366,10 @@ impl Default for RenderTextStyle {
         Self {
             color: Color::rgba(0x20, 0x20, 0x20, 0xff),
             font_size: 18,
-            centered: false,
+            horizontal_align: RenderTextHorizontalAlign::Left,
+            vertical_align: RenderTextVerticalAlign::Top,
+            layout_mode: RenderTextLayoutMode::SingleLine,
+            overflow: RenderTextOverflow::Clip,
         }
     }
 }

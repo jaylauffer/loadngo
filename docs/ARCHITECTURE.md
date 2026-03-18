@@ -16,6 +16,9 @@
   - Window metadata (`WindowDescriptor`)
   - Per-frame timing/surface/input (`HostFrame`, `InputSnapshot`, `TouchPoint`)
   - Render protocol (`RenderOp`, `RenderTextStyle`)
+    - text alignment (`Left`/`Center`/`Right`, `Top`/`Middle`/`Bottom`)
+    - text layout mode (`SingleLine`, `MultiLine`)
+    - single-line overflow policy (`Clip`, `EllipsisEnd`, `EllipsisMiddle`)
   - Texture/image seams (`DecodedImage`, `ImageRegistry`)
   - Split host seams:
     - `DesktopPlatformBackend`
@@ -28,6 +31,7 @@
 - Owns renderer-facing frame command encoding and execution boundaries.
 - Owns text/image rendering contracts independent of a specific GPU API.
 - Carries multilingual text metadata (direction, script, language) so shaping/fallback can stay in `loadngo`.
+- Owns deterministic text contract mapping from widget/app paint ops to backend frame commands.
 
 4. Host implementations (`gui-win32`, `host-mac`, future backends)
 - Translate native platform window/input/render to `host-core` and `ui-core` data.

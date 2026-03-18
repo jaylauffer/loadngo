@@ -7,14 +7,14 @@ use loadngo_host_core::{DecodedImage, ImageRegistry};
 use ui_core::{
     geometry::{Color, Point, Rect},
     input::{Key, Modifiers, PointerButton, PointerSource, PointerState},
-    paint::{PaintOp, TextStyle},
+    paint::{HorizontalAlign, PaintOp, TextLayoutMode, TextStyle, VerticalAlign},
 };
 use windows::Win32::Foundation::{COLORREF, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
     CreatePen, CreateSolidBrush, DeleteObject, DrawTextW, FillRect, GetStockObject, Rectangle,
     SelectObject, SetTextColor, StretchDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
-    DEFAULT_GUI_FONT, DIB_RGB_COLORS, DT_CENTER, DT_SINGLELINE, DT_VCENTER, HBRUSH, HDC, PS_SOLID,
-    SRCCOPY,
+    DEFAULT_GUI_FONT, DIB_RGB_COLORS, DT_BOTTOM, DT_CENTER, DT_LEFT, DT_RIGHT, DT_SINGLELINE,
+    DT_TOP, DT_VCENTER, DT_WORDBREAK, HBRUSH, HDC, PS_SOLID, SRCCOPY,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_DOWN, VK_LEFT, VK_RETURN, VK_RIGHT, VK_SPACE, VK_UP,
@@ -160,10 +160,20 @@ fn render_text(dc: HDC, rect: Rect, text: &str, style: &TextStyle) {
         let _ = SetTextColor(dc, rgb(style.color));
         let old_font = SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
         let mut rect = rect_from_core(rect);
-        let mut flags = DT_VCENTER | DT_SINGLELINE;
-        if style.centered {
-            flags |= DT_CENTER;
-        }
+        let mut flags = match style.layout_mode {
+            TextLayoutMode::SingleLine => DT_SINGLELINE,
+            TextLayoutMode::MultiLine => DT_WORDBREAK,
+        };
+        flags |= match style.horizontal_align {
+            HorizontalAlign::Left => DT_LEFT,
+            HorizontalAlign::Center => DT_CENTER,
+            HorizontalAlign::Right => DT_RIGHT,
+        };
+        flags |= match style.vertical_align {
+            VerticalAlign::Top => DT_TOP,
+            VerticalAlign::Middle => DT_VCENTER,
+            VerticalAlign::Bottom => DT_BOTTOM,
+        };
         let mut buf = to_wstring(text);
         if !buf.is_empty() {
             buf.pop();

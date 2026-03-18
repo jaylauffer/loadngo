@@ -2,7 +2,7 @@ use crate::{
     component::Component,
     geometry::{Color, Rect},
     input::{Key, UiEvent},
-    paint::{PaintOp, TextStyle},
+    paint::{HorizontalAlign, PaintOp, TextLayoutMode, TextStyle, VerticalAlign},
     widget::WidgetResponse,
 };
 
@@ -119,7 +119,9 @@ impl TabbedContainer {
                     rect,
                     text: page.title.clone(),
                     style: TextStyle {
-                        centered: true,
+                        horizontal_align: HorizontalAlign::Center,
+                        vertical_align: VerticalAlign::Middle,
+                        layout_mode: TextLayoutMode::SingleLine,
                         ..TextStyle::default()
                     },
                 });

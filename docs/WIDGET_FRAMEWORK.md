@@ -44,6 +44,39 @@ This keeps:
 
 Integer snapping belongs at the backend/raster edge, not in the widget model.
 
+## Text Contract
+
+Widget text is part of the framework contract, not ad hoc caller math.
+
+Current shared text style semantics:
+- horizontal alignment: `Left`, `Center`, `Right`
+- vertical alignment: `Top`, `Middle`, `Bottom`
+- layout mode: `SingleLine`, `MultiLine`
+- single-line overflow: `Clip`, `EllipsisEnd`, `EllipsisMiddle`
+
+Rules:
+- alignment is defined against the displayed text box that users actually see, not ad hoc caller offsets
+- `SingleLine` text must resolve overflow deterministically before rasterization
+- `MultiLine` text may contain explicit newlines and should report a logical height
+  based on all rendered lines
+- widget callers should not fake vertical centering by hardcoded pixel offsets once
+  alignment exists in the shared text contract
+- widget callers still need to allocate a sane line box; packing 18pt text into an 18px-tall panel is a layout bug, not a renderer feature
+
+Recommended usage:
+- buttons, tab captions, compact value fields:
+  - `SingleLine`
+  - `Center`/`Middle`
+- labels and inspector-style fields:
+  - `SingleLine`
+  - `Left` with explicit `Top`/`Middle` depending on the widget
+- text blocks:
+  - `MultiLine`
+  - usually `Left`/`Top`
+
+This is the boundary that desktop backends must preserve so editor and runtime UI
+do not drift into separate text-layout worlds.
+
 In practical terms:
 - `sng-rusty` builds models such as `RuntimeGlobalMenuModel`
 - `loadngo`-owned hosts/composition layers turn those models into:
@@ -157,6 +190,7 @@ The minimum useful test coverage is:
   - release-outside cancellation
   - hover/focus redraw behavior
   - paint contract
+  - text alignment and overflow contract
 - composition-host tests
   - model-to-widget mapping
   - action aggregation
@@ -165,6 +199,11 @@ The minimum useful test coverage is:
   - fractional-rect hit testing
   - half-open edge behavior
   - desktop and touch interaction paths
+  - deterministic text placement for top/middle/bottom alignment
+  - deterministic single-line overflow behavior
+- runtime/editor validation
+  - confirm `sng-rusty` runtime button labels stay vertically centered
+  - confirm `sng_rusty_editor` headers, list rows, and inspector labels are not clipped
 - runtime model tests
   - widget-key/action round-trips
   - menu/button model contents

@@ -628,7 +628,10 @@ pub fn render_text_lines(
                 style: RenderTextStyle {
                     color,
                     font_size,
-                    centered: false,
+                    horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Left,
+                    vertical_align: loadngo_host_core::RenderTextVerticalAlign::Top,
+                    layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+                    overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 },
             });
         }
@@ -668,7 +671,10 @@ pub fn draw_plain_text(text: &str, x: f32, y: f32, size: f32, color: UiColor) ->
             style: RenderTextStyle {
                 color,
                 font_size,
-                centered: false,
+                horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Left,
+                vertical_align: loadngo_host_core::RenderTextVerticalAlign::Top,
+                layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+                overflow: loadngo_host_core::RenderTextOverflow::Clip,
             },
             direction: loadngo_renderer::TextDirection::Auto,
             script: loadngo_renderer::TextScript::Auto,

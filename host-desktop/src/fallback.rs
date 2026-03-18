@@ -373,7 +373,10 @@ pub fn render_text_lines(
                 style: RenderTextStyle {
                     color,
                     font_size,
-                    centered: false,
+                    horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Left,
+                    vertical_align: loadngo_host_core::RenderTextVerticalAlign::Top,
+                    layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+                    overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 },
             });
         }
