@@ -728,7 +728,7 @@ fn rasterize_text_request(
             request.rect.x as f32
         };
         let visible_top = if request.style.centered {
-            request.rect.y as f32 + (request.rect.height as f32 - opaque_height) * 0.5
+            request.rect.y as f32 + (request.rect.height as f32 - opaque_height).max(0.0) * 0.5
         } else {
             request.rect.y as f32
         };
@@ -753,7 +753,7 @@ fn rasterize_text_request(
 }
 
 fn opaque_alpha_bounds(image: &DecodedImage) -> Option<(u32, u32)> {
-    const MIN_ALPHA: u8 = 8;
+    const MIN_ALPHA: u8 = 1;
     let width = image.width as usize;
     let height = image.height as usize;
     if width == 0 || height == 0 {
@@ -2360,6 +2360,8 @@ impl GraphicsBackend for MetalBackend {
 mod tests {
     use super::*;
     use loadngo_renderer::{FrameCommand, Renderer, RendererConfig};
+    #[cfg(target_os = "macos")]
+    use loadngo_renderer::TextRequest;
     use ui_core::geometry::Color;
 
     #[test]
@@ -2398,10 +2400,10 @@ mod tests {
             },
             FrameCommand::FillRect {
                 rect: ui_core::geometry::Rect {
-                    x: 0,
-                    y: 0,
-                    width: 10,
-                    height: 10,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 10.0,
+                    height: 10.0,
                 },
                 color: Color::rgba(255, 0, 0, 255),
             },
@@ -2425,10 +2427,10 @@ mod tests {
         let mut backend = MetalBackend::new_headless();
         backend.recorded_commands = vec![FrameCommand::StrokeRect {
             rect: ui_core::geometry::Rect {
-                x: 10,
-                y: 20,
-                width: 100,
-                height: 40,
+                x: 10.0,
+                y: 20.0,
+                width: 100.0,
+                height: 40.0,
             },
             color: Color::rgba(255, 255, 255, 255),
             thickness: 4,
@@ -2441,8 +2443,8 @@ mod tests {
     #[test]
     fn rasterized_line_generates_pixels() {
         let image = rasterize_line(
-            ui_core::geometry::Point { x: 0, y: 0 },
-            ui_core::geometry::Point { x: 8, y: 0 },
+            ui_core::geometry::Point { x: 0.0, y: 0.0 },
+            ui_core::geometry::Point { x: 8.0, y: 0.0 },
             Color::rgba(255, 0, 0, 255),
             2,
         )
@@ -2453,7 +2455,7 @@ mod tests {
     #[test]
     fn rasterized_circle_generates_pixels() {
         let image = rasterize_circle(
-            ui_core::geometry::Point { x: 8, y: 8 },
+            ui_core::geometry::Point { x: 8.0, y: 8.0 },
             4,
             Color::rgba(0, 255, 0, 255),
         )
@@ -2468,5 +2470,94 @@ mod tests {
             .expect("macOS should expose a default Metal device");
         assert_eq!(backend.state(), MetalBackendState::Ready);
         assert!(backend.has_bound_device());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_text_raster_is_not_double_flipped() {
+        fn row_alpha_counts(image: &DecodedImage, rows: usize) -> Vec<usize> {
+            let width = image.width as usize;
+            let height = image.height as usize;
+            let rows = rows.min(height);
+            (0..rows)
+                .map(|y| {
+                    let start = y * width * 4;
+                    let end = start + width * 4;
+                    image.rgba8[start..end]
+                        .chunks_exact(4)
+                        .filter(|px| px[3] > 0)
+                        .count()
+                })
+                .collect()
+        }
+
+        for (text, rect_height, centered) in [
+            ("Menu", 44, true),
+            ("Labels", 24, false),
+            ("Live Preview", 30, false),
+        ] {
+            let request = TextRequest {
+                rect: ui_core::geometry::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 300.0,
+                    height: rect_height as f32,
+                },
+                text: text.to_string(),
+                style: loadngo_host_core::RenderTextStyle {
+                    centered,
+                    ..Default::default()
+                },
+                direction: loadngo_renderer::TextDirection::Auto,
+                script: loadngo_renderer::TextScript::Auto,
+                language: None,
+            };
+            let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
+            let top_rows = row_alpha_counts(&raster.image, 8);
+            let mut all_rows = row_alpha_counts(&raster.image, raster.image.height as usize);
+            all_rows.reverse();
+            let bottom_rows = all_rows.into_iter().take(8).collect::<Vec<_>>();
+            assert!(
+                top_rows.iter().all(|count| *count == 0),
+                "raw text raster unexpectedly has alpha in top rows for {text}: {top_rows:?}"
+            );
+            assert!(
+                bottom_rows.iter().any(|count| *count > 0),
+                "raw text raster unexpectedly lacks alpha in bottom rows for {text}: {bottom_rows:?}"
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn generated_text_visuals_flip_vertically() {
+        let mut backend = MetalBackend::new_headless();
+        backend.recorded_commands = vec![FrameCommand::Text(TextRequest {
+            rect: ui_core::geometry::Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 120.0,
+                height: 44.0,
+            },
+            text: "Menu".to_string(),
+            style: loadngo_host_core::RenderTextStyle {
+                centered: true,
+                ..Default::default()
+            },
+            direction: loadngo_renderer::TextDirection::Auto,
+            script: loadngo_renderer::TextScript::Auto,
+            language: None,
+        })];
+        let visuals = backend
+            .frame_visuals()
+            .expect("text command should rasterize into a visual");
+        let text_visual = visuals
+            .into_iter()
+            .find_map(|visual| match visual {
+                FrameVisual::GeneratedImage(image) => Some(image),
+                _ => None,
+            })
+            .expect("expected generated text image");
+        assert!(text_visual.placement.flip_vertical);
     }
 }
