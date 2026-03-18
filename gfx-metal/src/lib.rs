@@ -442,7 +442,7 @@ impl MetalBackend {
                     let image_width = raster.image.width as f32;
                     let image_height = raster.image.height as f32;
                     trace_widgets_log(format!(
-                        "text request='{}' centered={} rect=({}, {}, {}, {}) logical=({}, {}) baseline={} image=({}, {}) content_top={} placement=({}, {})",
+                        "text request='{}' centered={} rect=({}, {}, {}, {}) logical=({}, {}) baseline={} image=({}, {}) content_top={} opaque_top_display={} opaque_height={} placement=({}, {})",
                         request.text,
                         request.style.centered,
                         request.rect.x,
@@ -455,6 +455,8 @@ impl MetalBackend {
                         image_width,
                         image_height,
                         raster.content_top_in_image,
+                        raster.opaque_top_in_display,
+                        raster.opaque_height,
                         raster.x,
                         raster.y,
                     ));
@@ -696,6 +698,8 @@ struct RasterizedText {
     y: f32,
     metrics: RasterMetrics,
     content_top_in_image: f32,
+    opaque_top_in_display: f32,
+    opaque_height: f32,
 }
 
 fn rasterize_text_request(
@@ -705,24 +709,37 @@ fn rasterize_text_request(
     #[cfg(target_os = "macos")]
     {
         let raster = macos::rasterize_text(request, font_source)?;
-        let displayed_content_top =
-            raster.image.height as f32 - raster.content_top_in_image - raster.metrics.height;
+        let (opaque_top_in_image, opaque_bottom_in_image) =
+            opaque_alpha_bounds(&raster.image).unwrap_or_else(|| {
+                let top = raster.content_top_in_image.max(0.0).floor() as u32;
+                let bottom = (raster.content_top_in_image + raster.metrics.height)
+                    .max(0.0)
+                    .ceil()
+                    .max(1.0) as u32
+                    - 1;
+                (top, bottom)
+            });
+        let opaque_height = (opaque_bottom_in_image + 1).saturating_sub(opaque_top_in_image) as f32;
+        let opaque_top_in_display =
+            raster.image.height as f32 - 1.0 - opaque_bottom_in_image as f32;
         let text_x = if request.style.centered {
             request.rect.x as f32 + (request.rect.width as f32 - raster.metrics.width) * 0.5
         } else {
             request.rect.x as f32
         };
-        let text_y = if request.style.centered {
-            request.rect.y as f32 + (request.rect.height as f32 - raster.metrics.height) * 0.5
+        let visible_top = if request.style.centered {
+            request.rect.y as f32 + (request.rect.height as f32 - opaque_height) * 0.5
         } else {
             request.rect.y as f32
         };
         Ok(RasterizedText {
             image: raster.image,
             x: text_x,
-            y: text_y - displayed_content_top,
+            y: visible_top - opaque_top_in_display,
             metrics: raster.metrics,
             content_top_in_image: raster.content_top_in_image,
+            opaque_top_in_display,
+            opaque_height,
         })
     }
 
@@ -732,6 +749,32 @@ fn rasterize_text_request(
         Err(RendererError::Text(
             "native text rasterization is unavailable on this platform".to_string(),
         ))
+    }
+}
+
+fn opaque_alpha_bounds(image: &DecodedImage) -> Option<(u32, u32)> {
+    const MIN_ALPHA: u8 = 8;
+    let width = image.width as usize;
+    let height = image.height as usize;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let mut top = None;
+    let mut bottom = None;
+    for y in 0..height {
+        let row_start = y * width * 4;
+        let row_end = row_start + width * 4;
+        let has_opaque = image.rgba8[row_start..row_end]
+            .chunks_exact(4)
+            .any(|px| px[3] >= MIN_ALPHA);
+        if has_opaque {
+            top.get_or_insert(y as u32);
+            bottom = Some(y as u32);
+        }
+    }
+    match (top, bottom) {
+        (Some(top), Some(bottom)) => Some((top, bottom)),
+        _ => None,
     }
 }
 
@@ -1497,6 +1540,8 @@ mod macos {
                 baseline_from_top: layout.metrics.baseline_from_top,
             },
             content_top_in_image: pad_top,
+            opaque_top_in_display: 0.0,
+            opaque_height: layout.metrics.height,
         })
     }
 
