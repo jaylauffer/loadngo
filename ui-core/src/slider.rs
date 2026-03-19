@@ -173,7 +173,7 @@ impl SliderModel {
                 font_size: 18,
                 horizontal_align: HorizontalAlign::Left,
                 vertical_align: VerticalAlign::Top,
-                vertical_metric_mode: crate::TextVerticalMetricMode::VisibleInk,
+                vertical_metric_mode: crate::TextVerticalMetricMode::LogicalLineBox,
                 layout_mode: TextLayoutMode::SingleLine,
                 overflow: crate::TextOverflow::Clip,
             },

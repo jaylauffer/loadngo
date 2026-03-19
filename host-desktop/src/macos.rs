@@ -11,7 +11,9 @@ use std::{
 };
 
 use loadngo_gfx_metal::{
-    measure_text_metrics as metal_measure_text_metrics, register_image_resource, MetalBackend,
+    measure_font_line_metrics as metal_measure_font_line_metrics,
+    measure_text_metrics as metal_measure_text_metrics, register_image_resource, FontLineMetrics,
+    MetalBackend,
 };
 use loadngo_host_core::{
     AssetIoBackend, DecodedImage, DesktopGraphicsBackend, DesktopPlatformBackend, FrameDemand,
@@ -606,6 +608,31 @@ pub fn measure_text_metrics(
     .unwrap_or(TextMetrics {
         width: text.chars().count() as f32 * font_size as f32 * font_scale * 0.6,
         height: font_size as f32 * font_scale,
+    })
+}
+
+pub fn measure_font_line_metrics(
+    font: Option<&DesktopFont>,
+    font_size: u16,
+    font_scale: f32,
+) -> FontLineMetrics {
+    metal_measure_font_line_metrics(
+        font.and_then(DesktopFont::source_path),
+        font_size as f32 * font_scale,
+    )
+    .unwrap_or(FontLineMetrics {
+        ascent: font_size as f32 * font_scale * 0.8,
+        descent: font_size as f32 * font_scale * 0.2,
+        leading: 0.0,
+        ink_top_from_baseline: font_size as f32 * font_scale * 0.8,
+        ink_bottom_from_baseline: font_size as f32 * font_scale * 0.2,
+        ink_height: font_size as f32 * font_scale,
+        baseline_from_top: font_size as f32 * font_scale * 0.8,
+        line_height: font_size as f32 * font_scale,
+        line_box_height: ui_core::single_line_text_box_height(font_size) * font_scale.max(0.0),
+        line_step: ui_core::multiline_line_step(font_size) * font_scale.max(0.0),
+        raster_pad_top: 0.0,
+        raster_pad_bottom: 0.0,
     })
 }
 
