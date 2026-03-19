@@ -761,16 +761,18 @@ fn rasterize_text_request(
         let visible_top = match request.style.vertical_align {
             loadngo_host_core::RenderTextVerticalAlign::Top => request.rect.y as f32,
             loadngo_host_core::RenderTextVerticalAlign::Middle => {
-                request.rect.y as f32 + (request.rect.height as f32 - opaque_height).max(0.0) * 0.5
+                request.rect.y as f32
+                    + (request.rect.height as f32 - raster.metrics.height).max(0.0) * 0.5
             }
             loadngo_host_core::RenderTextVerticalAlign::Bottom => {
-                request.rect.y as f32 + (request.rect.height as f32 - opaque_height).max(0.0)
+                request.rect.y as f32
+                    + (request.rect.height as f32 - raster.metrics.height).max(0.0)
             }
         };
         Ok(RasterizedText {
             image: raster.image,
             x: text_x,
-            y: visible_top - opaque_top_in_display,
+            y: visible_top - logical_top_in_display,
             metrics: raster.metrics,
             content_top_in_image: raster.content_top_in_image,
             logical_top_in_display,
@@ -1613,7 +1615,7 @@ mod macos {
             .iter()
             .map(|layout| layout.metrics.width)
             .fold(1.0f32, f32::max);
-        let line_height = layouts
+        let measured_line_height = layouts
             .iter()
             .map(|layout| layout.metrics.height)
             .fold(1.0f32, f32::max);
@@ -1621,7 +1623,14 @@ mod macos {
             .iter()
             .map(|layout| layout.metrics.baseline_from_top)
             .fold(1.0f32, f32::max);
-        let logical_height = (line_height * lines.len() as f32).max(1.0);
+        let line_box_height = ui_core::single_line_text_box_height(request.style.font_size);
+        let line_step = ui_core::multiline_line_step(request.style.font_size);
+        let logical_height = match request.style.layout_mode {
+            loadngo_host_core::RenderTextLayoutMode::SingleLine => line_box_height.max(1.0),
+            loadngo_host_core::RenderTextLayoutMode::MultiLine => {
+                (line_box_height + line_step * lines.len().saturating_sub(1) as f32).max(1.0)
+            }
+        };
         // CoreText can draw a few pixels above the typographic ascent on macOS.
         // Keep extra headroom in the offscreen raster so editor/runtime labels do
         // not lose their top edge before alignment is applied.
@@ -1629,6 +1638,7 @@ mod macos {
         let pad_bottom = (request.style.font_size as f32 * 0.25).ceil().max(2.0) + 2.0;
         let width = logical_width.max(1.0).ceil() as usize;
         let height = (logical_height + pad_top + pad_bottom).max(1.0).ceil() as usize;
+        let line_content_top = (line_box_height - measured_line_height).max(0.0) * 0.5;
         let mut rgba = vec![0u8; width * height * 4];
         let color_space = unsafe { CGColorSpaceCreateDeviceRGB() };
         if color_space.is_null() {
@@ -1691,7 +1701,8 @@ mod macos {
                 CGContextSetTextPosition(
                     context,
                     0.0,
-                    (pad_top + baseline_from_top + line_height * index as f32) as f64,
+                    (pad_top + line_content_top + baseline_from_top + line_step * index as f32)
+                        as f64,
                 );
                 CTLineDraw(layout.line, context);
             }
@@ -2777,7 +2788,7 @@ mod tests {
             language: None,
         };
         let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
-        let displayed_visible_top = raster.y + raster.opaque_top_in_display;
+        let displayed_visible_top = raster.y + raster.logical_top_in_display;
         assert!(
             displayed_visible_top.abs() < 0.5,
             "expected visible text top to align with rect top, got {displayed_visible_top}"
@@ -2809,9 +2820,9 @@ mod tests {
         let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
         let expected_x =
             request.rect.x + (request.rect.width - raster.metrics.width).max(0.0) * 0.5;
-        let displayed_visible_top = raster.y + raster.opaque_top_in_display;
+        let displayed_visible_top = raster.y + raster.logical_top_in_display;
         let expected_top =
-            request.rect.y + (request.rect.height - raster.opaque_height).max(0.0) * 0.5;
+            request.rect.y + (request.rect.height - raster.metrics.height).max(0.0) * 0.5;
         assert!((raster.x - expected_x).abs() < 0.5);
         assert!((displayed_visible_top - expected_top).abs() < 0.5);
     }
@@ -2840,8 +2851,40 @@ mod tests {
         };
         let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
         let displayed_visible_bottom =
-            raster.y + raster.opaque_top_in_display + raster.opaque_height;
+            raster.y + raster.logical_top_in_display + raster.metrics.height;
         assert!((displayed_visible_bottom - request.rect.height).abs() < 0.5);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn single_line_text_reports_shared_line_box_height() {
+        let request = TextRequest {
+            rect: ui_core::geometry::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 240.0,
+                height: 44.0,
+            },
+            text: "Menu".to_string(),
+            style: loadngo_host_core::RenderTextStyle {
+                font_size: 18,
+                horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Center,
+                vertical_align: loadngo_host_core::RenderTextVerticalAlign::Middle,
+                layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+                overflow: loadngo_host_core::RenderTextOverflow::Clip,
+                ..Default::default()
+            },
+            direction: loadngo_renderer::TextDirection::Auto,
+            script: loadngo_renderer::TextScript::Auto,
+            language: None,
+        };
+
+        let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
+
+        assert_eq!(
+            raster.metrics.height,
+            ui_core::single_line_text_box_height(18)
+        );
     }
 
     #[cfg(target_os = "macos")]

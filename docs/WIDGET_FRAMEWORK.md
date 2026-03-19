@@ -56,12 +56,19 @@ Current shared text style semantics:
 
 Rules:
 - alignment is defined against the displayed text box that users actually see, not ad hoc caller offsets
+- the shared single-line line-box contract is `ui_core::single_line_text_box_height(font_size)`
+- multiline vertical progression should use `ui_core::multiline_line_step(font_size)` until explicit line spacing becomes part of `TextStyle`
 - `SingleLine` text must resolve overflow deterministically before rasterization
 - `MultiLine` text may contain explicit newlines and should report a logical height
   based on all rendered lines
 - widget callers should not fake vertical centering by hardcoded pixel offsets once
   alignment exists in the shared text contract
 - widget callers still need to allocate a sane line box; packing 18pt text into an 18px-tall panel is a layout bug, not a renderer feature
+
+Implementation guidance:
+- `LabelModel` should emit a single-line text rect using the shared line-box contract rather than ad hoc caller math
+- list rows should reserve a shared single-line text box inside row chrome instead of deriving text height from arbitrary per-panel padding
+- platform backends must align the logical text box for `Top`/`Middle`/`Bottom`, not the visible glyph ink bounds
 
 Recommended usage:
 - buttons, tab captions, compact value fields:
