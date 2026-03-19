@@ -596,7 +596,7 @@ impl MetalBackend {
                     let image_width = raster.image.width as f32;
                     let image_height = raster.image.height as f32;
                     trace_widgets_log(format!(
-                        "text request='{}' h_align={:?} v_align={:?} mode={:?} overflow={:?} rect=({}, {}, {}, {}) logical=({}, {}) baseline={} image=({}, {}) content_top={} logical_top_display={} placement=({}, {})",
+                        "text request='{}' h_align={:?} v_align={:?} mode={:?} overflow={:?} rect=({}, {}, {}, {}) logical=({}, {}) baseline={} image=({}, {}) content_top={} logical_top_display={} opaque_top_display={} opaque_height={} placement=({}, {})",
                         request.text,
                         request.style.horizontal_align,
                         request.style.vertical_align,
@@ -613,6 +613,8 @@ impl MetalBackend {
                         image_height,
                         raster.content_top_in_image,
                         raster.logical_top_in_display,
+                        raster.opaque_top_in_display,
+                        raster.opaque_height,
                         raster.x,
                         raster.y,
                     ));
@@ -716,8 +718,8 @@ struct RasterizedText {
     opaque_height: f32,
 }
 
-const TEXT_RASTER_DISPLAY_TOP_BLEED: f32 = 6.0;
-const TEXT_RASTER_DISPLAY_BOTTOM_BLEED: f32 = 2.0;
+const TEXT_RASTER_DISPLAY_TOP_BLEED: f32 = 2.0;
+const TEXT_RASTER_DISPLAY_BOTTOM_BLEED: f32 = 6.0;
 
 fn rasterize_text_request(
     request: &TextRequest,
@@ -743,17 +745,13 @@ fn rasterize_text_request(
         let crop_top = (raster.content_top_in_image - TEXT_RASTER_DISPLAY_BOTTOM_BLEED)
             .floor()
             .max(0.0) as u32;
-        let crop_bottom = (raster.content_top_in_image
-            + raster.metrics.height
-            + TEXT_RASTER_DISPLAY_TOP_BLEED)
-            .ceil()
-            .min(raster.image.height as f32) as u32;
-        if crop_top < crop_bottom
-            && (crop_top > 0 || crop_bottom < raster.image.height)
-        {
+        let crop_bottom =
+            (raster.content_top_in_image + raster.metrics.height + TEXT_RASTER_DISPLAY_TOP_BLEED)
+                .ceil()
+                .min(raster.image.height as f32) as u32;
+        if crop_top < crop_bottom && (crop_top > 0 || crop_bottom < raster.image.height) {
             raster.image = crop_decoded_image_rows(&raster.image, crop_top, crop_bottom);
-            raster.content_top_in_image =
-                (raster.content_top_in_image - crop_top as f32).max(0.0);
+            raster.content_top_in_image = (raster.content_top_in_image - crop_top as f32).max(0.0);
         }
         let (opaque_top_in_image, opaque_bottom_in_image) = opaque_alpha_bounds(&raster.image)
             .unwrap_or_else(|| {
@@ -783,17 +781,16 @@ fn rasterize_text_request(
         };
         let (visible_top, top_in_display) = match request.style.vertical_align {
             loadngo_host_core::RenderTextVerticalAlign::Top => {
-                (request.rect.y as f32, logical_top_in_display)
+                (request.rect.y as f32, opaque_top_in_display)
             }
             loadngo_host_core::RenderTextVerticalAlign::Middle => (
                 request.rect.y as f32
-                    + (request.rect.height as f32 - raster.metrics.height).max(0.0) * 0.5,
-                logical_top_in_display,
+                    + (request.rect.height as f32 - opaque_height).max(0.0) * 0.5,
+                opaque_top_in_display,
             ),
             loadngo_host_core::RenderTextVerticalAlign::Bottom => (
-                request.rect.y as f32
-                    + (request.rect.height as f32 - raster.metrics.height).max(0.0),
-                logical_top_in_display,
+                request.rect.y as f32 + (request.rect.height as f32 - opaque_height).max(0.0),
+                opaque_top_in_display,
             ),
         };
         Ok(RasterizedText {
@@ -2850,7 +2847,7 @@ mod tests {
             language: None,
         };
         let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
-        let displayed_visible_top = raster.y + raster.logical_top_in_display;
+        let displayed_visible_top = raster.y + raster.opaque_top_in_display;
         assert!(
             displayed_visible_top.abs() < 0.5,
             "expected visible text top to align with rect top, got {displayed_visible_top}"
@@ -2882,9 +2879,9 @@ mod tests {
         let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
         let expected_x =
             request.rect.x + (request.rect.width - raster.metrics.width).max(0.0) * 0.5;
-        let displayed_visible_top = raster.y + raster.logical_top_in_display;
+        let displayed_visible_top = raster.y + raster.opaque_top_in_display;
         let expected_top =
-            request.rect.y + (request.rect.height - raster.metrics.height).max(0.0) * 0.5;
+            request.rect.y + (request.rect.height - raster.opaque_height).max(0.0) * 0.5;
         assert!((raster.x - expected_x).abs() < 0.5);
         assert!((displayed_visible_top - expected_top).abs() < 0.5);
     }
@@ -2913,7 +2910,7 @@ mod tests {
         };
         let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
         let displayed_logical_bottom =
-            raster.y + raster.logical_top_in_display + raster.metrics.height;
+            raster.y + raster.opaque_top_in_display + raster.opaque_height;
         assert!((displayed_logical_bottom - request.rect.height).abs() < 0.5);
     }
 
@@ -2976,7 +2973,13 @@ mod tests {
         let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
 
         assert!(raster.image.height as f32 <= raster.metrics.height + 8.0);
-        assert!((raster.y - (request.rect.y + (request.rect.height - raster.metrics.height) * 0.5 - raster.logical_top_in_display)).abs() < 0.5);
+        assert!(
+            (raster.y
+                - (request.rect.y + (request.rect.height - raster.opaque_height) * 0.5
+                    - raster.opaque_top_in_display))
+                .abs()
+                < 0.5
+        );
     }
 
     #[cfg(target_os = "macos")]

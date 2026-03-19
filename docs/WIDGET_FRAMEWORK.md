@@ -64,11 +64,14 @@ Rules:
 - widget callers should not fake vertical centering by hardcoded pixel offsets once
   alignment exists in the shared text contract
 - widget callers still need to allocate a sane line box; packing 18pt text into an 18px-tall panel is a layout bug, not a renderer feature
+- current desktop backend behavior:
+  - layout still reserves the shared single-line line box
+  - final `Top` / `Middle` / `Bottom` placement is resolved against the displayed opaque text bounds so clip rects do not shave glyph tops
 
 Implementation guidance:
 - `LabelModel` should emit a single-line text rect using the shared line-box contract rather than ad hoc caller math
 - list rows should reserve a shared single-line text box inside row chrome instead of deriving text height from arbitrary per-panel padding
-- platform backends must align the logical text box for `Top`/`Middle`/`Bottom`, not the visible glyph ink bounds
+- platform backends must preserve the caller's reserved line box, but place the rendered image using the displayed text bounds so the final result stays visually aligned inside clipped widgets
 
 Recommended usage:
 - buttons, tab captions, compact value fields:
@@ -97,6 +100,15 @@ Current core composition widgets:
   - padded scroll viewport plus shared scrollbar indicator
 - `ListRowModel`
   - reusable row chrome and content-slot layout for richer list items
+
+Desktop verification harness:
+- `cargo run --manifest-path /Users/jay/pudding/loadngo/Cargo.toml -p loadngo-host-desktop --bin text_harness`
+- this renders one desktop window with:
+  - direct `RenderOp::Text` samples
+  - centered `ButtonModel` samples
+  - fixed-height `ListRowModel` + `LabelModel` samples
+  - a `TextBlockModel` multiline sample
+- use it before changing shared desktop text placement so runtime/editor regressions are caught in one place
 
 This is the boundary that desktop backends must preserve so editor and runtime UI
 do not drift into separate text-layout worlds.
