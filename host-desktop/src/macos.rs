@@ -613,16 +613,18 @@ pub fn render_text_lines(
     line_spacing: f32,
 ) {
     let mut ops = Vec::new();
-    let line_height = font_size as f32 * font_scale;
+    let line_height = ui_core::multiline_line_step(font_size) * font_scale.max(0.0);
+    let line_box_height = ui_core::single_line_text_box_height(font_size) * font_scale.max(0.0);
     let mut current_y = y;
     for line in lines {
         if !line.is_empty() {
+            let metrics = measure_text_metrics(line, font, font_size, font_scale);
             ops.push(RenderOp::Text {
                 rect: ui_core::geometry::Rect {
                     x,
                     y: current_y,
-                    width: 0.0,
-                    height: font_size as f32,
+                    width: metrics.width.max(1.0),
+                    height: line_box_height,
                 },
                 text: line.clone(),
                 style: RenderTextStyle {
@@ -659,13 +661,14 @@ pub fn clear(color: UiColor) {
 pub fn draw_plain_text(text: &str, x: f32, y: f32, size: f32, color: UiColor) -> TextMetrics {
     let (font_size, font_scale) = font_size_and_scale(size);
     let metrics = measure_text_metrics(text, None, font_size, font_scale);
+    let line_box_height = ui_core::single_line_text_box_height(font_size) * font_scale.max(0.0);
     render_commands(
         &[FrameCommand::Text(loadngo_renderer::TextRequest {
             rect: ui_core::geometry::Rect {
                 x,
                 y,
-                width: 0.0,
-                height: font_size as f32,
+                width: metrics.width.max(1.0),
+                height: line_box_height,
             },
             text: text.to_string(),
             style: RenderTextStyle {
@@ -690,6 +693,7 @@ pub fn blit_texture(texture: &DesktopTexture, rect: UiRect, alpha: f32) {
         &[FrameCommand::Image(loadngo_renderer::ImageRequest {
             image_key: texture.image_key.clone(),
             rect,
+            clip_rect: None,
             alpha,
         })],
         None,

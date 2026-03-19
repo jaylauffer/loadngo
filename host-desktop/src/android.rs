@@ -1592,6 +1592,7 @@ fn prepare_gles_frame(
                                 width: texture.width as f32,
                                 height: texture.height as f32,
                             },
+                            clip_rect: Some(request.rect),
                             image_key,
                             alpha: 1.0,
                         }));
@@ -1613,6 +1614,7 @@ fn prepare_gles_frame(
                     next_textures.insert(image_key.clone(), texture);
                     next_commands.push(FrameCommand::Image(ImageRequest {
                         rect,
+                        clip_rect: None,
                         image_key,
                         alpha: 1.0,
                     }));
@@ -1630,6 +1632,7 @@ fn prepare_gles_frame(
                     next_textures.insert(image_key.clone(), texture);
                     next_commands.push(FrameCommand::Image(ImageRequest {
                         rect,
+                        clip_rect: None,
                         image_key,
                         alpha: 1.0,
                     }));
@@ -2015,6 +2018,25 @@ fn clip_rect_to_surface(rect: UiRect, width: usize, height: usize) -> Option<(i3
         None
     } else {
         Some((x0, y0, x1, y1))
+    }
+}
+
+fn intersect_rects(a: UiRect, b: UiRect) -> Option<UiRect> {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = a.right().min(b.right());
+    let y1 = a.bottom().min(b.bottom());
+    let width = x1 - x0;
+    let height = y1 - y0;
+    if width <= 0.0 || height <= 0.0 {
+        None
+    } else {
+        Some(UiRect {
+            x: x0,
+            y: y0,
+            width,
+            height,
+        })
     }
 }
 
@@ -2585,7 +2607,7 @@ impl<'a> SoftwareFramebuffer<'a> {
         let Some(texture) = textures.get(request.image_key.as_str()) else {
             return;
         };
-        self.blit_software_texture(texture, request.rect, request.alpha);
+        self.blit_software_texture(texture, request.rect, request.clip_rect, request.alpha);
     }
 
     fn draw_text(
@@ -2688,11 +2710,25 @@ impl<'a> SoftwareFramebuffer<'a> {
         }
     }
 
-    fn blit_software_texture(&mut self, texture: &SoftwareTexture, rect: UiRect, alpha: f32) {
+    fn blit_software_texture(
+        &mut self,
+        texture: &SoftwareTexture,
+        rect: UiRect,
+        clip_rect: Option<UiRect>,
+        alpha: f32,
+    ) {
         if texture.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
             return;
         }
-        let Some((x0, y0, x1, y1)) = self.clip_rect(rect) else {
+        let draw_rect = if let Some(clip_rect) = clip_rect {
+            let Some(draw_rect) = intersect_rects(rect, clip_rect) else {
+                return;
+            };
+            draw_rect
+        } else {
+            rect
+        };
+        let Some((x0, y0, x1, y1)) = self.clip_rect(draw_rect) else {
             return;
         };
 
@@ -2765,11 +2801,12 @@ pub fn render_text_lines(
     let mut current_y = y;
     for line in lines {
         if !line.is_empty() {
+            let metrics = measure_text_metrics(line, font, font_size, font_scale);
             ops.push(RenderOp::Text {
                 rect: UiRect {
                     x,
                     y: current_y,
-                    width: 0.0,
+                    width: metrics.width.max(1.0),
                     height: line_box_height,
                 },
                 text: line.clone(),
@@ -2823,7 +2860,7 @@ pub fn draw_plain_text(text: &str, _x: f32, _y: f32, size: f32, _color: UiColor)
         rect: UiRect {
             x: _x,
             y: _y,
-            width: 0.0,
+            width: metrics.width.max(1.0),
             height: single_line_text_box_height(font_size) * font_scale.max(0.0),
         },
         text: text.to_string(),
@@ -2846,6 +2883,7 @@ pub fn blit_texture(texture: &DesktopTexture, rect: UiRect, alpha: f32) {
     if let Some(image_key) = texture.image_key() {
         queue_commands([FrameCommand::Image(ImageRequest {
             rect,
+            clip_rect: None,
             image_key: image_key.to_string(),
             alpha,
         })]);
@@ -2866,6 +2904,7 @@ pub fn blit_texture(texture: &DesktopTexture, rect: UiRect, alpha: f32) {
         .queued_commands
         .push(FrameCommand::Image(ImageRequest {
             rect,
+            clip_rect: None,
             image_key,
             alpha,
         }));

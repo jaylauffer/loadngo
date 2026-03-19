@@ -97,6 +97,7 @@ struct BlitImage {
     y: f32,
     width: f32,
     height: f32,
+    clip_rect: Option<ui_core::geometry::Rect>,
     alpha: f32,
     flip_vertical: bool,
 }
@@ -420,6 +421,7 @@ impl MetalBackend {
                         y: request.rect.y as f32,
                         width: request.rect.width as f32,
                         height: request.rect.height as f32,
+                        clip_rect: request.clip_rect,
                         alpha: request.alpha,
                         flip_vertical: false,
                     })
@@ -472,6 +474,7 @@ impl MetalBackend {
                             y: raster.y,
                             width: image_width,
                             height: image_height,
+                            clip_rect: Some(request.rect),
                             alpha: 1.0,
                             flip_vertical: true,
                         },
@@ -580,6 +583,7 @@ impl MetalBackend {
                         y: request.rect.y as f32,
                         width: request.rect.width as f32,
                         height: request.rect.height as f32,
+                        clip_rect: request.clip_rect,
                         alpha: request.alpha,
                         flip_vertical: false,
                     }));
@@ -620,6 +624,7 @@ impl MetalBackend {
                             y: raster.y,
                             width: image_width,
                             height: image_height,
+                            clip_rect: Some(request.rect),
                             alpha: 1.0,
                             flip_vertical: true,
                         },
@@ -711,6 +716,9 @@ struct RasterizedText {
     opaque_height: f32,
 }
 
+const TEXT_RASTER_DISPLAY_TOP_BLEED: f32 = 6.0;
+const TEXT_RASTER_DISPLAY_BOTTOM_BLEED: f32 = 2.0;
+
 fn rasterize_text_request(
     request: &TextRequest,
     font_source: Option<&str>,
@@ -731,7 +739,22 @@ fn rasterize_text_request(
                 &request.style.overflow,
             )?;
         }
-        let raster = macos::rasterize_text(&request, font_source)?;
+        let mut raster = macos::rasterize_text(&request, font_source)?;
+        let crop_top = (raster.content_top_in_image - TEXT_RASTER_DISPLAY_BOTTOM_BLEED)
+            .floor()
+            .max(0.0) as u32;
+        let crop_bottom = (raster.content_top_in_image
+            + raster.metrics.height
+            + TEXT_RASTER_DISPLAY_TOP_BLEED)
+            .ceil()
+            .min(raster.image.height as f32) as u32;
+        if crop_top < crop_bottom
+            && (crop_top > 0 || crop_bottom < raster.image.height)
+        {
+            raster.image = crop_decoded_image_rows(&raster.image, crop_top, crop_bottom);
+            raster.content_top_in_image =
+                (raster.content_top_in_image - crop_top as f32).max(0.0);
+        }
         let (opaque_top_in_image, opaque_bottom_in_image) = opaque_alpha_bounds(&raster.image)
             .unwrap_or_else(|| {
                 let top = raster.content_top_in_image.max(0.0).floor() as u32;
@@ -758,21 +781,25 @@ fn rasterize_text_request(
                 request.rect.x as f32 + (request.rect.width as f32 - raster.metrics.width).max(0.0)
             }
         };
-        let visible_top = match request.style.vertical_align {
-            loadngo_host_core::RenderTextVerticalAlign::Top => request.rect.y as f32,
-            loadngo_host_core::RenderTextVerticalAlign::Middle => {
-                request.rect.y as f32
-                    + (request.rect.height as f32 - raster.metrics.height).max(0.0) * 0.5
+        let (visible_top, top_in_display) = match request.style.vertical_align {
+            loadngo_host_core::RenderTextVerticalAlign::Top => {
+                (request.rect.y as f32, logical_top_in_display)
             }
-            loadngo_host_core::RenderTextVerticalAlign::Bottom => {
+            loadngo_host_core::RenderTextVerticalAlign::Middle => (
                 request.rect.y as f32
-                    + (request.rect.height as f32 - raster.metrics.height).max(0.0)
-            }
+                    + (request.rect.height as f32 - raster.metrics.height).max(0.0) * 0.5,
+                logical_top_in_display,
+            ),
+            loadngo_host_core::RenderTextVerticalAlign::Bottom => (
+                request.rect.y as f32
+                    + (request.rect.height as f32 - raster.metrics.height).max(0.0),
+                logical_top_in_display,
+            ),
         };
         Ok(RasterizedText {
             image: raster.image,
             x: text_x,
-            y: visible_top - logical_top_in_display,
+            y: visible_top - top_in_display,
             metrics: raster.metrics,
             content_top_in_image: raster.content_top_in_image,
             logical_top_in_display,
@@ -814,6 +841,23 @@ fn opaque_alpha_bounds(image: &DecodedImage) -> Option<(u32, u32)> {
         (Some(top), Some(bottom)) => Some((top, bottom)),
         _ => None,
     }
+}
+
+fn crop_decoded_image_rows(image: &DecodedImage, start_row: u32, end_row: u32) -> DecodedImage {
+    let start_row = start_row.min(image.height);
+    let end_row = end_row.min(image.height).max(start_row);
+    let new_height = end_row.saturating_sub(start_row).max(1);
+    let row_bytes = image.width as usize * 4;
+    let mut rgba8 = vec![0u8; row_bytes * new_height as usize];
+    for row in 0..new_height as usize {
+        let src_row = start_row as usize + row;
+        let src_start = src_row * row_bytes;
+        let src_end = src_start + row_bytes;
+        let dst_start = row * row_bytes;
+        let dst_end = dst_start + row_bytes;
+        rgba8[dst_start..dst_end].copy_from_slice(&image.rgba8[src_start..src_end]);
+    }
+    DecodedImage::new(image.width, new_height, rgba8)
 }
 
 fn apply_single_line_overflow(
@@ -961,6 +1005,7 @@ fn rasterize_line(
             y: min_y,
             width: width as f32,
             height: height as f32,
+            clip_rect: None,
             alpha: 1.0,
             flip_vertical: false,
         },
@@ -1000,6 +1045,7 @@ fn rasterize_circle(
             y: min_y as f32,
             width: width as f32,
             height: height as f32,
+            clip_rect: None,
             alpha: 1.0,
             flip_vertical: false,
         },
@@ -2299,50 +2345,66 @@ mod macos {
         surface_width: f32,
         surface_height: f32,
     ) -> [MetalTexturedVertex; 6] {
-        let x0 = clip_x(image.x, surface_width);
-        let x1 = clip_x(image.x + image.width, surface_width);
-        let y0 = clip_y(image.y, surface_height);
-        let y1 = clip_y(image.y + image.height, surface_height);
+        let mut draw_x0 = image.x;
+        let mut draw_y0 = image.y;
+        let mut draw_x1 = image.x + image.width;
+        let mut draw_y1 = image.y + image.height;
+        if let Some(clip) = image.clip_rect {
+            draw_x0 = draw_x0.max(clip.x);
+            draw_y0 = draw_y0.max(clip.y);
+            draw_x1 = draw_x1.min(clip.x + clip.width);
+            draw_y1 = draw_y1.min(clip.y + clip.height);
+        }
+        let safe_width = image.width.max(1.0);
+        let safe_height = image.height.max(1.0);
+        let u0 = ((draw_x0 - image.x) / safe_width).clamp(0.0, 1.0);
+        let u1 = ((draw_x1 - image.x) / safe_width).clamp(0.0, 1.0);
+        let raw_v0 = ((draw_y0 - image.y) / safe_height).clamp(0.0, 1.0);
+        let raw_v1 = ((draw_y1 - image.y) / safe_height).clamp(0.0, 1.0);
+        let x0 = clip_x(draw_x0, surface_width);
+        let x1 = clip_x(draw_x1, surface_width);
+        let y0 = clip_y(draw_y0, surface_height);
+        let y1 = clip_y(draw_y1, surface_height);
         let (v0, v1) = if image.flip_vertical {
-            (1.0, 0.0)
+            (1.0 - raw_v0, 1.0 - raw_v1)
         } else {
-            (0.0, 1.0)
+            (raw_v0, raw_v1)
         };
         [
             MetalTexturedVertex {
                 x: x0,
                 y: y0,
-                u: 0.0,
+                u: u0,
                 v: v0,
             },
             MetalTexturedVertex {
                 x: x1,
                 y: y0,
-                u: 1.0,
+                u: u1,
                 v: v0,
             },
             MetalTexturedVertex {
                 x: x0,
                 y: y1,
-                u: 0.0,
+                u: u0,
                 v: v1,
             },
             MetalTexturedVertex {
                 x: x1,
                 y: y0,
-                u: 1.0,
+                u: u1,
                 v: v0,
             },
             MetalTexturedVertex {
                 x: x1,
                 y: y1,
-                u: 1.0,
+                u: u1,
                 v: v1,
             },
             MetalTexturedVertex {
                 x: x0,
                 y: y1,
-                u: 0.0,
+                u: u0,
                 v: v1,
             },
         ]
@@ -2850,9 +2912,9 @@ mod tests {
             language: None,
         };
         let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
-        let displayed_visible_bottom =
+        let displayed_logical_bottom =
             raster.y + raster.logical_top_in_display + raster.metrics.height;
-        assert!((displayed_visible_bottom - request.rect.height).abs() < 0.5);
+        assert!((displayed_logical_bottom - request.rect.height).abs() < 0.5);
     }
 
     #[cfg(target_os = "macos")]
@@ -2885,6 +2947,36 @@ mod tests {
             raster.metrics.height,
             ui_core::single_line_text_box_height(18)
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn single_line_text_raster_trims_excess_vertical_padding() {
+        let request = TextRequest {
+            rect: ui_core::geometry::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 240.0,
+                height: 44.0,
+            },
+            text: "Menu".to_string(),
+            style: loadngo_host_core::RenderTextStyle {
+                font_size: 18,
+                horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Center,
+                vertical_align: loadngo_host_core::RenderTextVerticalAlign::Middle,
+                layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+                overflow: loadngo_host_core::RenderTextOverflow::Clip,
+                ..Default::default()
+            },
+            direction: loadngo_renderer::TextDirection::Auto,
+            script: loadngo_renderer::TextScript::Auto,
+            language: None,
+        };
+
+        let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
+
+        assert!(raster.image.height as f32 <= raster.metrics.height + 8.0);
+        assert!((raster.y - (request.rect.y + (request.rect.height - raster.metrics.height) * 0.5 - raster.logical_top_in_display)).abs() < 0.5);
     }
 
     #[cfg(target_os = "macos")]
