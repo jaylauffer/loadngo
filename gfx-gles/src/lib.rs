@@ -883,7 +883,7 @@ mod android {
                 };
                 let texture =
                     ensure_gpu_texture(request.image_key.as_str(), resource, gpu_textures)?;
-                let vertices = textured_rect_vertices(request.rect, width, height);
+                let vertices = textured_rect_vertices(request, width, height);
                 glBufferData(
                     GL_ARRAY_BUFFER,
                     (vertices.len() * std::mem::size_of::<f32>()) as isize,
@@ -962,25 +962,38 @@ mod android {
         ]
     }
 
-    fn textured_rect_vertices(rect: ui_core::geometry::Rect, width: i32, height: i32) -> [f32; 24] {
+    fn textured_rect_vertices(request: &ImageRequest, width: i32, height: i32) -> [f32; 24] {
         let width = width.max(1) as f32;
         let height = height.max(1) as f32;
-        let x0 = rect.x as f32;
-        let y0 = rect.y as f32;
-        let x1 = (rect.x + rect.width) as f32;
-        let y1 = (rect.y + rect.height) as f32;
+        let rect = request.rect;
+        let mut draw_x0 = rect.x;
+        let mut draw_y0 = rect.y;
+        let mut draw_x1 = rect.x + rect.width;
+        let mut draw_y1 = rect.y + rect.height;
+        if let Some(clip) = request.clip_rect {
+            draw_x0 = draw_x0.max(clip.x);
+            draw_y0 = draw_y0.max(clip.y);
+            draw_x1 = draw_x1.min(clip.x + clip.width);
+            draw_y1 = draw_y1.min(clip.y + clip.height);
+        }
+        let safe_width = rect.width.max(1.0);
+        let safe_height = rect.height.max(1.0);
+        let u0 = ((draw_x0 - rect.x) / safe_width).clamp(0.0, 1.0);
+        let u1 = ((draw_x1 - rect.x) / safe_width).clamp(0.0, 1.0);
+        let v0 = ((draw_y0 - rect.y) / safe_height).clamp(0.0, 1.0);
+        let v1 = ((draw_y1 - rect.y) / safe_height).clamp(0.0, 1.0);
 
         let to_clip_x = |x: f32| (x / width) * 2.0 - 1.0;
         let to_clip_y = |y: f32| 1.0 - (y / height) * 2.0;
 
-        let left = to_clip_x(x0);
-        let right = to_clip_x(x1);
-        let top = to_clip_y(y0);
-        let bottom = to_clip_y(y1);
+        let left = to_clip_x(draw_x0);
+        let right = to_clip_x(draw_x1);
+        let top = to_clip_y(draw_y0);
+        let bottom = to_clip_y(draw_y1);
 
         [
-            left, top, 0.0, 0.0, right, top, 1.0, 0.0, left, bottom, 0.0, 1.0, left, bottom, 0.0,
-            1.0, right, top, 1.0, 0.0, right, bottom, 1.0, 1.0,
+            left, top, u0, v0, right, top, u1, v0, left, bottom, u0, v1, left, bottom, u0, v1,
+            right, top, u1, v0, right, bottom, u1, v1,
         ]
     }
 

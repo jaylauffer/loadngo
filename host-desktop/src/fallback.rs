@@ -358,16 +358,18 @@ pub fn render_text_lines(
     line_spacing: f32,
 ) {
     let mut ops = Vec::new();
-    let line_height = font_size as f32 * font_scale;
+    let line_height = ui_core::multiline_line_step(font_size) * font_scale.max(0.0);
+    let line_box_height = ui_core::single_line_text_box_height(font_size) * font_scale.max(0.0);
     let mut current_y = y;
     for line in lines {
         if !line.is_empty() {
+            let metrics = approximate_text_metrics(line, font_size, font_scale);
             ops.push(RenderOp::Text {
                 rect: ui_core::geometry::Rect {
                     x: x as i32,
                     y: current_y as i32,
-                    width: 0,
-                    height: font_size as i32,
+                    width: metrics.width.max(1.0) as i32,
+                    height: line_box_height as i32,
                 },
                 text: line.clone(),
                 style: RenderTextStyle {

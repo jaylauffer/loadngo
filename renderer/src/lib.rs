@@ -254,6 +254,7 @@ pub struct TextRequest {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImageRequest {
     pub rect: Rect,
+    pub clip_rect: Option<Rect>,
     pub image_key: String,
     pub alpha: f32,
 }
@@ -458,6 +459,7 @@ impl Renderer {
                     alpha,
                 } => FrameCommand::Image(ImageRequest {
                     rect: *rect,
+                    clip_rect: None,
                     image_key: image_key.clone(),
                     alpha: *alpha,
                 }),
@@ -533,6 +535,7 @@ impl Renderer {
                 }
                 PaintOp::BlitImage { rect, image_key } => FrameCommand::Image(ImageRequest {
                     rect: *rect,
+                    clip_rect: None,
                     image_key: image_key.clone(),
                     alpha: 1.0,
                 }),
@@ -626,6 +629,7 @@ mod tests {
                     width: 30.0,
                     height: 40.0,
                 },
+                clip_rect: None,
                 image_key: "scene/title.png".to_string(),
                 alpha: 1.0,
             })]
@@ -738,6 +742,7 @@ mod tests {
                     width: 10.0,
                     height: 10.0,
                 },
+                clip_rect: None,
                 image_key: "scene/a.png".to_string(),
                 alpha: 1.0,
             }),
@@ -748,6 +753,7 @@ mod tests {
                     width: 10.0,
                     height: 10.0,
                 },
+                clip_rect: None,
                 image_key: "scene/a.png".to_string(),
                 alpha: 0.5,
             }),
@@ -758,6 +764,7 @@ mod tests {
                     width: 10.0,
                     height: 10.0,
                 },
+                clip_rect: None,
                 image_key: "scene/b.png".to_string(),
                 alpha: 1.0,
             }),
