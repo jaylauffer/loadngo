@@ -12,6 +12,7 @@ This is the control-level counterpart to:
 
 - [WIDGET_FRAMEWORK.md](/Users/jay/pudding/loadngo/docs/WIDGET_FRAMEWORK.md)
 - [WORKSPACE_LAYOUT.md](/Users/jay/pudding/loadngo/docs/WORKSPACE_LAYOUT.md)
+- [TEXT_INPUT_MODEL.md](/Users/jay/pudding/loadngo/docs/TEXT_INPUT_MODEL.md)
 
 ## Current `ui-core` Coverage
 
@@ -52,18 +53,32 @@ The following controls are still missing or incomplete.
 
 ### Text Input
 
-Missing:
+Still missing or incomplete:
 
 - single-line editable text field
-- multiline editable text area
-- selection/caret model
 - clipboard semantics
-- focus and keyboard navigation behavior
+- undo/redo
+- IME/composition
+- width-aware soft wrap
+- spellcheck hooks
 
-These are the largest missing standard controls.
+This is still the largest incomplete standard control family.
 
 If `loadngo` is intended to support serious editor workflows, text input is
 first-class and should not stay app-local.
+
+Current foundation:
+
+- `TextAreaModel` now exists in [text_area.rs](/Users/jay/pudding/loadngo/ui-core/src/text_area.rs)
+- the dedicated desktop validation surface is
+  [text_input_harness.rs](/Users/jay/pudding/loadngo/host-desktop/src/bin/text_input_harness.rs)
+- the carried-forward design concepts from the old C++ editors are documented in
+  [TEXT_INPUT_MODEL.md](/Users/jay/pudding/loadngo/docs/TEXT_INPUT_MODEL.md)
+- current supported behavior:
+  - authoritative multiline source buffer
+  - caret and selection model
+  - focus and keyboard navigation
+  - pointer placement and drag selection
 
 ### Radio Buttons / Grouped Exclusive Selection
 
@@ -158,6 +173,20 @@ Why first:
 - many later controls depend on text entry
 - spin box and editable combo both build on it
 - editors cannot stay credible without first-class text editing
+- `sng_rusty_editor` is now explicitly blocked on multiline `.ron` editing, so
+  `TextAreaModel` is the immediate next practical dependency
+
+Immediate priority within Phase 1:
+
+- build `TextAreaModel` first
+- then add `TextFieldModel`
+
+Reason:
+
+- multiline source editing is required to make `sng_rusty_editor` a real
+  authoring tool
+- the `.ron`-first editor plan is documented in
+  [RON_FIRST_EDITOR.md](/Users/jay/pudding/sng-rusty/docs/RON_FIRST_EDITOR.md)
 
 Key requirements:
 
@@ -168,6 +197,7 @@ Key requirements:
 - backspace/delete
 - insertion/replacement
 - clipboard hooks later
+- desktop text-input harness with deterministic verification
 
 ### Phase 2: Radio And Group Semantics
 

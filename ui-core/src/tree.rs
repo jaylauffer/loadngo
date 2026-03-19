@@ -161,6 +161,7 @@ impl TreeControl {
                     width: row_rect.width - 12.0,
                     height: row_rect.height,
                 },
+                clip_rect: None,
                 text: node.text.clone(),
                 style: TextStyle::default(),
             });

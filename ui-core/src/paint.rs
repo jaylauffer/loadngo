@@ -29,12 +29,19 @@ pub enum TextOverflow {
     EllipsisMiddle,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TextVerticalMetricMode {
+    VisibleInk,
+    LogicalLineBox,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextStyle {
     pub color: Color,
     pub font_size: u16,
     pub horizontal_align: HorizontalAlign,
     pub vertical_align: VerticalAlign,
+    pub vertical_metric_mode: TextVerticalMetricMode,
     pub layout_mode: TextLayoutMode,
     pub overflow: TextOverflow,
 }
@@ -46,6 +53,7 @@ impl Default for TextStyle {
             font_size: 18,
             horizontal_align: HorizontalAlign::Left,
             vertical_align: VerticalAlign::Top,
+            vertical_metric_mode: TextVerticalMetricMode::VisibleInk,
             layout_mode: TextLayoutMode::SingleLine,
             overflow: TextOverflow::Clip,
         }
@@ -69,6 +77,7 @@ pub enum PaintOp {
     },
     Text {
         rect: Rect,
+        clip_rect: Option<Rect>,
         text: String,
         style: TextStyle,
     },

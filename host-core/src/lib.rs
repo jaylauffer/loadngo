@@ -6,7 +6,10 @@ use std::time::Duration;
 
 use image::DynamicImage;
 use serde::{Deserialize, Serialize};
-use ui_core::geometry::{Color, Point, Rect};
+use ui_core::{
+    geometry::{Color, Point, Rect},
+    Modifiers,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowDescriptor {
@@ -206,7 +209,7 @@ pub struct TextBlockStyle {
     pub line_spacing: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HostFrame {
     pub timing: FrameTiming,
     pub surface: SurfaceInfo,
@@ -221,6 +224,21 @@ pub enum HostKey {
     R,
     Up,
     Down,
+    Left,
+    Right,
+    Home,
+    End,
+    Enter,
+    Tab,
+    Backspace,
+    Delete,
+    A,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostKeyEvent {
+    pub key: HostKey,
+    pub modifiers: Modifiers,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -240,10 +258,11 @@ pub struct TouchPoint {
     pub phase: TouchPhase,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InputSnapshot {
     pub mouse_x: f32,
     pub mouse_y: f32,
+    pub mouse_wheel_x: f32,
     pub mouse_wheel_y: f32,
     pub mouse_pressed: bool,
     pub mouse_down: bool,
@@ -256,6 +275,9 @@ pub struct InputSnapshot {
     pub r_pressed: bool,
     pub up_pressed: bool,
     pub down_pressed: bool,
+    pub modifiers: Modifiers,
+    pub key_events: Vec<HostKeyEvent>,
+    pub typed_text: String,
 }
 
 impl InputSnapshot {
@@ -267,6 +289,7 @@ impl InputSnapshot {
             HostKey::R => self.r_pressed,
             HostKey::Up => self.up_pressed,
             HostKey::Down => self.down_pressed,
+            _ => self.key_events.iter().any(|event| event.key == key),
         }
     }
 
@@ -351,12 +374,19 @@ pub enum RenderTextOverflow {
     EllipsisMiddle,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RenderTextVerticalMetricMode {
+    VisibleInk,
+    LogicalLineBox,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenderTextStyle {
     pub color: Color,
     pub font_size: u16,
     pub horizontal_align: RenderTextHorizontalAlign,
     pub vertical_align: RenderTextVerticalAlign,
+    pub vertical_metric_mode: RenderTextVerticalMetricMode,
     pub layout_mode: RenderTextLayoutMode,
     pub overflow: RenderTextOverflow,
 }
@@ -368,6 +398,7 @@ impl Default for RenderTextStyle {
             font_size: 18,
             horizontal_align: RenderTextHorizontalAlign::Left,
             vertical_align: RenderTextVerticalAlign::Top,
+            vertical_metric_mode: RenderTextVerticalMetricMode::VisibleInk,
             layout_mode: RenderTextLayoutMode::SingleLine,
             overflow: RenderTextOverflow::Clip,
         }
@@ -483,6 +514,7 @@ mod tests {
         InputSnapshot {
             mouse_x: 0.0,
             mouse_y: 0.0,
+            mouse_wheel_x: 0.0,
             mouse_wheel_y: 0.0,
             mouse_pressed: false,
             mouse_down: false,
@@ -495,6 +527,9 @@ mod tests {
             r_pressed: false,
             up_pressed: false,
             down_pressed: false,
+            modifiers: Modifiers::default(),
+            key_events: Vec::new(),
+            typed_text: String::new(),
         }
     }
 
@@ -566,6 +601,27 @@ mod tests {
         assert!(snapshot.key_pressed(HostKey::Escape));
         assert!(!snapshot.key_pressed(HostKey::Space));
         assert!(snapshot.key_down(HostKey::Space));
+    }
+
+    #[test]
+    fn input_snapshot_reports_event_backed_navigation_keys() {
+        let snapshot = InputSnapshot {
+            key_events: vec![HostKeyEvent {
+                key: HostKey::Left,
+                modifiers: Modifiers {
+                    shift: true,
+                    ctrl: false,
+                    alt: false,
+                    meta: false,
+                },
+            }],
+            typed_text: "abc".to_string(),
+            ..blank_snapshot()
+        };
+
+        assert!(snapshot.key_pressed(HostKey::Left));
+        assert_eq!(snapshot.typed_text, "abc");
+        assert!(snapshot.key_events[0].modifiers.shift);
     }
 
     #[test]

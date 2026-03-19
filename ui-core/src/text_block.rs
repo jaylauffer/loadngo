@@ -48,6 +48,7 @@ impl TextBlockModel {
         style.layout_mode = TextLayoutMode::MultiLine;
         scene.push(PaintOp::Text {
             rect: self.content_rect(),
+            clip_rect: None,
             text: self.text.clone(),
             style,
         });
@@ -135,6 +136,7 @@ mod tests {
                     width: 200.0,
                     height: 104.0,
                 },
+                clip_rect: None,
                 text: "Selection\nop #0001\nScene bg.png".to_string(),
                 style: block.style.clone(),
             }]

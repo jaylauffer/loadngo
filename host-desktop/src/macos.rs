@@ -1,7 +1,7 @@
 use std::{
     cell::RefCell,
     env,
-    ffi::CString,
+    ffi::{CStr, CString},
     future::Future,
     path::Path,
     pin::Pin,
@@ -15,8 +15,8 @@ use loadngo_gfx_metal::{
 };
 use loadngo_host_core::{
     AssetIoBackend, DecodedImage, DesktopGraphicsBackend, DesktopPlatformBackend, FrameDemand,
-    FrameTiming, HostFrame, InputSnapshot, RenderOp, RenderTextStyle, SurfaceInfo, TextMetrics,
-    WindowDescriptor, WindowIconSet,
+    FrameTiming, HostFrame, HostKey, HostKeyEvent, InputSnapshot, RenderOp, RenderTextStyle,
+    SurfaceInfo, TextMetrics, WindowDescriptor, WindowIconSet,
 };
 use loadngo_proactor::{CompletionKind, KqueuePort, Proactor, ProactorHandle, RunReport};
 use loadngo_renderer::{FrameCommand, Renderer, RendererConfig};
@@ -147,7 +147,7 @@ impl DesktopBackendRuntime {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct InputState {
     snapshot: InputSnapshot,
 }
@@ -158,6 +158,7 @@ impl Default for InputState {
             snapshot: InputSnapshot {
                 mouse_x: 0.0,
                 mouse_y: 0.0,
+                mouse_wheel_x: 0.0,
                 mouse_wheel_y: 0.0,
                 mouse_pressed: false,
                 mouse_down: false,
@@ -170,6 +171,9 @@ impl Default for InputState {
                 r_pressed: false,
                 up_pressed: false,
                 down_pressed: false,
+                modifiers: ui_core::Modifiers::default(),
+                key_events: Vec::new(),
+                typed_text: String::new(),
             },
         }
     }
@@ -177,6 +181,7 @@ impl Default for InputState {
 
 impl InputState {
     fn clear_transients(&mut self) {
+        self.snapshot.mouse_wheel_x = 0.0;
         self.snapshot.mouse_wheel_y = 0.0;
         self.snapshot.mouse_pressed = false;
         self.snapshot.mouse_released = false;
@@ -186,27 +191,41 @@ impl InputState {
         self.snapshot.r_pressed = false;
         self.snapshot.up_pressed = false;
         self.snapshot.down_pressed = false;
+        self.snapshot.key_events.clear();
+        self.snapshot.typed_text.clear();
         self.snapshot.touches = [None; 8];
     }
 
-    fn apply_key_down(&mut self, key_code: u16) {
-        match key_code {
-            KEYCODE_ESCAPE => self.snapshot.escape_pressed = true,
-            KEYCODE_SPACE => {
-                if !self.snapshot.space_down {
-                    self.snapshot.space_pressed = true;
+    fn apply_key_down(&mut self, key_code: u16, modifiers: ui_core::Modifiers, typed_text: &str) {
+        self.snapshot.modifiers = modifiers;
+        let host_key = host_key_from_key_code(key_code);
+        if let Some(host_key) = host_key {
+            self.snapshot.key_events.push(HostKeyEvent {
+                key: host_key,
+                modifiers,
+            });
+            match host_key {
+                HostKey::Escape => self.snapshot.escape_pressed = true,
+                HostKey::Space => {
+                    if !self.snapshot.space_down {
+                        self.snapshot.space_pressed = true;
+                    }
+                    self.snapshot.space_down = true;
                 }
-                self.snapshot.space_down = true;
+                HostKey::F3 => self.snapshot.f3_pressed = true,
+                HostKey::R => self.snapshot.r_pressed = true,
+                HostKey::Up => self.snapshot.up_pressed = true,
+                HostKey::Down => self.snapshot.down_pressed = true,
+                _ => {}
             }
-            KEYCODE_F3 => self.snapshot.f3_pressed = true,
-            KEYCODE_R => self.snapshot.r_pressed = true,
-            KEYCODE_UP => self.snapshot.up_pressed = true,
-            KEYCODE_DOWN => self.snapshot.down_pressed = true,
-            _ => {}
+        }
+        if !typed_text.is_empty() && !modifiers.ctrl && !modifiers.meta {
+            self.snapshot.typed_text.push_str(typed_text);
         }
     }
 
-    fn apply_key_up(&mut self, key_code: u16) {
+    fn apply_key_up(&mut self, key_code: u16, modifiers: ui_core::Modifiers) {
+        self.snapshot.modifiers = modifiers;
         if key_code == KEYCODE_SPACE {
             self.snapshot.space_down = false;
         }
@@ -232,6 +251,7 @@ thread_local! {
     static APP_STATE: RefCell<Option<AppState>> = const { RefCell::new(None) };
     static MAC_PROACTOR: RefCell<Option<MacProactor>> = const { RefCell::new(None) };
     static TEXTURE_COUNTER: RefCell<u64> = const { RefCell::new(0) };
+    static CURSOR_PREFERS_TEXT: RefCell<bool> = const { RefCell::new(false) };
 }
 
 const NS_WINDOW_STYLE_MASK_TITLED: u64 = 1 << 0;
@@ -257,9 +277,22 @@ const WINDOW_RESIZE_CURSOR_MARGIN: f64 = 6.0;
 const KEYCODE_ESCAPE: u16 = 53;
 const KEYCODE_SPACE: u16 = 49;
 const KEYCODE_R: u16 = 15;
+const KEYCODE_A: u16 = 0;
 const KEYCODE_F3: u16 = 99;
+const KEYCODE_TAB: u16 = 48;
+const KEYCODE_ENTER: u16 = 36;
+const KEYCODE_BACKSPACE: u16 = 51;
+const KEYCODE_DELETE: u16 = 117;
+const KEYCODE_LEFT: u16 = 123;
+const KEYCODE_RIGHT: u16 = 124;
 const KEYCODE_UP: u16 = 126;
 const KEYCODE_DOWN: u16 = 125;
+const KEYCODE_HOME: u16 = 115;
+const KEYCODE_END: u16 = 119;
+const NSEVENT_MODIFIER_FLAG_SHIFT: u64 = 1 << 17;
+const NSEVENT_MODIFIER_FLAG_CONTROL: u64 = 1 << 18;
+const NSEVENT_MODIFIER_FLAG_OPTION: u64 = 1 << 19;
+const NSEVENT_MODIFIER_FLAG_COMMAND: u64 = 1 << 20;
 struct MacProactor {
     proactor: Proactor<KqueuePort>,
     handle: ProactorHandle<KqueuePort>,
@@ -524,11 +557,22 @@ pub fn capture_frame() -> HostFrame {
         let frame = HostFrame {
             timing: state.timing,
             surface: state.surface,
-            input: state.input.snapshot,
+            input: state.input.snapshot.clone(),
         };
         state.input.clear_transients();
         frame
     })
+}
+
+pub fn set_text_cursor_active(active: bool) {
+    CURSOR_PREFERS_TEXT.with(|prefers_text| {
+        *prefers_text.borrow_mut() = active;
+    });
+    APP_STATE.with(|state| {
+        if let Some(state) = state.borrow().as_ref() {
+            update_window_cursor(&state.window);
+        }
+    });
 }
 
 pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
@@ -632,6 +676,8 @@ pub fn render_text_lines(
                     font_size,
                     horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Left,
                     vertical_align: loadngo_host_core::RenderTextVerticalAlign::Top,
+                    vertical_metric_mode:
+                        loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
                     layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
                     overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 },
@@ -670,12 +716,15 @@ pub fn draw_plain_text(text: &str, x: f32, y: f32, size: f32, color: UiColor) ->
                 width: metrics.width.max(1.0),
                 height: line_box_height,
             },
+            clip_rect: None,
             text: text.to_string(),
             style: RenderTextStyle {
                 color,
                 font_size,
                 horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Left,
                 vertical_align: loadngo_host_core::RenderTextVerticalAlign::Top,
+                vertical_metric_mode:
+                    loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
                 layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
                 overflow: loadngo_host_core::RenderTextOverflow::Clip,
             },
@@ -1001,8 +1050,11 @@ fn pump_events_until(timeout: Option<Duration>) {
             dequeue: true
         ];
         if !event.is_null() {
+            let event_type: u64 = msg_send![event, type];
             handle_event(event);
-            let _: () = msg_send![app, sendEvent: event];
+            if should_forward_event_to_app(event_type) {
+                let _: () = msg_send![app, sendEvent: event];
+            }
             let distant_past: *mut AnyObject = msg_send![class!(NSDate), distantPast];
             loop {
                 let event: *mut AnyObject = msg_send![
@@ -1015,8 +1067,11 @@ fn pump_events_until(timeout: Option<Duration>) {
                 if event.is_null() {
                     break;
                 }
+                let event_type: u64 = msg_send![event, type];
                 handle_event(event);
-                let _: () = msg_send![app, sendEvent: event];
+                if should_forward_event_to_app(event_type) {
+                    let _: () = msg_send![app, sendEvent: event];
+                }
             }
         }
         let _: () = msg_send![app, updateWindows];
@@ -1032,11 +1087,13 @@ fn pump_events_until(timeout: Option<Duration>) {
                 width: bounds.size.width as f32,
                 height: bounds.size.height as f32,
             };
-            let _: () =
-                unsafe { msg_send![&*state.window, invalidateCursorRectsForView: &*state.view] };
             update_window_cursor(&state.window);
         }
     });
+}
+
+fn should_forward_event_to_app(event_type: u64) -> bool {
+    !matches!(event_type, NSEVENT_TYPE_KEY_DOWN | NSEVENT_TYPE_KEY_UP)
 }
 
 fn drain_proactor() {
@@ -1058,11 +1115,13 @@ fn handle_event(event: *mut AnyObject) {
         let Some(state) = state.as_mut() else {
             return;
         };
+        let modifiers = event_modifiers(event);
         match event_type {
             NSEVENT_TYPE_LEFT_MOUSE_DOWN
             | NSEVENT_TYPE_RIGHT_MOUSE_DOWN
             | NSEVENT_TYPE_OTHER_MOUSE_DOWN => {
                 let (x, y) = event_point_in_view(&state.view, event);
+                state.input.snapshot.modifiers = modifiers;
                 state.input.snapshot.mouse_x = x;
                 state.input.snapshot.mouse_y = y;
                 state.input.snapshot.mouse_pressed = true;
@@ -1072,6 +1131,7 @@ fn handle_event(event: *mut AnyObject) {
             | NSEVENT_TYPE_RIGHT_MOUSE_UP
             | NSEVENT_TYPE_OTHER_MOUSE_UP => {
                 let (x, y) = event_point_in_view(&state.view, event);
+                state.input.snapshot.modifiers = modifiers;
                 state.input.snapshot.mouse_x = x;
                 state.input.snapshot.mouse_y = y;
                 state.input.snapshot.mouse_released = true;
@@ -1082,20 +1142,25 @@ fn handle_event(event: *mut AnyObject) {
             | NSEVENT_TYPE_RIGHT_MOUSE_DRAGGED
             | NSEVENT_TYPE_OTHER_MOUSE_DRAGGED => {
                 let (x, y) = event_point_in_view(&state.view, event);
+                state.input.snapshot.modifiers = modifiers;
                 state.input.snapshot.mouse_x = x;
                 state.input.snapshot.mouse_y = y;
             }
             NSEVENT_TYPE_SCROLL_WHEEL => {
+                let delta_x: f64 = unsafe { msg_send![event, scrollingDeltaX] };
                 let delta_y: f64 = unsafe { msg_send![event, scrollingDeltaY] };
+                state.input.snapshot.modifiers = modifiers;
+                state.input.snapshot.mouse_wheel_x += delta_x as f32;
                 state.input.snapshot.mouse_wheel_y += delta_y as f32;
             }
             NSEVENT_TYPE_KEY_DOWN => {
                 let key_code: u16 = unsafe { msg_send![event, keyCode] };
-                state.input.apply_key_down(key_code);
+                let typed_text = typed_text_from_event(event);
+                state.input.apply_key_down(key_code, modifiers, &typed_text);
             }
             NSEVENT_TYPE_KEY_UP => {
                 let key_code: u16 = unsafe { msg_send![event, keyCode] };
-                state.input.apply_key_up(key_code);
+                state.input.apply_key_up(key_code, modifiers);
             }
             _ => {}
         }
@@ -1250,6 +1315,69 @@ fn ns_string(value: &str) -> Retained<AnyObject> {
     unsafe { msg_send![class!(NSString), stringWithUTF8String: cstr.as_ptr()] }
 }
 
+fn event_modifiers(event: *mut AnyObject) -> ui_core::Modifiers {
+    let flags: u64 = unsafe { msg_send![event, modifierFlags] };
+    ui_core::Modifiers {
+        shift: flags & NSEVENT_MODIFIER_FLAG_SHIFT != 0,
+        ctrl: flags & NSEVENT_MODIFIER_FLAG_CONTROL != 0,
+        alt: flags & NSEVENT_MODIFIER_FLAG_OPTION != 0,
+        meta: flags & NSEVENT_MODIFIER_FLAG_COMMAND != 0,
+    }
+}
+
+fn host_key_from_key_code(key_code: u16) -> Option<HostKey> {
+    Some(match key_code {
+        KEYCODE_ESCAPE => HostKey::Escape,
+        KEYCODE_SPACE => HostKey::Space,
+        KEYCODE_R => HostKey::R,
+        KEYCODE_A => HostKey::A,
+        KEYCODE_F3 => HostKey::F3,
+        KEYCODE_TAB => HostKey::Tab,
+        KEYCODE_ENTER => HostKey::Enter,
+        KEYCODE_BACKSPACE => HostKey::Backspace,
+        KEYCODE_DELETE => HostKey::Delete,
+        KEYCODE_LEFT => HostKey::Left,
+        KEYCODE_RIGHT => HostKey::Right,
+        KEYCODE_UP => HostKey::Up,
+        KEYCODE_DOWN => HostKey::Down,
+        KEYCODE_HOME => HostKey::Home,
+        KEYCODE_END => HostKey::End,
+        _ => return None,
+    })
+}
+
+fn typed_text_from_event(event: *mut AnyObject) -> String {
+    let characters: *mut AnyObject = unsafe { msg_send![event, characters] };
+    let Some(text) = ns_string_to_rust(characters) else {
+        return String::new();
+    };
+    text.chars().filter(|&ch| is_printable_text_input_char(ch)).collect()
+}
+
+fn ns_string_to_rust(ns_string: *mut AnyObject) -> Option<String> {
+    if ns_string.is_null() {
+        return None;
+    }
+    let ptr: *const std::ffi::c_char = unsafe { msg_send![ns_string, UTF8String] };
+    if ptr.is_null() {
+        return None;
+    }
+    Some(
+        unsafe { CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .into_owned(),
+    )
+}
+
+fn is_printable_text_input_char(ch: char) -> bool {
+    let code = ch as u32;
+    !ch.is_control()
+        && !matches!(
+            code,
+            0xE000..=0xF8FF | 0xF0000..=0xFFFFD | 0x100000..=0x10FFFD
+        )
+}
+
 fn proactor_report_has_activity(report: RunReport) -> bool {
     report.dispatched_completions > 0
         || report.dispatched_deferred > 0
@@ -1294,11 +1422,14 @@ fn update_window_cursor(window: &Retained<AnyObject>) {
         let near_top = (mouse_location.y - top).abs() <= WINDOW_RESIZE_CURSOR_MARGIN;
         let inside_x = mouse_location.x >= left && mouse_location.x <= right;
         let inside_y = mouse_location.y >= bottom && mouse_location.y <= top;
+        let prefers_text = CURSOR_PREFERS_TEXT.with(|prefers_text| *prefers_text.borrow());
 
         let cursor: *mut AnyObject = if (near_left || near_right) && inside_y {
             msg_send![class!(NSCursor), resizeLeftRightCursor]
         } else if (near_top || near_bottom) && inside_x {
             msg_send![class!(NSCursor), resizeUpDownCursor]
+        } else if prefers_text {
+            msg_send![class!(NSCursor), IBeamCursor]
         } else {
             msg_send![class!(NSCursor), arrowCursor]
         };

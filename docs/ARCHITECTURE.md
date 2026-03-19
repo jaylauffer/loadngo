@@ -9,6 +9,8 @@ Related design notes:
 - [WIDGET_FRAMEWORK.md](/Users/jay/pudding/loadngo/docs/WIDGET_FRAMEWORK.md)
 - [WORKSPACE_LAYOUT.md](/Users/jay/pudding/loadngo/docs/WORKSPACE_LAYOUT.md)
 - [CONTROL_ROADMAP.md](/Users/jay/pudding/loadngo/docs/CONTROL_ROADMAP.md)
+- [TEXT_INPUT_MODEL.md](/Users/jay/pudding/loadngo/docs/TEXT_INPUT_MODEL.md)
+- [RON_FIRST_EDITOR.md](/Users/jay/pudding/sng-rusty/docs/RON_FIRST_EDITOR.md)
 
 ## Layer model
 1. `ui-core`
@@ -58,6 +60,9 @@ Related design notes:
 
 ## Input model
 - `InputSnapshot` carries mouse + touch + key state per frame.
+- Text-editing surfaces now also depend on:
+  - per-frame typed text
+  - key events with modifiers
 - Pointer helpers in `host-core` (`pointer_in_rect`, `pointer_pressed_in_rect`, `pointer_released`) provide shared hit-testing semantics across platforms.
 - Backends map native input to `InputSnapshot`; app/UI code consumes the normalized form.
 

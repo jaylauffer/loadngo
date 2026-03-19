@@ -117,6 +117,7 @@ impl ButtonModel {
         });
         scene.push(PaintOp::Text {
             rect: self.bounds,
+            clip_rect: None,
             text: self.text.clone(),
             style: TextStyle {
                 horizontal_align: HorizontalAlign::Center,
@@ -282,7 +283,12 @@ mod tests {
         let text = scene
             .into_iter()
             .find_map(|op| match op {
-                PaintOp::Text { rect, text, style } => Some((rect, text, style)),
+                PaintOp::Text {
+                    rect,
+                    text,
+                    style,
+                    ..
+                } => Some((rect, text, style)),
                 _ => None,
             })
             .expect("button paint should emit text");

@@ -244,6 +244,7 @@ impl FontCatalogManifest {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextRequest {
     pub rect: Rect,
+    pub clip_rect: Option<Rect>,
     pub text: String,
     pub style: RenderTextStyle,
     pub direction: TextDirection,
@@ -450,9 +451,9 @@ impl Renderer {
                     radius: *radius,
                     color: *color,
                 },
-                RenderOp::Text { rect, text, style } => {
-                    FrameCommand::Text(self.text_request(*rect, text.clone(), style.clone()))
-                }
+                RenderOp::Text { rect, text, style } => FrameCommand::Text(
+                    self.text_request(*rect, None, text.clone(), style.clone()),
+                ),
                 RenderOp::BlitImage {
                     rect,
                     image_key,
@@ -485,7 +486,12 @@ impl Renderer {
                     color: *color,
                     thickness: self.config.widget_stroke_thickness,
                 },
-                PaintOp::Text { rect, text, style } => {
+                PaintOp::Text {
+                    rect,
+                    clip_rect,
+                    text,
+                    style,
+                } => {
                     let render_style = RenderTextStyle {
                         color: style.color,
                         font_size: style.font_size,
@@ -511,6 +517,14 @@ impl Renderer {
                                 loadngo_host_core::RenderTextVerticalAlign::Bottom
                             }
                         },
+                        vertical_metric_mode: match style.vertical_metric_mode {
+                            ui_core::TextVerticalMetricMode::VisibleInk => {
+                                loadngo_host_core::RenderTextVerticalMetricMode::VisibleInk
+                            }
+                            ui_core::TextVerticalMetricMode::LogicalLineBox => {
+                                loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox
+                            }
+                        },
                         layout_mode: match style.layout_mode {
                             ui_core::TextLayoutMode::SingleLine => {
                                 loadngo_host_core::RenderTextLayoutMode::SingleLine
@@ -531,7 +545,12 @@ impl Renderer {
                             }
                         },
                     };
-                    FrameCommand::Text(self.text_request(*rect, text.clone(), render_style))
+                    FrameCommand::Text(self.text_request(
+                        *rect,
+                        *clip_rect,
+                        text.clone(),
+                        render_style,
+                    ))
                 }
                 PaintOp::BlitImage { rect, image_key } => FrameCommand::Image(ImageRequest {
                     rect: *rect,
@@ -566,9 +585,16 @@ impl Renderer {
         FrameResourcePlan { image_keys }
     }
 
-    fn text_request(&self, rect: Rect, text: String, style: RenderTextStyle) -> TextRequest {
+    fn text_request(
+        &self,
+        rect: Rect,
+        clip_rect: Option<Rect>,
+        text: String,
+        style: RenderTextStyle,
+    ) -> TextRequest {
         TextRequest {
             rect,
+            clip_rect,
             text,
             style,
             direction: self.config.default_direction,
@@ -657,6 +683,8 @@ mod tests {
                 font_size: 24,
                 horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Center,
                 vertical_align: loadngo_host_core::RenderTextVerticalAlign::Middle,
+                vertical_metric_mode:
+                    loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
                 layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
                 overflow: loadngo_host_core::RenderTextOverflow::Clip,
             },
@@ -684,12 +712,19 @@ mod tests {
                 width: 120.0,
                 height: 28.0,
             },
+            clip_rect: Some(Rect {
+                x: 10.0,
+                y: 12.0,
+                width: 80.0,
+                height: 20.0,
+            }),
             text: "preview".to_string(),
             style: ui_core::TextStyle {
                 color: Color::rgba(255, 255, 255, 255),
                 font_size: 18,
                 horizontal_align: ui_core::HorizontalAlign::Right,
                 vertical_align: ui_core::VerticalAlign::Bottom,
+                vertical_metric_mode: ui_core::TextVerticalMetricMode::LogicalLineBox,
                 layout_mode: ui_core::TextLayoutMode::SingleLine,
                 overflow: ui_core::TextOverflow::EllipsisMiddle,
             },
@@ -711,6 +746,15 @@ mod tests {
                 assert_eq!(
                     request.style.overflow,
                     loadngo_host_core::RenderTextOverflow::EllipsisMiddle
+                );
+                assert_eq!(
+                    request.clip_rect,
+                    Some(Rect {
+                        x: 10.0,
+                        y: 12.0,
+                        width: 80.0,
+                        height: 20.0
+                    })
                 );
             }
             other => panic!("expected text request, got {other:?}"),

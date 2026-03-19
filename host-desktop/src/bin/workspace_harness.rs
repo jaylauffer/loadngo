@@ -49,9 +49,18 @@ fn build_workspace() -> WorkspaceNode {
     left_tabs.add_page("Outline", WorkspaceNode::leaf(PANEL_OUTLINE, "Outline"));
 
     let mut inspector_tabs = WorkspaceTabGroup::new(Rect::default());
-    inspector_tabs.add_page("Selection", WorkspaceNode::leaf(PANEL_SELECTION, "Selection"));
-    inspector_tabs.add_page("Validation", WorkspaceNode::leaf(PANEL_VALIDATION, "Validation"));
-    inspector_tabs.add_page("Dictation", WorkspaceNode::leaf(PANEL_DICTATION, "Dictation"));
+    inspector_tabs.add_page(
+        "Selection",
+        WorkspaceNode::leaf(PANEL_SELECTION, "Selection"),
+    );
+    inspector_tabs.add_page(
+        "Validation",
+        WorkspaceNode::leaf(PANEL_VALIDATION, "Validation"),
+    );
+    inspector_tabs.add_page(
+        "Dictation",
+        WorkspaceNode::leaf(PANEL_DICTATION, "Dictation"),
+    );
 
     let mut right_split = WorkspaceSplitNode::new(
         SplitAxis::Horizontal,

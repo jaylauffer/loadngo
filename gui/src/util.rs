@@ -85,7 +85,9 @@ pub fn render_paint_ops(dc: HDC, ops: &[PaintOp]) {
                     let _ = SelectObject(dc, old_pen);
                     let _ = DeleteObject(pen);
                 }
-                PaintOp::Text { rect, text, style } => render_text(dc, *rect, text, style),
+                PaintOp::Text {
+                    rect, text, style, ..
+                } => render_text(dc, *rect, text, style),
                 PaintOp::Line { from, to, color } => {
                     let pen = CreatePen(PS_SOLID, 1, rgb(*color));
                     let old_pen = SelectObject(dc, pen);
