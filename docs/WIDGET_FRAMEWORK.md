@@ -101,6 +101,22 @@ Current core composition widgets:
 - `ListRowModel`
   - reusable row chrome and content-slot layout for richer list items
 
+Workspace layout roadmap:
+- split/tree/tab direction is documented in [WORKSPACE_LAYOUT.md](/Users/jay/pudding/loadngo/docs/WORKSPACE_LAYOUT.md)
+- the intended path is:
+  - splitter resizing first
+  - tab groups as first-class layout nodes
+  - docking later, built on the same workspace tree
+
+Control completeness roadmap:
+- control-family coverage and missing standard widgets are documented in [CONTROL_ROADMAP.md](/Users/jay/pudding/loadngo/docs/CONTROL_ROADMAP.md)
+- especially important missing families:
+  - text input
+  - radio/grouped exclusive selection
+  - spin box
+  - richer combo variants
+  - scribble pad
+
 Desktop verification harness:
 - `cargo run --manifest-path /Users/jay/pudding/loadngo/Cargo.toml -p loadngo-host-desktop --bin text_harness`
 - this renders one desktop window with:

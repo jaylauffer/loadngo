@@ -5,6 +5,11 @@
 - Isolate platform-specific APIs behind small host shims.
 - Keep runtime/editor logic independent of any single windowing/render library.
 
+Related design notes:
+- [WIDGET_FRAMEWORK.md](/Users/jay/pudding/loadngo/docs/WIDGET_FRAMEWORK.md)
+- [WORKSPACE_LAYOUT.md](/Users/jay/pudding/loadngo/docs/WORKSPACE_LAYOUT.md)
+- [CONTROL_ROADMAP.md](/Users/jay/pudding/loadngo/docs/CONTROL_ROADMAP.md)
+
 ## Layer model
 1. `ui-core`
 - Owns widget models and behavior (`ButtonModel`, `ListCombo`, `TreeControl`, tabs, list state, pointer/key event types).
