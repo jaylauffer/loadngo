@@ -17,6 +17,13 @@ pub struct TabbedContainer {
     pub bounds: Rect,
     pub pages: Vec<TabPage>,
     pub selected: usize,
+    pub tab_strip_height: f32,
+    pub background: Color,
+    pub border_color: Color,
+    pub selected_fill: Color,
+    pub unselected_fill: Color,
+    pub selected_text_color: Color,
+    pub unselected_text_color: Color,
 }
 
 impl TabbedContainer {
@@ -25,6 +32,13 @@ impl TabbedContainer {
             bounds,
             pages: Vec::new(),
             selected: 0,
+            tab_strip_height: 32.0,
+            background: Color::rgba(15, 19, 26, 255),
+            border_color: Color::rgba(74, 84, 98, 255),
+            selected_fill: Color::rgba(42, 77, 109, 255),
+            unselected_fill: Color::rgba(24, 29, 38, 255),
+            selected_text_color: Color::rgba(236, 239, 244, 255),
+            unselected_text_color: Color::rgba(198, 206, 219, 255),
         }
     }
 
@@ -48,6 +62,19 @@ impl TabbedContainer {
         self.pages.get(self.selected)
     }
 
+    pub fn selected_content_id(&self) -> Option<u64> {
+        self.selected_page().and_then(|page| page.content_id)
+    }
+
+    pub fn content_rect(&self) -> Rect {
+        Rect {
+            x: self.bounds.x,
+            y: self.bounds.y + self.tab_strip_height,
+            width: self.bounds.width,
+            height: (self.bounds.height - self.tab_strip_height).max(0.0),
+        }
+    }
+
     pub fn tab_rects(&self) -> Vec<Rect> {
         if self.pages.is_empty() {
             return Vec::new();
@@ -60,7 +87,7 @@ impl TabbedContainer {
                 x: self.bounds.x + (index as f32 * width),
                 y: self.bounds.y,
                 width,
-                height: 32.0,
+                height: self.tab_strip_height,
             })
             .collect()
     }
@@ -98,27 +125,36 @@ impl TabbedContainer {
     pub fn paint(&self, scene: &mut Vec<PaintOp>) {
         scene.push(PaintOp::FillRect {
             rect: self.bounds,
-            color: Color::rgba(0xe5, 0xe7, 0xe0, 0xff),
+            color: self.background,
+        });
+        scene.push(PaintOp::StrokeRect {
+            rect: self.bounds,
+            color: self.border_color,
         });
         for (index, rect) in self.tab_rects().into_iter().enumerate() {
             let selected = index == self.selected;
             scene.push(PaintOp::FillRect {
                 rect,
                 color: if selected {
-                    Color::rgba(0xf6, 0xd6, 0x99, 0xff)
+                    self.selected_fill
                 } else {
-                    Color::rgba(0xd9, 0xdf, 0xd2, 0xff)
+                    self.unselected_fill
                 },
             });
             scene.push(PaintOp::StrokeRect {
                 rect,
-                color: Color::rgba(0x6d, 0x7d, 0x6e, 0xff),
+                color: self.border_color,
             });
             if let Some(page) = self.pages.get(index) {
                 scene.push(PaintOp::Text {
                     rect,
                     text: page.title.clone(),
                     style: TextStyle {
+                        color: if selected {
+                            self.selected_text_color
+                        } else {
+                            self.unselected_text_color
+                        },
                         horizontal_align: HorizontalAlign::Center,
                         vertical_align: VerticalAlign::Middle,
                         layout_mode: TextLayoutMode::SingleLine,
@@ -129,6 +165,8 @@ impl TabbedContainer {
         }
     }
 }
+
+pub type TabGroupModel = TabbedContainer;
 
 impl Component for TabbedContainer {
     fn bounds(&self) -> Rect {
@@ -151,7 +189,7 @@ impl Component for TabbedContainer {
 #[cfg(test)]
 mod tests {
     use super::TabbedContainer;
-    use crate::{Modifiers, PointerButton, PointerState, Rect, UiEvent};
+    use crate::{Color, Modifiers, PointerButton, PointerState, Rect, UiEvent};
 
     #[test]
     fn tab_selection_tracks_selected_page() {
@@ -210,5 +248,35 @@ mod tests {
         assert!((rects[1].x - (5.5 + 101.0 / 3.0)).abs() < 0.001);
         assert!((rects[2].x - (5.5 + 2.0 * 101.0 / 3.0)).abs() < 0.001);
         assert!((rects[0].width - 101.0 / 3.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn content_rect_starts_below_tab_strip() {
+        let tabs = TabbedContainer::new(Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 240.0,
+            height: 180.0,
+        });
+        let content = tabs.content_rect();
+
+        assert_eq!(content.x, 10.0);
+        assert_eq!(content.y, 52.0);
+        assert_eq!(content.width, 240.0);
+        assert_eq!(content.height, 148.0);
+    }
+
+    #[test]
+    fn default_tab_theme_matches_dark_panel_ui() {
+        let tabs = TabbedContainer::new(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 120.0,
+        });
+
+        assert_eq!(tabs.background, Color::rgba(15, 19, 26, 255));
+        assert_eq!(tabs.selected_fill, Color::rgba(42, 77, 109, 255));
+        assert_eq!(tabs.unselected_text_color, Color::rgba(198, 206, 219, 255));
     }
 }

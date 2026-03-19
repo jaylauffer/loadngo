@@ -98,8 +98,14 @@ Current core composition widgets:
   - vertical child slot layout with padding and gap
 - `ScrollContainerModel`
   - padded scroll viewport plus shared scrollbar indicator
+- `SplitNodeModel`
+  - ratio-based split layout with min-size clamping and draggable handle state
+- `TabGroupModel`
+  - tab strip plus shared content rect for the selected page
 - `ListRowModel`
   - reusable row chrome and content-slot layout for richer list items
+- `WorkspaceNode`
+  - recursive split/tab/leaf layout tree for desktop workspaces
 
 Workspace layout roadmap:
 - split/tree/tab direction is documented in [WORKSPACE_LAYOUT.md](/Users/jay/pudding/loadngo/docs/WORKSPACE_LAYOUT.md)
@@ -125,6 +131,15 @@ Desktop verification harness:
   - fixed-height `ListRowModel` + `LabelModel` samples
   - a `TextBlockModel` multiline sample
 - use it before changing shared desktop text placement so runtime/editor regressions are caught in one place
+
+Workspace verification harness:
+- `cargo run --manifest-path /Users/jay/pudding/loadngo/Cargo.toml -p loadngo-host-desktop --bin workspace_harness`
+- this renders one desktop window with:
+  - nested split handles
+  - tab groups
+  - visible selected leaf panes
+  - app-owned content inside workspace-managed layout rects
+- use it before changing split/tree/tab workspace behavior so editor-shell regressions are caught outside `sng_rusty_editor`
 
 This is the boundary that desktop backends must preserve so editor and runtime UI
 do not drift into separate text-layout worlds.

@@ -16,10 +16,14 @@ pub use ui_core::{
     panel::{Panel, PanelModel},
     scroll_container::{ScrollContainer, ScrollContainerModel},
     stack::{VerticalStack, VerticalStackModel},
-    tabs::{TabPage, TabbedContainer},
+    tabs::{TabGroupModel, TabPage, TabbedContainer},
     text_block::{TextBlock, TextBlockModel},
     tree::{TreeCombo, TreeControl, TreeNode},
     widget::{WidgetId, WidgetResponse},
+    workspace::{
+        WorkspaceLeaf, WorkspaceLeafView, WorkspaceNode, WorkspaceSplitNode, WorkspaceTabGroup,
+        WorkspaceTabPage,
+    },
 };
 
 pub mod button;
