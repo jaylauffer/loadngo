@@ -59,6 +59,7 @@ impl LabelModel {
     pub fn paint(&self, scene: &mut Vec<PaintOp>) {
         scene.push(PaintOp::Text {
             rect: self.text_rect(),
+            clip_rect: None,
             text: self.text.clone(),
             style: self.style.clone(),
         });
@@ -113,7 +114,6 @@ mod tests {
         component::Component,
         geometry::{Color, Insets, Rect},
         paint::{PaintOp, TextLayoutMode, VerticalAlign},
-        single_line_text_box_height,
     };
 
     #[test]
@@ -147,6 +147,7 @@ mod tests {
                     width: 180.0,
                     height: 30.0,
                 },
+                clip_rect: None,
                 text: "Inspector".to_string(),
                 style: label.style.clone(),
             }]
@@ -171,7 +172,7 @@ mod tests {
         let text_rect = label.text_rect();
 
         assert_eq!(text_rect.y, 20.0);
-        assert_eq!(text_rect.height, single_line_text_box_height(17));
+        assert_eq!(text_rect.height, 24.0);
     }
 
     #[test]

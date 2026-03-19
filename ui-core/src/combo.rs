@@ -105,6 +105,7 @@ impl ListCombo {
                 width: self.bounds.width - 34.0,
                 height: self.bounds.height,
             },
+            clip_rect: None,
             text: self.selected_item().unwrap_or("Select...").to_string(),
             style: TextStyle {
                 horizontal_align: HorizontalAlign::Left,

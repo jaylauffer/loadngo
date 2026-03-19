@@ -166,12 +166,14 @@ impl SliderModel {
 
         scene.push(PaintOp::Text {
             rect: label_rect,
+            clip_rect: None,
             text: self.text.clone(),
             style: TextStyle {
                 color: Color::rgba(0xeb, 0xeb, 0xf5, 0xff),
                 font_size: 18,
                 horizontal_align: HorizontalAlign::Left,
                 vertical_align: VerticalAlign::Top,
+                vertical_metric_mode: crate::TextVerticalMetricMode::VisibleInk,
                 layout_mode: TextLayoutMode::SingleLine,
                 overflow: crate::TextOverflow::Clip,
             },

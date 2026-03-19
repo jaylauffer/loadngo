@@ -72,7 +72,7 @@ impl WorkspaceTabGroup {
     }
 
     fn handle_event(&mut self, event: UiEvent) -> WidgetResponse {
-        let mut response = self.tabs.handle_event(event);
+        let mut response = self.tabs.handle_event(event.clone());
         if !response.input_consumed {
             if let Some(page) = self.pages.get_mut(self.tabs.selected) {
                 response = merge_response(response, page.child.handle_event(event));
@@ -103,12 +103,7 @@ pub struct WorkspaceSplitNode {
 }
 
 impl WorkspaceSplitNode {
-    pub fn new(
-        axis: SplitAxis,
-        bounds: Rect,
-        first: WorkspaceNode,
-        second: WorkspaceNode,
-    ) -> Self {
+    pub fn new(axis: SplitAxis, bounds: Rect, first: WorkspaceNode, second: WorkspaceNode) -> Self {
         Self {
             split: SplitNodeModel::new(axis, bounds),
             first: Box::new(first),
@@ -123,14 +118,14 @@ impl WorkspaceSplitNode {
     }
 
     fn handle_event(&mut self, event: UiEvent) -> WidgetResponse {
-        let response = self.split.handle_event(event);
+        let response = self.split.handle_event(event.clone());
         if response.input_consumed {
             self.first.set_bounds(self.split.first_rect());
             self.second.set_bounds(self.split.second_rect());
             return response;
         }
 
-        let left = self.first.handle_event(event);
+        let left = self.first.handle_event(event.clone());
         let right = self.second.handle_event(event);
         merge_response(response, merge_response(left, right))
     }
@@ -231,8 +226,8 @@ fn merge_response(mut base: WidgetResponse, next: WidgetResponse) -> WidgetRespo
 mod tests {
     use super::{WorkspaceLeafView, WorkspaceNode, WorkspaceSplitNode, WorkspaceTabGroup};
     use crate::{
-        Point, Rect, SplitAxis,
         input::{Modifiers, PointerButton, PointerState, UiEvent},
+        Point, Rect, SplitAxis,
     };
 
     fn pointer(x: f32, y: f32) -> PointerState {

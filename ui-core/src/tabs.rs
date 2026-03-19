@@ -148,6 +148,7 @@ impl TabbedContainer {
             if let Some(page) = self.pages.get(index) {
                 scene.push(PaintOp::Text {
                     rect,
+                    clip_rect: None,
                     text: page.title.clone(),
                     style: TextStyle {
                         color: if selected {

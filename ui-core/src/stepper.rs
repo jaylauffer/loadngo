@@ -114,12 +114,14 @@ impl StepperModel {
 
         scene.push(PaintOp::Text {
             rect: label_rect,
+            clip_rect: None,
             text: self.text.clone(),
             style: TextStyle {
                 color: Color::rgba(235, 235, 245, 255),
                 font_size: 18,
                 horizontal_align: HorizontalAlign::Left,
                 vertical_align: VerticalAlign::Top,
+                vertical_metric_mode: crate::TextVerticalMetricMode::VisibleInk,
                 layout_mode: TextLayoutMode::SingleLine,
                 overflow: crate::TextOverflow::Clip,
             },
@@ -141,12 +143,14 @@ impl StepperModel {
         });
         scene.push(PaintOp::Text {
             rect: self.value_rect_with(button_y, button_h),
+            clip_rect: None,
             text: self.value_text.clone(),
             style: TextStyle {
                 color: Color::rgba(255, 255, 255, 255),
                 font_size: 18,
                 horizontal_align: HorizontalAlign::Center,
                 vertical_align: VerticalAlign::Middle,
+                vertical_metric_mode: crate::TextVerticalMetricMode::VisibleInk,
                 layout_mode: TextLayoutMode::SingleLine,
                 overflow: crate::TextOverflow::Clip,
             },
@@ -172,12 +176,14 @@ impl StepperModel {
         });
         scene.push(PaintOp::Text {
             rect,
+            clip_rect: None,
             text: label.to_string(),
             style: TextStyle {
                 color: Color::rgba(255, 255, 255, 255),
                 font_size: 18,
                 horizontal_align: HorizontalAlign::Center,
                 vertical_align: VerticalAlign::Middle,
+                vertical_metric_mode: crate::TextVerticalMetricMode::VisibleInk,
                 layout_mode: TextLayoutMode::SingleLine,
                 overflow: crate::TextOverflow::Clip,
             },

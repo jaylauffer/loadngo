@@ -90,6 +90,10 @@ Current core text widgets:
 - `TextBlockModel`
   - multiline static text inside a bounded rect
   - callers may pre-wrap by inserting `\n` until shared width-aware wrapping exists
+- `TextAreaModel`
+  - multiline editable text surface
+  - authoritative source buffer with caret and selection state
+  - first phase uses explicit newline-based visual lines
 
 Current core composition widgets:
 - `PanelModel`
@@ -116,6 +120,7 @@ Workspace layout roadmap:
 
 Control completeness roadmap:
 - control-family coverage and missing standard widgets are documented in [CONTROL_ROADMAP.md](/Users/jay/pudding/loadngo/docs/CONTROL_ROADMAP.md)
+- text-input model details and prior-art review are documented in [TEXT_INPUT_MODEL.md](/Users/jay/pudding/loadngo/docs/TEXT_INPUT_MODEL.md)
 - especially important missing families:
   - text input
   - radio/grouped exclusive selection
@@ -140,6 +145,14 @@ Workspace verification harness:
   - visible selected leaf panes
   - app-owned content inside workspace-managed layout rects
 - use it before changing split/tree/tab workspace behavior so editor-shell regressions are caught outside `sng_rusty_editor`
+
+Text-input verification harness:
+- `cargo run --manifest-path /Users/jay/pudding/loadngo/Cargo.toml -p loadngo-host-desktop --bin text_input_harness`
+- this renders one desktop window with:
+  - a live `TextAreaModel`
+  - keyboard entry, caret movement, selection, and scroll behavior
+  - a focused validation surface for host text-input plumbing
+- use it before moving multiline source editing into `sng_rusty_editor`
 
 This is the boundary that desktop backends must preserve so editor and runtime UI
 do not drift into separate text-layout worlds.

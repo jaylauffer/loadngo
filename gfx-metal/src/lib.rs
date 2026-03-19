@@ -474,7 +474,7 @@ impl MetalBackend {
                             y: raster.y,
                             width: image_width,
                             height: image_height,
-                            clip_rect: Some(request.rect),
+                            clip_rect: request.clip_rect.or(Some(request.rect)),
                             alpha: 1.0,
                             flip_vertical: true,
                         },
@@ -626,7 +626,7 @@ impl MetalBackend {
                             y: raster.y,
                             width: image_width,
                             height: image_height,
-                            clip_rect: Some(request.rect),
+                            clip_rect: request.clip_rect.or(Some(request.rect)),
                             alpha: 1.0,
                             flip_vertical: true,
                         },
@@ -742,19 +742,27 @@ fn rasterize_text_request(
             )?;
         }
         let mut raster = macos::rasterize_text(&request, font_source)?;
+        let logical_top = raster.content_top_in_image.floor().max(0.0) as u32;
+        let logical_bottom = (raster.content_top_in_image + raster.metrics.height)
+            .ceil()
+            .max(1.0)
+            .min(raster.image.height as f32) as u32;
         let (crop_top, crop_bottom) =
             if let Some((opaque_top, opaque_bottom)) = opaque_alpha_bounds(&raster.image) {
-                (
-                    opaque_top.saturating_sub(TEXT_RASTER_ALPHA_TOP_MARGIN),
-                    (opaque_bottom + 1 + TEXT_RASTER_ALPHA_BOTTOM_MARGIN).min(raster.image.height),
-                )
+                let opaque_crop_top = opaque_top.saturating_sub(TEXT_RASTER_ALPHA_TOP_MARGIN);
+                let opaque_crop_bottom =
+                    (opaque_bottom + 1 + TEXT_RASTER_ALPHA_BOTTOM_MARGIN).min(raster.image.height);
+                match request.style.vertical_metric_mode {
+                    loadngo_host_core::RenderTextVerticalMetricMode::VisibleInk => {
+                        (opaque_crop_top, opaque_crop_bottom)
+                    }
+                    loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox => (
+                        opaque_crop_top.min(logical_top),
+                        opaque_crop_bottom.max(logical_bottom).min(raster.image.height),
+                    ),
+                }
             } else {
-                let fallback_top = raster.content_top_in_image.floor().max(0.0) as u32;
-                let fallback_bottom = (raster.content_top_in_image + raster.metrics.height)
-                    .ceil()
-                    .max(1.0)
-                    .min(raster.image.height as f32) as u32;
-                (fallback_top, fallback_bottom)
+                (logical_top, logical_bottom)
             };
         if crop_top < crop_bottom && (crop_top > 0 || crop_bottom < raster.image.height) {
             raster.image = crop_decoded_image_rows(&raster.image, crop_top, crop_bottom);
@@ -786,24 +794,27 @@ fn rasterize_text_request(
                 request.rect.x as f32 + (request.rect.width as f32 - raster.metrics.width).max(0.0)
             }
         };
-        let (visible_top, top_in_display) = match request.style.vertical_align {
-            loadngo_host_core::RenderTextVerticalAlign::Top => {
-                (request.rect.y as f32, opaque_top_in_display)
+        let (metric_height, top_in_display) = match request.style.vertical_metric_mode {
+            loadngo_host_core::RenderTextVerticalMetricMode::VisibleInk => {
+                (opaque_height, opaque_top_in_display)
             }
-            loadngo_host_core::RenderTextVerticalAlign::Middle => (
-                request.rect.y as f32
-                    + (request.rect.height as f32 - opaque_height).max(0.0) * 0.5,
-                opaque_top_in_display,
-            ),
-            loadngo_host_core::RenderTextVerticalAlign::Bottom => (
-                request.rect.y as f32 + (request.rect.height as f32 - opaque_height).max(0.0),
-                opaque_top_in_display,
-            ),
+            loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox => {
+                (raster.metrics.height, logical_top_in_display)
+            }
+        };
+        let target_top = match request.style.vertical_align {
+            loadngo_host_core::RenderTextVerticalAlign::Top => request.rect.y as f32,
+            loadngo_host_core::RenderTextVerticalAlign::Middle => {
+                request.rect.y as f32 + (request.rect.height as f32 - metric_height).max(0.0) * 0.5
+            }
+            loadngo_host_core::RenderTextVerticalAlign::Bottom => {
+                request.rect.y as f32 + (request.rect.height as f32 - metric_height).max(0.0)
+            }
         };
         Ok(RasterizedText {
             image: raster.image,
             x: text_x,
-            y: visible_top - top_in_display,
+            y: target_top - top_in_display,
             metrics: raster.metrics,
             content_top_in_image: raster.content_top_in_image,
             logical_top_in_display,
@@ -1203,6 +1214,9 @@ mod macos {
             attributes: *const c_void,
         ) -> CTFontRef;
         fn CTFontCreateWithName(name: CFStringRef, size: f64, matrix: *const c_void) -> CTFontRef;
+        fn CTFontGetAscent(font: CTFontRef) -> f64;
+        fn CTFontGetDescent(font: CTFontRef) -> f64;
+        fn CTFontGetLeading(font: CTFontRef) -> f64;
         fn CTLineCreateWithAttributedString(string: CFAttributedStringRef) -> CTLineRef;
         fn CTLineGetTypographicBounds(
             line: CTLineRef,
@@ -1850,11 +1864,15 @@ mod macos {
             ));
         }
 
-        let mut ascent = 0.0;
-        let mut descent = 0.0;
-        let mut leading = 0.0;
-        let width =
-            unsafe { CTLineGetTypographicBounds(line, &mut ascent, &mut descent, &mut leading) };
+        let mut line_ascent = 0.0;
+        let mut line_descent = 0.0;
+        let mut line_leading = 0.0;
+        let width = unsafe {
+            CTLineGetTypographicBounds(line, &mut line_ascent, &mut line_descent, &mut line_leading)
+        };
+        let ascent = unsafe { CTFontGetAscent(font) };
+        let descent = unsafe { CTFontGetDescent(font) };
+        let leading = unsafe { CTFontGetLeading(font) };
         let metrics = RasterMetrics {
             width: width.max(0.0).ceil() as f32,
             height: (ascent + descent + leading).max(1.0).ceil() as f32,
@@ -2764,6 +2782,7 @@ mod tests {
                     width: 300.0,
                     height: rect_height as f32,
                 },
+                clip_rect: None,
                 text: text.to_string(),
                 style: loadngo_host_core::RenderTextStyle {
                     horizontal_align: if centered {
@@ -2816,6 +2835,7 @@ mod tests {
                 width: 120.0,
                 height: 44.0,
             },
+            clip_rect: None,
             text: "Menu".to_string(),
             style: loadngo_host_core::RenderTextStyle {
                 horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Center,
@@ -2843,7 +2863,52 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn top_aligned_text_aligns_visible_top_to_rect_top() {
+    fn generated_text_visuals_preserve_explicit_clip_rect() {
+        let mut backend = MetalBackend::new_headless();
+        let clip_rect = ui_core::geometry::Rect {
+            x: 24.0,
+            y: 28.0,
+            width: 80.0,
+            height: 20.0,
+        };
+        backend.recorded_commands = vec![FrameCommand::Text(TextRequest {
+            rect: ui_core::geometry::Rect {
+                x: -40.0,
+                y: 20.0,
+                width: 180.0,
+                height: 44.0,
+            },
+            clip_rect: Some(clip_rect),
+            text: "A long line".to_string(),
+            style: loadngo_host_core::RenderTextStyle {
+                horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Left,
+                vertical_align: loadngo_host_core::RenderTextVerticalAlign::Top,
+                vertical_metric_mode:
+                    loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
+                layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+                overflow: loadngo_host_core::RenderTextOverflow::Clip,
+                ..Default::default()
+            },
+            direction: loadngo_renderer::TextDirection::Auto,
+            script: loadngo_renderer::TextScript::Auto,
+            language: None,
+        })];
+        let visuals = backend
+            .frame_visuals()
+            .expect("text command should rasterize into a visual");
+        let text_visual = visuals
+            .into_iter()
+            .find_map(|visual| match visual {
+                FrameVisual::GeneratedImage(image) => Some(image),
+                _ => None,
+            })
+            .expect("expected generated text image");
+        assert_eq!(text_visual.placement.clip_rect, Some(clip_rect));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn top_aligned_text_aligns_logical_top_to_rect_top() {
         let request = TextRequest {
             rect: ui_core::geometry::Rect {
                 x: 0.0,
@@ -2851,6 +2916,7 @@ mod tests {
                 width: 300.0,
                 height: 24.0,
             },
+            clip_rect: None,
             text: "Labels".to_string(),
             style: loadngo_host_core::RenderTextStyle {
                 horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Left,
@@ -2864,16 +2930,16 @@ mod tests {
             language: None,
         };
         let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
-        let displayed_visible_top = raster.y + raster.opaque_top_in_display;
+        let displayed_logical_top = raster.y + raster.logical_top_in_display;
         assert!(
-            displayed_visible_top.abs() < 0.5,
-            "expected visible text top to align with rect top, got {displayed_visible_top}"
+            displayed_logical_top.abs() < 1.1,
+            "expected logical text top to align with rect top, got {displayed_logical_top}"
         );
     }
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn middle_aligned_text_centers_visible_text_in_rect() {
+    fn middle_aligned_text_centers_logical_text_in_rect() {
         let request = TextRequest {
             rect: ui_core::geometry::Rect {
                 x: 10.0,
@@ -2881,10 +2947,13 @@ mod tests {
                 width: 220.0,
                 height: 60.0,
             },
+            clip_rect: None,
             text: "Menu".to_string(),
             style: loadngo_host_core::RenderTextStyle {
                 horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Center,
                 vertical_align: loadngo_host_core::RenderTextVerticalAlign::Middle,
+                vertical_metric_mode:
+                    loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
                 layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
                 overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 ..Default::default()
@@ -2896,16 +2965,16 @@ mod tests {
         let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
         let expected_x =
             request.rect.x + (request.rect.width - raster.metrics.width).max(0.0) * 0.5;
-        let displayed_visible_top = raster.y + raster.opaque_top_in_display;
+        let displayed_logical_top = raster.y + raster.logical_top_in_display;
         let expected_top =
-            request.rect.y + (request.rect.height - raster.opaque_height).max(0.0) * 0.5;
+            request.rect.y + (request.rect.height - raster.metrics.height).max(0.0) * 0.5;
         assert!((raster.x - expected_x).abs() < 0.5);
-        assert!((displayed_visible_top - expected_top).abs() < 0.5);
+        assert!((displayed_logical_top - expected_top).abs() < 0.5);
     }
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn bottom_aligned_text_positions_visible_bottom_at_rect_bottom() {
+    fn bottom_aligned_text_positions_logical_bottom_at_rect_bottom() {
         let request = TextRequest {
             rect: ui_core::geometry::Rect {
                 x: 0.0,
@@ -2913,10 +2982,13 @@ mod tests {
                 width: 220.0,
                 height: 48.0,
             },
+            clip_rect: None,
             text: "Inspector".to_string(),
             style: loadngo_host_core::RenderTextStyle {
                 horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Left,
                 vertical_align: loadngo_host_core::RenderTextVerticalAlign::Bottom,
+                vertical_metric_mode:
+                    loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
                 layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
                 overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 ..Default::default()
@@ -2927,7 +2999,7 @@ mod tests {
         };
         let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
         let displayed_logical_bottom =
-            raster.y + raster.opaque_top_in_display + raster.opaque_height;
+            raster.y + raster.logical_top_in_display + raster.metrics.height;
         assert!((displayed_logical_bottom - request.rect.height).abs() < 0.5);
     }
 
@@ -2941,11 +3013,14 @@ mod tests {
                 width: 240.0,
                 height: 44.0,
             },
+            clip_rect: None,
             text: "Menu".to_string(),
             style: loadngo_host_core::RenderTextStyle {
                 font_size: 18,
                 horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Center,
                 vertical_align: loadngo_host_core::RenderTextVerticalAlign::Middle,
+                vertical_metric_mode:
+                    loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
                 layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
                 overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 ..Default::default()
@@ -2973,11 +3048,14 @@ mod tests {
                 width: 240.0,
                 height: 44.0,
             },
+            clip_rect: None,
             text: "Menu".to_string(),
             style: loadngo_host_core::RenderTextStyle {
                 font_size: 18,
                 horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Center,
                 vertical_align: loadngo_host_core::RenderTextVerticalAlign::Middle,
+                vertical_metric_mode:
+                    loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
                 layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
                 overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 ..Default::default()
@@ -2992,11 +3070,81 @@ mod tests {
         assert!(raster.image.height as f32 <= raster.metrics.height + 8.0);
         assert!(
             (raster.y
-                - (request.rect.y + (request.rect.height - raster.opaque_height) * 0.5
-                    - raster.opaque_top_in_display))
+                - (request.rect.y + (request.rect.height - raster.metrics.height) * 0.5
+                    - raster.logical_top_in_display))
                 .abs()
                 < 0.5
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn logical_line_box_alignment_is_stable_for_punctuation_only_text() {
+        let make_request = |text: &str| TextRequest {
+            rect: ui_core::geometry::Rect {
+                x: 0.0,
+                y: 20.0,
+                width: 220.0,
+                height: 40.0,
+            },
+            clip_rect: None,
+            text: text.to_string(),
+            style: loadngo_host_core::RenderTextStyle {
+                font_size: 18,
+                horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Left,
+                vertical_align: loadngo_host_core::RenderTextVerticalAlign::Middle,
+                vertical_metric_mode:
+                    loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
+                layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+                overflow: loadngo_host_core::RenderTextOverflow::Clip,
+                ..Default::default()
+            },
+            direction: loadngo_renderer::TextDirection::Auto,
+            script: loadngo_renderer::TextScript::Auto,
+            language: None,
+        };
+
+        let word = rasterize_text_request(&make_request("Menu"), None)
+            .expect("word text raster should succeed");
+        let punctuation = rasterize_text_request(&make_request("....."), None)
+            .expect("punctuation text raster should succeed");
+
+        let displayed_word_top = word.y + word.logical_top_in_display;
+        let displayed_punctuation_top = punctuation.y + punctuation.logical_top_in_display;
+        assert!((displayed_word_top - displayed_punctuation_top).abs() < 0.5);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn logical_line_box_raster_preserves_full_box_for_punctuation_only_text() {
+        let request = TextRequest {
+            rect: ui_core::geometry::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 220.0,
+                height: 44.0,
+            },
+            clip_rect: None,
+            text: ".....".to_string(),
+            style: loadngo_host_core::RenderTextStyle {
+                font_size: 18,
+                horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Center,
+                vertical_align: loadngo_host_core::RenderTextVerticalAlign::Middle,
+                vertical_metric_mode:
+                    loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
+                layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+                overflow: loadngo_host_core::RenderTextOverflow::Clip,
+                ..Default::default()
+            },
+            direction: loadngo_renderer::TextDirection::Auto,
+            script: loadngo_renderer::TextScript::Auto,
+            language: None,
+        };
+
+        let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
+
+        assert!(raster.image.height as f32 >= raster.metrics.height);
+        assert!(raster.logical_top_in_display >= 0.0);
     }
 
     #[cfg(target_os = "macos")]
@@ -3055,6 +3203,7 @@ mod tests {
                 width: 320.0,
                 height: 80.0,
             },
+            clip_rect: None,
             text: "Silver and Gold".to_string(),
             style: loadngo_host_core::RenderTextStyle {
                 layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
@@ -3092,6 +3241,7 @@ mod tests {
                 width: 400.0,
                 height: 160.0,
             },
+            clip_rect: None,
             text: "WWWWWWWWWWWW\nMMMMMM\nHH".to_string(),
             style: loadngo_host_core::RenderTextStyle {
                 font_size: 22,

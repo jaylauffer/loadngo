@@ -730,6 +730,7 @@ fn blank_snapshot() -> InputSnapshot {
     InputSnapshot {
         mouse_x: 0.0,
         mouse_y: 0.0,
+        mouse_wheel_x: 0.0,
         mouse_wheel_y: 0.0,
         mouse_pressed: false,
         mouse_down: false,
@@ -742,6 +743,9 @@ fn blank_snapshot() -> InputSnapshot {
         r_pressed: false,
         up_pressed: false,
         down_pressed: false,
+        modifiers: ui_core::Modifiers::default(),
+        key_events: Vec::new(),
+        typed_text: String::new(),
     }
 }
 
@@ -1129,6 +1133,8 @@ pub fn asset_exists(path: &str) -> bool {
     };
     manager.open(asset_name.as_c_str()).is_some()
 }
+
+pub fn set_text_cursor_active(_active: bool) {}
 
 pub fn desktop_render_backend_status() -> DesktopRenderBackendStatus {
     let state = app_state().lock().expect("android app state poisoned");
@@ -2863,6 +2869,7 @@ pub fn draw_plain_text(text: &str, _x: f32, _y: f32, size: f32, _color: UiColor)
             width: metrics.width.max(1.0),
             height: single_line_text_box_height(font_size) * font_scale.max(0.0),
         },
+        clip_rect: None,
         text: text.to_string(),
         style: loadngo_host_core::RenderTextStyle {
             color: _color,

@@ -17,6 +17,7 @@ pub use ui_core::{
     scroll_container::{ScrollContainer, ScrollContainerModel},
     stack::{VerticalStack, VerticalStackModel},
     tabs::{TabGroupModel, TabPage, TabbedContainer},
+    text_area::{TextArea, TextAreaLayoutCache, TextAreaLineLayout, TextAreaModel},
     text_block::{TextBlock, TextBlockModel},
     tree::{TreeCombo, TreeControl, TreeNode},
     widget::{WidgetId, WidgetResponse},

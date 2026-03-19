@@ -105,6 +105,7 @@ impl DesktopPlatformBackend for LoadngoPlaceholderPlatformHost {
             input: InputSnapshot {
                 mouse_x: 0.0,
                 mouse_y: 0.0,
+                mouse_wheel_x: 0.0,
                 mouse_wheel_y: 0.0,
                 mouse_pressed: false,
                 mouse_down: false,
@@ -117,6 +118,9 @@ impl DesktopPlatformBackend for LoadngoPlaceholderPlatformHost {
                 r_pressed: false,
                 up_pressed: false,
                 down_pressed: false,
+                modifiers: ui_core::Modifiers::default(),
+                key_events: Vec::new(),
+                typed_text: String::new(),
             },
         }
     }
@@ -296,6 +300,8 @@ pub async fn load_text(path: &str) -> Result<String, String> {
 pub fn asset_exists(path: &str) -> bool {
     Path::new(path).exists()
 }
+
+pub fn set_text_cursor_active(_active: bool) {}
 
 pub async fn load_font(path: &str) -> Result<DesktopFont, String> {
     LoadngoPlaceholderGraphicsHost::load_font(path).await

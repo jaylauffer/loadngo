@@ -1,7 +1,241 @@
 use crate::{
-    geometry::{Color, Rect},
+    geometry::{Color, Point, Rect},
     paint::PaintOp,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollbarAxis {
+    Vertical,
+    Horizontal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrollbarDragState {
+    pub pointer_offset: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScrollbarModel {
+    pub axis: ScrollbarAxis,
+    pub track_rect: Rect,
+    pub offset: f32,
+    pub viewport_span: f32,
+    pub content_span: f32,
+    content_span_known: bool,
+    pub min_thumb_span: f32,
+}
+
+impl ScrollbarModel {
+    pub fn new(axis: ScrollbarAxis, track_rect: Rect, offset: f32) -> Self {
+        Self {
+            axis,
+            track_rect,
+            offset: offset.max(0.0),
+            viewport_span: match axis {
+                ScrollbarAxis::Vertical => track_rect.height,
+                ScrollbarAxis::Horizontal => track_rect.width,
+            },
+            content_span: match axis {
+                ScrollbarAxis::Vertical => track_rect.height,
+                ScrollbarAxis::Horizontal => track_rect.width,
+            },
+            content_span_known: false,
+            min_thumb_span: match axis {
+                ScrollbarAxis::Vertical => 24.0,
+                ScrollbarAxis::Horizontal => 32.0,
+            },
+        }
+    }
+
+    pub fn set_track_rect(&mut self, track_rect: Rect) {
+        self.track_rect = track_rect;
+        self.clamp_offset();
+    }
+
+    pub fn set_viewport_span(&mut self, viewport_span: f32) {
+        self.viewport_span = viewport_span.max(0.0);
+        self.clamp_offset();
+    }
+
+    pub fn set_content_span(&mut self, content_span: f32) {
+        self.content_span = content_span.max(self.viewport_span);
+        self.content_span_known = true;
+        self.clamp_offset();
+    }
+
+    pub fn apply_scroll_delta(&mut self, delta: f32) {
+        self.offset += delta;
+        if self.content_span_known {
+            self.clamp_offset();
+        } else {
+            self.offset = self.offset.max(0.0);
+        }
+    }
+
+    pub fn max_offset(&self) -> f32 {
+        (self.content_span - self.viewport_span).max(0.0)
+    }
+
+    pub fn is_scrollable(&self) -> bool {
+        self.content_span_known
+            && self.max_offset() > 0.0
+            && self.primary_span(self.track_rect) > 0.0
+            && self.cross_span(self.track_rect) > 0.0
+    }
+
+    pub fn indicator_thumb_rect(&self) -> Option<Rect> {
+        if !self.is_scrollable() {
+            return None;
+        }
+        let max_offset = self.max_offset();
+        let thumb_span = self.thumb_span(self.primary_span(self.track_rect), max_offset);
+        let t = if max_offset > 0.0 {
+            (self.offset / max_offset).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let thumb_start =
+            self.primary_start(self.track_rect) + (self.primary_span(self.track_rect) - thumb_span) * t;
+        Some(self.rect_with_primary_range(self.track_rect, thumb_start, thumb_span))
+    }
+
+    pub fn interactive_rect(&self, pad_cross: f32, pad_main: f32) -> Option<Rect> {
+        if !self.is_scrollable() {
+            return None;
+        }
+        Some(match self.axis {
+            ScrollbarAxis::Vertical => Rect {
+                x: self.track_rect.x - pad_cross,
+                y: self.track_rect.y - pad_main,
+                width: self.track_rect.width + pad_cross * 2.0,
+                height: self.track_rect.height + pad_main * 2.0,
+            },
+            ScrollbarAxis::Horizontal => Rect {
+                x: self.track_rect.x - pad_main,
+                y: self.track_rect.y - pad_cross,
+                width: self.track_rect.width + pad_main * 2.0,
+                height: self.track_rect.height + pad_cross * 2.0,
+            },
+        })
+    }
+
+    pub fn begin_indicator_drag(&self, pointer: Point) -> Option<ScrollbarDragState> {
+        let thumb = self.indicator_thumb_rect()?;
+        if !thumb.contains(pointer) {
+            return None;
+        }
+        Some(ScrollbarDragState {
+            pointer_offset: self.primary_point(pointer) - self.primary_start(thumb),
+        })
+    }
+
+    pub fn drag_indicator_to(&mut self, pointer: Point, drag_state: ScrollbarDragState) {
+        if !self.is_scrollable() {
+            return;
+        }
+        let thumb = self
+            .indicator_thumb_rect()
+            .unwrap_or(self.rect_with_primary_range(self.track_rect, self.primary_start(self.track_rect), 0.0));
+        self.set_offset_from_thumb_start(
+            self.primary_point(pointer) - self.primary_start(self.track_rect) - drag_state.pointer_offset,
+            self.primary_span(thumb),
+        );
+    }
+
+    pub fn scroll_to_indicator_position(&mut self, pointer: Point) {
+        if !self.is_scrollable() {
+            return;
+        }
+        let thumb_span = self.thumb_span(self.primary_span(self.track_rect), self.max_offset());
+        self.set_offset_from_thumb_start(
+            self.primary_point(pointer) - self.primary_start(self.track_rect) - thumb_span * 0.5,
+            thumb_span,
+        );
+    }
+
+    pub fn paint_indicator(&self, scene: &mut Vec<PaintOp>, track_color: Color, thumb_color: Color) {
+        if !self.is_scrollable() {
+            return;
+        }
+        scene.push(PaintOp::FillRect {
+            rect: self.track_rect,
+            color: track_color,
+        });
+        if let Some(thumb) = self.indicator_thumb_rect() {
+            scene.push(PaintOp::FillRect {
+                rect: thumb,
+                color: thumb_color,
+            });
+        }
+    }
+
+    fn clamp_offset(&mut self) {
+        self.offset = self.offset.clamp(0.0, self.max_offset());
+    }
+
+    fn thumb_span(&self, track_span: f32, max_offset: f32) -> f32 {
+        let ratio = (track_span / (track_span + max_offset)).clamp(0.12, 1.0);
+        (track_span * ratio).clamp(self.min_thumb_span, track_span)
+    }
+
+    fn set_offset_from_thumb_start(&mut self, thumb_start: f32, thumb_span: f32) {
+        let max_offset = self.max_offset();
+        if max_offset <= 0.0 {
+            self.offset = 0.0;
+            return;
+        }
+        let travel = (self.primary_span(self.track_rect) - thumb_span).max(0.0);
+        let local = thumb_start.clamp(0.0, travel);
+        let t = if travel > 0.0 { local / travel } else { 0.0 };
+        self.offset = max_offset * t;
+        self.clamp_offset();
+    }
+
+    fn primary_start(&self, rect: Rect) -> f32 {
+        match self.axis {
+            ScrollbarAxis::Vertical => rect.y,
+            ScrollbarAxis::Horizontal => rect.x,
+        }
+    }
+
+    fn primary_span(&self, rect: Rect) -> f32 {
+        match self.axis {
+            ScrollbarAxis::Vertical => rect.height,
+            ScrollbarAxis::Horizontal => rect.width,
+        }
+    }
+
+    fn cross_span(&self, rect: Rect) -> f32 {
+        match self.axis {
+            ScrollbarAxis::Vertical => rect.width,
+            ScrollbarAxis::Horizontal => rect.height,
+        }
+    }
+
+    fn primary_point(&self, point: Point) -> f32 {
+        match self.axis {
+            ScrollbarAxis::Vertical => point.y,
+            ScrollbarAxis::Horizontal => point.x,
+        }
+    }
+
+    fn rect_with_primary_range(&self, track: Rect, start: f32, span: f32) -> Rect {
+        match self.axis {
+            ScrollbarAxis::Vertical => Rect {
+                x: track.x,
+                y: start,
+                width: track.width,
+                height: span,
+            },
+            ScrollbarAxis::Horizontal => Rect {
+                x: start,
+                y: track.y,
+                width: span,
+                height: track.height,
+            },
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScrollThumbDragState {

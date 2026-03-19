@@ -224,7 +224,10 @@ impl SplitNodeModel {
         } else {
             Color::rgba(0xa5, 0xaa, 0xbe, 0xc8)
         };
-        scene.push(PaintOp::FillRect { rect: handle, color: fill });
+        scene.push(PaintOp::FillRect {
+            rect: handle,
+            color: fill,
+        });
         scene.push(PaintOp::StrokeRect {
             rect: handle,
             color: border,

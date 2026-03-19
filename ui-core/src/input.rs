@@ -72,15 +72,20 @@ pub enum Key {
     Enter,
     Space,
     Escape,
+    Tab,
     Up,
     Down,
     Left,
     Right,
+    Home,
+    End,
+    Backspace,
+    Delete,
     Character(char),
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum UiEvent {
     PointerMoved(PointerState),
     PointerLeft,
@@ -96,6 +101,9 @@ pub enum UiEvent {
     KeyPressed {
         key: Key,
         modifiers: Modifiers,
+    },
+    TextInput {
+        text: String,
     },
     ScrollLines {
         delta: i32,
