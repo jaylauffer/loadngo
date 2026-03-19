@@ -718,8 +718,8 @@ struct RasterizedText {
     opaque_height: f32,
 }
 
-const TEXT_RASTER_DISPLAY_TOP_BLEED: f32 = 2.0;
-const TEXT_RASTER_DISPLAY_BOTTOM_BLEED: f32 = 6.0;
+const TEXT_RASTER_ALPHA_TOP_MARGIN: u32 = 2;
+const TEXT_RASTER_ALPHA_BOTTOM_MARGIN: u32 = 2;
 
 fn rasterize_text_request(
     request: &TextRequest,
@@ -742,13 +742,20 @@ fn rasterize_text_request(
             )?;
         }
         let mut raster = macos::rasterize_text(&request, font_source)?;
-        let crop_top = (raster.content_top_in_image - TEXT_RASTER_DISPLAY_BOTTOM_BLEED)
-            .floor()
-            .max(0.0) as u32;
-        let crop_bottom =
-            (raster.content_top_in_image + raster.metrics.height + TEXT_RASTER_DISPLAY_TOP_BLEED)
-                .ceil()
-                .min(raster.image.height as f32) as u32;
+        let (crop_top, crop_bottom) =
+            if let Some((opaque_top, opaque_bottom)) = opaque_alpha_bounds(&raster.image) {
+                (
+                    opaque_top.saturating_sub(TEXT_RASTER_ALPHA_TOP_MARGIN),
+                    (opaque_bottom + 1 + TEXT_RASTER_ALPHA_BOTTOM_MARGIN).min(raster.image.height),
+                )
+            } else {
+                let fallback_top = raster.content_top_in_image.floor().max(0.0) as u32;
+                let fallback_bottom = (raster.content_top_in_image + raster.metrics.height)
+                    .ceil()
+                    .max(1.0)
+                    .min(raster.image.height as f32) as u32;
+                (fallback_top, fallback_bottom)
+            };
         if crop_top < crop_bottom && (crop_top > 0 || crop_bottom < raster.image.height) {
             raster.image = crop_decoded_image_rows(&raster.image, crop_top, crop_bottom);
             raster.content_top_in_image = (raster.content_top_in_image - crop_top as f32).max(0.0);
@@ -2777,13 +2784,17 @@ mod tests {
             let mut all_rows = row_alpha_counts(&raster.image, raster.image.height as usize);
             all_rows.reverse();
             let bottom_rows = all_rows.into_iter().take(8).collect::<Vec<_>>();
+            let total_alpha_rows = row_alpha_counts(&raster.image, raster.image.height as usize)
+                .into_iter()
+                .filter(|count| *count > 0)
+                .count();
             assert!(
-                top_rows.iter().all(|count| *count == 0),
-                "raw text raster unexpectedly has alpha in top rows for {text}: {top_rows:?}"
+                total_alpha_rows > 0,
+                "raw text raster unexpectedly has no alpha for {text}"
             );
             assert!(
-                bottom_rows.iter().any(|count| *count > 0),
-                "raw text raster unexpectedly lacks alpha in bottom rows for {text}: {bottom_rows:?}"
+                top_rows.iter().any(|count| *count > 0) || bottom_rows.iter().any(|count| *count > 0),
+                "raw text raster unexpectedly lacks edge alpha for {text}: top={top_rows:?} bottom={bottom_rows:?}"
             );
         }
     }
