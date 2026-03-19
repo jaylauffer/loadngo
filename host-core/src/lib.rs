@@ -398,7 +398,7 @@ impl Default for RenderTextStyle {
             font_size: 18,
             horizontal_align: RenderTextHorizontalAlign::Left,
             vertical_align: RenderTextVerticalAlign::Top,
-            vertical_metric_mode: RenderTextVerticalMetricMode::VisibleInk,
+            vertical_metric_mode: RenderTextVerticalMetricMode::LogicalLineBox,
             layout_mode: RenderTextLayoutMode::SingleLine,
             overflow: RenderTextOverflow::Clip,
         }

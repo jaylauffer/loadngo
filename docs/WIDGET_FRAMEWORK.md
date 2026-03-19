@@ -154,6 +154,14 @@ Text-input verification harness:
   - a focused validation surface for host text-input plumbing
 - use it before moving multiline source editing into `sng_rusty_editor`
 
+Text-metrics verification harness:
+- `cargo run --manifest-path /Users/jay/pudding/loadngo/Cargo.toml -p loadngo-host-desktop --bin text_metrics_harness`
+- this renders one desktop window with:
+  - side-by-side `LogicalLineBox` vs `VisibleInk` single-line samples
+  - the strings `123`, `...`, `ooo`, `Ops(`, `gggg`, `T`, `MMMMM`, and `WWWWW`
+  - a three-tab comparison row so sibling control alignment is obvious
+- use it when changing baseline, line-box, or vertical centering behavior in the shared renderer
+
 This is the boundary that desktop backends must preserve so editor and runtime UI
 do not drift into separate text-layout worlds.
 

@@ -53,7 +53,7 @@ impl Default for TextStyle {
             font_size: 18,
             horizontal_align: HorizontalAlign::Left,
             vertical_align: VerticalAlign::Top,
-            vertical_metric_mode: TextVerticalMetricMode::VisibleInk,
+            vertical_metric_mode: TextVerticalMetricMode::LogicalLineBox,
             layout_mode: TextLayoutMode::SingleLine,
             overflow: TextOverflow::Clip,
         }

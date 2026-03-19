@@ -122,6 +122,32 @@ struct RasterMetrics {
     baseline_from_top: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FontLineMetrics {
+    pub ascent: f32,
+    pub descent: f32,
+    pub leading: f32,
+    pub ink_top_from_baseline: f32,
+    pub ink_bottom_from_baseline: f32,
+    pub ink_height: f32,
+    pub baseline_from_top: f32,
+    pub line_height: f32,
+    pub line_box_height: f32,
+    pub line_step: f32,
+    pub raster_pad_top: f32,
+    pub raster_pad_bottom: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DebugTextPlacement {
+    pub x: f32,
+    pub y: f32,
+    pub logical_top_in_display: f32,
+    pub logical_height: f32,
+    pub opaque_top_in_display: f32,
+    pub opaque_height: f32,
+}
+
 pub fn measure_text_metrics(
     text: &str,
     font_source: Option<&str>,
@@ -139,6 +165,39 @@ pub fn measure_text_metrics(
             "native text measurement is unavailable on this platform".to_string(),
         ))
     }
+}
+
+pub fn measure_font_line_metrics(
+    font_source: Option<&str>,
+    font_size: f32,
+) -> Result<FontLineMetrics, RendererError> {
+    #[cfg(target_os = "macos")]
+    {
+        return macos::measure_font_line_metrics(font_source, font_size);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (font_source, font_size);
+        Err(RendererError::Text(
+            "native font line metrics are unavailable on this platform".to_string(),
+        ))
+    }
+}
+
+pub fn debug_text_placement(
+    request: &TextRequest,
+    font_source: Option<&str>,
+) -> Result<DebugTextPlacement, RendererError> {
+    let raster = rasterize_text_request(request, font_source)?;
+    Ok(DebugTextPlacement {
+        x: raster.x,
+        y: raster.y,
+        logical_top_in_display: raster.logical_top_in_display,
+        logical_height: raster.metrics.height,
+        opaque_top_in_display: raster.opaque_top_in_display,
+        opaque_height: raster.opaque_height,
+    })
 }
 
 pub fn register_image_resource(image_key: &str, image: &DecodedImage) {
@@ -1094,7 +1153,7 @@ mod macos {
     use objc2::encode::{Encode, Encoding};
     use objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
 
-    use crate::{BlitImage, ClearColor, RasterMetrics, RasterizedText, SolidRect};
+    use crate::{BlitImage, ClearColor, FontLineMetrics, RasterMetrics, RasterizedText, SolidRect};
 
     #[link(name = "AppKit", kind = "framework")]
     unsafe extern "C" {}
@@ -1217,6 +1276,7 @@ mod macos {
         fn CTFontGetAscent(font: CTFontRef) -> f64;
         fn CTFontGetDescent(font: CTFontRef) -> f64;
         fn CTFontGetLeading(font: CTFontRef) -> f64;
+        fn CTFontGetBoundingBox(font: CTFontRef) -> CGRect;
         fn CTLineCreateWithAttributedString(string: CFAttributedStringRef) -> CTLineRef;
         fn CTLineGetTypographicBounds(
             line: CTLineRef,
@@ -1652,6 +1712,17 @@ mod macos {
         })
     }
 
+    pub fn measure_font_line_metrics(
+        font_source: Option<&str>,
+        font_size: f32,
+    ) -> Result<FontLineMetrics, RendererError> {
+        let font_size = font_size.max(1.0);
+        let font = create_font(font_source, font_size)?;
+        let metrics = font_line_metrics(font, font_size);
+        release_cf(font);
+        Ok(metrics)
+    }
+
     pub fn rasterize_text(
         request: &TextRequest,
         font_source: Option<&str>,
@@ -1679,30 +1750,19 @@ mod macos {
             .iter()
             .map(|layout| layout.metrics.width)
             .fold(1.0f32, f32::max);
-        let measured_line_height = layouts
-            .iter()
-            .map(|layout| layout.metrics.height)
-            .fold(1.0f32, f32::max);
-        let baseline_from_top = layouts
-            .iter()
-            .map(|layout| layout.metrics.baseline_from_top)
-            .fold(1.0f32, f32::max);
-        let line_box_height = ui_core::single_line_text_box_height(request.style.font_size);
-        let line_step = ui_core::multiline_line_step(request.style.font_size);
+        let line_metrics = font_line_metrics(layouts[0].font, request.style.font_size as f32);
+        let line_box_height = line_metrics.line_box_height;
+        let line_step = line_metrics.line_step;
         let logical_height = match request.style.layout_mode {
             loadngo_host_core::RenderTextLayoutMode::SingleLine => line_box_height.max(1.0),
             loadngo_host_core::RenderTextLayoutMode::MultiLine => {
                 (line_box_height + line_step * lines.len().saturating_sub(1) as f32).max(1.0)
             }
         };
-        // CoreText can draw a few pixels above the typographic ascent on macOS.
-        // Keep extra headroom in the offscreen raster so editor/runtime labels do
-        // not lose their top edge before alignment is applied.
-        let pad_top = (request.style.font_size as f32 * 0.5).ceil().max(4.0) + 4.0;
-        let pad_bottom = (request.style.font_size as f32 * 0.25).ceil().max(2.0) + 2.0;
+        let pad_top = line_metrics.raster_pad_top;
+        let pad_bottom = line_metrics.raster_pad_bottom;
         let width = logical_width.max(1.0).ceil() as usize;
         let height = (logical_height + pad_top + pad_bottom).max(1.0).ceil() as usize;
-        let line_content_top = (line_box_height - measured_line_height).max(0.0) * 0.5;
         let mut rgba = vec![0u8; width * height * 4];
         let color_space = unsafe { CGColorSpaceCreateDeviceRGB() };
         if color_space.is_null() {
@@ -1771,8 +1831,9 @@ mod macos {
                 CGContextSetTextPosition(
                     context,
                     0.0,
-                    (pad_top + line_content_top + baseline_from_top + line_step * line_index as f32)
-                        as f64,
+                    (pad_top
+                        + (line_box_height - line_metrics.baseline_from_top).max(0.0)
+                        + line_step * line_index as f32) as f64,
                 );
                 CTLineDraw(layout.line, context);
             }
@@ -1794,7 +1855,7 @@ mod macos {
             metrics: RasterMetrics {
                 width: logical_width,
                 height: logical_height,
-                baseline_from_top,
+                baseline_from_top: line_metrics.baseline_from_top,
             },
             content_top_in_image: pad_top,
             logical_top_in_display: pad_bottom,
@@ -1886,6 +1947,39 @@ mod macos {
             metrics,
         })
     }
+
+    fn font_line_metrics(font: CTFontRef, font_size: f32) -> FontLineMetrics {
+        let ascent = unsafe { CTFontGetAscent(font) }.max(0.0).ceil() as f32;
+        let descent = unsafe { CTFontGetDescent(font) }.max(0.0).ceil() as f32;
+        let leading = unsafe { CTFontGetLeading(font) }.max(0.0).ceil() as f32;
+        let line_height = (ascent + descent + leading).max(1.0);
+        let bounds = unsafe { CTFontGetBoundingBox(font) };
+        let ink_top_from_baseline = (bounds.origin.y + bounds.size.height).max(0.0).ceil() as f32;
+        let ink_bottom_from_baseline = (-bounds.origin.y).max(0.0).ceil() as f32;
+        let ink_height = (ink_top_from_baseline + ink_bottom_from_baseline).max(1.0);
+        let line_box_height = ui_core::single_line_text_box_height(font_size.round() as u16)
+            .max(line_height.ceil());
+        let line_step = ui_core::multiline_line_step(font_size.round() as u16);
+        let raster_pad_top = (font_size * 0.5).ceil().max(4.0) + 4.0;
+        let raster_pad_bottom = (font_size * 0.25).ceil().max(2.0) + 2.0;
+        let baseline_from_top =
+            (ascent + (line_box_height - line_height).max(0.0) * 0.5).ceil();
+        FontLineMetrics {
+            ascent,
+            descent,
+            leading,
+            ink_top_from_baseline,
+            ink_bottom_from_baseline,
+            ink_height,
+            baseline_from_top,
+            line_height,
+            line_box_height,
+            line_step,
+            raster_pad_top,
+            raster_pad_bottom,
+        }
+    }
+
 
     fn create_font(font_source: Option<&str>, font_size: f32) -> Result<CTFontRef, RendererError> {
         if let Some(path) = font_source {
@@ -3112,6 +3206,96 @@ mod tests {
         let displayed_word_top = word.y + word.logical_top_in_display;
         let displayed_punctuation_top = punctuation.y + punctuation.logical_top_in_display;
         assert!((displayed_word_top - displayed_punctuation_top).abs() < 0.5);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn logical_line_box_metrics_are_content_independent_for_varied_strings() {
+        let samples = ["123", "...", "ooo", "Ops(", "gggg", "T", "MMMMM", "WWWWW"];
+        let rasters: Vec<_> = samples
+            .into_iter()
+            .map(|text| {
+                rasterize_text_request(
+                    &TextRequest {
+                        rect: ui_core::geometry::Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 240.0,
+                            height: 44.0,
+                        },
+                        clip_rect: None,
+                        text: text.to_string(),
+                        style: loadngo_host_core::RenderTextStyle {
+                            font_size: 18,
+                            horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Center,
+                            vertical_align: loadngo_host_core::RenderTextVerticalAlign::Middle,
+                            vertical_metric_mode:
+                                loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
+                            layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+                            overflow: loadngo_host_core::RenderTextOverflow::Clip,
+                            ..Default::default()
+                        },
+                        direction: loadngo_renderer::TextDirection::Auto,
+                        script: loadngo_renderer::TextScript::Auto,
+                        language: None,
+                    },
+                    None,
+                )
+                .expect("text raster should succeed")
+            })
+            .collect();
+
+        let first = &rasters[0];
+        for raster in rasters.iter().skip(1) {
+            assert_eq!(raster.metrics.height, first.metrics.height);
+            assert_eq!(raster.metrics.baseline_from_top, first.metrics.baseline_from_top);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn logical_line_box_middle_alignment_is_stable_across_varied_strings() {
+        let samples = ["123", "...", "ooo", "Ops(", "gggg", "T", "MMMMM", "WWWWW"];
+        let rect = ui_core::geometry::Rect {
+            x: 0.0,
+            y: 20.0,
+            width: 240.0,
+            height: 44.0,
+        };
+        let mut displayed_tops = Vec::new();
+        for sample in samples {
+            let raster = rasterize_text_request(
+                &TextRequest {
+                    rect,
+                    clip_rect: None,
+                    text: sample.to_string(),
+                    style: loadngo_host_core::RenderTextStyle {
+                        font_size: 18,
+                        horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Center,
+                        vertical_align: loadngo_host_core::RenderTextVerticalAlign::Middle,
+                        vertical_metric_mode:
+                            loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
+                        layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+                        overflow: loadngo_host_core::RenderTextOverflow::Clip,
+                        ..Default::default()
+                    },
+                    direction: loadngo_renderer::TextDirection::Auto,
+                    script: loadngo_renderer::TextScript::Auto,
+                    language: None,
+                },
+                None,
+            )
+            .expect("text raster should succeed");
+            displayed_tops.push(raster.y + raster.logical_top_in_display);
+        }
+
+        let first = displayed_tops[0];
+        for top in displayed_tops.into_iter().skip(1) {
+            assert!(
+                (top - first).abs() < 0.5,
+                "expected shared logical top, got first={first} current={top}"
+            );
+        }
     }
 
     #[cfg(target_os = "macos")]
