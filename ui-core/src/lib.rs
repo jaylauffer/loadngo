@@ -12,6 +12,7 @@ pub mod paint;
 pub mod panel;
 pub mod scroll;
 pub mod scroll_container;
+pub mod split;
 pub mod slider;
 pub mod stack;
 pub mod stepper;
@@ -20,6 +21,7 @@ pub mod text;
 pub mod text_block;
 pub mod tree;
 pub mod widget;
+pub mod workspace;
 
 pub use bitmap::{Bitmap, BitmapModel};
 pub use button::{Button, ButtonModel};
@@ -35,11 +37,16 @@ pub use paint::{HorizontalAlign, PaintOp, TextLayoutMode, TextOverflow, TextStyl
 pub use panel::{Panel, PanelModel};
 pub use scroll::{ScrollRegionModel, ScrollThumbDragState};
 pub use scroll_container::{ScrollContainer, ScrollContainerModel};
+pub use split::{SplitAxis, SplitDragState, SplitNode, SplitNodeModel};
 pub use slider::SliderModel;
 pub use stack::{VerticalStack, VerticalStackModel};
 pub use stepper::StepperModel;
-pub use tabs::{TabPage, TabbedContainer};
+pub use tabs::{TabGroupModel, TabPage, TabbedContainer};
 pub use text::{multiline_line_step, single_line_text_box_height};
 pub use text_block::{TextBlock, TextBlockModel};
 pub use tree::{TreeCombo, TreeControl, TreeNode};
 pub use widget::{WidgetAction, WidgetId, WidgetResponse};
+pub use workspace::{
+    WorkspaceLeaf, WorkspaceLeafView, WorkspaceNode, WorkspaceSplitNode, WorkspaceTabGroup,
+    WorkspaceTabPage,
+};

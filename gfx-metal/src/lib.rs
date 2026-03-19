@@ -1748,10 +1748,16 @@ mod macos {
                 color.a as f64 / 255.0,
             );
             for (index, layout) in layouts.iter().enumerate() {
+                let line_index = match request.style.layout_mode {
+                    loadngo_host_core::RenderTextLayoutMode::SingleLine => 0,
+                    loadngo_host_core::RenderTextLayoutMode::MultiLine => {
+                        lines.len().saturating_sub(1).saturating_sub(index)
+                    }
+                };
                 CGContextSetTextPosition(
                     context,
                     0.0,
-                    (pad_top + line_content_top + baseline_from_top + line_step * index as f32)
+                    (pad_top + line_content_top + baseline_from_top + line_step * line_index as f32)
                         as f64,
                 );
                 CTLineDraw(layout.line, context);
@@ -3074,5 +3080,76 @@ mod tests {
         let multi_raster =
             rasterize_text_request(&multi, None).expect("multi line should rasterize");
         assert!(multi_raster.metrics.height > single_raster.metrics.height);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn multiline_text_preserves_top_to_bottom_line_order_in_display_space() {
+        let request = TextRequest {
+            rect: ui_core::geometry::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 160.0,
+            },
+            text: "WWWWWWWWWWWW\nMMMMMM\nHH".to_string(),
+            style: loadngo_host_core::RenderTextStyle {
+                font_size: 22,
+                layout_mode: loadngo_host_core::RenderTextLayoutMode::MultiLine,
+                overflow: loadngo_host_core::RenderTextOverflow::Clip,
+                ..Default::default()
+            },
+            direction: loadngo_renderer::TextDirection::Auto,
+            script: loadngo_renderer::TextScript::Auto,
+            language: None,
+        };
+
+        let raster = rasterize_text_request(&request, None).expect("multiline should rasterize");
+        let band_widths = displayed_opaque_band_widths(&raster.image);
+
+        assert_eq!(band_widths.len(), 3, "expected three displayed text bands");
+        assert!(
+            band_widths[0] > band_widths[1],
+            "top band should correspond to widest first line: {:?}",
+            band_widths
+        );
+        assert!(
+            band_widths[1] > band_widths[2],
+            "middle band should correspond to medium second line: {:?}",
+            band_widths
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    fn displayed_opaque_band_widths(image: &DecodedImage) -> Vec<usize> {
+        let mut row_widths = Vec::with_capacity(image.height as usize);
+        for display_row in 0..image.height as usize {
+            let image_row = image.height as usize - 1 - display_row;
+            let row_start = image_row * image.width as usize * 4;
+            let row_end = row_start + image.width as usize * 4;
+            let width = image.rgba8[row_start..row_end]
+                .chunks_exact(4)
+                .filter(|pixel| pixel[3] > 0)
+                .count();
+            row_widths.push(width);
+        }
+
+        let mut bands = Vec::new();
+        let mut in_band = false;
+        let mut band_max = 0usize;
+        for width in row_widths {
+            if width > 0 {
+                in_band = true;
+                band_max = band_max.max(width);
+            } else if in_band {
+                bands.push(band_max);
+                in_band = false;
+                band_max = 0;
+            }
+        }
+        if in_band {
+            bands.push(band_max);
+        }
+        bands
     }
 }

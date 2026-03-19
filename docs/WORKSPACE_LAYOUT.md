@@ -122,12 +122,31 @@ Phase 1:
 - compute child rects and handle rect
 - paint only the handle/chrome needed for interaction
 
+Current status:
+
+- `ui-core` now has `SplitNodeModel`
+- `sng_rusty_editor` now uses split-driven shell layout for
+  left/center/right panes and the labels/operations split
+- editor pane ratios are persisted as editor settings
+- editor window size is also persisted between runs
+
 Phase 2:
 
 - add a tab-group node model
 - support selected tab
 - expose tab strip bounds and content bounds
 - reuse existing tab concepts where possible
+
+Current status:
+
+- `ui-core` now has a reusable `TabGroupModel`
+- `ui-core` now has a recursive `WorkspaceNode` tree with:
+  - `Split`
+  - `Tabs`
+  - `Leaf`
+- nested split/tab workspace behavior is exercised in
+  [workspace_harness.rs](/Users/jay/pudding/loadngo/host-desktop/src/bin/workspace_harness.rs)
+- `sng_rusty_editor` now uses a `WorkspaceTabGroup` for the right-side tool pane
 
 Phase 3:
 
