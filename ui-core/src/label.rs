@@ -1,7 +1,8 @@
 use crate::{
     component::Component,
     geometry::{Insets, Rect},
-    paint::{PaintOp, TextStyle},
+    paint::{PaintOp, TextLayoutMode, TextStyle, VerticalAlign},
+    single_line_text_box_height,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -39,9 +40,25 @@ impl LabelModel {
         }
     }
 
+    pub fn text_rect(&self) -> Rect {
+        let mut rect = self.content_rect();
+        if matches!(self.style.layout_mode, TextLayoutMode::SingleLine) {
+            let line_box_height = single_line_text_box_height(self.style.font_size);
+            let available_height = rect.height.max(0.0);
+            let offset_y = match self.style.vertical_align {
+                VerticalAlign::Top => 0.0,
+                VerticalAlign::Middle => (available_height - line_box_height).max(0.0) * 0.5,
+                VerticalAlign::Bottom => (available_height - line_box_height).max(0.0),
+            };
+            rect.y += offset_y;
+            rect.height = line_box_height.max(available_height);
+        }
+        rect
+    }
+
     pub fn paint(&self, scene: &mut Vec<PaintOp>) {
         scene.push(PaintOp::Text {
-            rect: self.content_rect(),
+            rect: self.text_rect(),
             text: self.text.clone(),
             style: self.style.clone(),
         });
@@ -95,7 +112,8 @@ mod tests {
     use crate::{
         component::Component,
         geometry::{Color, Insets, Rect},
-        paint::PaintOp,
+        paint::{PaintOp, TextLayoutMode, VerticalAlign},
+        single_line_text_box_height,
     };
 
     #[test]
@@ -133,6 +151,27 @@ mod tests {
                 style: label.style.clone(),
             }]
         );
+    }
+
+    #[test]
+    fn single_line_label_uses_shared_text_box_height() {
+        let mut label = LabelModel::new(
+            "Labels",
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 180.0,
+                height: 24.0,
+            },
+        );
+        label.style.font_size = 17;
+        label.style.layout_mode = TextLayoutMode::SingleLine;
+        label.style.vertical_align = VerticalAlign::Top;
+
+        let text_rect = label.text_rect();
+
+        assert_eq!(text_rect.y, 20.0);
+        assert_eq!(text_rect.height, single_line_text_box_height(17));
     }
 
     #[test]

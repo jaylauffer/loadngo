@@ -2,6 +2,7 @@ use crate::{
     component::Component,
     geometry::{Color, Insets, Rect},
     paint::PaintOp,
+    single_line_text_box_height,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -18,9 +19,9 @@ impl ListRowModel {
             bounds,
             padding: Insets {
                 left: 10.0,
-                top: 4.0,
+                top: 2.0,
                 right: 10.0,
-                bottom: 4.0,
+                bottom: 2.0,
             },
             background: None,
             border: None,
@@ -79,6 +80,20 @@ impl ListRowModel {
             width,
             height: content.height,
         }
+    }
+
+    pub fn single_line_body_rect(
+        &self,
+        font_size: u16,
+        leading_width: f32,
+        trailing_width: f32,
+        gap: f32,
+    ) -> Rect {
+        let mut rect = self.body_rect(leading_width, trailing_width, gap);
+        let line_box_height = single_line_text_box_height(font_size);
+        rect.y += (rect.height - line_box_height).max(0.0) * 0.5;
+        rect.height = line_box_height.max(rect.height);
+        rect
     }
 
     pub fn paint(&self, scene: &mut Vec<PaintOp>) {
@@ -141,6 +156,7 @@ mod tests {
         component::Component,
         geometry::{Color, Rect},
         paint::PaintOp,
+        single_line_text_box_height,
     };
 
     #[test]
@@ -156,18 +172,18 @@ mod tests {
             row.content_rect(),
             Rect {
                 x: 20.0,
-                y: 24.0,
+                y: 22.0,
                 width: 280.0,
-                height: 28.0,
+                height: 32.0,
             }
         );
         assert_eq!(
             row.body_rect(24.0, 40.0, 8.0),
             Rect {
                 x: 52.0,
-                y: 24.0,
+                y: 22.0,
                 width: 200.0,
-                height: 28.0,
+                height: 32.0,
             }
         );
     }
@@ -227,5 +243,24 @@ mod tests {
                 height: 40.0,
             }
         );
+    }
+
+    #[test]
+    fn list_row_single_line_body_rect_uses_shared_box_height() {
+        let row = ListRowModel::new(Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 300.0,
+            height: 35.0,
+        });
+
+        let body = row.single_line_body_rect(17, 0.0, 0.0, 0.0);
+
+        assert_eq!(body.x, 20.0);
+        assert_eq!(
+            body.y,
+            22.0 + (31.0 - single_line_text_box_height(17)) * 0.5
+        );
+        assert_eq!(body.height, 31.0);
     }
 }

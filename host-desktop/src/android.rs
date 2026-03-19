@@ -23,7 +23,9 @@ use ndk::hardware_buffer_format::HardwareBufferFormat;
 use ndk::native_window::NativeWindow;
 use ui_core::{
     geometry::{Color as UiColor, Rect as UiRect},
+    multiline_line_step,
     paint::PaintOp,
+    single_line_text_box_height,
 };
 
 #[derive(Clone, Default)]
@@ -1676,6 +1678,7 @@ fn rasterize_text_command(
     );
     let padding_x = 4.0;
     let padding_y = 6.0;
+    let line_box_height = single_line_text_box_height(request.style.font_size);
     let width = request
         .rect
         .width
@@ -1684,8 +1687,8 @@ fn rasterize_text_command(
     let height = request
         .rect
         .height
+        .max(line_box_height + padding_y * 2.0)
         .max(measured.height.ceil() + padding_y * 2.0)
-        .max(request.style.font_size as f32 + padding_y * 2.0)
         .max(1.0);
     let mut surface = OwnedSoftwareSurface::new(width.ceil() as usize, height.ceil() as usize);
     let mut local_request = request.clone();
@@ -1808,15 +1811,24 @@ impl OwnedSoftwareSurface {
         };
         let layout = software_text_line_layout(Some(font), request.style.font_size, 1.0);
         let px = layout.px;
-        let line_height = layout.line_height.max(1) as f32;
+        let measured_line_height = layout.line_height.max(1) as f32;
+        let line_box_height = single_line_text_box_height(request.style.font_size);
+        let line_step = multiline_line_step(request.style.font_size);
+        let baseline_offset =
+            layout.baseline_offset as f32 + (line_box_height - measured_line_height).max(0.0) * 0.5;
         let normalized_text = match request.style.layout_mode {
             loadngo_host_core::RenderTextLayoutMode::SingleLine => request.text.replace('\n', " "),
             loadngo_host_core::RenderTextLayoutMode::MultiLine => request.text.clone(),
         };
         let lines: Vec<&str> = normalized_text.split('\n').collect();
-        let mut total_height = (line_height * lines.len() as f32).max(line_height);
+        let mut total_height = match request.style.layout_mode {
+            loadngo_host_core::RenderTextLayoutMode::SingleLine => line_box_height,
+            loadngo_host_core::RenderTextLayoutMode::MultiLine => {
+                line_box_height + line_step * lines.len().saturating_sub(1) as f32
+            }
+        };
         if total_height <= 0.0 {
-            total_height = line_height;
+            total_height = line_box_height;
         }
 
         let mut origin_y = 0.0;
@@ -1850,8 +1862,7 @@ impl OwnedSoftwareSurface {
                     (request.rect.width - line_metrics.width).max(0.0)
                 }
             };
-            let baseline_y =
-                origin_y + line_index as f32 * line_height + layout.baseline_offset as f32;
+            let baseline_y = origin_y + line_index as f32 * line_step + baseline_offset;
             for ch in line.chars() {
                 if ch == ' ' {
                     let metrics = font.inner.metrics(ch, px);
@@ -2587,15 +2598,24 @@ impl<'a> SoftwareFramebuffer<'a> {
         };
         let layout = software_text_line_layout(Some(font), request.style.font_size, 1.0);
         let px = layout.px;
-        let line_height = layout.line_height.max(1) as f32;
+        let measured_line_height = layout.line_height.max(1) as f32;
+        let line_box_height = single_line_text_box_height(request.style.font_size);
+        let line_step = multiline_line_step(request.style.font_size);
+        let baseline_offset =
+            layout.baseline_offset as f32 + (line_box_height - measured_line_height).max(0.0) * 0.5;
         let normalized_text = match request.style.layout_mode {
             loadngo_host_core::RenderTextLayoutMode::SingleLine => request.text.replace('\n', " "),
             loadngo_host_core::RenderTextLayoutMode::MultiLine => request.text.clone(),
         };
         let lines: Vec<&str> = normalized_text.split('\n').collect();
-        let mut total_height = (line_height * lines.len() as f32).max(line_height);
+        let mut total_height = match request.style.layout_mode {
+            loadngo_host_core::RenderTextLayoutMode::SingleLine => line_box_height,
+            loadngo_host_core::RenderTextLayoutMode::MultiLine => {
+                line_box_height + line_step * lines.len().saturating_sub(1) as f32
+            }
+        };
         if total_height <= 0.0 {
-            total_height = line_height;
+            total_height = line_box_height;
         }
 
         let mut origin_y = request.rect.y;
@@ -2629,8 +2649,7 @@ impl<'a> SoftwareFramebuffer<'a> {
                     (request.rect.width - line_metrics.width).max(0.0)
                 }
             };
-            let baseline_y =
-                origin_y + line_index as f32 * line_height + layout.baseline_offset as f32;
+            let baseline_y = origin_y + line_index as f32 * line_step + baseline_offset;
             for ch in line.chars() {
                 if ch == ' ' {
                     let metrics = font.inner.metrics(ch, px);
@@ -2741,7 +2760,8 @@ pub fn render_text_lines(
     line_spacing: f32,
 ) {
     let mut ops = Vec::new();
-    let line_height = font_size as f32 * font_scale;
+    let line_height = multiline_line_step(font_size) * font_scale.max(0.0);
+    let line_box_height = single_line_text_box_height(font_size) * font_scale.max(0.0);
     let mut current_y = y;
     for line in lines {
         if !line.is_empty() {
@@ -2750,7 +2770,7 @@ pub fn render_text_lines(
                     x,
                     y: current_y,
                     width: 0.0,
-                    height: font_size as f32,
+                    height: line_box_height,
                 },
                 text: line.clone(),
                 style: loadngo_host_core::RenderTextStyle {
@@ -2804,7 +2824,7 @@ pub fn draw_plain_text(text: &str, _x: f32, _y: f32, size: f32, _color: UiColor)
             x: _x,
             y: _y,
             width: 0.0,
-            height: font_size as f32,
+            height: single_line_text_box_height(font_size) * font_scale.max(0.0),
         },
         text: text.to_string(),
         style: loadngo_host_core::RenderTextStyle {
