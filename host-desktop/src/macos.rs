@@ -104,6 +104,8 @@ struct DesktopBackendRuntime {
     metal: Option<MetalBackend>,
     pending_commands: Vec<FrameCommand>,
     pending_font_source: Option<String>,
+    last_submitted_commands: Option<Vec<FrameCommand>>,
+    last_submitted_font_source: Option<String>,
     detail: String,
 }
 
@@ -115,6 +117,8 @@ impl DesktopBackendRuntime {
             metal: None,
             pending_commands: Vec::new(),
             pending_font_source: None,
+            last_submitted_commands: None,
+            last_submitted_font_source: None,
             detail: "loadngo Metal backend waiting for the first frame".to_string(),
         }
     }
@@ -932,6 +936,15 @@ fn flush_selected_backend() {
 
         let pending_commands = std::mem::take(&mut runtime.pending_commands);
         let pending_font_source = runtime.pending_font_source.take();
+        let unchanged_frame = runtime
+            .last_submitted_commands
+            .as_ref()
+            .is_some_and(|last| last == &pending_commands)
+            && runtime.last_submitted_font_source == pending_font_source;
+        if unchanged_frame {
+            runtime.detail = "Metal backend skipped an identical queued frame".to_string();
+            return;
+        }
         let backend = match runtime.ensure_metal_ready() {
             Ok(backend) => backend,
             Err(err) => {
@@ -942,6 +955,8 @@ fn flush_selected_backend() {
         backend.set_text_font_source(pending_font_source.as_deref());
         match Renderer::new(RendererConfig::default()).render(backend, &pending_commands) {
             Ok(()) => {
+                runtime.last_submitted_commands = Some(pending_commands);
+                runtime.last_submitted_font_source = pending_font_source;
                 runtime.last_used = DesktopRenderBackendKind::Metal;
                 runtime.detail = "Metal backend rendered the queued frame".to_string();
             }

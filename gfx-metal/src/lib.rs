@@ -44,6 +44,53 @@ fn trace_widgets_log(message: impl AsRef<str>) {
     }
 }
 
+fn metal_diagnostics_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("LOADNGO_METAL_DIAGNOSTICS")
+            .map(|value| {
+                let value = value.trim().to_ascii_lowercase();
+                value == "1" || value == "true" || value == "yes" || value == "on"
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn metal_diagnostics_log(message: impl AsRef<str>) {
+    if metal_diagnostics_enabled() {
+        eprintln!("[loadngo-metal] {}", message.as_ref());
+    }
+}
+
+static TEXT_RASTER_CACHE_HITS: AtomicUsize = AtomicUsize::new(0);
+static TEXT_RASTER_CACHE_MISSES: AtomicUsize = AtomicUsize::new(0);
+static METAL_DIAGNOSTIC_FRAME_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Debug, Clone, Copy)]
+struct MetalDiagnosticsSnapshot {
+    cache_entries: usize,
+    cache_bytes: usize,
+    cache_hits: usize,
+    cache_misses: usize,
+}
+
+fn metal_text_cache_snapshot() -> MetalDiagnosticsSnapshot {
+    let (cache_entries, cache_bytes) = TEXT_RASTER_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let bytes = cache
+            .values()
+            .map(|item| item.image.rgba8.len())
+            .sum::<usize>();
+        (cache.len(), bytes)
+    });
+    MetalDiagnosticsSnapshot {
+        cache_entries,
+        cache_bytes,
+        cache_hits: TEXT_RASTER_CACHE_HITS.load(Ordering::Relaxed),
+        cache_misses: TEXT_RASTER_CACHE_MISSES.load(Ordering::Relaxed),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetalBackendState {
     UnboundSurface,
@@ -826,8 +873,10 @@ fn cached_text_raster(
 ) -> Result<Arc<CachedTextRaster>, RendererError> {
     let cache_key = text_raster_cache_key(request, font_source);
     if let Some(cached) = TEXT_RASTER_CACHE.with(|cache| cache.borrow().get(&cache_key).cloned()) {
+        TEXT_RASTER_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
         return Ok(cached);
     }
+    TEXT_RASTER_CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
 
     let mut request = request.clone();
     if matches!(
@@ -1916,13 +1965,6 @@ mod macos {
             CGColorSpaceRelease(color_space);
         }
 
-        for layout in layouts {
-            release_cf(layout.line);
-            release_cf(layout.attributed_string);
-            release_cf(layout.font);
-            release_cf(layout.string);
-        }
-
         Ok(RasterizedText {
             image: Arc::new(DecodedImage::new(width as u32, height as u32, rgba)),
             x: 0.0,
@@ -1945,6 +1987,15 @@ mod macos {
         attributed_string: CFAttributedStringRef,
         line: CTLineRef,
         metrics: RasterMetrics,
+    }
+
+    impl Drop for TextLayout {
+        fn drop(&mut self) {
+            release_cf(self.line);
+            release_cf(self.attributed_string);
+            release_cf(self.font);
+            release_cf(self.string);
+        }
     }
 
     fn layout_text(
@@ -2688,6 +2739,11 @@ impl GraphicsBackend for MetalBackend {
         }
         #[cfg(target_os = "macos")]
         if self.state == MetalBackendState::SurfaceBound {
+            let text_command_count = self
+                .recorded_commands
+                .iter()
+                .filter(|command| matches!(command, FrameCommand::Text(request) if !request.text.is_empty()))
+                .count();
             let clear = self.frame_clear_color().unwrap_or(ClearColor {
                 red: 0.0,
                 green: 0.0,
@@ -2695,6 +2751,58 @@ impl GraphicsBackend for MetalBackend {
                 alpha: 1.0,
             });
             let visuals = self.frame_visuals()?;
+            if metal_diagnostics_enabled() {
+                let frame_index = METAL_DIAGNOSTIC_FRAME_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+                if frame_index <= 8 || frame_index % 60 == 0 {
+                    let mut solid_rects = 0usize;
+                    let mut registered_images = 0usize;
+                    let mut generated_images = 0usize;
+                    let mut generated_text_images = 0usize;
+                    let mut generated_shape_images = 0usize;
+                    let mut generated_image_bytes = 0usize;
+                    for visual in &visuals {
+                        match visual {
+                            FrameVisual::SolidRect(_) => solid_rects += 1,
+                            FrameVisual::RegisteredImage(_) => registered_images += 1,
+                            FrameVisual::GeneratedImage(image) => {
+                                generated_images += 1;
+                                generated_image_bytes += image.image.rgba8.len();
+                                if image.placement.image_key == "__loadngo_text" {
+                                    generated_text_images += 1;
+                                } else {
+                                    generated_shape_images += 1;
+                                }
+                            }
+                        }
+                    }
+                    let snapshot = metal_text_cache_snapshot();
+                    let transient_texture_uploads = generated_images;
+                    let transient_texture_upload_bytes = generated_image_bytes;
+                    let registered_texture_reuses = registered_images;
+                    let registered_texture_pool = self.textures.len();
+                    metal_diagnostics_log(format!(
+                        "frame={} commands={} text_commands={} visuals={} solid={} registered={} generated={} generated_text={} generated_shape={} generated_bytes={} transient_uploads={} transient_upload_bytes={} registered_reuses={} registered_texture_pool={} cache_entries={} cache_bytes={} cache_hits={} cache_misses={}",
+                        frame_index,
+                        self.recorded_commands.len(),
+                        text_command_count,
+                        visuals.len(),
+                        solid_rects,
+                        registered_images,
+                        generated_images,
+                        generated_text_images,
+                        generated_shape_images,
+                        generated_image_bytes,
+                        transient_texture_uploads,
+                        transient_texture_upload_bytes,
+                        registered_texture_reuses,
+                        registered_texture_pool,
+                        snapshot.cache_entries,
+                        snapshot.cache_bytes,
+                        snapshot.cache_hits,
+                        snapshot.cache_misses,
+                    ));
+                }
+            }
             let has_textured_images = visuals.iter().any(|visual| {
                 matches!(
                     visual,
