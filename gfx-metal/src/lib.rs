@@ -1270,8 +1270,9 @@ fn distance_to_segment(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> 
 #[cfg(target_os = "macos")]
 mod macos {
     use std::ffi::{c_void, CString};
-    use std::sync::atomic::{AtomicIsize, Ordering};
     use std::sync::Arc;
+    #[cfg(test)]
+    use std::sync::atomic::{AtomicIsize, Ordering};
 
     use loadngo_host_core::{DecodedImage, TextMetrics};
     use loadngo_renderer::{RendererError, TextRequest};
