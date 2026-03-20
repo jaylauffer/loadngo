@@ -280,7 +280,11 @@ const KEYCODE_ESCAPE: u16 = 53;
 const KEYCODE_SPACE: u16 = 49;
 const KEYCODE_R: u16 = 15;
 const KEYCODE_A: u16 = 0;
+const KEYCODE_C: u16 = 8;
 const KEYCODE_S: u16 = 1;
+const KEYCODE_V: u16 = 9;
+const KEYCODE_Y: u16 = 16;
+const KEYCODE_Z: u16 = 6;
 const KEYCODE_F3: u16 = 99;
 const KEYCODE_TAB: u16 = 48;
 const KEYCODE_ENTER: u16 = 36;
@@ -576,6 +580,46 @@ pub fn set_text_cursor_active(active: bool) {
             update_window_cursor(&state.window);
         }
     });
+}
+
+pub fn read_clipboard_text() -> Result<Option<String>, String> {
+    let output = std::process::Command::new("pbpaste")
+        .arg("-Prefer")
+        .arg("txt")
+        .output()
+        .map_err(|err| format!("failed to run pbpaste: {err}"))?;
+    if !output.status.success() {
+        return Err(format!("pbpaste exited with status {}", output.status));
+    }
+    let text = String::from_utf8(output.stdout)
+        .map_err(|err| format!("clipboard text is not valid utf-8: {err}"))?;
+    if text.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(text))
+    }
+}
+
+pub fn write_clipboard_text(text: &str) -> Result<(), String> {
+    use std::io::Write;
+
+    let mut child = std::process::Command::new("pbcopy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("failed to run pbcopy: {err}"))?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|err| format!("failed to write clipboard text: {err}"))?;
+    }
+    let status = child
+        .wait()
+        .map_err(|err| format!("failed waiting for pbcopy: {err}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("pbcopy exited with status {status}"))
+    }
 }
 
 pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
@@ -1359,7 +1403,11 @@ fn host_key_from_key_code(key_code: u16) -> Option<HostKey> {
         KEYCODE_SPACE => HostKey::Space,
         KEYCODE_R => HostKey::R,
         KEYCODE_A => HostKey::A,
+        KEYCODE_C => HostKey::C,
         KEYCODE_S => HostKey::S,
+        KEYCODE_V => HostKey::V,
+        KEYCODE_Y => HostKey::Y,
+        KEYCODE_Z => HostKey::Z,
         KEYCODE_F3 => HostKey::F3,
         KEYCODE_TAB => HostKey::Tab,
         KEYCODE_ENTER => HostKey::Enter,

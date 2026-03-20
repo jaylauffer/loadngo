@@ -76,9 +76,13 @@ Current foundation:
   [TEXT_INPUT_MODEL.md](/Users/jay/pudding/loadngo/docs/TEXT_INPUT_MODEL.md)
 - current supported behavior:
   - authoritative multiline source buffer
+  - piece-table-backed document storage
+  - undo/redo and revision tracking
   - caret and selection model
   - focus and keyboard navigation
   - pointer placement and drag selection
+- editor/document-layer architecture is documented in
+  [TEXT_EDITOR_MODEL.md](/Users/jay/pudding/loadngo/docs/TEXT_EDITOR_MODEL.md)
 
 ### Radio Buttons / Grouped Exclusive Selection
 
@@ -198,6 +202,8 @@ Key requirements:
 - insertion/replacement
 - clipboard hooks later
 - desktop text-input harness with deterministic verification
+- piece-table-backed document model for editor-grade surfaces
+- incremental line index maintenance as the next performance step
 
 ### Phase 2: Radio And Group Semantics
 

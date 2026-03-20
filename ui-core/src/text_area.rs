@@ -7,6 +7,7 @@ use crate::{
     paint::{HorizontalAlign, PaintOp, TextLayoutMode, TextOverflow, TextStyle, VerticalAlign},
     scroll::{ScrollbarAxis, ScrollbarDragState, ScrollbarModel},
     text::single_line_text_box_height,
+    text_document::TextDocument,
     widget::{WidgetId, WidgetResponse},
 };
 
@@ -36,10 +37,27 @@ struct CachedLineMetrics {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+struct DocumentLineMetrics {
+    source_start: usize,
+    source_end: usize,
+    display_text: String,
+    char_offsets: Vec<f32>,
+    width: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingTextEdit {
+    dirty_line: usize,
+    old_end_line: usize,
+    new_end_line: usize,
+    char_delta: isize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextAreaModel {
     pub widget_id: WidgetId,
     pub bounds: Rect,
-    pub text: String,
+    pub document: TextDocument,
     pub style: TextStyle,
     pub padding: Insets,
     pub background: Option<Color>,
@@ -47,6 +65,10 @@ pub struct TextAreaModel {
     pub selection_fill: Color,
     pub caret_color: Color,
     pub line_spacing: f32,
+    pub show_line_numbers: bool,
+    pub line_number_color: Color,
+    pub line_number_gutter_fill: Option<Color>,
+    pub line_number_gutter_border: Option<Color>,
     pub scroll_x: f32,
     pub scroll_y: f32,
     pub focused: bool,
@@ -63,6 +85,12 @@ pub struct TextAreaModel {
     pub layout_cache: TextAreaLayoutCache,
     pub horizontal_scrollbar: ScrollbarModel,
     pub vertical_scrollbar: ScrollbarModel,
+    line_starts: Vec<usize>,
+    line_index_dirty: bool,
+    document_lines: Vec<DocumentLineMetrics>,
+    document_dirty_from_line: Option<usize>,
+    pending_edit: Option<PendingTextEdit>,
+    document_content_width: f32,
     line_metrics_cache: HashMap<String, CachedLineMetrics>,
     cache_font_size: u16,
     cache_tab_spaces: usize,
@@ -79,6 +107,7 @@ impl TextAreaModel {
     const VSCROLL_HIT_PAD_Y: f32 = 2.0;
 
     pub fn new(text: impl Into<String>, bounds: Rect) -> Self {
+        let text = text.into();
         let mut style = TextStyle::default();
         style.layout_mode = TextLayoutMode::MultiLine;
         style.horizontal_align = HorizontalAlign::Left;
@@ -90,7 +119,7 @@ impl TextAreaModel {
         Self {
             widget_id: WidgetId(0),
             bounds,
-            text: text.into(),
+            document: TextDocument::new(text),
             style,
             padding: Insets {
                 left: 12.0,
@@ -103,6 +132,10 @@ impl TextAreaModel {
             selection_fill: Color::rgba(0x39, 0x5e, 0x96, 0xd8),
             caret_color: Color::rgba(0xf4, 0xf6, 0xfa, 0xff),
             line_spacing: 2.0,
+            show_line_numbers: false,
+            line_number_color: Color::rgba(0x8d, 0x9a, 0xae, 0xff),
+            line_number_gutter_fill: Some(Color::rgba(0x10, 0x15, 0x1d, 0xf6)),
+            line_number_gutter_border: Some(Color::rgba(0x36, 0x41, 0x53, 0xff)),
             scroll_x: 0.0,
             scroll_y: 0.0,
             focused: false,
@@ -127,6 +160,12 @@ impl TextAreaModel {
                 Rect::default(),
                 0.0,
             ),
+            line_starts: vec![0],
+            line_index_dirty: true,
+            document_lines: Vec::new(),
+            document_dirty_from_line: Some(0),
+            pending_edit: None,
+            document_content_width: 0.0,
             line_metrics_cache: HashMap::new(),
             cache_font_size,
             cache_tab_spaces: 4,
@@ -144,7 +183,7 @@ impl TextAreaModel {
     }
 
     pub fn content_rect(&self) -> Rect {
-        let base = self.base_content_rect();
+        let base = self.text_base_content_rect();
         if self.horizontal_scrollbar.is_scrollable() || self.vertical_scrollbar.is_scrollable() {
             Rect {
                 x: base.x,
@@ -178,12 +217,57 @@ impl TextAreaModel {
         }
     }
 
+    fn line_number_digits(&self) -> usize {
+        self.line_starts.len().max(1).to_string().len().max(2)
+    }
+
+    fn line_number_gutter_width(&self) -> f32 {
+        if !self.show_line_numbers {
+            return 0.0;
+        }
+        let digits = self.line_number_digits() as f32;
+        16.0 + digits * (self.style.font_size as f32 * 0.62)
+    }
+
+    fn gutter_rect(&self) -> Option<Rect> {
+        if !self.show_line_numbers {
+            return None;
+        }
+        let base = self.base_content_rect();
+        Some(Rect {
+            x: base.x,
+            y: base.y,
+            width: self.line_number_gutter_width().min(base.width),
+            height: base.height,
+        })
+    }
+
+    fn text_base_content_rect(&self) -> Rect {
+        let base = self.base_content_rect();
+        let gutter = self.line_number_gutter_width().min(base.width);
+        Rect {
+            x: base.x + gutter,
+            y: base.y,
+            width: (base.width - gutter).max(0.0),
+            height: base.height,
+        }
+    }
+
     pub fn caret(&self) -> usize {
         self.selection_head
     }
 
+    pub fn text(&self) -> String {
+        self.document.to_string()
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.document.revision()
+    }
+
     pub fn prefers_text_cursor(&self, point: Point) -> bool {
         self.layout_cache.content_rect.contains(point)
+            && self.gutter_rect().is_none_or(|gutter| !gutter.contains(point))
             && self
                 .horizontal_scrollbar
                 .interactive_rect(Self::HSCROLL_HIT_PAD_Y, Self::HSCROLL_HIT_PAD_X)
@@ -232,45 +316,50 @@ impl TextAreaModel {
     where
         F: FnMut(&str, u16) -> f32,
     {
+        self.ensure_line_index();
         if self.cache_font_size != self.style.font_size || self.cache_tab_spaces != self.tab_spaces {
             self.line_metrics_cache.clear();
             self.cache_font_size = self.style.font_size;
             self.cache_tab_spaces = self.tab_spaces;
+            self.document_dirty_from_line = Some(0);
+            self.pending_edit = None;
         }
-        let base_content_rect = self.base_content_rect();
+        self.ensure_document_layout(measure_width);
+        let base_content_rect = self.text_base_content_rect();
         let line_box_height = single_line_text_box_height(self.style.font_size);
         let line_step = line_box_height + self.line_spacing.max(0.0);
-        let line_ranges = self.line_ranges();
-        let mut lines = Vec::with_capacity(line_ranges.len());
+        let total_line_count = self.document_lines.len().max(1);
         let mut selection_rects = Vec::new();
         let selection_range = self.selection_range();
         let mut caret_rect = None;
-        let caret = self.caret();
-        let mut content_width: f32 = 0.0;
-
-        for (index, (source_start, source_end)) in line_ranges.into_iter().enumerate() {
-            let y = base_content_rect.y + index as f32 * line_step - self.scroll_y;
+        let content_height = if total_line_count == 0 {
+            line_box_height
+        } else {
+            ((total_line_count - 1) as f32 * line_step + line_box_height).max(line_box_height)
+        };
+        let content_rect =
+            self.layout_scrollbars(base_content_rect, self.document_content_width, content_height);
+        let visible_start = (self.scroll_y / line_step).floor().max(0.0) as usize;
+        let visible_end = ((self.scroll_y + content_rect.height) / line_step)
+            .ceil()
+            .max(0.0) as usize
+            + 1;
+        let mut lines = Vec::new();
+        for index in visible_start.min(total_line_count)..visible_end.min(total_line_count) {
+            let metrics = &self.document_lines[index];
             let rect = Rect {
                 x: base_content_rect.x,
-                y,
-                width: base_content_rect.width,
+                y: base_content_rect.y + index as f32 * line_step - self.scroll_y,
+                width: content_rect.width,
                 height: line_box_height,
             };
-            let source_text = self.slice_chars(source_start, source_end);
-            let (display_text, char_offsets) = self.cached_display_text(
-                &source_text,
-                measure_width,
-            );
-
             let line = TextAreaLineLayout {
-                source_start,
-                source_end,
-                display_text,
+                source_start: metrics.source_start,
+                source_end: metrics.source_end,
+                display_text: metrics.display_text.clone(),
                 rect,
-                char_offsets,
+                char_offsets: metrics.char_offsets.clone(),
             };
-            let line_width = line.char_offsets.last().copied().unwrap_or(0.0);
-            content_width = content_width.max(line_width);
 
             if let Some((selection_start, selection_end)) = selection_range {
                 if selection_start < line.source_end && selection_end > line.source_start {
@@ -292,22 +381,23 @@ impl TextAreaModel {
                 }
             }
 
-            if caret >= line.source_start && caret <= line.source_end {
-                let local = caret
-                    .saturating_sub(line.source_start)
-                    .min(line.char_offsets.len().saturating_sub(1));
-                let caret_top = line.rect.y + 1.0;
+            lines.push(line);
+        }
+
+        if let Some((line_index, local, _)) = self.line_position_for_caret() {
+            if let Some(metrics) = self.document_lines.get(line_index) {
+                let rect_y = base_content_rect.y + line_index as f32 * line_step - self.scroll_y;
+                let caret_top = rect_y + 1.0;
                 let caret_height =
-                    (self.style.font_size as f32 + 1.0).min((line.rect.height - 2.0).max(1.0));
+                    (self.style.font_size as f32 + 1.0).min((line_box_height - 2.0).max(1.0));
+                let local = local.min(metrics.char_offsets.len().saturating_sub(1));
                 caret_rect = Some(Rect {
-                    x: line.rect.x + line.char_offsets[local] - self.scroll_x,
+                    x: base_content_rect.x + metrics.char_offsets[local] - self.scroll_x,
                     y: caret_top,
                     width: 1.5,
                     height: caret_height,
                 });
             }
-
-            lines.push(line);
         }
 
         if caret_rect.is_none() && lines.is_empty() {
@@ -321,18 +411,12 @@ impl TextAreaModel {
             });
         }
 
-        let content_height = if lines.is_empty() {
-            line_box_height
-        } else {
-            ((lines.len() - 1) as f32 * line_step + line_box_height).max(line_box_height)
-        };
-        let content_rect = self.layout_scrollbars(base_content_rect, content_width, content_height);
         self.layout_cache = TextAreaLayoutCache {
             lines,
             selection_rects,
             caret_rect,
             content_rect,
-            content_width,
+            content_width: self.document_content_width,
             content_height,
         };
         self.clamp_scroll();
@@ -364,6 +448,78 @@ impl TextAreaModel {
             },
         );
         (display_text, char_offsets)
+    }
+
+    fn ensure_document_layout<F>(&mut self, measure_width: &mut F)
+    where
+        F: FnMut(&str, u16) -> f32,
+    {
+        let Some(dirty_from_line) = self.document_dirty_from_line else {
+            return;
+        };
+        let line_ranges = self.line_ranges();
+        let pending_edit = self.pending_edit.take();
+        let mut document_lines = if dirty_from_line == 0 {
+            Vec::with_capacity(line_ranges.len())
+        } else {
+            self.document_lines[..dirty_from_line.min(self.document_lines.len())].to_vec()
+        };
+        let mut content_width = document_lines
+            .iter()
+            .map(|line| line.width)
+            .fold(0.0f32, f32::max);
+        let (recompute_end_exclusive, reuse_suffix_start) =
+            if let Some(edit) = pending_edit.filter(|edit| edit.dirty_line == dirty_from_line) {
+                (
+                    (edit.new_end_line + 1).min(line_ranges.len()),
+                    Some((edit.old_end_line + 1, edit.char_delta)),
+                )
+            } else {
+                (line_ranges.len(), None)
+            };
+        for (source_start, source_end) in line_ranges
+            .iter()
+            .copied()
+            .skip(dirty_from_line)
+            .take(recompute_end_exclusive.saturating_sub(dirty_from_line))
+        {
+            let source_text = self.slice_chars(source_start, source_end);
+            let (display_text, char_offsets) = self.cached_display_text(&source_text, measure_width);
+            let width = char_offsets.last().copied().unwrap_or(0.0);
+            content_width = content_width.max(width);
+            document_lines.push(DocumentLineMetrics {
+                source_start,
+                source_end,
+                display_text,
+                char_offsets,
+                width,
+            });
+        }
+        if let Some((old_suffix_start, char_delta)) = reuse_suffix_start {
+            for line in self.document_lines.iter().skip(old_suffix_start) {
+                let shifted = DocumentLineMetrics {
+                    source_start: ((line.source_start as isize) + char_delta).max(0) as usize,
+                    source_end: ((line.source_end as isize) + char_delta).max(0) as usize,
+                    display_text: line.display_text.clone(),
+                    char_offsets: line.char_offsets.clone(),
+                    width: line.width,
+                };
+                content_width = content_width.max(shifted.width);
+                document_lines.push(shifted);
+            }
+        }
+        if document_lines.is_empty() {
+            document_lines.push(DocumentLineMetrics {
+                source_start: 0,
+                source_end: 0,
+                display_text: String::new(),
+                char_offsets: vec![0.0],
+                width: 0.0,
+            });
+        }
+        self.document_lines = document_lines;
+        self.document_content_width = content_width;
+        self.document_dirty_from_line = None;
     }
 
     pub fn handle_event(&mut self, event: UiEvent) -> WidgetResponse {
@@ -547,6 +703,24 @@ impl TextAreaModel {
                 color,
             });
         }
+        if let Some(gutter) = self.gutter_rect() {
+            if let Some(color) = self.line_number_gutter_fill {
+                scene.push(PaintOp::FillRect { rect: gutter, color });
+            }
+            if let Some(color) = self.line_number_gutter_border {
+                scene.push(PaintOp::Line {
+                    from: Point {
+                        x: gutter.x + gutter.width,
+                        y: gutter.y,
+                    },
+                    to: Point {
+                        x: gutter.x + gutter.width,
+                        y: gutter.y + gutter.height,
+                    },
+                    color,
+                });
+            }
+        }
         let content = self.layout_cache.content_rect;
         for rect in self.layout_cache.selection_rects.iter().copied() {
             if rect_intersects(rect, content) {
@@ -557,6 +731,31 @@ impl TextAreaModel {
             }
         }
         for line in &self.layout_cache.lines {
+            if let Some(gutter) = self.gutter_rect() {
+                let line_number = self
+                    .line_starts
+                    .partition_point(|&line_start| line_start <= line.source_start)
+                    .max(1);
+                scene.push(PaintOp::Text {
+                    rect: Rect {
+                        x: gutter.x + 4.0,
+                        y: line.rect.y,
+                        width: (gutter.width - 8.0).max(0.0),
+                        height: line.rect.height,
+                    },
+                    clip_rect: Some(gutter),
+                    text: line_number.to_string(),
+                    style: TextStyle {
+                        color: self.line_number_color,
+                        font_size: self.style.font_size.saturating_sub(1).max(10),
+                        horizontal_align: HorizontalAlign::Right,
+                        vertical_align: VerticalAlign::Top,
+                        layout_mode: TextLayoutMode::SingleLine,
+                        overflow: TextOverflow::Clip,
+                        ..self.style.clone()
+                    },
+                });
+            }
             if !line.display_text.is_empty() && rect_intersects(line.rect, content) {
                 scene.push(PaintOp::Text {
                     rect: Rect {
@@ -617,6 +816,25 @@ impl TextAreaModel {
             self.select_all();
             return WidgetResponse::redraw_consumed();
         }
+        if matches!(key, Key::Character('z') | Key::Character('Z'))
+            && (modifiers.ctrl || modifiers.meta)
+        {
+            let changed = if modifiers.shift { self.redo() } else { self.undo() };
+            return if changed {
+                WidgetResponse::redraw_consumed()
+            } else {
+                WidgetResponse::default()
+            };
+        }
+        if matches!(key, Key::Character('y') | Key::Character('Y'))
+            && (modifiers.ctrl || modifiers.meta)
+        {
+            return if self.redo() {
+                WidgetResponse::redraw_consumed()
+            } else {
+                WidgetResponse::default()
+            };
+        }
 
         let changed = match key {
             Key::Left => self.move_horizontal(-1, modifiers.shift),
@@ -672,13 +890,13 @@ impl TextAreaModel {
             return false;
         };
         let next_line_index = (line_index as isize + direction)
-            .clamp(0, self.layout_cache.lines.len().saturating_sub(1) as isize)
+            .clamp(0, self.document_lines.len().saturating_sub(1) as isize)
             as usize;
         if next_line_index == line_index && direction != 0 {
             return false;
         }
         let preferred_x = self.preferred_x.unwrap_or(caret_x);
-        let next_line = &self.layout_cache.lines[next_line_index];
+        let next_line = &self.document_lines[next_line_index];
         let next_local = closest_char_offset_index(&next_line.char_offsets, preferred_x)
             .min(next_line.source_end.saturating_sub(next_line.source_start));
         let next_caret = next_line.source_start + next_local;
@@ -696,7 +914,7 @@ impl TextAreaModel {
         let Some((line_index, _, _)) = self.line_position_for_caret() else {
             return false;
         };
-        let line = &self.layout_cache.lines[line_index];
+        let line = &self.document_lines[line_index];
         let next = if to_start {
             line.source_start
         } else {
@@ -766,59 +984,68 @@ impl TextAreaModel {
     }
 
     fn replace_char_range(&mut self, start: usize, end: usize, replacement: &str) {
-        let start_byte = byte_index_for_char(&self.text, start);
-        let end_byte = byte_index_for_char(&self.text, end);
-        self.text.replace_range(start_byte..end_byte, replacement);
+        self.ensure_line_index();
+        let dirty_line = self.line_index_for_char(start);
+        let old_end_line = if start == end {
+            dirty_line
+        } else {
+            self.line_index_for_char(end.saturating_sub(1))
+        };
+        let new_end_line = dirty_line + replacement.chars().filter(|&ch| ch == '\n').count();
+        let char_delta = replacement.chars().count() as isize - end.saturating_sub(start) as isize;
+        self.update_line_starts_for_replace(start, end, replacement);
+        self.document.replace_char_range(start, end, replacement);
+        self.pending_edit = Some(PendingTextEdit {
+            dirty_line,
+            old_end_line,
+            new_end_line,
+            char_delta,
+        });
+        self.document_dirty_from_line = Some(
+            self.document_dirty_from_line
+                .map(|existing| existing.min(dirty_line))
+                .unwrap_or(dirty_line),
+        );
     }
 
     fn line_ranges(&self) -> Vec<(usize, usize)> {
-        let mut ranges = Vec::new();
-        let mut start = 0usize;
-        let mut char_index = 0usize;
-        for ch in self.text.chars() {
-            if ch == '\n' {
-                ranges.push((start, char_index));
-                start = char_index + 1;
-            }
-            char_index += 1;
-        }
-        ranges.push((start, char_index));
-        if ranges.is_empty() {
-            ranges.push((0, 0));
+        let char_len = self.char_len();
+        let mut ranges = Vec::with_capacity(self.line_starts.len());
+        for (index, start) in self.line_starts.iter().copied().enumerate() {
+            let end = self
+                .line_starts
+                .get(index + 1)
+                .map(|next| next.saturating_sub(1))
+                .unwrap_or(char_len);
+            ranges.push((start, end));
         }
         ranges
     }
 
     fn slice_chars(&self, start: usize, end: usize) -> String {
-        self.text
-            .chars()
-            .skip(start)
-            .take(end.saturating_sub(start))
-            .collect()
+        self.document.slice_chars(start, end)
     }
 
     fn char_len(&self) -> usize {
-        self.text.chars().count()
+        self.document.len_chars()
     }
 
     fn hit_test(&self, point: Point) -> usize {
-        if self.layout_cache.lines.is_empty() {
+        if self.document_lines.is_empty() {
             return 0;
         }
-        let line_index = self
-            .layout_cache
-            .lines
-            .iter()
-            .position(|line| point.y < line.rect.y + line.rect.height)
-            .unwrap_or(self.layout_cache.lines.len() - 1);
-        let line = &self.layout_cache.lines[line_index];
-        let local_x = (point.x - line.rect.x + self.scroll_x).max(0.0);
+        let line_step = single_line_text_box_height(self.style.font_size) + self.line_spacing.max(0.0);
+        let local_y = (point.y - self.text_base_content_rect().y + self.scroll_y).max(0.0);
+        let line_index = (local_y / line_step)
+            .floor()
+            .clamp(0.0, self.document_lines.len().saturating_sub(1) as f32) as usize;
+        let line = &self.document_lines[line_index];
+        let local_x = (point.x - self.text_base_content_rect().x + self.scroll_x).max(0.0);
         line.source_start + closest_char_offset_index(&line.char_offsets, local_x)
     }
 
     fn line_position_for_caret(&self) -> Option<(usize, usize, f32)> {
-        self.layout_cache
-            .lines
+        self.document_lines
             .iter()
             .enumerate()
             .find_map(|(index, line)| {
@@ -1003,6 +1230,96 @@ impl TextAreaModel {
     fn request_caret_visibility(&mut self) {
         self.caret_visibility_pending = true;
     }
+
+    fn line_index_for_char(&self, char_index: usize) -> usize {
+        self.line_starts
+            .partition_point(|&start| start <= char_index)
+            .saturating_sub(1)
+    }
+
+    fn ensure_line_index(&mut self) {
+        if !self.line_index_dirty {
+            return;
+        }
+        self.line_starts.clear();
+        self.line_starts.push(0);
+        let mut char_index = 0usize;
+        self.document.for_each_chunk(|chunk| {
+            for ch in chunk.chars() {
+                char_index += 1;
+                if ch == '\n' {
+                    self.line_starts.push(char_index);
+                }
+            }
+        });
+        if self.line_starts.is_empty() {
+            self.line_starts.push(0);
+        }
+        self.line_index_dirty = false;
+    }
+
+    fn update_line_starts_for_replace(&mut self, start: usize, end: usize, replacement: &str) {
+        let start = start.min(self.char_len());
+        let end = end.min(self.char_len());
+        let (start, end) = if start <= end { (start, end) } else { (end, start) };
+        let prefix_len = self.line_starts.partition_point(|&line_start| line_start <= start);
+        let suffix_start = self.line_starts.partition_point(|&line_start| line_start <= end);
+        let inserted_chars = replacement.chars().count();
+        let removed_chars = end.saturating_sub(start);
+        let delta = inserted_chars as isize - removed_chars as isize;
+
+        let mut updated = Vec::with_capacity(
+            prefix_len
+                + replacement.chars().filter(|&ch| ch == '\n').count()
+                + self.line_starts.len().saturating_sub(suffix_start),
+        );
+        updated.extend_from_slice(&self.line_starts[..prefix_len]);
+
+        let mut local_char_index = 0usize;
+        for ch in replacement.chars() {
+            local_char_index += 1;
+            if ch == '\n' {
+                updated.push(start + local_char_index);
+            }
+        }
+
+        for &line_start in &self.line_starts[suffix_start..] {
+            updated.push(((line_start as isize) + delta).max(0) as usize);
+        }
+
+        if updated.is_empty() || updated[0] != 0 {
+            updated.insert(0, 0);
+        }
+        self.line_starts = updated;
+        self.line_index_dirty = false;
+    }
+
+    pub fn undo(&mut self) -> bool {
+        if !self.document.undo() {
+            return false;
+        }
+        self.after_document_history_change();
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        if !self.document.redo() {
+            return false;
+        }
+        self.after_document_history_change();
+        true
+    }
+
+    fn after_document_history_change(&mut self) {
+        self.line_index_dirty = true;
+        self.document_dirty_from_line = Some(0);
+        self.pending_edit = None;
+        let len = self.char_len();
+        self.selection_anchor = self.selection_anchor.min(len);
+        self.selection_head = self.selection_head.min(len);
+        self.preferred_x = None;
+        self.request_caret_visibility();
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1070,13 +1387,6 @@ where
     (display_text, char_offsets)
 }
 
-fn byte_index_for_char(text: &str, char_index: usize) -> usize {
-    text.char_indices()
-        .nth(char_index)
-        .map(|(byte_index, _)| byte_index)
-        .unwrap_or(text.len())
-}
-
 fn ordered_range(a: usize, b: usize) -> (usize, usize) {
     if a <= b {
         (a, b)
@@ -1138,13 +1448,43 @@ mod tests {
         let _ = area.handle_event(UiEvent::TextInput {
             text: "d".to_string(),
         });
-        assert_eq!(area.text, "abcd");
+        assert_eq!(area.text(), "abcd");
 
         let _ = area.handle_event(UiEvent::KeyPressed {
             key: Key::Backspace,
             modifiers: Modifiers::default(),
         });
-        assert_eq!(area.text, "abc");
+        assert_eq!(area.text(), "abc");
+    }
+
+    #[test]
+    fn command_z_and_redo_restore_document_edits() {
+        let mut area = area("abc");
+        area.selection_anchor = 3;
+        area.selection_head = 3;
+        let _ = area.handle_event(UiEvent::TextInput {
+            text: "d".to_string(),
+        });
+        assert_eq!(area.text(), "abcd");
+
+        let _ = area.handle_event(UiEvent::KeyPressed {
+            key: Key::Character('z'),
+            modifiers: Modifiers {
+                meta: true,
+                ..Modifiers::default()
+            },
+        });
+        assert_eq!(area.text(), "abc");
+
+        let _ = area.handle_event(UiEvent::KeyPressed {
+            key: Key::Character('z'),
+            modifiers: Modifiers {
+                meta: true,
+                shift: true,
+                ..Modifiers::default()
+            },
+        });
+        assert_eq!(area.text(), "abcd");
     }
 
     #[test]
@@ -1156,7 +1496,7 @@ mod tests {
             text: "gamma".to_string(),
         });
 
-        assert_eq!(area.text, "alpha gamma");
+        assert_eq!(area.text(), "alpha gamma");
         assert_eq!(area.selection_anchor, 11);
         assert_eq!(area.selection_head, 11);
     }
@@ -1180,6 +1520,20 @@ mod tests {
             modifiers: Modifiers::default(),
         });
         assert_eq!(area.selection_head, 13);
+    }
+
+    #[test]
+    fn up_arrow_moves_caret_to_previous_line() {
+        let mut area = area("alpha\nbeta\ngamma");
+        area.selection_anchor = 8;
+        area.selection_head = 8;
+        area.relayout(measure_width);
+
+        let _ = area.handle_event(UiEvent::KeyPressed {
+            key: Key::Up,
+            modifiers: Modifiers::default(),
+        });
+        assert_eq!(area.selection_head, 2);
     }
 
     #[test]
@@ -1260,7 +1614,7 @@ mod tests {
             },
         );
         area.focused = true;
-        let len = area.text.chars().count();
+        let len = area.text().chars().count();
         area.selection_anchor = len;
         area.selection_head = len;
 
@@ -1269,7 +1623,7 @@ mod tests {
         assert!(area.scroll_x > 0.0);
         let caret = area.layout_cache.caret_rect.expect("caret rect");
         let content = area.layout_cache.content_rect;
-        assert!(caret.x + caret.width <= content.x + content.width + 0.01);
+        assert!(caret.x <= content.x + content.width + 0.01);
     }
 
     #[test]
@@ -1284,7 +1638,7 @@ mod tests {
             },
         );
         area.focused = true;
-        let len = area.text.chars().count();
+        let len = area.text().chars().count();
         area.selection_anchor = len;
         area.selection_head = len;
         area.relayout(measure_width);
@@ -1318,7 +1672,7 @@ mod tests {
             },
         );
         area.focused = true;
-        let len = area.text.chars().count();
+        let len = area.text().chars().count();
         area.selection_anchor = len;
         area.selection_head = len;
         area.relayout(measure_width);
@@ -1418,7 +1772,7 @@ mod tests {
             },
         );
         area.focused = true;
-        let len = area.text.chars().count();
+        let len = area.text().chars().count();
         area.selection_anchor = len;
         area.selection_head = len;
         area.relayout(measure_width);
@@ -1454,7 +1808,7 @@ mod tests {
             },
         );
         area.focused = true;
-        let len = area.text.chars().count();
+        let len = area.text().chars().count();
         area.selection_anchor = len;
         area.selection_head = len;
         area.relayout(measure_width);
@@ -1482,7 +1836,7 @@ mod tests {
             },
         );
         area.focused = true;
-        let len = area.text.chars().count();
+        let len = area.text().chars().count();
         area.selection_anchor = len;
         area.selection_head = len;
         area.relayout(measure_width);
@@ -1564,5 +1918,91 @@ mod tests {
 
         assert!(second_calls > 0);
         assert!(second_calls < first_calls);
+    }
+
+    #[test]
+    fn localized_edit_reuses_unchanged_suffix_document_lines() {
+        let mut area = TextAreaModel::new(
+            "alpha\nbeta\ngamma\ndelta",
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 240.0,
+            },
+        );
+        area.focused = true;
+
+        let mut first_calls = 0usize;
+        area.relayout(|text, font_size| {
+            first_calls += 1;
+            measure_width(text, font_size)
+        });
+        area.selection_anchor = 1;
+        area.selection_head = 1;
+        let _ = area.handle_event(UiEvent::TextInput {
+            text: "Z".to_string(),
+        });
+
+        let mut second_calls = 0usize;
+        area.relayout(|text, font_size| {
+            second_calls += 1;
+            measure_width(text, font_size)
+        });
+
+        assert!(second_calls < first_calls);
+        assert_eq!(area.document_lines[1].display_text, "beta");
+        assert_eq!(area.document_lines[2].display_text, "gamma");
+        assert_eq!(area.document_lines[3].display_text, "delta");
+    }
+
+    #[test]
+    fn replace_updates_line_starts_without_marking_index_dirty() {
+        let mut area = area("alpha\nbeta\ngamma");
+        area.selection_anchor = 5;
+        area.selection_head = 5;
+        let _ = area.handle_event(UiEvent::TextInput {
+            text: "\n".to_string(),
+        });
+
+        assert_eq!(area.line_starts, vec![0, 6, 7, 12]);
+        assert!(!area.line_index_dirty);
+    }
+
+    #[test]
+    fn deleting_newline_merges_line_starts_incrementally() {
+        let mut area = area("alpha\nbeta\ngamma");
+        area.selection_anchor = 5;
+        area.selection_head = 6;
+        let _ = area.handle_event(UiEvent::KeyPressed {
+            key: Key::Backspace,
+            modifiers: Modifiers::default(),
+        });
+
+        assert_eq!(area.line_starts, vec![0, 10]);
+        assert!(!area.line_index_dirty);
+    }
+
+    #[test]
+    fn line_number_gutter_shifts_text_viewport_and_paints_numbers() {
+        let mut area = area("alpha\nbeta\ngamma");
+        area.show_line_numbers = true;
+        area.relayout(measure_width);
+
+        let gutter = area.gutter_rect().expect("gutter");
+        let content = area.layout_cache.content_rect;
+        assert!(content.x >= gutter.right());
+
+        let mut ops = Vec::new();
+        area.paint(&mut ops);
+        let line_number_texts: Vec<String> = ops
+            .into_iter()
+            .filter_map(|op| match op {
+                crate::paint::PaintOp::Text { text, rect, .. } if rect.x < content.x => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert!(line_number_texts.iter().any(|text| text == "1"));
+        assert!(line_number_texts.iter().any(|text| text == "2"));
     }
 }

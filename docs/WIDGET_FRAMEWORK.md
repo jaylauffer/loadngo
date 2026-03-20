@@ -92,8 +92,9 @@ Current core text widgets:
   - callers may pre-wrap by inserting `\n` until shared width-aware wrapping exists
 - `TextAreaModel`
   - multiline editable text surface
+  - uses an editor-grade `TextDocument` backend for source editing
   - authoritative source buffer with caret and selection state
-  - first phase uses explicit newline-based visual lines
+  - current source-editor path is desktop-first and newline-line-based
 
 Current core composition widgets:
 - `PanelModel`
@@ -121,6 +122,7 @@ Workspace layout roadmap:
 Control completeness roadmap:
 - control-family coverage and missing standard widgets are documented in [CONTROL_ROADMAP.md](/Users/jay/pudding/loadngo/docs/CONTROL_ROADMAP.md)
 - text-input model details and prior-art review are documented in [TEXT_INPUT_MODEL.md](/Users/jay/pudding/loadngo/docs/TEXT_INPUT_MODEL.md)
+- editor/document-layer architecture is documented in [TEXT_EDITOR_MODEL.md](/Users/jay/pudding/loadngo/docs/TEXT_EDITOR_MODEL.md)
 - especially important missing families:
   - text input
   - radio/grouped exclusive selection
