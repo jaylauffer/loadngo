@@ -161,6 +161,7 @@ Text-metrics verification harness:
   - the strings `123`, `...`, `ooo`, `Ops(`, `gggg`, `T`, `MMMMM`, and `WWWWW`
   - a three-tab comparison row so sibling control alignment is obvious
 - use it when changing baseline, line-box, or vertical centering behavior in the shared renderer
+- process lessons and debugging guidance are documented in [TEXT_RENDERING_TROUBLESHOOTING.md](/Users/jay/pudding/loadngo/docs/TEXT_RENDERING_TROUBLESHOOTING.md)
 
 This is the boundary that desktop backends must preserve so editor and runtime UI
 do not drift into separate text-layout worlds.

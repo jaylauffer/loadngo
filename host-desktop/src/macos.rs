@@ -280,6 +280,7 @@ const KEYCODE_ESCAPE: u16 = 53;
 const KEYCODE_SPACE: u16 = 49;
 const KEYCODE_R: u16 = 15;
 const KEYCODE_A: u16 = 0;
+const KEYCODE_S: u16 = 1;
 const KEYCODE_F3: u16 = 99;
 const KEYCODE_TAB: u16 = 48;
 const KEYCODE_ENTER: u16 = 36;
@@ -1358,6 +1359,7 @@ fn host_key_from_key_code(key_code: u16) -> Option<HostKey> {
         KEYCODE_SPACE => HostKey::Space,
         KEYCODE_R => HostKey::R,
         KEYCODE_A => HostKey::A,
+        KEYCODE_S => HostKey::S,
         KEYCODE_F3 => HostKey::F3,
         KEYCODE_TAB => HostKey::Tab,
         KEYCODE_ENTER => HostKey::Enter,

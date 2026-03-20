@@ -222,6 +222,7 @@ pub enum HostKey {
     Space,
     F3,
     R,
+    S,
     Up,
     Down,
     Left,

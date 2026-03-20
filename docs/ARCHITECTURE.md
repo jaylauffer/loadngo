@@ -10,6 +10,7 @@ Related design notes:
 - [WORKSPACE_LAYOUT.md](/Users/jay/pudding/loadngo/docs/WORKSPACE_LAYOUT.md)
 - [CONTROL_ROADMAP.md](/Users/jay/pudding/loadngo/docs/CONTROL_ROADMAP.md)
 - [TEXT_INPUT_MODEL.md](/Users/jay/pudding/loadngo/docs/TEXT_INPUT_MODEL.md)
+- [TEXT_RENDERING_TROUBLESHOOTING.md](/Users/jay/pudding/loadngo/docs/TEXT_RENDERING_TROUBLESHOOTING.md)
 - [RON_FIRST_EDITOR.md](/Users/jay/pudding/sng-rusty/docs/RON_FIRST_EDITOR.md)
 
 ## Layer model
