@@ -48,7 +48,7 @@ struct DocumentLineMetrics {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PendingTextEdit {
     dirty_line: usize,
-    old_end_line: usize,
+    old_suffix_start: usize,
     new_end_line: usize,
     char_delta: isize,
 }
@@ -294,6 +294,14 @@ impl TextAreaModel {
         self.request_caret_visibility();
     }
 
+    pub fn set_caret(&mut self, caret: usize) {
+        let next = caret.min(self.char_len());
+        self.selection_anchor = next;
+        self.selection_head = next;
+        self.preferred_x = None;
+        self.request_caret_visibility();
+    }
+
     pub fn relayout<F>(&mut self, mut measure_width: F)
     where
         F: FnMut(&str, u16) -> f32,
@@ -472,7 +480,7 @@ impl TextAreaModel {
             if let Some(edit) = pending_edit.filter(|edit| edit.dirty_line == dirty_from_line) {
                 (
                     (edit.new_end_line + 1).min(line_ranges.len()),
-                    Some((edit.old_end_line + 1, edit.char_delta)),
+                    Some((edit.old_suffix_start, edit.char_delta)),
                 )
             } else {
                 (line_ranges.len(), None)
@@ -986,18 +994,14 @@ impl TextAreaModel {
     fn replace_char_range(&mut self, start: usize, end: usize, replacement: &str) {
         self.ensure_line_index();
         let dirty_line = self.line_index_for_char(start);
-        let old_end_line = if start == end {
-            dirty_line
-        } else {
-            self.line_index_for_char(end.saturating_sub(1))
-        };
+        let old_suffix_start = self.line_starts.partition_point(|&line_start| line_start <= end);
         let new_end_line = dirty_line + replacement.chars().filter(|&ch| ch == '\n').count();
         let char_delta = replacement.chars().count() as isize - end.saturating_sub(start) as isize;
         self.update_line_starts_for_replace(start, end, replacement);
         self.document.replace_char_range(start, end, replacement);
         self.pending_edit = Some(PendingTextEdit {
             dirty_line,
-            old_end_line,
+            old_suffix_start,
             new_end_line,
             char_delta,
         });
@@ -2004,5 +2008,111 @@ mod tests {
             .collect();
         assert!(line_number_texts.iter().any(|text| text == "1"));
         assert!(line_number_texts.iter().any(|text| text == "2"));
+    }
+
+    #[test]
+    fn backspacing_line_contents_to_empty_preserves_line_numbers_and_vertical_motion() {
+        let mut area = area("one\ntwo\nthree\nfour");
+        area.show_line_numbers = true;
+        area.relayout(measure_width);
+
+        area.selection_anchor = 7;
+        area.selection_head = 7;
+        for _ in 0..3 {
+            let _ = area.handle_event(UiEvent::KeyPressed {
+                key: Key::Backspace,
+                modifiers: Modifiers::default(),
+            });
+        }
+        area.relayout(measure_width);
+
+        assert_eq!(area.text(), "one\n\nthree\nfour");
+        assert_eq!(area.line_starts, vec![0, 4, 5, 11]);
+
+        let painted_numbers: Vec<String> = {
+            let mut ops = Vec::new();
+            area.paint(&mut ops);
+            ops.into_iter()
+                .filter_map(|op| match op {
+                    crate::paint::PaintOp::Text { text, rect, .. }
+                        if rect.x < area.layout_cache.content_rect.x =>
+                    {
+                        Some(text)
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(painted_numbers, vec!["1", "2", "3", "4"]);
+
+        area.selection_anchor = 2;
+        area.selection_head = 2;
+        area.relayout(measure_width);
+        let _ = area.handle_event(UiEvent::KeyPressed {
+            key: Key::Down,
+            modifiers: Modifiers::default(),
+        });
+        assert_eq!(area.line_position_for_caret().map(|(line, _, _)| line), Some(1));
+        area.relayout(measure_width);
+        let _ = area.handle_event(UiEvent::KeyPressed {
+            key: Key::Down,
+            modifiers: Modifiers::default(),
+        });
+        assert_eq!(area.line_position_for_caret().map(|(line, _, _)| line), Some(2));
+    }
+
+    #[test]
+    fn backspacing_at_start_of_empty_line_merges_lines_without_duplicate_numbers() {
+        let mut area = area("one\ntwo\nthree\nfour");
+        area.show_line_numbers = true;
+        area.relayout(measure_width);
+
+        area.selection_anchor = 7;
+        area.selection_head = 7;
+        for _ in 0..4 {
+            let _ = area.handle_event(UiEvent::KeyPressed {
+                key: Key::Backspace,
+                modifiers: Modifiers::default(),
+            });
+        }
+        area.relayout(measure_width);
+
+        assert_eq!(area.text(), "one\nthree\nfour");
+        assert_eq!(area.line_starts, vec![0, 4, 10]);
+        assert_eq!(area.document_lines.len(), 3);
+        assert_eq!(area.document_lines[0].display_text, "one");
+        assert_eq!(area.document_lines[1].display_text, "three");
+        assert_eq!(area.document_lines[2].display_text, "four");
+
+        let painted_numbers: Vec<String> = {
+            let mut ops = Vec::new();
+            area.paint(&mut ops);
+            ops.into_iter()
+                .filter_map(|op| match op {
+                    crate::paint::PaintOp::Text { text, rect, .. }
+                        if rect.x < area.layout_cache.content_rect.x =>
+                    {
+                        Some(text)
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(painted_numbers, vec!["1", "2", "3"]);
+
+        area.selection_anchor = 2;
+        area.selection_head = 2;
+        area.relayout(measure_width);
+        let _ = area.handle_event(UiEvent::KeyPressed {
+            key: Key::Down,
+            modifiers: Modifiers::default(),
+        });
+        assert_eq!(area.line_position_for_caret().map(|(line, _, _)| line), Some(1));
+        area.relayout(measure_width);
+        let _ = area.handle_event(UiEvent::KeyPressed {
+            key: Key::Down,
+            modifiers: Modifiers::default(),
+        });
+        assert_eq!(area.line_position_for_caret().map(|(line, _, _)| line), Some(2));
     }
 }

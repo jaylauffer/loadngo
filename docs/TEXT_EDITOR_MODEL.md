@@ -159,6 +159,14 @@ In other words:
 - keep deterministic tests near the document model
 - validate text-input behavior in `text_input_harness`
 - validate source-editor behavior in `sng_rusty_editor`
+- add and prefer a dedicated editor harness for source-specific behavior
+  - line numbers/gutter
+  - large-file load
+  - undo/redo
+  - vertical navigation across empty lines
+  - line merge/split edits
+  - clipboard shortcuts
+  - save/dirty workflow stubs
 
 ## Immediate Next Improvements
 
@@ -179,6 +187,7 @@ Priority order:
    - current-line highlight
    - gutter polish
    - keyboard shortcuts and desktop menu integration
+   - dedicated `text_editor_harness` on top of `TextAreaModel` + `TextDocument`
 4. text-system completeness
    - single-line `TextFieldModel`
    - IME/composition
