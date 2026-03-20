@@ -546,6 +546,7 @@ mod imp {
     const MUSIC_BASE_VOLUME: f32 = 0.8;
     const MUSIC_BASS_CUTOFF_HZ: u32 = 180;
     const MUSIC_BASS_POST_GAIN: f32 = 0.9;
+    const MUSIC_IDLE_POLL_INTERVAL: Duration = Duration::from_millis(1000);
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum MusicCueMode {
@@ -945,7 +946,7 @@ mod imp {
             if self.active_track.is_some()
                 && (self.playlist_mode_active || self.resume_playlist_after_cue)
             {
-                return Some(Duration::from_millis(100));
+                return Some(MUSIC_IDLE_POLL_INTERVAL);
             }
             None
         }

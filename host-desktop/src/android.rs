@@ -1136,6 +1136,14 @@ pub fn asset_exists(path: &str) -> bool {
 
 pub fn set_text_cursor_active(_active: bool) {}
 
+pub fn read_clipboard_text() -> Result<Option<String>, String> {
+    Ok(None)
+}
+
+pub fn write_clipboard_text(_text: &str) -> Result<(), String> {
+    Ok(())
+}
+
 pub fn desktop_render_backend_status() -> DesktopRenderBackendStatus {
     let state = app_state().lock().expect("android app state poisoned");
     let gles_state = state

@@ -303,6 +303,14 @@ pub fn asset_exists(path: &str) -> bool {
 
 pub fn set_text_cursor_active(_active: bool) {}
 
+pub fn read_clipboard_text() -> Result<Option<String>, String> {
+    Ok(None)
+}
+
+pub fn write_clipboard_text(_text: &str) -> Result<(), String> {
+    Ok(())
+}
+
 pub async fn load_font(path: &str) -> Result<DesktopFont, String> {
     LoadngoPlaceholderGraphicsHost::load_font(path).await
 }

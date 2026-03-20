@@ -1,9 +1,11 @@
 use std::{
     cell::RefCell,
+    collections::hash_map::DefaultHasher,
     collections::HashMap,
+    hash::{Hash, Hasher},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        OnceLock,
+        Arc, OnceLock,
     },
 };
 
@@ -16,6 +18,7 @@ use ui_core::geometry::Color;
 
 thread_local! {
     static REGISTERED_IMAGES: RefCell<HashMap<String, DecodedImage>> = RefCell::new(HashMap::new());
+    static TEXT_RASTER_CACHE: RefCell<HashMap<String, Arc<CachedTextRaster>>> = RefCell::new(HashMap::new());
 }
 
 fn trace_widgets_enabled() -> bool {
@@ -104,7 +107,7 @@ struct BlitImage {
 
 #[derive(Debug, Clone, PartialEq)]
 struct GeneratedFrameImage {
-    image: DecodedImage,
+    image: Arc<DecodedImage>,
     placement: BlitImage,
 }
 
@@ -767,7 +770,7 @@ impl MetalBackend {
 
 #[derive(Debug, Clone, PartialEq)]
 struct RasterizedText {
-    image: DecodedImage,
+    image: Arc<DecodedImage>,
     x: f32,
     y: f32,
     metrics: RasterMetrics,
@@ -777,8 +780,135 @@ struct RasterizedText {
     opaque_height: f32,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct CachedTextRaster {
+    image: Arc<DecodedImage>,
+    metrics: RasterMetrics,
+    content_top_in_image: f32,
+    logical_top_in_display: f32,
+    opaque_top_in_display: f32,
+    opaque_height: f32,
+}
+
 const TEXT_RASTER_ALPHA_TOP_MARGIN: u32 = 2;
 const TEXT_RASTER_ALPHA_BOTTOM_MARGIN: u32 = 2;
+const TEXT_RASTER_CACHE_LIMIT: usize = 512;
+
+fn text_raster_cache_key(request: &TextRequest, font_source: Option<&str>) -> String {
+    let mut hasher = DefaultHasher::new();
+    font_source.unwrap_or_default().hash(&mut hasher);
+    request.text.hash(&mut hasher);
+    request.rect.width.to_bits().hash(&mut hasher);
+    request.rect.height.to_bits().hash(&mut hasher);
+    request.style.font_size.hash(&mut hasher);
+    request.style.color.r.hash(&mut hasher);
+    request.style.color.g.hash(&mut hasher);
+    request.style.color.b.hash(&mut hasher);
+    request.style.color.a.hash(&mut hasher);
+    request.style.horizontal_align.hash(&mut hasher);
+    request.style.vertical_align.hash(&mut hasher);
+    request.style.vertical_metric_mode.hash(&mut hasher);
+    request.style.layout_mode.hash(&mut hasher);
+    request.style.overflow.hash(&mut hasher);
+    std::mem::discriminant(&request.direction).hash(&mut hasher);
+    std::mem::discriminant(&request.script).hash(&mut hasher);
+    request
+        .language
+        .as_ref()
+        .map(|tag| tag.as_str())
+        .hash(&mut hasher);
+    format!("generated://metal-text/{:016x}", hasher.finish())
+}
+
+fn cached_text_raster(
+    request: &TextRequest,
+    font_source: Option<&str>,
+) -> Result<Arc<CachedTextRaster>, RendererError> {
+    let cache_key = text_raster_cache_key(request, font_source);
+    if let Some(cached) = TEXT_RASTER_CACHE.with(|cache| cache.borrow().get(&cache_key).cloned()) {
+        return Ok(cached);
+    }
+
+    let mut request = request.clone();
+    if matches!(
+        request.style.layout_mode,
+        loadngo_host_core::RenderTextLayoutMode::SingleLine
+    ) && request.rect.width > 0.0
+    {
+        request.text = apply_single_line_overflow(
+            &request.text,
+            request.rect.width as f32,
+            font_source,
+            request.style.font_size as f32,
+            &request.style.overflow,
+        )?;
+    }
+
+    let mut raster = macos::rasterize_text(&request, font_source)?;
+    let logical_top = raster.content_top_in_image.floor().max(0.0) as u32;
+    let logical_bottom = (raster.content_top_in_image + raster.metrics.height)
+        .ceil()
+        .max(1.0)
+        .min(raster.image.height as f32) as u32;
+    let (crop_top, crop_bottom) =
+        if let Some((opaque_top, opaque_bottom)) = opaque_alpha_bounds(&raster.image) {
+            let opaque_crop_top = opaque_top.saturating_sub(TEXT_RASTER_ALPHA_TOP_MARGIN);
+            let opaque_crop_bottom =
+                (opaque_bottom + 1 + TEXT_RASTER_ALPHA_BOTTOM_MARGIN).min(raster.image.height);
+            match request.style.vertical_metric_mode {
+                loadngo_host_core::RenderTextVerticalMetricMode::VisibleInk => {
+                    (opaque_crop_top, opaque_crop_bottom)
+                }
+                loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox => (
+                    opaque_crop_top.min(logical_top),
+                    opaque_crop_bottom.max(logical_bottom).min(raster.image.height),
+                ),
+            }
+        } else {
+            (logical_top, logical_bottom)
+        };
+    if crop_top < crop_bottom && (crop_top > 0 || crop_bottom < raster.image.height) {
+        raster.image = Arc::new(crop_decoded_image_rows(
+            raster.image.as_ref(),
+            crop_top,
+            crop_bottom,
+        ));
+        raster.content_top_in_image = (raster.content_top_in_image - crop_top as f32).max(0.0);
+    }
+    let (opaque_top_in_image, opaque_bottom_in_image) =
+        opaque_alpha_bounds(&raster.image).unwrap_or_else(|| {
+            let top = raster.content_top_in_image.max(0.0).floor() as u32;
+            let bottom = (raster.content_top_in_image + raster.metrics.height)
+                .max(0.0)
+                .ceil()
+                .max(1.0) as u32
+                - 1;
+            (top, bottom)
+        });
+    let opaque_height = (opaque_bottom_in_image + 1).saturating_sub(opaque_top_in_image) as f32;
+    let logical_top_in_display = (raster.image.height as f32
+        - (raster.content_top_in_image + raster.metrics.height))
+        .max(0.0);
+    let opaque_top_in_display = raster.image.height as f32 - 1.0 - opaque_bottom_in_image as f32;
+    let cached = Arc::new(CachedTextRaster {
+        image: raster.image,
+        metrics: raster.metrics,
+        content_top_in_image: raster.content_top_in_image,
+        logical_top_in_display,
+        opaque_top_in_display,
+        opaque_height,
+    });
+
+    TEXT_RASTER_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= TEXT_RASTER_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(cache_key, cached.clone());
+    });
+
+    Ok(cached)
+}
 
 fn rasterize_text_request(
     request: &TextRequest,
@@ -786,63 +916,7 @@ fn rasterize_text_request(
 ) -> Result<RasterizedText, RendererError> {
     #[cfg(target_os = "macos")]
     {
-        let mut request = request.clone();
-        if matches!(
-            request.style.layout_mode,
-            loadngo_host_core::RenderTextLayoutMode::SingleLine
-        ) && request.rect.width > 0.0
-        {
-            request.text = apply_single_line_overflow(
-                &request.text,
-                request.rect.width as f32,
-                font_source,
-                request.style.font_size as f32,
-                &request.style.overflow,
-            )?;
-        }
-        let mut raster = macos::rasterize_text(&request, font_source)?;
-        let logical_top = raster.content_top_in_image.floor().max(0.0) as u32;
-        let logical_bottom = (raster.content_top_in_image + raster.metrics.height)
-            .ceil()
-            .max(1.0)
-            .min(raster.image.height as f32) as u32;
-        let (crop_top, crop_bottom) =
-            if let Some((opaque_top, opaque_bottom)) = opaque_alpha_bounds(&raster.image) {
-                let opaque_crop_top = opaque_top.saturating_sub(TEXT_RASTER_ALPHA_TOP_MARGIN);
-                let opaque_crop_bottom =
-                    (opaque_bottom + 1 + TEXT_RASTER_ALPHA_BOTTOM_MARGIN).min(raster.image.height);
-                match request.style.vertical_metric_mode {
-                    loadngo_host_core::RenderTextVerticalMetricMode::VisibleInk => {
-                        (opaque_crop_top, opaque_crop_bottom)
-                    }
-                    loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox => (
-                        opaque_crop_top.min(logical_top),
-                        opaque_crop_bottom.max(logical_bottom).min(raster.image.height),
-                    ),
-                }
-            } else {
-                (logical_top, logical_bottom)
-            };
-        if crop_top < crop_bottom && (crop_top > 0 || crop_bottom < raster.image.height) {
-            raster.image = crop_decoded_image_rows(&raster.image, crop_top, crop_bottom);
-            raster.content_top_in_image = (raster.content_top_in_image - crop_top as f32).max(0.0);
-        }
-        let (opaque_top_in_image, opaque_bottom_in_image) = opaque_alpha_bounds(&raster.image)
-            .unwrap_or_else(|| {
-                let top = raster.content_top_in_image.max(0.0).floor() as u32;
-                let bottom = (raster.content_top_in_image + raster.metrics.height)
-                    .max(0.0)
-                    .ceil()
-                    .max(1.0) as u32
-                    - 1;
-                (top, bottom)
-            });
-        let opaque_height = (opaque_bottom_in_image + 1).saturating_sub(opaque_top_in_image) as f32;
-        let logical_top_in_display = (raster.image.height as f32
-            - (raster.content_top_in_image + raster.metrics.height))
-            .max(0.0);
-        let opaque_top_in_display =
-            raster.image.height as f32 - 1.0 - opaque_bottom_in_image as f32;
+        let raster = cached_text_raster(request, font_source)?;
         let text_x = match request.style.horizontal_align {
             loadngo_host_core::RenderTextHorizontalAlign::Left => request.rect.x as f32,
             loadngo_host_core::RenderTextHorizontalAlign::Center => {
@@ -855,10 +929,10 @@ fn rasterize_text_request(
         };
         let (metric_height, top_in_display) = match request.style.vertical_metric_mode {
             loadngo_host_core::RenderTextVerticalMetricMode::VisibleInk => {
-                (opaque_height, opaque_top_in_display)
+                (raster.opaque_height, raster.opaque_top_in_display)
             }
             loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox => {
-                (raster.metrics.height, logical_top_in_display)
+                (raster.metrics.height, raster.logical_top_in_display)
             }
         };
         let target_top = match request.style.vertical_align {
@@ -871,14 +945,14 @@ fn rasterize_text_request(
             }
         };
         Ok(RasterizedText {
-            image: raster.image,
+            image: raster.image.clone(),
             x: text_x,
             y: target_top - top_in_display,
             metrics: raster.metrics,
             content_top_in_image: raster.content_top_in_image,
-            logical_top_in_display,
-            opaque_top_in_display,
-            opaque_height,
+            logical_top_in_display: raster.logical_top_in_display,
+            opaque_top_in_display: raster.opaque_top_in_display,
+            opaque_height: raster.opaque_height,
         })
     }
 
@@ -1072,7 +1146,7 @@ fn rasterize_line(
         }
     }
     Some(GeneratedFrameImage {
-        image: DecodedImage::new(width, height, rgba),
+        image: Arc::new(DecodedImage::new(width, height, rgba)),
         placement: BlitImage {
             image_key: "__loadngo_line".to_string(),
             x: min_x,
@@ -1112,7 +1186,7 @@ fn rasterize_circle(
         }
     }
     Some(GeneratedFrameImage {
-        image: DecodedImage::new(width, height, rgba),
+        image: Arc::new(DecodedImage::new(width, height, rgba)),
         placement: BlitImage {
             image_key: "__loadngo_circle".to_string(),
             x: min_x as f32,
@@ -1147,6 +1221,7 @@ fn distance_to_segment(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> 
 #[cfg(target_os = "macos")]
 mod macos {
     use std::ffi::{c_void, CString};
+    use std::sync::Arc;
 
     use loadngo_host_core::{DecodedImage, TextMetrics};
     use loadngo_renderer::{RendererError, TextRequest};
@@ -1849,7 +1924,7 @@ mod macos {
         }
 
         Ok(RasterizedText {
-            image: DecodedImage::new(width as u32, height as u32, rgba),
+            image: Arc::new(DecodedImage::new(width as u32, height as u32, rgba)),
             x: 0.0,
             y: 0.0,
             metrics: RasterMetrics {
@@ -2677,7 +2752,11 @@ impl GraphicsBackend for MetalBackend {
                     .map(|(index, image)| {
                         let key = format!("__loadngo_generated_{index}");
                         let texture =
-                            macos::MetalTexture::from_decoded_image(device, &key, &image.image)?;
+                            macos::MetalTexture::from_decoded_image(
+                                device,
+                                &key,
+                                image.image.as_ref(),
+                            )?;
                         Ok((texture, image.placement.clone()))
                     })
                     .collect::<Result<Vec<_>, RendererError>>()?;
