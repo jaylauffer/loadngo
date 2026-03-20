@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{
     component::Component,
     geometry::{Color, Insets, Point, Rect},
@@ -28,6 +30,12 @@ pub struct TextAreaLayoutCache {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+struct CachedLineMetrics {
+    display_text: String,
+    char_offsets: Vec<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextAreaModel {
     pub widget_id: WidgetId,
     pub bounds: Rect,
@@ -55,6 +63,9 @@ pub struct TextAreaModel {
     pub layout_cache: TextAreaLayoutCache,
     pub horizontal_scrollbar: ScrollbarModel,
     pub vertical_scrollbar: ScrollbarModel,
+    line_metrics_cache: HashMap<String, CachedLineMetrics>,
+    cache_font_size: u16,
+    cache_tab_spaces: usize,
 }
 
 impl TextAreaModel {
@@ -75,6 +86,7 @@ impl TextAreaModel {
         style.vertical_metric_mode = crate::TextVerticalMetricMode::LogicalLineBox;
         style.overflow = TextOverflow::Clip;
         style.color = Color::rgba(0xeb, 0xef, 0xf7, 0xff);
+        let cache_font_size = style.font_size;
         Self {
             widget_id: WidgetId(0),
             bounds,
@@ -115,6 +127,9 @@ impl TextAreaModel {
                 Rect::default(),
                 0.0,
             ),
+            line_metrics_cache: HashMap::new(),
+            cache_font_size,
+            cache_tab_spaces: 4,
         }
     }
 
@@ -217,6 +232,11 @@ impl TextAreaModel {
     where
         F: FnMut(&str, u16) -> f32,
     {
+        if self.cache_font_size != self.style.font_size || self.cache_tab_spaces != self.tab_spaces {
+            self.line_metrics_cache.clear();
+            self.cache_font_size = self.style.font_size;
+            self.cache_tab_spaces = self.tab_spaces;
+        }
         let base_content_rect = self.base_content_rect();
         let line_box_height = single_line_text_box_height(self.style.font_size);
         let line_step = line_box_height + self.line_spacing.max(0.0);
@@ -237,10 +257,8 @@ impl TextAreaModel {
                 height: line_box_height,
             };
             let source_text = self.slice_chars(source_start, source_end);
-            let (display_text, char_offsets) = build_display_text(
+            let (display_text, char_offsets) = self.cached_display_text(
                 &source_text,
-                self.tab_spaces,
-                self.style.font_size,
                 measure_width,
             );
 
@@ -318,6 +336,34 @@ impl TextAreaModel {
             content_height,
         };
         self.clamp_scroll();
+    }
+
+    fn cached_display_text<F>(
+        &mut self,
+        source_text: &str,
+        measure_width: &mut F,
+    ) -> (String, Vec<f32>)
+    where
+        F: FnMut(&str, u16) -> f32,
+    {
+        if let Some(cached) = self.line_metrics_cache.get(source_text) {
+            return (cached.display_text.clone(), cached.char_offsets.clone());
+        }
+
+        let (display_text, char_offsets) = build_display_text(
+            source_text,
+            self.tab_spaces,
+            self.style.font_size,
+            measure_width,
+        );
+        self.line_metrics_cache.insert(
+            source_text.to_string(),
+            CachedLineMetrics {
+                display_text: display_text.clone(),
+                char_offsets: char_offsets.clone(),
+            },
+        );
+        (display_text, char_offsets)
     }
 
     pub fn handle_event(&mut self, event: UiEvent) -> WidgetResponse {
@@ -1455,5 +1501,68 @@ mod tests {
 
         let caret_after = area.layout_cache.caret_rect.expect("caret rect after");
         assert!(caret_after.x + caret_after.width <= content.x + content.width + 0.01);
+    }
+
+    #[test]
+    fn relayout_reuses_cached_line_metrics_for_unchanged_lines() {
+        let mut area = TextAreaModel::new(
+            "alpha\nbeta\ngamma",
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 240.0,
+            },
+        );
+        area.focused = true;
+
+        let mut first_calls = 0usize;
+        area.relayout(|text, font_size| {
+            first_calls += 1;
+            measure_width(text, font_size)
+        });
+        assert!(first_calls > 0);
+
+        let mut second_calls = 0usize;
+        area.relayout(|text, font_size| {
+            second_calls += 1;
+            measure_width(text, font_size)
+        });
+        assert_eq!(second_calls, 0);
+    }
+
+    #[test]
+    fn single_line_edit_remeasures_less_than_initial_full_layout() {
+        let mut area = TextAreaModel::new(
+            "alpha\nbeta\ngamma\ndelta",
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 240.0,
+            },
+        );
+        area.focused = true;
+
+        let mut first_calls = 0usize;
+        area.relayout(|text, font_size| {
+            first_calls += 1;
+            measure_width(text, font_size)
+        });
+
+        area.selection_anchor = 2;
+        area.selection_head = 2;
+        let _ = area.handle_event(UiEvent::TextInput {
+            text: "Z".to_string(),
+        });
+
+        let mut second_calls = 0usize;
+        area.relayout(|text, font_size| {
+            second_calls += 1;
+            measure_width(text, font_size)
+        });
+
+        assert!(second_calls > 0);
+        assert!(second_calls < first_calls);
     }
 }
