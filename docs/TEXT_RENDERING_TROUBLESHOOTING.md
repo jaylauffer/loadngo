@@ -99,3 +99,41 @@ This note is macOS-first, but the same discipline should apply to every backend:
 - instrument the harnesses
 - port the same verification method to Android / GLES and later Windows/Linux
 
+## Runtime Memory Troubleshooting
+
+The same discipline applies to runtime stability work, not just placement bugs.
+
+In March 2026, the `sng-rusty` runtime looked like a Metal memory blow-up at first, but the actual sequence was:
+- excessive frame demand multiplied renderer work
+- text raster diagnostics showed the text cache was already effective
+- `vmmap` showed the dominant growth was `MALLOC_SMALL`, not GPU residency
+- `heap` then pointed directly at persistent CoreText/CoreFoundation objects like `CTLine`, `CTRun`, `CGFont`, and `CFData`
+
+The decisive fix was not another cache tweak. It was ownership:
+- `TextLayout` in `loadngo-gfx-metal` created CoreText/CoreFoundation objects on the success path
+- those objects were only released in one raster path, not by ownership
+- adding `Drop` to release them collapsed the runtime from multi-GB growth to roughly steady-state memory
+
+Practical rules for renderer/runtime memory debugging:
+
+1. Add counters before optimizing.
+- count generated text requests
+- count cache hits/misses
+- count transient uploads and bytes
+- log them under an env flag, not unconditionally
+
+2. Use `vmmap` before blaming Metal.
+- distinguish `MALLOC_SMALL` / `MALLOC_LARGE` from `IOSurface` / `IOAccelerator`
+- if heap dominates, look for ownership and object-lifetime bugs first
+
+3. Use `heap` to identify object families.
+- if the top consumers are CoreText/CoreFoundation classes, inspect retain/release paths
+- do not assume the issue is GPU-side just because the renderer is involved
+
+4. Add ownership regressions, not just frame-count regressions.
+- if a path creates native text/layout objects, add a test that repeated measure/raster cycles return the live-object count to zero
+
+5. Separate “fewer frames” from “less memory”.
+- reduced frame cadence helps
+- skipped identical submissions help
+- but neither substitutes for correct ownership

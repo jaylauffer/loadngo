@@ -1270,6 +1270,7 @@ fn distance_to_segment(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> 
 #[cfg(target_os = "macos")]
 mod macos {
     use std::ffi::{c_void, CString};
+    use std::sync::atomic::{AtomicIsize, Ordering};
     use std::sync::Arc;
 
     use loadngo_host_core::{DecodedImage, TextMetrics};
@@ -1989,8 +1990,18 @@ mod macos {
         metrics: RasterMetrics,
     }
 
+    #[cfg(test)]
+    static LIVE_TEXT_LAYOUTS: AtomicIsize = AtomicIsize::new(0);
+
+    #[cfg(test)]
+    pub(crate) fn live_text_layout_count() -> isize {
+        LIVE_TEXT_LAYOUTS.load(Ordering::Relaxed)
+    }
+
     impl Drop for TextLayout {
         fn drop(&mut self) {
+            #[cfg(test)]
+            LIVE_TEXT_LAYOUTS.fetch_sub(1, Ordering::Relaxed);
             release_cf(self.line);
             release_cf(self.attributed_string);
             release_cf(self.font);
@@ -2065,6 +2076,8 @@ mod macos {
             height: (ascent + descent + leading).max(1.0).ceil() as f32,
             baseline_from_top: ascent.max(0.0).ceil() as f32,
         };
+        #[cfg(test)]
+        LIVE_TEXT_LAYOUTS.fetch_add(1, Ordering::Relaxed);
         Ok(TextLayout {
             font,
             string,
@@ -3140,6 +3153,51 @@ mod tests {
             })
             .expect("expected generated text image");
         assert!(text_visual.placement.flip_vertical);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn text_layout_objects_are_released_after_measure_and_raster() {
+        assert_eq!(super::macos::live_text_layout_count(), 0);
+
+        for _ in 0..32 {
+            let metrics = measure_text_metrics("Menu", None, 18.0)
+                .expect("text measurement should succeed");
+            assert!(metrics.width > 0.0);
+            let raster = rasterize_text_request(
+                &TextRequest {
+                    rect: ui_core::geometry::Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 220.0,
+                        height: 44.0,
+                    },
+                    clip_rect: None,
+                    text: "Tallahassee Dawn".to_string(),
+                    style: loadngo_host_core::RenderTextStyle {
+                        font_size: 18,
+                        horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Center,
+                        vertical_align: loadngo_host_core::RenderTextVerticalAlign::Middle,
+                        vertical_metric_mode:
+                            loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
+                        layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
+                        overflow: loadngo_host_core::RenderTextOverflow::Clip,
+                        ..Default::default()
+                    },
+                    direction: loadngo_renderer::TextDirection::Auto,
+                    script: loadngo_renderer::TextScript::Auto,
+                    language: None,
+                },
+                None,
+            )
+            .expect("text raster should succeed");
+            assert!(raster.image.width > 0);
+            assert_eq!(
+                super::macos::live_text_layout_count(),
+                0,
+                "text layouts must be released after each measure/raster cycle"
+            );
+        }
     }
 
     #[cfg(target_os = "macos")]
