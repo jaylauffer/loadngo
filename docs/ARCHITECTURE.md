@@ -1,9 +1,19 @@
 # loadngo Architecture
 
+Guiding philosophy:
+- save as many lives as we may, even our own
+
 ## Goals
 - Keep GUI components platform agnostic.
 - Isolate platform-specific APIs behind small host shims.
 - Keep runtime/editor logic independent of any single windowing/render library.
+
+That philosophy should shape architectural choices:
+- preserve meaningful work and state
+- make recovery and reconciliation possible
+- avoid needless data loss
+- avoid exposing more identity or history than necessary
+- treat storage and lineage as ways of protecting lived effort, not merely moving bytes
 
 Related design notes:
 - [WIDGET_FRAMEWORK.md](/Users/jay/pudding/loadngo/docs/WIDGET_FRAMEWORK.md)
@@ -11,7 +21,9 @@ Related design notes:
 - [CONTROL_ROADMAP.md](/Users/jay/pudding/loadngo/docs/CONTROL_ROADMAP.md)
 - [TEXT_INPUT_MODEL.md](/Users/jay/pudding/loadngo/docs/TEXT_INPUT_MODEL.md)
 - [TEXT_RENDERING_TROUBLESHOOTING.md](/Users/jay/pudding/loadngo/docs/TEXT_RENDERING_TROUBLESHOOTING.md)
+- [PUDDING_CAS_PQ_MODEL.md](/Users/jay/pudding/loadngo/docs/PUDDING_CAS_PQ_MODEL.md)
 - [RON_FIRST_EDITOR.md](/Users/jay/pudding/sng-rusty/docs/RON_FIRST_EDITOR.md)
+- [ENGINE_CAPABILITY_MATRIX.md](/Users/jay/pudding/sng-rusty/docs/ENGINE_CAPABILITY_MATRIX.md)
 
 ## Layer model
 1. `ui-core`
