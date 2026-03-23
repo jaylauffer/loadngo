@@ -62,7 +62,8 @@ async fn run_text_input_harness() {
             area.focused && ((caret_blink_origin.elapsed().as_millis() / 530) % 2 == 0);
         area.relayout(measure_width);
         loadngo_host_desktop::set_text_cursor_active(
-            (area.drag_selecting && area.bounds.contains(pointer)) || area.prefers_text_cursor(pointer),
+            (area.drag_selecting && area.bounds.contains(pointer))
+                || area.prefers_text_cursor(pointer),
         );
 
         let mut scene = Vec::new();

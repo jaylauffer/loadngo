@@ -40,7 +40,10 @@ fn window_descriptor() -> WindowDescriptor {
 
 async fn run_text_metrics_harness() {
     let metrics = loadngo_host_desktop::measure_font_line_metrics(None, BODY_FONT, 1.0);
-    eprintln!("text_metrics_harness BODY_FONT={BODY_FONT} {}", metrics_summary(metrics));
+    eprintln!(
+        "text_metrics_harness BODY_FONT={BODY_FONT} {}",
+        metrics_summary(metrics)
+    );
     log_sample_deltas();
     loop {
         let frame = loadngo_host_desktop::capture_frame();
@@ -58,7 +61,10 @@ async fn run_text_metrics_harness() {
 
 fn log_sample_deltas() {
     for (label, mode) in [
-        ("LogicalLineBox", RenderTextVerticalMetricMode::LogicalLineBox),
+        (
+            "LogicalLineBox",
+            RenderTextVerticalMetricMode::LogicalLineBox,
+        ),
         ("VisibleInk", RenderTextVerticalMetricMode::VisibleInk),
     ] {
         eprintln!("{label} sample deltas:");
@@ -83,6 +89,7 @@ fn log_sample_deltas() {
                         layout_mode: RenderTextLayoutMode::SingleLine,
                         overflow: RenderTextOverflow::Clip,
                     },
+                    font_source: None,
                     direction: loadngo_renderer::TextDirection::Auto,
                     script: loadngo_renderer::TextScript::Auto,
                     language: None,
@@ -327,7 +334,10 @@ fn paint_sample_row(
     });
     let mid_y = rect.y + rect.height * 0.5;
     ops.push(RenderOp::Line {
-        from: ui_core::Point { x: rect.x, y: mid_y },
+        from: ui_core::Point {
+            x: rect.x,
+            y: mid_y,
+        },
         to: ui_core::Point {
             x: rect.right(),
             y: mid_y,
@@ -368,7 +378,10 @@ fn paint_tab_sample(
     });
     let mid_y = rect.y + rect.height * 0.5;
     ops.push(RenderOp::Line {
-        from: ui_core::Point { x: rect.x, y: mid_y },
+        from: ui_core::Point {
+            x: rect.x,
+            y: mid_y,
+        },
         to: ui_core::Point {
             x: rect.right(),
             y: mid_y,
@@ -413,6 +426,7 @@ fn paint_logical_box_overlay(
             clip_rect: None,
             text: text.to_string(),
             style,
+            font_source: None,
             direction: loadngo_renderer::TextDirection::Auto,
             script: loadngo_renderer::TextScript::Auto,
             language: None,

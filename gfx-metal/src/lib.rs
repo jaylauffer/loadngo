@@ -910,7 +910,9 @@ fn cached_text_raster(
                 }
                 loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox => (
                     opaque_crop_top.min(logical_top),
-                    opaque_crop_bottom.max(logical_bottom).min(raster.image.height),
+                    opaque_crop_bottom
+                        .max(logical_bottom)
+                        .min(raster.image.height),
                 ),
             }
         } else {
@@ -924,8 +926,8 @@ fn cached_text_raster(
         ));
         raster.content_top_in_image = (raster.content_top_in_image - crop_top as f32).max(0.0);
     }
-    let (opaque_top_in_image, opaque_bottom_in_image) =
-        opaque_alpha_bounds(&raster.image).unwrap_or_else(|| {
+    let (opaque_top_in_image, opaque_bottom_in_image) = opaque_alpha_bounds(&raster.image)
+        .unwrap_or_else(|| {
             let top = raster.content_top_in_image.max(0.0).floor() as u32;
             let bottom = (raster.content_top_in_image + raster.metrics.height)
                 .max(0.0)
@@ -1270,9 +1272,9 @@ fn distance_to_segment(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> 
 #[cfg(target_os = "macos")]
 mod macos {
     use std::ffi::{c_void, CString};
-    use std::sync::Arc;
     #[cfg(test)]
     use std::sync::atomic::{AtomicIsize, Ordering};
+    use std::sync::Arc;
 
     use loadngo_host_core::{DecodedImage, TextMetrics};
     use loadngo_renderer::{RendererError, TextRequest};
@@ -2097,13 +2099,12 @@ mod macos {
         let ink_top_from_baseline = (bounds.origin.y + bounds.size.height).max(0.0).ceil() as f32;
         let ink_bottom_from_baseline = (-bounds.origin.y).max(0.0).ceil() as f32;
         let ink_height = (ink_top_from_baseline + ink_bottom_from_baseline).max(1.0);
-        let line_box_height = ui_core::single_line_text_box_height(font_size.round() as u16)
-            .max(line_height.ceil());
+        let line_box_height =
+            ui_core::single_line_text_box_height(font_size.round() as u16).max(line_height.ceil());
         let line_step = ui_core::multiline_line_step(font_size.round() as u16);
         let raster_pad_top = (font_size * 0.5).ceil().max(4.0) + 4.0;
         let raster_pad_bottom = (font_size * 0.25).ceil().max(2.0) + 2.0;
-        let baseline_from_top =
-            (ascent + (line_box_height - line_height).max(0.0) * 0.5).ceil();
+        let baseline_from_top = (ascent + (line_box_height - line_height).max(0.0) * 0.5).ceil();
         FontLineMetrics {
             ascent,
             descent,
@@ -2119,7 +2120,6 @@ mod macos {
             raster_pad_bottom,
         }
     }
-
 
     fn create_font(font_source: Option<&str>, font_size: f32) -> Result<CTFontRef, RendererError> {
         if let Some(path) = font_source {
@@ -2873,12 +2873,11 @@ impl GraphicsBackend for MetalBackend {
                     .enumerate()
                     .map(|(index, image)| {
                         let key = format!("__loadngo_generated_{index}");
-                        let texture =
-                            macos::MetalTexture::from_decoded_image(
-                                device,
-                                &key,
-                                image.image.as_ref(),
-                            )?;
+                        let texture = macos::MetalTexture::from_decoded_image(
+                            device,
+                            &key,
+                            image.image.as_ref(),
+                        )?;
                         Ok((texture, image.placement.clone()))
                     })
                     .collect::<Result<Vec<_>, RendererError>>()?;
@@ -3094,6 +3093,7 @@ mod tests {
                     overflow: loadngo_host_core::RenderTextOverflow::Clip,
                     ..Default::default()
                 },
+                font_source: None,
                 direction: loadngo_renderer::TextDirection::Auto,
                 script: loadngo_renderer::TextScript::Auto,
                 language: None,
@@ -3139,6 +3139,7 @@ mod tests {
                 overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 ..Default::default()
             },
+            font_source: None,
             direction: loadngo_renderer::TextDirection::Auto,
             script: loadngo_renderer::TextScript::Auto,
             language: None,
@@ -3162,8 +3163,8 @@ mod tests {
         assert_eq!(super::macos::live_text_layout_count(), 0);
 
         for _ in 0..32 {
-            let metrics = measure_text_metrics("Menu", None, 18.0)
-                .expect("text measurement should succeed");
+            let metrics =
+                measure_text_metrics("Menu", None, 18.0).expect("text measurement should succeed");
             assert!(metrics.width > 0.0);
             let raster = rasterize_text_request(
                 &TextRequest {
@@ -3185,6 +3186,7 @@ mod tests {
                         overflow: loadngo_host_core::RenderTextOverflow::Clip,
                         ..Default::default()
                     },
+                    font_source: None,
                     direction: loadngo_renderer::TextDirection::Auto,
                     script: loadngo_renderer::TextScript::Auto,
                     language: None,
@@ -3229,6 +3231,7 @@ mod tests {
                 overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 ..Default::default()
             },
+            font_source: None,
             direction: loadngo_renderer::TextDirection::Auto,
             script: loadngo_renderer::TextScript::Auto,
             language: None,
@@ -3265,6 +3268,7 @@ mod tests {
                 overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 ..Default::default()
             },
+            font_source: None,
             direction: loadngo_renderer::TextDirection::Auto,
             script: loadngo_renderer::TextScript::Auto,
             language: None,
@@ -3298,6 +3302,7 @@ mod tests {
                 overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 ..Default::default()
             },
+            font_source: None,
             direction: loadngo_renderer::TextDirection::Auto,
             script: loadngo_renderer::TextScript::Auto,
             language: None,
@@ -3333,6 +3338,7 @@ mod tests {
                 overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 ..Default::default()
             },
+            font_source: None,
             direction: loadngo_renderer::TextDirection::Auto,
             script: loadngo_renderer::TextScript::Auto,
             language: None,
@@ -3365,6 +3371,7 @@ mod tests {
                 overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 ..Default::default()
             },
+            font_source: None,
             direction: loadngo_renderer::TextDirection::Auto,
             script: loadngo_renderer::TextScript::Auto,
             language: None,
@@ -3400,6 +3407,7 @@ mod tests {
                 overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 ..Default::default()
             },
+            font_source: None,
             direction: loadngo_renderer::TextDirection::Auto,
             script: loadngo_renderer::TextScript::Auto,
             language: None,
@@ -3439,6 +3447,7 @@ mod tests {
                 overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 ..Default::default()
             },
+            font_source: None,
             direction: loadngo_renderer::TextDirection::Auto,
             script: loadngo_renderer::TextScript::Auto,
             language: None,
@@ -3481,6 +3490,7 @@ mod tests {
                             overflow: loadngo_host_core::RenderTextOverflow::Clip,
                             ..Default::default()
                         },
+                        font_source: None,
                         direction: loadngo_renderer::TextDirection::Auto,
                         script: loadngo_renderer::TextScript::Auto,
                         language: None,
@@ -3494,7 +3504,10 @@ mod tests {
         let first = &rasters[0];
         for raster in rasters.iter().skip(1) {
             assert_eq!(raster.metrics.height, first.metrics.height);
-            assert_eq!(raster.metrics.baseline_from_top, first.metrics.baseline_from_top);
+            assert_eq!(
+                raster.metrics.baseline_from_top,
+                first.metrics.baseline_from_top
+            );
         }
     }
 
@@ -3525,6 +3538,7 @@ mod tests {
                         overflow: loadngo_host_core::RenderTextOverflow::Clip,
                         ..Default::default()
                     },
+                    font_source: None,
                     direction: loadngo_renderer::TextDirection::Auto,
                     script: loadngo_renderer::TextScript::Auto,
                     language: None,
@@ -3566,6 +3580,7 @@ mod tests {
                 overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 ..Default::default()
             },
+            font_source: None,
             direction: loadngo_renderer::TextDirection::Auto,
             script: loadngo_renderer::TextScript::Auto,
             language: None,
@@ -3640,6 +3655,7 @@ mod tests {
                 overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 ..Default::default()
             },
+            font_source: None,
             direction: loadngo_renderer::TextDirection::Auto,
             script: loadngo_renderer::TextScript::Auto,
             language: None,
@@ -3679,6 +3695,7 @@ mod tests {
                 overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 ..Default::default()
             },
+            font_source: None,
             direction: loadngo_renderer::TextDirection::Auto,
             script: loadngo_renderer::TextScript::Auto,
             language: None,

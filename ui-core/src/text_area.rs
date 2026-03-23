@@ -155,11 +155,7 @@ impl TextAreaModel {
                 Rect::default(),
                 0.0,
             ),
-            vertical_scrollbar: ScrollbarModel::new(
-                ScrollbarAxis::Vertical,
-                Rect::default(),
-                0.0,
-            ),
+            vertical_scrollbar: ScrollbarModel::new(ScrollbarAxis::Vertical, Rect::default(), 0.0),
             line_starts: vec![0],
             line_index_dirty: true,
             document_lines: Vec::new(),
@@ -267,7 +263,9 @@ impl TextAreaModel {
 
     pub fn prefers_text_cursor(&self, point: Point) -> bool {
         self.layout_cache.content_rect.contains(point)
-            && self.gutter_rect().is_none_or(|gutter| !gutter.contains(point))
+            && self
+                .gutter_rect()
+                .is_none_or(|gutter| !gutter.contains(point))
             && self
                 .horizontal_scrollbar
                 .interactive_rect(Self::HSCROLL_HIT_PAD_Y, Self::HSCROLL_HIT_PAD_X)
@@ -325,7 +323,8 @@ impl TextAreaModel {
         F: FnMut(&str, u16) -> f32,
     {
         self.ensure_line_index();
-        if self.cache_font_size != self.style.font_size || self.cache_tab_spaces != self.tab_spaces {
+        if self.cache_font_size != self.style.font_size || self.cache_tab_spaces != self.tab_spaces
+        {
             self.line_metrics_cache.clear();
             self.cache_font_size = self.style.font_size;
             self.cache_tab_spaces = self.tab_spaces;
@@ -345,8 +344,11 @@ impl TextAreaModel {
         } else {
             ((total_line_count - 1) as f32 * line_step + line_box_height).max(line_box_height)
         };
-        let content_rect =
-            self.layout_scrollbars(base_content_rect, self.document_content_width, content_height);
+        let content_rect = self.layout_scrollbars(
+            base_content_rect,
+            self.document_content_width,
+            content_height,
+        );
         let visible_start = (self.scroll_y / line_step).floor().max(0.0) as usize;
         let visible_end = ((self.scroll_y + content_rect.height) / line_step)
             .ceil()
@@ -492,7 +494,8 @@ impl TextAreaModel {
             .take(recompute_end_exclusive.saturating_sub(dirty_from_line))
         {
             let source_text = self.slice_chars(source_start, source_end);
-            let (display_text, char_offsets) = self.cached_display_text(&source_text, measure_width);
+            let (display_text, char_offsets) =
+                self.cached_display_text(&source_text, measure_width);
             let width = char_offsets.last().copied().unwrap_or(0.0);
             content_width = content_width.max(width);
             document_lines.push(DocumentLineMetrics {
@@ -580,10 +583,12 @@ impl TextAreaModel {
                 {
                     if track.contains(state.position) {
                         self.focused = true;
-                        if let Some(drag) = self.vertical_scrollbar.begin_indicator_drag(state.position)
+                        if let Some(drag) =
+                            self.vertical_scrollbar.begin_indicator_drag(state.position)
                         {
                             self.vertical_drag = Some(drag);
-                            self.vertical_scrollbar.drag_indicator_to(state.position, drag);
+                            self.vertical_scrollbar
+                                .drag_indicator_to(state.position, drag);
                             self.sync_scroll_offsets_from_scrollbars();
                         } else {
                             self.vertical_scrollbar
@@ -604,8 +609,9 @@ impl TextAreaModel {
                 {
                     if track.contains(state.position) {
                         self.focused = true;
-                        if let Some(drag) =
-                            self.horizontal_scrollbar.begin_indicator_drag(state.position)
+                        if let Some(drag) = self
+                            .horizontal_scrollbar
+                            .begin_indicator_drag(state.position)
                         {
                             self.horizontal_drag = Some(drag);
                             self.horizontal_scrollbar
@@ -713,7 +719,10 @@ impl TextAreaModel {
         }
         if let Some(gutter) = self.gutter_rect() {
             if let Some(color) = self.line_number_gutter_fill {
-                scene.push(PaintOp::FillRect { rect: gutter, color });
+                scene.push(PaintOp::FillRect {
+                    rect: gutter,
+                    color,
+                });
             }
             if let Some(color) = self.line_number_gutter_border {
                 scene.push(PaintOp::Line {
@@ -827,7 +836,11 @@ impl TextAreaModel {
         if matches!(key, Key::Character('z') | Key::Character('Z'))
             && (modifiers.ctrl || modifiers.meta)
         {
-            let changed = if modifiers.shift { self.redo() } else { self.undo() };
+            let changed = if modifiers.shift {
+                self.redo()
+            } else {
+                self.undo()
+            };
             return if changed {
                 WidgetResponse::redraw_consumed()
             } else {
@@ -994,7 +1007,9 @@ impl TextAreaModel {
     fn replace_char_range(&mut self, start: usize, end: usize, replacement: &str) {
         self.ensure_line_index();
         let dirty_line = self.line_index_for_char(start);
-        let old_suffix_start = self.line_starts.partition_point(|&line_start| line_start <= end);
+        let old_suffix_start = self
+            .line_starts
+            .partition_point(|&line_start| line_start <= end);
         let new_end_line = dirty_line + replacement.chars().filter(|&ch| ch == '\n').count();
         let char_delta = replacement.chars().count() as isize - end.saturating_sub(start) as isize;
         self.update_line_starts_for_replace(start, end, replacement);
@@ -1038,11 +1053,13 @@ impl TextAreaModel {
         if self.document_lines.is_empty() {
             return 0;
         }
-        let line_step = single_line_text_box_height(self.style.font_size) + self.line_spacing.max(0.0);
+        let line_step =
+            single_line_text_box_height(self.style.font_size) + self.line_spacing.max(0.0);
         let local_y = (point.y - self.text_base_content_rect().y + self.scroll_y).max(0.0);
         let line_index = (local_y / line_step)
             .floor()
-            .clamp(0.0, self.document_lines.len().saturating_sub(1) as f32) as usize;
+            .clamp(0.0, self.document_lines.len().saturating_sub(1) as f32)
+            as usize;
         let line = &self.document_lines[line_index];
         let local_x = (point.x - self.text_base_content_rect().x + self.scroll_x).max(0.0);
         line.source_start + closest_char_offset_index(&line.char_offsets, local_x)
@@ -1079,14 +1096,14 @@ impl TextAreaModel {
         };
         let content = self.layout_cache.content_rect;
         if caret.x < content.x {
-            self.scroll_x = (self.scroll_x - (content.x - caret.x)).max(0.0);
+            self.scroll_x = (self.scroll_x - (content.x - caret.x).ceil()).max(0.0);
         } else if caret.x + caret.width > content.x + content.width {
-            self.scroll_x += (caret.x + caret.width) - (content.x + content.width);
+            self.scroll_x += ((caret.x + caret.width) - (content.x + content.width)).ceil();
         }
         if caret.y < content.y {
-            self.scroll_y = (self.scroll_y - (content.y - caret.y)).max(0.0);
+            self.scroll_y = (self.scroll_y - (content.y - caret.y).ceil()).max(0.0);
         } else if caret.y + caret.height > content.y + content.height {
-            self.scroll_y += (caret.y + caret.height) - (content.y + content.height);
+            self.scroll_y += ((caret.y + caret.height) - (content.y + content.height)).ceil();
         }
     }
 
@@ -1174,10 +1191,12 @@ impl TextAreaModel {
 
         self.horizontal_scrollbar.offset = self.scroll_x;
         self.vertical_scrollbar.offset = self.scroll_y;
-        self.horizontal_scrollbar.set_viewport_span(content_rect.width);
+        self.horizontal_scrollbar
+            .set_viewport_span(content_rect.width);
         self.horizontal_scrollbar
             .set_content_span(content_width.max(content_rect.width));
-        self.vertical_scrollbar.set_viewport_span(content_rect.height);
+        self.vertical_scrollbar
+            .set_viewport_span(content_rect.height);
         self.vertical_scrollbar
             .set_content_span(content_height.max(content_rect.height));
         self.horizontal_scrollbar.set_track_rect(if need_h {
@@ -1265,9 +1284,17 @@ impl TextAreaModel {
     fn update_line_starts_for_replace(&mut self, start: usize, end: usize, replacement: &str) {
         let start = start.min(self.char_len());
         let end = end.min(self.char_len());
-        let (start, end) = if start <= end { (start, end) } else { (end, start) };
-        let prefix_len = self.line_starts.partition_point(|&line_start| line_start <= start);
-        let suffix_start = self.line_starts.partition_point(|&line_start| line_start <= end);
+        let (start, end) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        let prefix_len = self
+            .line_starts
+            .partition_point(|&line_start| line_start <= start);
+        let suffix_start = self
+            .line_starts
+            .partition_point(|&line_start| line_start <= end);
         let inserted_chars = replacement.chars().count();
         let removed_chars = end.saturating_sub(start);
         let delta = inserted_chars as isize - removed_chars as isize;
@@ -2052,13 +2079,19 @@ mod tests {
             key: Key::Down,
             modifiers: Modifiers::default(),
         });
-        assert_eq!(area.line_position_for_caret().map(|(line, _, _)| line), Some(1));
+        assert_eq!(
+            area.line_position_for_caret().map(|(line, _, _)| line),
+            Some(1)
+        );
         area.relayout(measure_width);
         let _ = area.handle_event(UiEvent::KeyPressed {
             key: Key::Down,
             modifiers: Modifiers::default(),
         });
-        assert_eq!(area.line_position_for_caret().map(|(line, _, _)| line), Some(2));
+        assert_eq!(
+            area.line_position_for_caret().map(|(line, _, _)| line),
+            Some(2)
+        );
     }
 
     #[test]
@@ -2107,12 +2140,18 @@ mod tests {
             key: Key::Down,
             modifiers: Modifiers::default(),
         });
-        assert_eq!(area.line_position_for_caret().map(|(line, _, _)| line), Some(1));
+        assert_eq!(
+            area.line_position_for_caret().map(|(line, _, _)| line),
+            Some(1)
+        );
         area.relayout(measure_width);
         let _ = area.handle_event(UiEvent::KeyPressed {
             key: Key::Down,
             modifiers: Modifiers::default(),
         });
-        assert_eq!(area.line_position_for_caret().map(|(line, _, _)| line), Some(2));
+        assert_eq!(
+            area.line_position_for_caret().map(|(line, _, _)| line),
+            Some(2)
+        );
     }
 }

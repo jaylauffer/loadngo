@@ -32,8 +32,7 @@ const EGL_NONE: EglInt = 0x3038;
 #[link(name = "EGL")]
 unsafe extern "C" {
     fn eglGetDisplay(display_id: *mut c_void) -> EglDisplay;
-    fn eglInitialize(display: EglDisplay, major: *mut EglInt, minor: *mut EglInt)
-        -> EglBoolean;
+    fn eglInitialize(display: EglDisplay, major: *mut EglInt, minor: *mut EglInt) -> EglBoolean;
     fn eglChooseConfig(
         display: EglDisplay,
         attrib_list: *const EglInt,
@@ -98,8 +97,7 @@ pub fn bind_native_window(
         ];
         let mut config: EglConfig = ptr::null_mut();
         let mut num_config = 0;
-        if eglChooseConfig(display, attribs.as_ptr(), &mut config, 1, &mut num_config)
-            == EGL_FALSE
+        if eglChooseConfig(display, attribs.as_ptr(), &mut config, 1, &mut num_config) == EGL_FALSE
             || config.is_null()
             || num_config == 0
         {

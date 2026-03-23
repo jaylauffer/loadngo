@@ -218,7 +218,8 @@ pub fn bind_window(
             LinuxNativeWindow::X11,
         ),
         RawWindowHandle::Wayland(handle) => {
-            let egl_window = unsafe { wl_egl_window_create(handle.surface.as_ptr(), width, height) };
+            let egl_window =
+                unsafe { wl_egl_window_create(handle.surface.as_ptr(), width, height) };
             if egl_window.is_null() {
                 return Err(RendererError::Backend(
                     "wl_egl_window_create returned null".to_string(),
@@ -267,8 +268,7 @@ pub fn bind_window(
         ];
         let mut config: EglConfig = ptr::null_mut();
         let mut num_config = 0;
-        if eglChooseConfig(display, attribs.as_ptr(), &mut config, 1, &mut num_config)
-            == EGL_FALSE
+        if eglChooseConfig(display, attribs.as_ptr(), &mut config, 1, &mut num_config) == EGL_FALSE
             || config.is_null()
             || num_config == 0
         {
@@ -386,7 +386,13 @@ pub fn present_scene(
                 }
                 FrameCommand::FillRect { rect, color } => {
                     ensure_solid_pipeline(solid_program, solid_vbo)?;
-                    draw_solid_rects(*solid_program, *solid_vbo, width, height, &[(*rect, *color)])?;
+                    draw_solid_rects(
+                        *solid_program,
+                        *solid_vbo,
+                        width,
+                        height,
+                        &[(*rect, *color)],
+                    )?;
                 }
                 FrameCommand::StrokeRect {
                     rect,
@@ -409,7 +415,8 @@ pub fn present_scene(
                         gpu_textures,
                     )?;
                 }
-                FrameCommand::Line { .. } | FrameCommand::Circle { .. } | FrameCommand::Text(_) => {}
+                FrameCommand::Line { .. } | FrameCommand::Circle { .. } | FrameCommand::Text(_) => {
+                }
             }
         }
 
@@ -472,7 +479,10 @@ fn last_egl_error(label: &str) -> RendererError {
     RendererError::Backend(format!("{label} failed with EGL error 0x{code:04x}"))
 }
 
-fn ensure_solid_pipeline(solid_program: &mut u32, solid_vbo: &mut u32) -> Result<(), RendererError> {
+fn ensure_solid_pipeline(
+    solid_program: &mut u32,
+    solid_vbo: &mut u32,
+) -> Result<(), RendererError> {
     unsafe {
         if *solid_program == 0 {
             let vertex_shader = compile_shader(
@@ -495,7 +505,9 @@ fn ensure_solid_pipeline(solid_program: &mut u32, solid_vbo: &mut u32) -> Result
             if status == 0 {
                 let message = program_info_log(program);
                 glDeleteProgram(program);
-                return Err(RendererError::Backend(format!("glLinkProgram failed: {message}")));
+                return Err(RendererError::Backend(format!(
+                    "glLinkProgram failed: {message}"
+                )));
             }
             *solid_program = program;
         }
@@ -538,7 +550,9 @@ fn ensure_textured_pipeline(
             if status == 0 {
                 let message = program_info_log(program);
                 glDeleteProgram(program);
-                return Err(RendererError::Backend(format!("glLinkProgram failed: {message}")));
+                return Err(RendererError::Backend(format!(
+                    "glLinkProgram failed: {message}"
+                )));
             }
             *textured_program = program;
         }
@@ -720,7 +734,9 @@ fn rect_vertices(rect: ui_core::geometry::Rect, width: i32, height: i32) -> [f32
     let right = to_clip_x(x1);
     let top = to_clip_y(y0);
     let bottom = to_clip_y(y1);
-    [left, top, right, top, left, bottom, left, bottom, right, top, right, bottom]
+    [
+        left, top, right, top, left, bottom, left, bottom, right, top, right, bottom,
+    ]
 }
 
 fn textured_rect_vertices(request: &ImageRequest, width: i32, height: i32) -> [f32; 24] {
@@ -750,8 +766,8 @@ fn textured_rect_vertices(request: &ImageRequest, width: i32, height: i32) -> [f
     let top = to_clip_y(draw_y0);
     let bottom = to_clip_y(draw_y1);
     [
-        left, top, u0, v0, right, top, u1, v0, left, bottom, u0, v1, left, bottom, u0, v1,
-        right, top, u1, v0, right, bottom, u1, v1,
+        left, top, u0, v0, right, top, u1, v0, left, bottom, u0, v1, left, bottom, u0, v1, right,
+        top, u1, v0, right, bottom, u1, v1,
     ]
 }
 
@@ -769,7 +785,9 @@ fn compile_shader(shader_type: u32, source: &[u8]) -> Result<u32, RendererError>
         if status == 0 {
             let message = shader_info_log(shader);
             glDeleteShader(shader);
-            return Err(RendererError::Backend(format!("glCompileShader failed: {message}")));
+            return Err(RendererError::Backend(format!(
+                "glCompileShader failed: {message}"
+            )));
         }
         Ok(shader)
     }
@@ -783,7 +801,12 @@ fn shader_info_log(shader: u32) -> String {
             return "no shader info log".to_string();
         }
         let mut buffer = vec![0u8; length as usize];
-        glGetShaderInfoLog(shader, length, ptr::null_mut(), buffer.as_mut_ptr().cast::<i8>());
+        glGetShaderInfoLog(
+            shader,
+            length,
+            ptr::null_mut(),
+            buffer.as_mut_ptr().cast::<i8>(),
+        );
         String::from_utf8_lossy(&buffer)
             .trim_end_matches(char::from(0))
             .to_string()
@@ -798,7 +821,12 @@ fn program_info_log(program: u32) -> String {
             return "no program info log".to_string();
         }
         let mut buffer = vec![0u8; length as usize];
-        glGetProgramInfoLog(program, length, ptr::null_mut(), buffer.as_mut_ptr().cast::<i8>());
+        glGetProgramInfoLog(
+            program,
+            length,
+            ptr::null_mut(),
+            buffer.as_mut_ptr().cast::<i8>(),
+        );
         String::from_utf8_lossy(&buffer)
             .trim_end_matches(char::from(0))
             .to_string()

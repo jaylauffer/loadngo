@@ -804,6 +804,7 @@ pub fn draw_plain_text(text: &str, x: f32, y: f32, size: f32, color: UiColor) ->
                 layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
                 overflow: loadngo_host_core::RenderTextOverflow::Clip,
             },
+            font_source: None,
             direction: loadngo_renderer::TextDirection::Auto,
             script: loadngo_renderer::TextScript::Auto,
             language: None,
@@ -1441,7 +1442,9 @@ fn typed_text_from_event(event: *mut AnyObject) -> String {
     let Some(text) = ns_string_to_rust(characters) else {
         return String::new();
     };
-    text.chars().filter(|&ch| is_printable_text_input_char(ch)).collect()
+    text.chars()
+        .filter(|&ch| is_printable_text_input_char(ch))
+        .collect()
 }
 
 fn ns_string_to_rust(ns_string: *mut AnyObject) -> Option<String> {

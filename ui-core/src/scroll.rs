@@ -94,8 +94,8 @@ impl ScrollbarModel {
         } else {
             0.0
         };
-        let thumb_start =
-            self.primary_start(self.track_rect) + (self.primary_span(self.track_rect) - thumb_span) * t;
+        let thumb_start = self.primary_start(self.track_rect)
+            + (self.primary_span(self.track_rect) - thumb_span) * t;
         Some(self.rect_with_primary_range(self.track_rect, thumb_start, thumb_span))
     }
 
@@ -135,9 +135,15 @@ impl ScrollbarModel {
         }
         let thumb = self
             .indicator_thumb_rect()
-            .unwrap_or(self.rect_with_primary_range(self.track_rect, self.primary_start(self.track_rect), 0.0));
+            .unwrap_or(self.rect_with_primary_range(
+                self.track_rect,
+                self.primary_start(self.track_rect),
+                0.0,
+            ));
         self.set_offset_from_thumb_start(
-            self.primary_point(pointer) - self.primary_start(self.track_rect) - drag_state.pointer_offset,
+            self.primary_point(pointer)
+                - self.primary_start(self.track_rect)
+                - drag_state.pointer_offset,
             self.primary_span(thumb),
         );
     }
@@ -153,7 +159,12 @@ impl ScrollbarModel {
         );
     }
 
-    pub fn paint_indicator(&self, scene: &mut Vec<PaintOp>, track_color: Color, thumb_color: Color) {
+    pub fn paint_indicator(
+        &self,
+        scene: &mut Vec<PaintOp>,
+        track_color: Color,
+        thumb_color: Color,
+    ) {
         if !self.is_scrollable() {
             return;
         }

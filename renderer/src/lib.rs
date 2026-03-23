@@ -247,6 +247,7 @@ pub struct TextRequest {
     pub clip_rect: Option<Rect>,
     pub text: String,
     pub style: RenderTextStyle,
+    pub font_source: Option<String>,
     pub direction: TextDirection,
     pub script: TextScript,
     pub language: Option<LanguageTag>,
@@ -451,9 +452,9 @@ impl Renderer {
                     radius: *radius,
                     color: *color,
                 },
-                RenderOp::Text { rect, text, style } => FrameCommand::Text(
-                    self.text_request(*rect, None, text.clone(), style.clone()),
-                ),
+                RenderOp::Text { rect, text, style } => {
+                    FrameCommand::Text(self.text_request(*rect, None, text.clone(), style.clone()))
+                }
                 RenderOp::BlitImage {
                     rect,
                     image_key,
@@ -597,6 +598,7 @@ impl Renderer {
             clip_rect,
             text,
             style,
+            font_source: None,
             direction: self.config.default_direction,
             script: self.config.default_script,
             language: self.config.default_language.clone(),

@@ -46,9 +46,10 @@ impl TextBlockModel {
     pub fn paint(&self, scene: &mut Vec<PaintOp>) {
         let mut style = self.style.clone();
         style.layout_mode = TextLayoutMode::MultiLine;
+        let content = self.content_rect();
         scene.push(PaintOp::Text {
-            rect: self.content_rect(),
-            clip_rect: None,
+            rect: content,
+            clip_rect: Some(content),
             text: self.text.clone(),
             style,
         });
@@ -136,7 +137,12 @@ mod tests {
                     width: 200.0,
                     height: 104.0,
                 },
-                clip_rect: None,
+                clip_rect: Some(Rect {
+                    x: 18.0,
+                    y: 26.0,
+                    width: 200.0,
+                    height: 104.0,
+                }),
                 text: "Selection\nop #0001\nScene bg.png".to_string(),
                 style: block.style.clone(),
             }]

@@ -2887,6 +2887,7 @@ pub fn draw_plain_text(text: &str, _x: f32, _y: f32, size: f32, _color: UiColor)
             layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
             overflow: loadngo_host_core::RenderTextOverflow::Clip,
         },
+        font_source: None,
         direction: loadngo_renderer::TextDirection::Auto,
         script: loadngo_renderer::TextScript::Auto,
         language: None,

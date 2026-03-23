@@ -284,10 +284,7 @@ mod tests {
             .into_iter()
             .find_map(|op| match op {
                 PaintOp::Text {
-                    rect,
-                    text,
-                    style,
-                    ..
+                    rect, text, style, ..
                 } => Some((rect, text, style)),
                 _ => None,
             })
