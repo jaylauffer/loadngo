@@ -942,7 +942,6 @@ fn flush_selected_backend() {
             .is_some_and(|last| last == &pending_commands)
             && runtime.last_submitted_font_source == pending_font_source;
         if unchanged_frame {
-            runtime.detail = "Metal backend skipped an identical queued frame".to_string();
             return;
         }
         let backend = match runtime.ensure_metal_ready() {
@@ -958,7 +957,6 @@ fn flush_selected_backend() {
                 runtime.last_submitted_commands = Some(pending_commands);
                 runtime.last_submitted_font_source = pending_font_source;
                 runtime.last_used = DesktopRenderBackendKind::Metal;
-                runtime.detail = "Metal backend rendered the queued frame".to_string();
             }
             Err(err) => {
                 runtime.detail = format!("Metal backend render failed: {err}");
