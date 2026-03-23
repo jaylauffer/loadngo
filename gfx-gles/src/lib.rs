@@ -4,6 +4,11 @@ use std::sync::Arc;
 use loadngo_renderer::{FrameCommand, GraphicsBackend, RendererError};
 use ui_core::geometry::Color;
 
+#[cfg(target_os = "android")]
+mod android_egl;
+#[cfg(target_os = "linux")]
+pub mod linux_egl;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlesBackendState {
     UnboundSurface,
@@ -25,24 +30,26 @@ pub struct GlesBackend {
     frame_open: bool,
     surface_width: i32,
     surface_height: i32,
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     solid_program: u32,
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     solid_vbo: u32,
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     textured_program: u32,
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     textured_vbo: u32,
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     image_resources: HashMap<String, GlesImageResource>,
-    #[cfg(target_os = "android")]
-    gpu_textures: HashMap<String, android::GlTexture>,
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    gpu_textures: HashMap<String, u32>,
     #[cfg(target_os = "android")]
     display: Option<android::EglDisplay>,
     #[cfg(target_os = "android")]
     context: Option<android::EglContext>,
     #[cfg(target_os = "android")]
     surface: Option<android::EglSurface>,
+    #[cfg(target_os = "linux")]
+    linux_binding: Option<linux_egl::LinuxEglBinding>,
 }
 
 unsafe impl Send for GlesBackend {}
@@ -62,17 +69,17 @@ impl GlesBackend {
             frame_open: false,
             surface_width: 0,
             surface_height: 0,
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             solid_program: 0,
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             solid_vbo: 0,
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             textured_program: 0,
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             textured_vbo: 0,
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             image_resources: HashMap::new(),
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             gpu_textures: HashMap::new(),
             #[cfg(target_os = "android")]
             display: None,
@@ -80,6 +87,8 @@ impl GlesBackend {
             context: None,
             #[cfg(target_os = "android")]
             surface: None,
+            #[cfg(target_os = "linux")]
+            linux_binding: None,
         }
     }
 
@@ -90,17 +99,17 @@ impl GlesBackend {
             frame_open: false,
             surface_width: 0,
             surface_height: 0,
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             solid_program: 0,
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             solid_vbo: 0,
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             textured_program: 0,
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             textured_vbo: 0,
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             image_resources: HashMap::new(),
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             gpu_textures: HashMap::new(),
             #[cfg(target_os = "android")]
             display: None,
@@ -108,6 +117,8 @@ impl GlesBackend {
             context: None,
             #[cfg(target_os = "android")]
             surface: None,
+            #[cfg(target_os = "linux")]
+            linux_binding: None,
         }
     }
 
@@ -118,6 +129,10 @@ impl GlesBackend {
     pub fn update_surface_size(&mut self, width: i32, height: i32) {
         self.surface_width = width.max(1);
         self.surface_height = height.max(1);
+        #[cfg(target_os = "linux")]
+        if let Some(binding) = self.linux_binding.as_mut() {
+            linux_egl::resize(binding, self.surface_width, self.surface_height);
+        }
     }
 
     pub fn supports_commands(&self, commands: &[FrameCommand]) -> bool {
@@ -140,7 +155,7 @@ impl GlesBackend {
         &mut self,
         resources: impl IntoIterator<Item = (String, GlesImageResource)>,
     ) {
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         {
             let mut next = HashMap::new();
             for (key, resource) in resources {
@@ -151,14 +166,17 @@ impl GlesBackend {
                 if next.contains_key(key) {
                     true
                 } else {
+                    #[cfg(target_os = "android")]
                     android::destroy_texture(texture);
+                    #[cfg(target_os = "linux")]
+                    linux_egl::destroy_texture(texture);
                     false
                 }
             });
             self.image_resources = next;
         }
 
-        #[cfg(not(target_os = "android"))]
+        #[cfg(all(not(target_os = "android"), not(target_os = "linux")))]
         {
             let _ = resources.into_iter().count();
         }
@@ -193,6 +211,29 @@ impl GlesBackend {
             "OpenGL ES backend is only available on Android in this build".to_string(),
         ))
     }
+
+    #[cfg(target_os = "linux")]
+    pub fn try_bind_linux_window(
+        handles: &linux_egl::LinuxEglWindowHandles,
+        width: i32,
+        height: i32,
+    ) -> Result<Self, RendererError> {
+        let binding = linux_egl::bind_window(handles, width, height)?;
+        Ok(Self {
+            state: GlesBackendState::SurfaceBound,
+            recorded_commands: Vec::new(),
+            frame_open: false,
+            surface_width: width.max(1),
+            surface_height: height.max(1),
+            solid_program: 0,
+            solid_vbo: 0,
+            textured_program: 0,
+            textured_vbo: 0,
+            image_resources: HashMap::new(),
+            gpu_textures: HashMap::new(),
+            linux_binding: Some(binding),
+        })
+    }
 }
 
 impl Drop for GlesBackend {
@@ -211,6 +252,18 @@ impl Drop for GlesBackend {
                 &mut self.gpu_textures,
             );
             android::destroy(display, context, surface);
+        }
+
+        #[cfg(target_os = "linux")]
+        if let Some(binding) = self.linux_binding.take() {
+            linux_egl::destroy_scene_resources(
+                &mut self.solid_program,
+                &mut self.solid_vbo,
+                &mut self.textured_program,
+                &mut self.textured_vbo,
+                &mut self.gpu_textures,
+            );
+            linux_egl::destroy(binding);
         }
     }
 }
@@ -275,7 +328,25 @@ impl GraphicsBackend for GlesBackend {
                         &self.recorded_commands,
                     )
                 }
-                #[cfg(not(target_os = "android"))]
+                #[cfg(target_os = "linux")]
+                {
+                    let binding = self.linux_binding.as_ref().ok_or_else(|| {
+                        RendererError::Backend("Linux EGL binding is unavailable".to_string())
+                    })?;
+                    linux_egl::present_scene(
+                        binding,
+                        &mut self.solid_program,
+                        &mut self.solid_vbo,
+                        &mut self.textured_program,
+                        &mut self.textured_vbo,
+                        &self.image_resources,
+                        &mut self.gpu_textures,
+                        self.surface_width.max(1),
+                        self.surface_height.max(1),
+                        &self.recorded_commands,
+                    )
+                }
+                #[cfg(all(not(target_os = "android"), not(target_os = "linux")))]
                 {
                     Err(RendererError::Backend(
                         "Android GLES surface rendering is unavailable on this platform"
@@ -431,7 +502,7 @@ mod android {
         fn eglGetError() -> EglInt;
     }
 
-    #[link(name = "GLESv3")]
+    #[link(name = "GLESv2")]
     unsafe extern "C" {
         fn glViewport(x: i32, y: i32, width: i32, height: i32);
         fn glClearColor(red: f32, green: f32, blue: f32, alpha: f32);
