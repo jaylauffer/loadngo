@@ -1378,10 +1378,14 @@ fn prepare_gles_frame(
                 }
                 if let Some(image) = generated_cache.get(&image_key) {
                     let draw_rect = rasterized_text_draw_rect(request, image.width as f32, image.height as f32);
+                    let clip_rect = request
+                        .clip_rect
+                        .and_then(|clip| intersect_rects(clip, request.rect))
+                        .or(Some(request.rect));
                     next_textures.insert(image_key.clone(), image.clone());
                     next_commands.push(FrameCommand::Image(ImageRequest {
                         rect: draw_rect,
-                        clip_rect: Some(request.rect),
+                        clip_rect,
                         image_key,
                         alpha: 1.0,
                     }));
@@ -1462,6 +1466,25 @@ fn rasterized_text_draw_rect(request: &TextRequest, texture_width: f32, texture_
         y: request.rect.y - padding_y,
         width: texture_width,
         height: texture_height,
+    }
+}
+
+fn intersect_rects(a: UiRect, b: UiRect) -> Option<UiRect> {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = (a.x + a.width).min(b.x + b.width);
+    let y1 = (a.y + a.height).min(b.y + b.height);
+    let width = x1 - x0;
+    let height = y1 - y0;
+    if width <= 0.0 || height <= 0.0 {
+        None
+    } else {
+        Some(UiRect {
+            x: x0,
+            y: y0,
+            width,
+            height,
+        })
     }
 }
 
