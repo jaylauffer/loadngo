@@ -28,7 +28,7 @@ use ui_core::{
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, KeyCode, NamedKey, PhysicalKey};
 use winit::platform::x11::WindowAttributesExtX11;
 use winit::raw_window_handle::{
@@ -107,6 +107,11 @@ struct LinuxHostShared {
     state: Arc<(Mutex<HostSharedState>, Condvar)>,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum LinuxUserEvent {
+    Wake,
+}
+
 struct HostSharedState {
     latest_frame: HostFrame,
     pending_input: PendingInput,
@@ -123,6 +128,7 @@ struct HostSharedState {
     pending_redraw: bool,
     last_backend_used: DesktopRenderBackendKind,
     backend_detail: String,
+    event_proxy: Option<EventLoopProxy<LinuxUserEvent>>,
 }
 
 #[derive(Clone)]
@@ -237,6 +243,7 @@ impl Default for HostSharedState {
             pending_redraw: true,
             last_backend_used: DesktopRenderBackendKind::Unavailable,
             backend_detail: "Linux host waiting for the first frame".to_string(),
+            event_proxy: None,
         }
     }
 }
@@ -369,7 +376,13 @@ pub fn launch(
     };
     let _ = HOST_SHARED.set(shared.clone());
 
-    let event_loop = EventLoop::new().expect("failed to create Linux event loop");
+    let event_loop = EventLoop::<LinuxUserEvent>::with_user_event()
+        .build()
+        .expect("failed to create Linux event loop");
+    {
+        let mut state = lock_state();
+        state.event_proxy = Some(event_loop.create_proxy());
+    }
     let mut app = LinuxApp::new(window, icon, shared, Box::pin(entry));
     let _ = event_loop.run_app(&mut app);
 }
@@ -460,12 +473,17 @@ pub async fn next_frame(demand: FrameDemand) {
                             return;
                         }
                         advance_frame_clock(&mut state);
+                        let proxy = state.event_proxy.clone();
                         trace_linux(format!(
                             "next_frame timer fired delay_ms={} frame_epoch={}",
                             delay.as_millis(),
                             state.frame_epoch
                         ));
                         cvar.notify_all();
+                        drop(state);
+                        if let Some(proxy) = proxy {
+                            let _ = proxy.send_event(LinuxUserEvent::Wake);
+                        }
                         waker.wake();
                     });
                 }
@@ -865,7 +883,7 @@ impl LinuxApp {
     }
 }
 
-impl ApplicationHandler for LinuxApp {
+impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let mut attrs = WindowAttributes::default()
             .with_title(self.descriptor.title.clone())
@@ -1101,6 +1119,11 @@ impl ApplicationHandler for LinuxApp {
                 return;
             }
         }
+        self.request_redraw_if_needed();
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: LinuxUserEvent) {
+        trace_linux(format!("user_event {event:?}"));
         self.request_redraw_if_needed();
     }
 }
