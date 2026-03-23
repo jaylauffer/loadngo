@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+futures = "0.3"
 loadngo-host-core = { path = "../host-core" }
 loadngo-renderer = { path = "../renderer" }
 rodio = { version = "0.17", features = ["vorbis"] }
@@ -25,3 +26,10 @@ loadngo-gfx-gles = { path = "../gfx-gles" }
 ndk = { version = "0.8", default-features = false }
 ndk-context = "0.1"
 ndk-sys = "0.5"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+fontdue = "0.9.3"
+loadngo-gfx-gles = { path = "../gfx-gles" }
+softbuffer = "0.4"
+winit = { version = "0.30", default-features = false, features = ["wayland", "x11", "rwh_06"] }

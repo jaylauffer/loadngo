@@ -380,10 +380,10 @@ pub fn render_text_lines(
             let metrics = approximate_text_metrics(line, font_size, font_scale);
             ops.push(RenderOp::Text {
                 rect: ui_core::geometry::Rect {
-                    x: x as i32,
-                    y: current_y as i32,
-                    width: metrics.width.max(1.0) as i32,
-                    height: line_box_height as i32,
+                    x,
+                    y: current_y,
+                    width: metrics.width.max(1.0),
+                    height: line_box_height,
                 },
                 text: line.clone(),
                 style: RenderTextStyle {
@@ -391,6 +391,8 @@ pub fn render_text_lines(
                     font_size,
                     horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Left,
                     vertical_align: loadngo_host_core::RenderTextVerticalAlign::Top,
+                    vertical_metric_mode:
+                        loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
                     layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
                     overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 },
