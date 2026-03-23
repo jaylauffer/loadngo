@@ -9,6 +9,7 @@ license.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+ron.workspace = true
 tracing.workspace = true
 sha2.workspace = true
 blake3.workspace = true
