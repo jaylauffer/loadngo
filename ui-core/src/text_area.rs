@@ -400,7 +400,7 @@ impl TextAreaModel {
                     (self.style.font_size as f32 + 1.0).min((line_box_height - 2.0).max(1.0));
                 let local = local.min(metrics.char_offsets.len().saturating_sub(1));
                 caret_rect = Some(Rect {
-                    x: base_content_rect.x + metrics.char_offsets[local] - self.scroll_x,
+                    x: (base_content_rect.x + metrics.char_offsets[local] - self.scroll_x).round(),
                     y: caret_top,
                     width: 1.5,
                     height: caret_height,
