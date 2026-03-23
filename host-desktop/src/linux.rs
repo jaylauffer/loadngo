@@ -403,16 +403,6 @@ pub fn capture_frame() -> HostFrame {
     state.latest_frame.input.down_pressed = false;
     state.latest_frame.input.key_events.clear();
     state.latest_frame.input.typed_text.clear();
-    trace_linux(format!(
-        "capture_frame epoch={} typed_text={:?} key_events={} mouse_pressed={} mouse_released={} wheel=({}, {})",
-        state.frame_epoch,
-        frame.input.typed_text,
-        frame.input.key_events.len(),
-        frame.input.mouse_pressed,
-        frame.input.mouse_released,
-        frame.input.mouse_wheel_x,
-        frame.input.mouse_wheel_y,
-    ));
     frame
 }
 
@@ -434,17 +424,9 @@ pub async fn next_frame(demand: FrameDemand) {
             let (lock, _cvar) = &*shared().state;
             let state = lock.lock().expect("linux host state poisoned");
             if !state.running {
-                trace_linux(format!(
-                    "next_frame shutdown observed_epoch={} frame_epoch={}",
-                    self.observed_epoch, state.frame_epoch
-                ));
                 return std::task::Poll::Pending;
             }
             if state.frame_epoch > self.observed_epoch {
-                trace_linux(format!(
-                    "next_frame ready observed_epoch={} frame_epoch={} running={}",
-                    self.observed_epoch, state.frame_epoch, state.running
-                ));
                 self.observed_epoch = state.frame_epoch;
                 return std::task::Poll::Ready(());
             }
@@ -474,11 +456,6 @@ pub async fn next_frame(demand: FrameDemand) {
                         }
                         advance_frame_clock(&mut state);
                         let proxy = state.event_proxy.clone();
-                        trace_linux(format!(
-                            "next_frame timer fired delay_ms={} frame_epoch={}",
-                            delay.as_millis(),
-                            state.frame_epoch
-                        ));
                         cvar.notify_all();
                         drop(state);
                         if let Some(proxy) = proxy {
@@ -493,10 +470,6 @@ pub async fn next_frame(demand: FrameDemand) {
     }
 
     let observed_epoch = lock_state().frame_epoch;
-    trace_linux(format!(
-        "next_frame waiting demand={:?} observed_epoch={}",
-        demand, observed_epoch
-    ));
     NextFrameFuture {
         demand,
         observed_epoch,
@@ -863,14 +836,20 @@ impl LinuxApp {
         let (lock, cvar) = &*self.shared.state;
         let mut state = lock.lock().expect("linux host state poisoned");
         advance_frame_clock(&mut state);
-        trace_linux(format!(
-            "publish_frame epoch={} typed_text={:?} key_events={} pending_redraw={}",
-            state.frame_epoch,
-            state.latest_frame.input.typed_text,
-            state.latest_frame.input.key_events.len(),
-            state.pending_redraw
-        ));
         cvar.notify_all();
+    }
+
+    fn shutdown_graphics(&mut self) {
+        trace_linux(format!(
+            "shutdown_graphics gles_backend={} surface={} window={}",
+            self.gles_backend.is_some(),
+            self.surface.is_some(),
+            self.window.is_some()
+        ));
+        self.gles_backend = None;
+        self.surface = None;
+        self.window_id = None;
+        self.window = None;
     }
 
     fn request_redraw_if_needed(&self) {
@@ -1011,6 +990,8 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
                 let mut state = lock.lock().expect("linux host state poisoned");
                 state.running = false;
                 cvar.notify_all();
+                drop(state);
+                self.shutdown_graphics();
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
@@ -1073,7 +1054,6 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
                 should_publish_frame = true;
             }
             WindowEvent::Ime(Ime::Commit(text)) => {
-                trace_linux(format!("window_event Ime::Commit text={text:?}"));
                 let mut state = lock_state();
                 if let Some(filtered) = sanitized_typed_text(&text) {
                     state.pending_input.typed_text.push_str(&filtered);
@@ -1091,10 +1071,6 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
                 should_publish_frame = true;
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                trace_linux(format!(
-                    "window_event KeyboardInput state={:?} repeat={} logical={:?} physical={:?} text={:?}",
-                    event.state, event.repeat, event.logical_key, event.physical_key, event.text
-                ));
                 handle_keyboard_input(event);
                 should_publish_frame = true;
             }
@@ -1110,11 +1086,9 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
         self.pool.run_until_stalled();
         {
             let state = lock_state();
-            trace_linux(format!(
-                "about_to_wait running={} frame_epoch={} pending_redraw={}",
-                state.running, state.frame_epoch, state.pending_redraw
-            ));
             if !state.running {
+                drop(state);
+                self.shutdown_graphics();
                 event_loop.exit();
                 return;
             }
@@ -1122,8 +1096,7 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
         self.request_redraw_if_needed();
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: LinuxUserEvent) {
-        trace_linux(format!("user_event {event:?}"));
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: LinuxUserEvent) {
         self.request_redraw_if_needed();
     }
 }
@@ -1177,17 +1150,6 @@ fn handle_keyboard_input(event: winit::event::KeyEvent) {
                 modifiers,
             });
         }
-        trace_linux(format!(
-            "handle_keyboard_input pressed text={:?} key_events={} typed_text={:?}",
-            event.text,
-            state.pending_input.key_events.len(),
-            state.pending_input.typed_text
-        ));
-    } else {
-        trace_linux(format!(
-            "handle_keyboard_input released logical={:?} physical={:?}",
-            event.logical_key, event.physical_key
-        ));
     }
 }
 
