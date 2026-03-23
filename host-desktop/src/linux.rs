@@ -1781,6 +1781,10 @@ fn fill_circle_rgba(
 
 fn draw_text_request(buffer: &mut [u8], width: usize, height: usize, request: &TextRequest) {
     let font = resolve_text_request_font(request);
+    let clip_rect = request
+        .clip_rect
+        .and_then(|clip| intersect_rects(clip, request.rect))
+        .or(Some(request.rect));
     let layout = software_text_line_layout(&font, request.style.font_size, 1.0);
     let measured_line_height = layout.line_height.max(1.0);
     let line_box_height = ui_core::single_line_text_box_height(request.style.font_size);
@@ -1837,6 +1841,7 @@ fn draw_text_request(buffer: &mut [u8], width: usize, height: usize, request: &T
             &font,
             request.style.font_size,
             request.style.color,
+            clip_rect,
         );
     }
 }
@@ -1919,6 +1924,7 @@ fn draw_text_line(
     font: &DesktopFont,
     font_size: u16,
     color: UiColor,
+    clip_rect: Option<UiRect>,
 ) {
     let layout = software_text_line_layout(font, font_size, 1.0);
     let mut pen_x = x as f32;
@@ -1931,7 +1937,18 @@ fn draw_text_line(
                 let alpha = bitmap[gy * metrics.width + gx] as f32 / 255.0;
                 let px = glyph_x + gx as i32;
                 let py = glyph_y + gy as i32;
-                if px >= 0 && py >= 0 && (px as usize) < width && (py as usize) < height {
+                let inside_clip = clip_rect.is_none_or(|clip| {
+                    (px as f32) >= clip.x
+                        && (px as f32) < clip.x + clip.width
+                        && (py as f32) >= clip.y
+                        && (py as f32) < clip.y + clip.height
+                });
+                if inside_clip
+                    && px >= 0
+                    && py >= 0
+                    && (px as usize) < width
+                    && (py as usize) < height
+                {
                     blend_pixel(buffer, width, px as usize, py as usize, color, alpha);
                 }
             }
@@ -2080,5 +2097,44 @@ mod tests {
             _ => panic!("first command should remain text"),
         }
         assert!(matches!(commands[1], FrameCommand::Clear { .. }));
+    }
+
+    #[test]
+    fn draw_text_request_respects_clip_rect_in_software_path() {
+        let mut request = sample_text_request();
+        request.rect = UiRect {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 40.0,
+        };
+        request.clip_rect = Some(UiRect {
+            x: 60.0,
+            y: 0.0,
+            width: 140.0,
+            height: 40.0,
+        });
+        request.text = "Custom font clipping".to_string();
+
+        let width = 240usize;
+        let height = 48usize;
+        let mut rgba = vec![0u8; width * height * 4];
+        draw_text_request(&mut rgba, width, height, &request);
+
+        let left_alpha: usize = rgba
+            .chunks_exact(4)
+            .enumerate()
+            .filter(|(idx, _)| idx % width < 60)
+            .map(|(_, px)| px[3] as usize)
+            .sum();
+        let clipped_alpha: usize = rgba
+            .chunks_exact(4)
+            .enumerate()
+            .filter(|(idx, _)| idx % width >= 60 && idx % width < 200)
+            .map(|(_, px)| px[3] as usize)
+            .sum();
+
+        assert_eq!(left_alpha, 0);
+        assert!(clipped_alpha > 0);
     }
 }
