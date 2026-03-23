@@ -227,13 +227,6 @@ mod imp {
         }
 
         fn align_playlist_to_track(&mut self, path: &str) {
-            if let Some(idx) = self
-                .playlist_tracks
-                .iter()
-                .position(|candidate| candidate == path)
-            {
-                self.playlist_index = idx;
-            }
         }
 
         fn next_playlist_track(&mut self) -> Option<String> {
@@ -539,14 +532,17 @@ mod imp {
     use std::collections::HashMap;
     use std::fs::File;
     use std::io::BufReader;
+    use std::sync::OnceLock;
     use std::time::{Duration, Instant};
 
+    use rodio::cpal::traits::HostTrait;
     use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 
     const MUSIC_BASE_VOLUME: f32 = 0.8;
     const MUSIC_BASS_CUTOFF_HZ: u32 = 180;
     const MUSIC_BASS_POST_GAIN: f32 = 0.9;
     const MUSIC_IDLE_POLL_INTERVAL: Duration = Duration::from_millis(1000);
+    static AUDIO_BACKEND_FAILURE: OnceLock<String> = OnceLock::new();
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum MusicCueMode {
@@ -591,6 +587,36 @@ mod imp {
         }
 
         Ok(())
+    }
+
+    fn open_output_stream() -> Result<(OutputStream, OutputStreamHandle), String> {
+        if let Some(err) = AUDIO_BACKEND_FAILURE.get() {
+            return Err(err.clone());
+        }
+        if matches!(
+            std::env::var("LOADNGO_DISABLE_AUDIO").ok().as_deref(),
+            Some("1" | "true" | "TRUE" | "yes" | "YES")
+        ) {
+            let err = "Audio disabled by LOADNGO_DISABLE_AUDIO".to_string();
+            let _ = AUDIO_BACKEND_FAILURE.set(err.clone());
+            return Err(err);
+        }
+
+        let host = rodio::cpal::default_host();
+        let Some(device) = host.default_output_device() else {
+            let err = "No default output device".to_string();
+            let _ = AUDIO_BACKEND_FAILURE.set(err.clone());
+            return Err(err);
+        };
+
+        match OutputStream::try_from_device(&device) {
+            Ok(stream) => Ok(stream),
+            Err(err) => {
+                let detail = format!("Default output device stream failed: {err}");
+                let _ = AUDIO_BACKEND_FAILURE.set(detail.clone());
+                Err(detail)
+            }
+        }
     }
 
     impl TrackState {
@@ -671,7 +697,7 @@ mod imp {
             cue_mode: MusicCueMode,
             bass_boost: f32,
         ) -> Self {
-            match OutputStream::try_default() {
+            match open_output_stream() {
                 Ok((stream, stream_handle)) => Self {
                     tracks: HashMap::new(),
                     fade_duration: 1.0,
@@ -709,16 +735,6 @@ mod imp {
                         stream_handle: None,
                     }
                 }
-            }
-        }
-
-        fn align_playlist_to_track(&mut self, path: &str) {
-            if let Some(idx) = self
-                .playlist_tracks
-                .iter()
-                .position(|candidate| candidate == path)
-            {
-                self.playlist_index = idx;
             }
         }
 
@@ -1018,7 +1034,7 @@ mod imp {
                 return true;
             }
 
-            match OutputStream::try_default() {
+            match open_output_stream() {
                 Ok((stream, stream_handle)) => {
                     self.stream = Some(stream);
                     self.stream_handle = Some(stream_handle);
