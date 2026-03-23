@@ -243,6 +243,27 @@ Each child reference should distinguish:
 This keeps the parent/child model intact without making child-local history the
 only truth layer.
 
+### Workspace declaration
+
+The set of child repositories should be explicit, not hardcoded inside a tool.
+
+Near-term, `pudding` should declare its children in a root workspace config such
+as:
+
+- [pudding.workspace.ron](/Users/jay/pudding/pudding.workspace.ron)
+
+That declaration should identify:
+
+- child name
+- child path
+- whether the child is required or optional
+- inclusion policy for that child
+
+This avoids two failure modes:
+
+- treating one machine's local folder layout as the definition of `pudding`
+- accidentally ingesting or omitting children based on hidden binary constants
+
 ## Materializations And Replicas
 
 The system must distinguish:
