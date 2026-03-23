@@ -161,7 +161,8 @@ fn build_direct_text_ops(layout: &HarnessLayout) -> Vec<RenderOp> {
                 font_size: BODY_FONT,
                 horizontal_align: RenderTextHorizontalAlign::Center,
                 vertical_align,
-                vertical_metric_mode: loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
+                vertical_metric_mode:
+                    loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
                 layout_mode: RenderTextLayoutMode::SingleLine,
                 overflow: RenderTextOverflow::Clip,
             },

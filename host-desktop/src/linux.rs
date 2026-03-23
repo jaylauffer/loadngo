@@ -31,7 +31,9 @@ use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key as WinitKey, KeyCode, NamedKey, PhysicalKey};
 use winit::platform::x11::WindowAttributesExtX11;
-use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
+use winit::raw_window_handle::{
+    HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
+};
 use winit::window::{Icon, Window, WindowAttributes, WindowId};
 
 #[derive(Clone)]
@@ -241,6 +243,7 @@ impl Default for HostSharedState {
 
 static HOST_SHARED: OnceLock<LinuxHostShared> = OnceLock::new();
 static DEFAULT_FONT: OnceLock<DesktopFont> = OnceLock::new();
+static FONT_CACHE: OnceLock<Mutex<HashMap<String, DesktopFont>>> = OnceLock::new();
 static TRACE_ENABLED: OnceLock<bool> = OnceLock::new();
 
 fn shared() -> &'static LinuxHostShared {
@@ -249,6 +252,10 @@ fn shared() -> &'static LinuxHostShared {
 
 fn lock_state() -> std::sync::MutexGuard<'static, HostSharedState> {
     shared().state.0.lock().expect("linux host state poisoned")
+}
+
+fn font_cache() -> &'static Mutex<HashMap<String, DesktopFont>> {
+    FONT_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn trace_enabled() -> bool {
@@ -610,7 +617,10 @@ pub fn render_text_lines(
 }
 
 pub fn render_ops(ops: &[RenderOp], _font: Option<&DesktopFont>) {
-    let commands = Renderer::new(RendererConfig::default()).encode_render_ops(ops);
+    let mut commands = Renderer::new(RendererConfig::default()).encode_render_ops(ops);
+    if let Some(font_source) = _font.and_then(DesktopFont::source_path).map(str::to_string) {
+        apply_font_source_to_commands(&mut commands, &font_source);
+    }
     let mut state = lock_state();
     state.commands.extend(commands);
     state.pending_redraw = true;
@@ -682,7 +692,9 @@ pub fn upload_texture_with_image_key(
     let texture = DesktopTexture::new(image_key.map(str::to_string), image.clone());
     if let Some(image_key) = image_key {
         let mut state = lock_state();
-        state.image_registry.insert(image_key.to_string(), image.clone());
+        state
+            .image_registry
+            .insert(image_key.to_string(), image.clone());
         state
             .textures
             .insert(image_key.to_string(), Arc::new(image.clone()));
@@ -770,7 +782,12 @@ fn software_text_line_layout(
     }
 }
 
-fn measure_text_impl(text: &str, font: &DesktopFont, font_size: u16, font_scale: f32) -> TextMetrics {
+fn measure_text_impl(
+    text: &str,
+    font: &DesktopFont,
+    font_size: u16,
+    font_scale: f32,
+) -> TextMetrics {
     let layout = software_text_line_layout(font, font_size, font_scale);
     let mut max_width = 0.0f32;
     let mut current_width = 0.0f32;
@@ -914,10 +931,9 @@ impl ApplicationHandler for LinuxApp {
                     }
                 }
             }
-            match handles
-                .as_ref()
-                .map(|handles| GlesBackend::try_bind_linux_window(handles, size.width as i32, size.height as i32))
-            {
+            match handles.as_ref().map(|handles| {
+                GlesBackend::try_bind_linux_window(handles, size.width as i32, size.height as i32)
+            }) {
                 Some(Ok(backend)) => {
                     self.gles_backend = Some(backend);
                     let mut state = lock_state();
@@ -1004,7 +1020,11 @@ impl ApplicationHandler for LinuxApp {
                 state.pending_input.mouse_y = position.y as f32;
                 should_publish_frame = true;
             }
-            WindowEvent::MouseInput { state: button_state, button, .. } => {
+            WindowEvent::MouseInput {
+                state: button_state,
+                button,
+                ..
+            } => {
                 if button == MouseButton::Left {
                     let mut state = lock_state();
                     match button_state {
@@ -1253,7 +1273,9 @@ fn present(
         )
         .expect("failed to resize Linux surface");
 
-    let mut buffer = surface.buffer_mut().expect("failed to lock Linux surface buffer");
+    let mut buffer = surface
+        .buffer_mut()
+        .expect("failed to lock Linux surface buffer");
     let mut rgba = vec![0u8; width as usize * height as usize * 4];
 
     fill_rect_rgba(
@@ -1286,7 +1308,11 @@ fn present(
             FrameCommand::FillRect { rect, color } => {
                 fill_rect_rgba(&mut rgba, width as usize, height as usize, rect, color);
             }
-            FrameCommand::StrokeRect { rect, color, thickness } => {
+            FrameCommand::StrokeRect {
+                rect,
+                color,
+                thickness,
+            } => {
                 stroke_rect_rgba(
                     &mut rgba,
                     width as usize,
@@ -1322,21 +1348,12 @@ fn present(
                 radius.max(1),
                 color,
             ),
-            FrameCommand::Text(request) => draw_text_request(
-                &mut rgba,
-                width as usize,
-                height as usize,
-                &request,
-            ),
+            FrameCommand::Text(request) => {
+                draw_text_request(&mut rgba, width as usize, height as usize, &request)
+            }
             FrameCommand::Image(request) => {
                 if let Some(image) = textures.get(&request.image_key) {
-                    blit_image_rgba(
-                        &mut rgba,
-                        width as usize,
-                        height as usize,
-                        image,
-                        &request,
-                    );
+                    blit_image_rgba(&mut rgba, width as usize, height as usize, image, &request);
                 }
             }
         }
@@ -1377,7 +1394,8 @@ fn prepare_gles_frame(
                     }
                 }
                 if let Some(image) = generated_cache.get(&image_key) {
-                    let draw_rect = rasterized_text_draw_rect(request, image.width as f32, image.height as f32);
+                    let draw_rect =
+                        rasterized_text_draw_rect(request, image.width as f32, image.height as f32);
                     let clip_rect = request
                         .clip_rect
                         .and_then(|clip| intersect_rects(clip, request.rect))
@@ -1444,6 +1462,7 @@ fn prepare_gles_frame(
 fn generated_text_cache_key(request: &TextRequest) -> String {
     let mut hasher = DefaultHasher::new();
     request.text.hash(&mut hasher);
+    request.font_source.hash(&mut hasher);
     request.rect.width.to_bits().hash(&mut hasher);
     request.rect.height.to_bits().hash(&mut hasher);
     request.style.font_size.hash(&mut hasher);
@@ -1458,7 +1477,11 @@ fn generated_text_cache_key(request: &TextRequest) -> String {
     format!("generated://text/{:016x}", hasher.finish())
 }
 
-fn rasterized_text_draw_rect(request: &TextRequest, texture_width: f32, texture_height: f32) -> UiRect {
+fn rasterized_text_draw_rect(
+    request: &TextRequest,
+    texture_width: f32,
+    texture_height: f32,
+) -> UiRect {
     let padding_x = 4.0;
     let padding_y = 6.0;
     UiRect {
@@ -1489,11 +1512,11 @@ fn intersect_rects(a: UiRect, b: UiRect) -> Option<UiRect> {
 }
 
 fn rasterize_text_command(request: &TextRequest) -> Option<(UiRect, DecodedImage)> {
-    let font = default_font();
-    let measured = measure_text_impl(&request.text, font, request.style.font_size, 1.0);
+    let font = resolve_text_request_font(request);
+    let measured = measure_text_impl(&request.text, &font, request.style.font_size, 1.0);
     let padding_x = 4.0;
     let padding_y = 6.0;
-    let layout = software_text_line_layout(font, request.style.font_size, 1.0);
+    let layout = software_text_line_layout(&font, request.style.font_size, 1.0);
     let line_box_height = ui_core::single_line_text_box_height(request.style.font_size);
     let line_step = ui_core::multiline_line_step(request.style.font_size);
     let line_count = match request.style.layout_mode {
@@ -1757,8 +1780,8 @@ fn fill_circle_rgba(
 }
 
 fn draw_text_request(buffer: &mut [u8], width: usize, height: usize, request: &TextRequest) {
-    let font = default_font();
-    let layout = software_text_line_layout(font, request.style.font_size, 1.0);
+    let font = resolve_text_request_font(request);
+    let layout = software_text_line_layout(&font, request.style.font_size, 1.0);
     let measured_line_height = layout.line_height.max(1.0);
     let line_box_height = ui_core::single_line_text_box_height(request.style.font_size);
     let line_step = ui_core::multiline_line_step(request.style.font_size);
@@ -1788,18 +1811,17 @@ fn draw_text_request(buffer: &mut [u8], width: usize, height: usize, request: &T
     for (line_index, line) in lines.iter().enumerate() {
         let rendered = apply_overflow(
             line,
-            font,
+            &font,
             request.style.font_size,
             request.rect.width,
             request.style.overflow.clone(),
         );
-        let metrics = measure_text_impl(&rendered, font, request.style.font_size, 1.0);
+        let metrics = measure_text_impl(&rendered, &font, request.style.font_size, 1.0);
         let start_x = match request.style.horizontal_align {
             RenderTextHorizontalAlign::Left => request.rect.x.round() as i32,
-            RenderTextHorizontalAlign::Center => {
-                (request.rect.x + (request.rect.width - metrics.width).max(0.0) * 0.5).round()
-                    as i32
-            }
+            RenderTextHorizontalAlign::Center => (request.rect.x
+                + (request.rect.width - metrics.width).max(0.0) * 0.5)
+                .round() as i32,
             RenderTextHorizontalAlign::Right => {
                 (request.rect.x + (request.rect.width - metrics.width).max(0.0)).round() as i32
             }
@@ -1812,11 +1834,35 @@ fn draw_text_request(buffer: &mut [u8], width: usize, height: usize, request: &T
             &rendered,
             start_x,
             baseline_y,
-            font,
+            &font,
             request.style.font_size,
             request.style.color,
         );
     }
+}
+
+fn apply_font_source_to_commands(commands: &mut [FrameCommand], font_source: &str) {
+    for command in commands {
+        if let FrameCommand::Text(request) = command {
+            request.font_source = Some(font_source.to_string());
+        }
+    }
+}
+
+fn resolve_text_request_font(request: &TextRequest) -> DesktopFont {
+    let Some(font_source) = request.font_source.as_deref() else {
+        return default_font().clone();
+    };
+    if default_font().source_path() == Some(font_source) {
+        return default_font().clone();
+    }
+    let mut cache = font_cache().lock().expect("linux font cache poisoned");
+    if let Some(font) = cache.get(font_source) {
+        return font.clone();
+    }
+    let loaded = load_font_from_path(font_source).unwrap_or_else(|_| default_font().clone());
+    cache.insert(font_source.to_string(), loaded.clone());
+    loaded
 }
 
 fn apply_overflow(
@@ -1903,8 +1949,12 @@ fn blit_image_rgba(
 ) {
     let x0 = request.rect.x.max(0.0) as usize;
     let y0 = request.rect.y.max(0.0) as usize;
-    let x1 = (request.rect.x + request.rect.width).max(0.0).min(width as f32) as usize;
-    let y1 = (request.rect.y + request.rect.height).max(0.0).min(height as f32) as usize;
+    let x1 = (request.rect.x + request.rect.width)
+        .max(0.0)
+        .min(width as f32) as usize;
+    let y1 = (request.rect.y + request.rect.height)
+        .max(0.0)
+        .min(height as f32) as usize;
 
     let dst_w = (x1.saturating_sub(x0)).max(1);
     let dst_h = (y1.saturating_sub(y0)).max(1);
@@ -1964,4 +2014,71 @@ fn blend_pixel(buffer: &mut [u8], width: usize, x: usize, y: usize, color: UiCol
     buffer[idx + 1] = (out_g * 255.0).round().clamp(0.0, 255.0) as u8;
     buffer[idx + 2] = (out_b * 255.0).round().clamp(0.0, 255.0) as u8;
     buffer[idx + 3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use loadngo_renderer::{
+        rgba as renderer_rgba, FrameCommand, TextDirection, TextRequest, TextScript,
+    };
+
+    fn sample_text_request() -> TextRequest {
+        TextRequest {
+            rect: UiRect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 32.0,
+            },
+            clip_rect: None,
+            text: "Custom font".to_string(),
+            style: RenderTextStyle {
+                color: renderer_rgba(255, 255, 255, 255),
+                font_size: 18,
+                horizontal_align: RenderTextHorizontalAlign::Left,
+                vertical_align: RenderTextVerticalAlign::Top,
+                layout_mode: RenderTextLayoutMode::SingleLine,
+                overflow: RenderTextOverflow::Clip,
+                ..Default::default()
+            },
+            font_source: None,
+            direction: TextDirection::Auto,
+            script: TextScript::Auto,
+            language: None,
+        }
+    }
+
+    #[test]
+    fn generated_text_cache_key_changes_with_font_source() {
+        let mut request = sample_text_request();
+        let without_font = generated_text_cache_key(&request);
+        request.font_source = Some("/tmp/custom-font-a.ttf".to_string());
+        let with_font_a = generated_text_cache_key(&request);
+        request.font_source = Some("/tmp/custom-font-b.ttf".to_string());
+        let with_font_b = generated_text_cache_key(&request);
+
+        assert_ne!(without_font, with_font_a);
+        assert_ne!(with_font_a, with_font_b);
+    }
+
+    #[test]
+    fn render_ops_applies_font_source_to_text_commands() {
+        let mut commands = vec![
+            FrameCommand::Text(sample_text_request()),
+            FrameCommand::Clear {
+                color: renderer_rgba(0, 0, 0, 255),
+            },
+        ];
+
+        apply_font_source_to_commands(&mut commands, "/tmp/custom-font.ttf");
+
+        match &commands[0] {
+            FrameCommand::Text(request) => {
+                assert_eq!(request.font_source.as_deref(), Some("/tmp/custom-font.ttf"));
+            }
+            _ => panic!("first command should remain text"),
+        }
+        assert!(matches!(commands[1], FrameCommand::Clear { .. }));
+    }
 }

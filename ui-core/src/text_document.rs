@@ -120,7 +120,11 @@ impl TextDocument {
     pub fn replace_char_range(&mut self, start: usize, end: usize, replacement: &str) {
         let start = start.min(self.len_chars);
         let end = end.min(self.len_chars);
-        let (start, end) = if start <= end { (start, end) } else { (end, start) };
+        let (start, end) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
         let before_pieces = self.pieces.clone();
         let before_len_chars = self.len_chars;
         let before_revision = self.revision;
@@ -171,7 +175,11 @@ impl TextDocument {
         true
     }
 
-    fn split_pieces_at_char(&self, pieces: &[Piece], char_index: usize) -> (Vec<Piece>, Vec<Piece>) {
+    fn split_pieces_at_char(
+        &self,
+        pieces: &[Piece],
+        char_index: usize,
+    ) -> (Vec<Piece>, Vec<Piece>) {
         let mut before = Vec::new();
         let mut after = Vec::new();
         let mut remaining = char_index;
