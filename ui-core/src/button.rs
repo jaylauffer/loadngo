@@ -101,34 +101,55 @@ impl ButtonModel {
             HorizontalAlign::Center => 0.0,
         };
         let pulse = if self.hover || self.focused || self.pressed {
-            let elapsed_s = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs_f64() as f32;
+            let elapsed_s = animation_time_seconds();
             Some(hover_pulse(elapsed_s, self.pressed))
         } else {
             None
         };
-        let fill = if self.pressed {
-            Color::rgba(0xbe, 0xd5, 0xff, 0xf6)
-        } else if self.hover || self.focused {
-            Color::rgba(0xd9, 0xe7, 0xff, 0xf1)
+        let (fill, border, text_color) = if let Some(pulse) = pulse {
+            if self.pressed {
+                (
+                    lerp_color(
+                        Color::rgba(0x4c, 0x78, 0xbd, 0xf8),
+                        Color::rgba(0xf3, 0xf9, 0xff, 0xff),
+                        pulse,
+                    ),
+                    lerp_color(
+                        Color::rgba(0x2d, 0x52, 0x90, 0xff),
+                        Color::rgba(0xf0, 0xf9, 0xff, 0xff),
+                        pulse,
+                    ),
+                    lerp_color(
+                        Color::rgba(0xf5, 0xfa, 0xff, 0xff),
+                        Color::rgba(0x0d, 0x17, 0x28, 0xff),
+                        pulse,
+                    ),
+                )
+            } else {
+                (
+                    lerp_color(
+                        Color::rgba(0x5e, 0x84, 0xbd, 0xec),
+                        Color::rgba(0xf8, 0xfc, 0xff, 0xff),
+                        pulse,
+                    ),
+                    lerp_color(
+                        Color::rgba(0x36, 0x5f, 0xa0, 0xf6),
+                        Color::rgba(0xe1, 0xf1, 0xff, 0xff),
+                        pulse,
+                    ),
+                    lerp_color(
+                        Color::rgba(0xf3, 0xf8, 0xff, 0xff),
+                        Color::rgba(0x11, 0x1d, 0x30, 0xff),
+                        pulse,
+                    ),
+                )
+            }
         } else {
-            Color::rgba(0xf0, 0xf0, 0xf0, 0xd8)
-        };
-        let border = if self.pressed {
-            Color::rgba(0x3f, 0x6f, 0xb8, 0xf6)
-        } else if self.hover || self.focused {
-            Color::rgba(0x58, 0x87, 0xcc, 0xf0)
-        } else {
-            Color::rgba(0x86, 0x8d, 0xa0, 0xd4)
-        };
-        let text_color = if self.pressed {
-            Color::rgba(0x11, 0x1c, 0x2f, 0xff)
-        } else if self.hover || self.focused {
-            Color::rgba(0x16, 0x24, 0x3d, 0xff)
-        } else {
-            Color::rgba(0x20, 0x20, 0x20, 0xff)
+            (
+                Color::rgba(0xf0, 0xf0, 0xf0, 0xd8),
+                Color::rgba(0x86, 0x8d, 0xa0, 0xd4),
+                Color::rgba(0x20, 0x20, 0x20, 0xff),
+            )
         };
         scene.push(PaintOp::FillRect {
             rect: self.bounds,
@@ -142,21 +163,16 @@ impl ButtonModel {
                     width: (self.bounds.width - 2.0).max(1.0),
                     height: (self.bounds.height - 2.0).max(1.0),
                 },
-                color: if self.pressed {
-                    Color::rgba(
-                        0xf7,
-                        0xfb,
-                        0xff,
-                        (32.0 + pulse * 96.0).round().clamp(0.0, 255.0) as u8,
-                    )
-                } else {
-                    Color::rgba(
-                        0xf8,
-                        0xfb,
-                        0xff,
-                        (12.0 + pulse * 84.0).round().clamp(0.0, 255.0) as u8,
-                    )
-                },
+                color: Color::rgba(
+                    0xff,
+                    0xff,
+                    0xff,
+                    if self.pressed {
+                        (8.0 + pulse * 132.0).round().clamp(0.0, 255.0) as u8
+                    } else {
+                        (4.0 + pulse * 118.0).round().clamp(0.0, 255.0) as u8
+                    },
+                ),
             });
         }
         scene.push(PaintOp::StrokeRect {
@@ -166,21 +182,16 @@ impl ButtonModel {
         if let Some(pulse) = pulse {
             scene.push(PaintOp::StrokeRect {
                 rect: self.bounds,
-                color: if self.pressed {
-                    Color::rgba(
-                        0xb4,
-                        0xd8,
-                        0xff,
-                        (40.0 + pulse * 180.0).round().clamp(0.0, 255.0) as u8,
-                    )
-                } else {
-                    Color::rgba(
-                        0xa2,
-                        0xcf,
-                        0xff,
-                        (18.0 + pulse * 170.0).round().clamp(0.0, 255.0) as u8,
-                    )
-                },
+                color: Color::rgba(
+                    if self.pressed { 0xd9 } else { 0xc8 },
+                    if self.pressed { 0xee } else { 0xe5 },
+                    0xff,
+                    if self.pressed {
+                        (6.0 + pulse * 228.0).round().clamp(0.0, 255.0) as u8
+                    } else {
+                        (4.0 + pulse * 216.0).round().clamp(0.0, 255.0) as u8
+                    },
+                ),
             });
         }
         self.paint_trace(scene);
@@ -207,11 +218,7 @@ impl ButtonModel {
         if !self.hover && !self.pressed {
             return;
         }
-        let elapsed_s = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs_f64();
-        let t = elapsed_s as f32;
+        let t = animation_time_seconds();
         let inset = 5.0;
         let accent_x = 16.0_f32.min((self.bounds.width * 0.2).max(9.0));
         let accent_y = 11.0_f32.min((self.bounds.height * 0.36).max(7.0));
@@ -430,6 +437,28 @@ impl ButtonModel {
 fn hover_pulse(t: f32, pressed: bool) -> f32 {
     let speed = if pressed { 1.05 } else { 0.62 };
     ((t * speed).sin() * 0.5 + 0.5).powf(1.2)
+}
+
+fn animation_time_seconds() -> f32 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs_f64().rem_euclid(4096.0) as f32)
+        .unwrap_or(0.0)
+}
+
+fn lerp_color(from: Color, to: Color, t: f32) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    let lerp = |a: u8, b: u8| -> u8 {
+        ((a as f32) + ((b as f32) - (a as f32)) * t)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+    Color::rgba(
+        lerp(from.r, to.r),
+        lerp(from.g, to.g),
+        lerp(from.b, to.b),
+        lerp(from.a, to.a),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq)]
