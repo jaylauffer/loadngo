@@ -1347,7 +1347,7 @@ fn present(
                 points.as_slice(),
                 color,
                 thickness.max(1),
-                *closed,
+                closed,
             ),
             FrameCommand::ParticleBatch { particles } => {
                 for particle in particles {
