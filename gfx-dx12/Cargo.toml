@@ -1,0 +1,13 @@
+[package]
+name = "loadngo-gfx-dx12"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+blake3.workspace = true
+loadngo-host-core = { path = "../host-core" }
+loadngo-renderer = { path = "../renderer" }
+ui-core = { path = "../ui-core" }
+windows.workspace = true

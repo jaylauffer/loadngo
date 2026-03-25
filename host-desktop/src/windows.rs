@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::future::Future;
 use std::hash::{Hash, Hasher};
@@ -11,7 +13,7 @@ use arboard::Clipboard;
 use fontdue::{Font, FontSettings};
 use futures::executor::LocalPool;
 use futures::task::LocalSpawnExt;
-use loadngo_gfx_gles::{linux_egl::LinuxEglWindowHandles, GlesBackend};
+use loadngo_gfx_dx12::Dx12Backend;
 use loadngo_host_core::{
     DecodedImage, FrameDemand, FrameTiming, HostFrame, HostKey, HostKeyEvent, ImageRegistry,
     InputSnapshot, RenderOp, RenderTextHorizontalAlign, RenderTextLayoutMode, RenderTextOverflow,
@@ -30,10 +32,7 @@ use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, KeyCode, NamedKey, PhysicalKey};
-use winit::platform::x11::WindowAttributesExtX11;
-use winit::raw_window_handle::{
-    HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
-};
+use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::{Icon, Window, WindowAttributes, WindowId};
 
 #[derive(Clone)]
@@ -88,7 +87,7 @@ impl DesktopTexture {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DesktopRenderBackendKind {
-    Gles,
+    D3d12,
     Software,
     Unavailable,
 }
@@ -103,12 +102,12 @@ pub struct DesktopRenderBackendStatus {
 }
 
 #[derive(Clone)]
-struct LinuxHostShared {
+struct WindowsHostShared {
     state: Arc<(Mutex<HostSharedState>, Condvar)>,
 }
 
 #[derive(Debug, Clone, Copy)]
-enum LinuxUserEvent {
+enum WindowsUserEvent {
     Wake,
 }
 
@@ -117,6 +116,7 @@ struct HostSharedState {
     pending_input: PendingInput,
     frame_epoch: u64,
     last_frame_instant: Instant,
+    dpi_scale: f32,
     running: bool,
     simulate_mouse_with_touch: bool,
     cursor_visible: bool,
@@ -128,7 +128,7 @@ struct HostSharedState {
     pending_redraw: bool,
     last_backend_used: DesktopRenderBackendKind,
     backend_detail: String,
-    event_proxy: Option<EventLoopProxy<LinuxUserEvent>>,
+    event_proxy: Option<EventLoopProxy<WindowsUserEvent>>,
 }
 
 #[derive(Clone)]
@@ -232,6 +232,7 @@ impl Default for HostSharedState {
             pending_input: PendingInput::default(),
             frame_epoch: 0,
             last_frame_instant: Instant::now(),
+            dpi_scale: 1.0,
             running: true,
             simulate_mouse_with_touch: false,
             cursor_visible: true,
@@ -242,23 +243,27 @@ impl Default for HostSharedState {
             generated_texture_cache: HashMap::new(),
             pending_redraw: true,
             last_backend_used: DesktopRenderBackendKind::Unavailable,
-            backend_detail: "Linux host waiting for the first frame".to_string(),
+            backend_detail: "Windows host waiting for the first frame".to_string(),
             event_proxy: None,
         }
     }
 }
 
-static HOST_SHARED: OnceLock<LinuxHostShared> = OnceLock::new();
+static HOST_SHARED: OnceLock<WindowsHostShared> = OnceLock::new();
 static DEFAULT_FONT: OnceLock<DesktopFont> = OnceLock::new();
 static FONT_CACHE: OnceLock<Mutex<HashMap<String, DesktopFont>>> = OnceLock::new();
 static TRACE_ENABLED: OnceLock<bool> = OnceLock::new();
 
-fn shared() -> &'static LinuxHostShared {
-    HOST_SHARED.get().expect("linux host not initialized")
+fn shared() -> &'static WindowsHostShared {
+    HOST_SHARED.get().expect("windows host not initialized")
 }
 
 fn lock_state() -> std::sync::MutexGuard<'static, HostSharedState> {
-    shared().state.0.lock().expect("linux host state poisoned")
+    shared()
+        .state
+        .0
+        .lock()
+        .expect("windows host state poisoned")
 }
 
 fn font_cache() -> &'static Mutex<HashMap<String, DesktopFont>> {
@@ -266,7 +271,7 @@ fn font_cache() -> &'static Mutex<HashMap<String, DesktopFont>> {
 }
 
 fn trace_enabled() -> bool {
-    *TRACE_ENABLED.get_or_init(|| match std::env::var("LOADNGO_LINUX_TRACE") {
+    *TRACE_ENABLED.get_or_init(|| match std::env::var("LOADNGO_WINDOWS_TRACE") {
         Ok(value) => {
             let normalized = value.trim().to_ascii_lowercase();
             !matches!(normalized.as_str(), "" | "0" | "false" | "no" | "off")
@@ -275,9 +280,9 @@ fn trace_enabled() -> bool {
     })
 }
 
-fn trace_linux(message: impl AsRef<str>) {
+fn trace_windows(message: impl AsRef<str>) {
     if trace_enabled() {
-        eprintln!("[loadngo/linux/trace] {}", message.as_ref());
+        eprintln!("[loadngo/windows/trace] {}", message.as_ref());
     }
 }
 
@@ -292,9 +297,9 @@ fn sanitized_typed_text(text: &str) -> Option<String> {
 
 fn init_default_font() -> DesktopFont {
     let candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        r"C:\Windows\Fonts\segoeui.ttf",
+        r"C:\Windows\Fonts\arial.ttf",
+        r"C:\Windows\Fonts\tahoma.ttf",
     ];
     for path in candidates {
         if let Ok(bytes) = std::fs::read(path) {
@@ -303,7 +308,7 @@ fn init_default_font() -> DesktopFont {
             }
         }
     }
-    panic!("failed to load a usable Linux default font");
+    panic!("failed to load a usable Windows default font");
 }
 
 fn default_font() -> &'static DesktopFont {
@@ -329,21 +334,13 @@ fn requested_render_backend() -> DesktopRenderBackendKind {
         .map(str::to_ascii_lowercase)
         .as_deref()
     {
-        Some("gles") | None => DesktopRenderBackendKind::Gles,
+        Some("d3d12") | None => DesktopRenderBackendKind::D3d12,
         Some("software") => DesktopRenderBackendKind::Software,
         _ => DesktopRenderBackendKind::Unavailable,
     }
 }
 
-fn update_backend_detail(state: &mut HostSharedState, detail: impl Into<String>) {
-    let detail = detail.into();
-    if state.backend_detail != detail {
-        eprintln!("[loadngo/linux] {detail}");
-        state.backend_detail = detail;
-    }
-}
-
-fn describe_unsupported_gles_command(commands: &[FrameCommand]) -> Option<&'static str> {
+fn describe_unsupported_dx12_command(commands: &[FrameCommand]) -> Option<&'static str> {
     commands.iter().find_map(|command| match command {
         FrameCommand::Clear { .. } => None,
         FrameCommand::FillRect { .. } => None,
@@ -357,13 +354,43 @@ fn describe_unsupported_gles_command(commands: &[FrameCommand]) -> Option<&'stat
     })
 }
 
+fn update_backend_detail(state: &mut HostSharedState, detail: impl Into<String>) {
+    let detail = detail.into();
+    if state.backend_detail != detail {
+        eprintln!("[loadngo/windows] {detail}");
+        state.backend_detail = detail;
+    }
+}
+
+fn scale_from_window(window: &Window, high_dpi: bool) -> f32 {
+    if high_dpi {
+        window.scale_factor().max(1.0) as f32
+    } else {
+        1.0
+    }
+}
+
+fn logical_surface_info(size: PhysicalSize<u32>, scale: f32) -> SurfaceInfo {
+    SurfaceInfo {
+        width: size.width as f32 / scale.max(1.0),
+        height: size.height as f32 / scale.max(1.0),
+    }
+}
+
+fn logical_cursor_position(position: PhysicalPosition<f64>, scale: f32) -> (f32, f32) {
+    (
+        position.x as f32 / scale.max(1.0),
+        position.y as f32 / scale.max(1.0),
+    )
+}
+
 pub fn desktop_render_backend_status() -> DesktopRenderBackendStatus {
     let state = lock_state();
     DesktopRenderBackendStatus {
         requested: requested_render_backend(),
         last_used: state.last_backend_used,
         metal_initialized: false,
-        metal_surface_bound: matches!(state.last_backend_used, DesktopRenderBackendKind::Gles),
+        metal_surface_bound: matches!(state.last_backend_used, DesktopRenderBackendKind::D3d12),
         detail: state.backend_detail.clone(),
     }
 }
@@ -373,19 +400,19 @@ pub fn launch(
     icon: Option<WindowIconSet>,
     entry: impl Future<Output = ()> + 'static,
 ) {
-    let shared = LinuxHostShared {
+    let shared = WindowsHostShared {
         state: Arc::new((Mutex::new(HostSharedState::default()), Condvar::new())),
     };
     let _ = HOST_SHARED.set(shared.clone());
 
-    let event_loop = EventLoop::<LinuxUserEvent>::with_user_event()
+    let event_loop = EventLoop::<WindowsUserEvent>::with_user_event()
         .build()
-        .expect("failed to create Linux event loop");
+        .expect("failed to create Windows event loop");
     {
         let mut state = lock_state();
         state.event_proxy = Some(event_loop.create_proxy());
     }
-    let mut app = LinuxApp::new(window, icon, shared, Box::pin(entry));
+    let mut app = WindowsApp::new(window, icon, shared, Box::pin(entry));
     let _ = event_loop.run_app(&mut app);
 }
 
@@ -424,7 +451,7 @@ pub async fn next_frame(demand: FrameDemand) {
             cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<Self::Output> {
             let (lock, _cvar) = &*shared().state;
-            let state = lock.lock().expect("linux host state poisoned");
+            let state = lock.lock().expect("windows host state poisoned");
             if !state.running {
                 return std::task::Poll::Pending;
             }
@@ -439,8 +466,8 @@ pub async fn next_frame(demand: FrameDemand) {
                 let state_arc = shared().state.clone();
                 thread::spawn(move || {
                     let (lock, cvar) = &*state_arc;
-                    let guard = lock.lock().expect("linux host state poisoned");
-                    let _guard = cvar.wait(guard).expect("linux host wait poisoned");
+                    let guard = lock.lock().expect("windows host state poisoned");
+                    let _guard = cvar.wait(guard).expect("windows host wait poisoned");
                     waker.wake();
                 });
             }
@@ -452,7 +479,7 @@ pub async fn next_frame(demand: FrameDemand) {
                     thread::spawn(move || {
                         thread::sleep(delay);
                         let (lock, cvar) = &*state_arc;
-                        let mut state = lock.lock().expect("linux host state poisoned");
+                        let mut state = lock.lock().expect("windows host state poisoned");
                         if !state.running {
                             return;
                         }
@@ -461,7 +488,7 @@ pub async fn next_frame(demand: FrameDemand) {
                         cvar.notify_all();
                         drop(state);
                         if let Some(proxy) = proxy {
-                            let _ = proxy.send_event(LinuxUserEvent::Wake);
+                            let _ = proxy.send_event(WindowsUserEvent::Wake);
                         }
                         waker.wake();
                     });
@@ -802,23 +829,23 @@ fn measure_text_impl(
     }
 }
 
-struct LinuxApp {
+struct WindowsApp {
     descriptor: WindowDescriptor,
     icon: Option<WindowIconSet>,
-    shared: LinuxHostShared,
+    shared: WindowsHostShared,
     entry: Option<Pin<Box<dyn Future<Output = ()>>>>,
     pool: LocalPool,
     window: Option<Arc<Window>>,
     window_id: Option<WindowId>,
     surface: Option<Surface<Arc<Window>, Arc<Window>>>,
-    gles_backend: Option<GlesBackend>,
+    dx12_backend: Option<Dx12Backend>,
 }
 
-impl LinuxApp {
+impl WindowsApp {
     fn new(
         descriptor: WindowDescriptor,
         icon: Option<WindowIconSet>,
-        shared: LinuxHostShared,
+        shared: WindowsHostShared,
         entry: Pin<Box<dyn Future<Output = ()>>>,
     ) -> Self {
         Self {
@@ -830,25 +857,25 @@ impl LinuxApp {
             window: None,
             window_id: None,
             surface: None,
-            gles_backend: None,
+            dx12_backend: None,
         }
     }
 
     fn publish_frame(&mut self) {
         let (lock, cvar) = &*self.shared.state;
-        let mut state = lock.lock().expect("linux host state poisoned");
+        let mut state = lock.lock().expect("windows host state poisoned");
         advance_frame_clock(&mut state);
         cvar.notify_all();
     }
 
     fn shutdown_graphics(&mut self) {
-        trace_linux(format!(
-            "shutdown_graphics gles_backend={} surface={} window={}",
-            self.gles_backend.is_some(),
+        trace_windows(format!(
+            "shutdown_graphics surface={} dx12={} window={}",
             self.surface.is_some(),
+            self.dx12_backend.is_some(),
             self.window.is_some()
         ));
-        self.gles_backend = None;
+        self.dx12_backend = None;
         self.surface = None;
         self.window_id = None;
         self.window = None;
@@ -864,7 +891,7 @@ impl LinuxApp {
     }
 }
 
-impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
+impl ApplicationHandler<WindowsUserEvent> for WindowsApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let mut attrs = WindowAttributes::default()
             .with_title(self.descriptor.title.clone())
@@ -872,9 +899,6 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
                 self.descriptor.width.unwrap_or(1280) as f64,
                 self.descriptor.height.unwrap_or(720) as f64,
             ));
-        if let Some(class) = self.descriptor.linux_wm_class {
-            attrs = WindowAttributesExtX11::with_name(attrs, class.to_string(), class.to_string());
-        }
         if let Some(icon) = self.icon.clone().and_then(decode_icon) {
             attrs = attrs.with_window_icon(Some(icon));
         }
@@ -882,77 +906,67 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
         let window = Arc::new(
             event_loop
                 .create_window(attrs)
-                .expect("failed to create Linux window"),
+                .expect("failed to create Windows window"),
         );
         let context = Context::new(window.clone()).expect("failed to create softbuffer context");
         let surface =
             Surface::new(&context, window.clone()).expect("failed to create softbuffer surface");
         let size = window.inner_size();
+        let dpi_scale = scale_from_window(&window, self.descriptor.high_dpi);
+        let requested_backend = requested_render_backend();
 
         {
             let mut state = lock_state();
-            state.latest_frame.surface = SurfaceInfo {
-                width: size.width as f32,
-                height: size.height as f32,
-            };
-            update_backend_detail(&mut state, "Linux software renderer active");
+            state.dpi_scale = dpi_scale;
+            state.latest_frame.surface = logical_surface_info(size, dpi_scale);
+            match requested_backend {
+                DesktopRenderBackendKind::D3d12 => update_backend_detail(
+                    &mut state,
+                    format!(
+                        "Windows D3D12 backend requested; attempting native swapchain binding (dpi_scale={dpi_scale:.2})"
+                    ),
+                ),
+                DesktopRenderBackendKind::Software => update_backend_detail(
+                    &mut state,
+                    format!("Windows software renderer active (dpi_scale={dpi_scale:.2})"),
+                ),
+                DesktopRenderBackendKind::Unavailable => update_backend_detail(
+                    &mut state,
+                    format!(
+                        "Windows backend selection unavailable; using software renderer (dpi_scale={dpi_scale:.2})"
+                    ),
+                ),
+            }
         }
 
-        if matches!(requested_render_backend(), DesktopRenderBackendKind::Gles) {
-            let handles = match (window.display_handle(), window.window_handle()) {
-                (Ok(display), Ok(window_handle)) => Some(LinuxEglWindowHandles {
-                    display_handle: display.as_raw(),
-                    window_handle: window_handle.as_raw(),
-                }),
+        if matches!(requested_backend, DesktopRenderBackendKind::D3d12) {
+            let hwnd = match window.window_handle().map(|handle| handle.as_raw()) {
+                Ok(RawWindowHandle::Win32(handle)) => Some(handle.hwnd.get()),
                 _ => None,
             };
-            if let Some(handles) = handles.as_ref() {
-                let mut state = lock_state();
-                match (handles.display_handle, handles.window_handle) {
-                    (RawDisplayHandle::Wayland(_), RawWindowHandle::Wayland(_)) => {
-                        update_backend_detail(
-                            &mut state,
-                            "Linux GLES requested; attempting Wayland EGL binding",
-                        );
-                    }
-                    (RawDisplayHandle::Xlib(_), RawWindowHandle::Xlib(_))
-                    | (RawDisplayHandle::Xcb(_), RawWindowHandle::Xcb(_)) => {
-                        update_backend_detail(
-                            &mut state,
-                            "Linux GLES requested; attempting X11/Xcb EGL binding",
-                        );
-                    }
-                    _ => {
-                        update_backend_detail(
-                            &mut state,
-                            "Linux GLES requested; unsupported native window-handle combination",
-                        );
-                    }
-                }
-            }
-            match handles.as_ref().map(|handles| {
-                GlesBackend::try_bind_linux_window(handles, size.width as i32, size.height as i32)
-            }) {
+            match hwnd.map(|hwnd| Dx12Backend::try_bind_hwnd(hwnd, size.width as i32, size.height as i32)) {
                 Some(Ok(backend)) => {
-                    self.gles_backend = Some(backend);
+                    self.dx12_backend = Some(backend);
                     let mut state = lock_state();
                     update_backend_detail(
                         &mut state,
-                        "Linux GLES backend bound to the native window",
+                        format!(
+                            "Windows D3D12 backend bound to the native window (dpi_scale={dpi_scale:.2})"
+                        ),
                     );
                 }
                 Some(Err(err)) => {
                     let mut state = lock_state();
                     update_backend_detail(
                         &mut state,
-                        format!("Linux GLES backend unavailable: {err}"),
+                        format!("Windows D3D12 backend unavailable: {err}; falling back to software"),
                     );
                 }
                 None => {
                     let mut state = lock_state();
                     update_backend_detail(
                         &mut state,
-                        "Linux GLES backend unavailable: failed to obtain raw window handles",
+                        "Windows D3D12 backend unavailable: failed to obtain a Win32 window handle; falling back to software",
                     );
                 }
             }
@@ -968,11 +982,11 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
                 .spawn_local(async move {
                     entry.await;
                     let (lock, cvar) = &*shared.state;
-                    let mut state = lock.lock().expect("linux host state poisoned");
+                    let mut state = lock.lock().expect("windows host state poisoned");
                     state.running = false;
                     cvar.notify_all();
                 })
-                .expect("failed to spawn Linux runtime future");
+                .expect("failed to spawn Windows runtime future");
         }
         self.publish_frame();
         self.request_redraw_if_needed();
@@ -987,9 +1001,9 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
         let mut should_publish_frame = false;
         match event {
             WindowEvent::CloseRequested => {
-                trace_linux("window_event CloseRequested");
+                trace_windows("window_event CloseRequested");
                 let (lock, cvar) = &*self.shared.state;
-                let mut state = lock.lock().expect("linux host state poisoned");
+                let mut state = lock.lock().expect("windows host state poisoned");
                 state.running = false;
                 cvar.notify_all();
                 drop(state);
@@ -998,27 +1012,36 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
             }
             WindowEvent::RedrawRequested => {
                 if let (Some(window), Some(surface)) = (&self.window, &mut self.surface) {
-                    present(surface, window.inner_size(), &mut self.gles_backend);
+                    present(
+                        surface,
+                        window.inner_size(),
+                        scale_from_window(window, self.descriptor.high_dpi),
+                        &mut self.dx12_backend,
+                    );
                 }
                 let mut state = lock_state();
                 state.pending_redraw = false;
             }
             WindowEvent::Resized(size) => {
                 let mut state = lock_state();
-                state.latest_frame.surface = SurfaceInfo {
-                    width: size.width as f32,
-                    height: size.height as f32,
-                };
-                state.pending_redraw = true;
-                if let Some(backend) = self.gles_backend.as_mut() {
+                let dpi_scale = self
+                    .window
+                    .as_ref()
+                    .map(|window| scale_from_window(window, self.descriptor.high_dpi))
+                    .unwrap_or(1.0);
+                if let Some(backend) = self.dx12_backend.as_mut() {
                     backend.update_surface_size(size.width as i32, size.height as i32);
                 }
+                state.dpi_scale = dpi_scale;
+                state.latest_frame.surface = logical_surface_info(size, dpi_scale);
+                state.pending_redraw = true;
                 should_publish_frame = true;
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let mut state = lock_state();
-                state.pending_input.mouse_x = position.x as f32;
-                state.pending_input.mouse_y = position.y as f32;
+                let (x, y) = logical_cursor_position(position, state.dpi_scale);
+                state.pending_input.mouse_x = x;
+                state.pending_input.mouse_y = y;
                 should_publish_frame = true;
             }
             WindowEvent::MouseInput {
@@ -1049,10 +1072,29 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
                         state.pending_input.mouse_wheel_y += y;
                     }
                     MouseScrollDelta::PixelDelta(PhysicalPosition { x, y }) => {
-                        state.pending_input.mouse_wheel_x += x as f32 / 24.0;
-                        state.pending_input.mouse_wheel_y += y as f32 / 24.0;
+                        let scale = state.dpi_scale.max(1.0);
+                        state.pending_input.mouse_wheel_x += x as f32 / (24.0 * scale);
+                        state.pending_input.mouse_wheel_y += y as f32 / (24.0 * scale);
                     }
                 }
+                should_publish_frame = true;
+            }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                let mut state = lock_state();
+                state.dpi_scale = if self.descriptor.high_dpi {
+                    scale_factor.max(1.0) as f32
+                } else {
+                    1.0
+                };
+                if let Some(window) = &self.window {
+                    if let Some(backend) = self.dx12_backend.as_mut() {
+                        let size = window.inner_size();
+                        backend.update_surface_size(size.width as i32, size.height as i32);
+                    }
+                    state.latest_frame.surface =
+                        logical_surface_info(window.inner_size(), state.dpi_scale);
+                }
+                state.pending_redraw = true;
                 should_publish_frame = true;
             }
             WindowEvent::Ime(Ime::Commit(text)) => {
@@ -1098,7 +1140,7 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
         self.request_redraw_if_needed();
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: LinuxUserEvent) {
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: WindowsUserEvent) {
         self.request_redraw_if_needed();
     }
 }
@@ -1189,7 +1231,8 @@ fn map_host_key(event: &winit::event::KeyEvent) -> Option<HostKey> {
 fn present(
     surface: &mut Surface<Arc<Window>, Arc<Window>>,
     size: PhysicalSize<u32>,
-    gles_backend: &mut Option<GlesBackend>,
+    dpi_scale: f32,
+    dx12_backend: &mut Option<Dx12Backend>,
 ) {
     let width = size.width.max(1);
     let height = size.height.max(1);
@@ -1203,54 +1246,56 @@ fn present(
             state.generated_texture_cache.clone(),
         )
     };
+    let commands = scale_frame_commands(commands, dpi_scale);
 
-    if let Some(backend) = gles_backend.as_mut() {
-        let (gles_commands, gles_textures, next_generated_cache) =
-            prepare_gles_frame(&commands, &textures, generated_cache);
+    if let Some(backend) = dx12_backend.as_mut() {
+        let (dx12_commands, dx12_textures, next_generated_cache) =
+            prepare_dx12_frame(&commands, &textures, generated_cache);
         {
             let mut state = lock_state();
             state.generated_texture_cache = next_generated_cache;
         }
         backend.update_surface_size(width as i32, height as i32);
-        backend.sync_image_resources(gles_textures.iter().map(|(key, image)| {
-            (
-                key.clone(),
-                loadngo_gfx_gles::GlesImageResource {
-                    width: image.width as i32,
-                    height: image.height as i32,
-                    rgba8: Arc::from(image.rgba8.clone()),
-                },
-            )
-        }));
-        if backend.supports_commands(&gles_commands) {
-            match Renderer::new(RendererConfig::default()).render(backend, &gles_commands) {
+        backend.sync_image_resources(
+            dx12_textures
+                .iter()
+                .map(|(key, image)| (key.clone(), image.clone())),
+        );
+        if backend.supports_commands(&dx12_commands) {
+            match Renderer::new(RendererConfig::default()).render(backend, &dx12_commands) {
                 Ok(()) => {
                     let mut state = lock_state();
-                    state.last_backend_used = DesktopRenderBackendKind::Gles;
+                    state.last_backend_used = DesktopRenderBackendKind::D3d12;
                     update_backend_detail(
                         &mut state,
-                        "Linux GLES backend rendered the queued frame",
+                        "Windows D3D12 backend rendered the queued frame",
                     );
                     return;
                 }
                 Err(err) => {
+                    *dx12_backend = None;
                     let mut state = lock_state();
                     update_backend_detail(
                         &mut state,
-                        format!("Linux GLES render failed, falling back to software: {err}"),
+                        format!(
+                            "Windows D3D12 render failed, disabling the backend and falling back to software: {err}"
+                        ),
                     );
                 }
             }
         } else {
             let mut state = lock_state();
-            let reason = describe_unsupported_gles_command(&gles_commands).unwrap_or("Unknown");
+            let reason = describe_unsupported_dx12_command(&dx12_commands).unwrap_or("Unknown");
             update_backend_detail(
                 &mut state,
                 format!(
-                    "Linux GLES backend rejected queued frame because it contains unsupported {reason} commands; falling back to software"
+                    "Windows D3D12 backend rejected queued frame because it contains unsupported {reason} commands; falling back to software"
                 ),
             );
         }
+    } else {
+        let mut state = lock_state();
+        state.generated_texture_cache = generated_cache;
     }
 
     surface
@@ -1258,11 +1303,11 @@ fn present(
             std::num::NonZeroU32::new(width).expect("nonzero width"),
             std::num::NonZeroU32::new(height).expect("nonzero height"),
         )
-        .expect("failed to resize Linux surface");
+        .expect("failed to resize Windows surface");
 
     let mut buffer = surface
         .buffer_mut()
-        .expect("failed to lock Linux surface buffer");
+        .expect("failed to lock Windows surface buffer");
     let mut rgba = vec![0u8; width as usize * height as usize * 4];
 
     fill_rect_rgba(
@@ -1375,16 +1420,16 @@ fn present(
     for (dst, chunk) in buffer.iter_mut().zip(rgba.chunks_exact(4)) {
         *dst = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);
     }
-    buffer.present().expect("failed to present Linux surface");
+    buffer.present().expect("failed to present Windows surface");
     let mut state = lock_state();
     state.last_backend_used = DesktopRenderBackendKind::Software;
     update_backend_detail(
         &mut state,
-        "Linux software renderer rendered the queued frame",
+        "Windows software renderer rendered the queued frame",
     );
 }
 
-fn prepare_gles_frame(
+fn prepare_dx12_frame(
     commands: &[FrameCommand],
     textures: &HashMap<String, Arc<DecodedImage>>,
     mut generated_cache: HashMap<String, Arc<DecodedImage>>,
@@ -1494,6 +1539,120 @@ fn prepare_gles_frame(
     }
 
     (next_commands, next_textures, generated_cache)
+}
+
+fn scale_frame_commands(commands: Vec<FrameCommand>, scale: f32) -> Vec<FrameCommand> {
+    if (scale - 1.0).abs() <= f32::EPSILON {
+        return commands;
+    }
+    commands
+        .into_iter()
+        .map(|command| scale_frame_command(command, scale))
+        .collect()
+}
+
+fn scale_frame_command(command: FrameCommand, scale: f32) -> FrameCommand {
+    match command {
+        FrameCommand::Clear { color } => FrameCommand::Clear { color },
+        FrameCommand::FillRect { rect, color } => FrameCommand::FillRect {
+            rect: scale_rect(rect, scale),
+            color,
+        },
+        FrameCommand::StrokeRect {
+            rect,
+            color,
+            thickness,
+        } => FrameCommand::StrokeRect {
+            rect: scale_rect(rect, scale),
+            color,
+            thickness: scale_i32(thickness, scale),
+        },
+        FrameCommand::Line {
+            from,
+            to,
+            color,
+            thickness,
+        } => FrameCommand::Line {
+            from: scale_point(from, scale),
+            to: scale_point(to, scale),
+            color,
+            thickness: scale_i32(thickness, scale),
+        },
+        FrameCommand::Circle {
+            center,
+            radius,
+            color,
+        } => FrameCommand::Circle {
+            center: scale_point(center, scale),
+            radius: scale_i32(radius, scale),
+            color,
+        },
+        FrameCommand::Polyline {
+            points,
+            color,
+            thickness,
+            closed,
+        } => FrameCommand::Polyline {
+            points: points
+                .into_iter()
+                .map(|point| scale_point(point, scale))
+                .collect(),
+            color,
+            thickness: scale_i32(thickness, scale),
+            closed,
+        },
+        FrameCommand::ParticleBatch { particles } => FrameCommand::ParticleBatch {
+            particles: particles
+                .into_iter()
+                .map(|mut particle| {
+                    particle.center = scale_point(particle.center, scale);
+                    particle.radius *= scale;
+                    particle
+                })
+                .collect(),
+        },
+        FrameCommand::Text(request) => FrameCommand::Text(scale_text_request(request, scale)),
+        FrameCommand::Image(request) => FrameCommand::Image(scale_image_request(request, scale)),
+    }
+}
+
+fn scale_point(point: Point, scale: f32) -> Point {
+    Point {
+        x: point.x * scale,
+        y: point.y * scale,
+    }
+}
+
+fn scale_rect(rect: UiRect, scale: f32) -> UiRect {
+    UiRect {
+        x: rect.x * scale,
+        y: rect.y * scale,
+        width: rect.width * scale,
+        height: rect.height * scale,
+    }
+}
+
+fn scale_i32(value: i32, scale: f32) -> i32 {
+    ((value.max(1) as f32) * scale).round().max(1.0) as i32
+}
+
+fn scale_font_size(font_size: u16, scale: f32) -> u16 {
+    ((font_size.max(1) as f32) * scale)
+        .round()
+        .clamp(1.0, u16::MAX as f32) as u16
+}
+
+fn scale_text_request(mut request: TextRequest, scale: f32) -> TextRequest {
+    request.rect = scale_rect(request.rect, scale);
+    request.clip_rect = request.clip_rect.map(|clip| scale_rect(clip, scale));
+    request.style.font_size = scale_font_size(request.style.font_size, scale);
+    request
+}
+
+fn scale_image_request(mut request: ImageRequest, scale: f32) -> ImageRequest {
+    request.rect = scale_rect(request.rect, scale);
+    request.clip_rect = request.clip_rect.map(|clip| scale_rect(clip, scale));
+    request
 }
 
 fn generated_text_cache_key(request: &TextRequest) -> String {
@@ -1999,7 +2158,7 @@ fn resolve_text_request_font(request: &TextRequest) -> DesktopFont {
     if default_font().source_path() == Some(font_source) {
         return default_font().clone();
     }
-    let mut cache = font_cache().lock().expect("linux font cache poisoned");
+    let mut cache = font_cache().lock().expect("windows font cache poisoned");
     if let Some(font) = cache.get(font_source) {
         return font.clone();
     }

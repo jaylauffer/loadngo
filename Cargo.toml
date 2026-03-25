@@ -7,6 +7,7 @@ members = [
     "network",
     "gui",
     "gui-win32",
+    "gfx-dx12",
     "gfx-gles",
     "gfx-metal",
     "host-desktop",
@@ -36,6 +37,7 @@ windows = { version = "0.58", features = [
     "Win32_System_LibraryLoader",
     "Win32_System_SystemInformation",
     "Win32_System_Time",
+    "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Controls",
@@ -44,6 +46,11 @@ windows = { version = "0.58", features = [
     "Win32_UI_Shell_Common",
     "Win32_Globalization",
     "Win32_Graphics_Gdi",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Direct3D_Fxc",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
     "implement",
 ] }
 windows-core = "0.58"

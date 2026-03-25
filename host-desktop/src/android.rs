@@ -1822,13 +1822,9 @@ fn append_rasterized_polyline_textures(
         return;
     }
     for segment in points.windows(2) {
-        if let Some((image_key, rect, texture)) = rasterize_line_command(
-            segment[0],
-            segment[1],
-            color,
-            thickness,
-            *generated_index,
-        ) {
+        if let Some((image_key, rect, texture)) =
+            rasterize_line_command(segment[0], segment[1], color, thickness, *generated_index)
+        {
             *generated_index += 1;
             textures.insert(image_key.clone(), texture);
             commands.push(FrameCommand::Image(ImageRequest {
@@ -2684,7 +2680,12 @@ impl<'a> SoftwareFramebuffer<'a> {
             self.line(segment[0], segment[1], color, thickness);
         }
         if closed {
-            self.line(*points.last().unwrap_or(&points[0]), points[0], color, thickness);
+            self.line(
+                *points.last().unwrap_or(&points[0]),
+                points[0],
+                color,
+                thickness,
+            );
         }
     }
 
@@ -3017,8 +3018,7 @@ pub fn draw_plain_text(text: &str, _x: f32, _y: f32, size: f32, _color: UiColor)
             font_size,
             horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Left,
             vertical_align: loadngo_host_core::RenderTextVerticalAlign::Top,
-            vertical_metric_mode:
-                loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
+            vertical_metric_mode: loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
             layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
             overflow: loadngo_host_core::RenderTextOverflow::Clip,
         },
