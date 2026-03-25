@@ -14,7 +14,7 @@ use loadngo_renderer::{
     FrameCommand, FrameResourcePlan, GraphicsBackend, ImageResourceKey, Renderer, RendererConfig,
     RendererError, TextRequest,
 };
-use ui_core::geometry::Color;
+use ui_core::geometry::{Color, Point};
 
 thread_local! {
     static REGISTERED_IMAGES: RefCell<HashMap<String, DecodedImage>> = RefCell::new(HashMap::new());
@@ -608,6 +608,29 @@ impl MetalBackend {
                         images.push(image);
                     }
                 }
+                FrameCommand::Polyline {
+                    points,
+                    color,
+                    thickness,
+                    closed,
+                } => append_polyline_generated_images(
+                    &mut images,
+                    points,
+                    *color,
+                    *thickness,
+                    *closed,
+                ),
+                FrameCommand::ParticleBatch { particles } => {
+                    for particle in particles {
+                        if let Some(image) = rasterize_circle(
+                            particle.center,
+                            particle.radius.round().max(1.0) as i32,
+                            particle.color,
+                        ) {
+                            images.push(image);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -760,6 +783,29 @@ impl MetalBackend {
                         visuals.push(FrameVisual::GeneratedImage(image));
                     }
                 }
+                FrameCommand::Polyline {
+                    points,
+                    color,
+                    thickness,
+                    closed,
+                } => append_polyline_visuals(
+                    &mut visuals,
+                    points,
+                    *color,
+                    *thickness,
+                    *closed,
+                ),
+                FrameCommand::ParticleBatch { particles } => {
+                    for particle in particles {
+                        if let Some(image) = rasterize_circle(
+                            particle.center,
+                            particle.radius.round().max(1.0) as i32,
+                            particle.color,
+                        ) {
+                            visuals.push(FrameVisual::GeneratedImage(image));
+                        }
+                    }
+                }
                 FrameCommand::Clear { .. } => {}
             }
         }
@@ -811,6 +857,60 @@ impl MetalBackend {
             MetalBackendState::UnboundSurface => Err(RendererError::Backend(
                 "Metal backend is not bound to a drawable surface".to_string(),
             )),
+        }
+    }
+}
+
+fn append_polyline_generated_images(
+    images: &mut Vec<GeneratedFrameImage>,
+    points: &[Point],
+    color: Color,
+    thickness: i32,
+    closed: bool,
+) {
+    if points.len() < 2 {
+        return;
+    }
+    for segment in points.windows(2) {
+        if let Some(image) = rasterize_line(segment[0], segment[1], color, thickness) {
+            images.push(image);
+        }
+    }
+    if closed {
+        if let Some(image) = rasterize_line(
+            *points.last().unwrap_or(&points[0]),
+            points[0],
+            color,
+            thickness,
+        ) {
+            images.push(image);
+        }
+    }
+}
+
+fn append_polyline_visuals(
+    visuals: &mut Vec<FrameVisual>,
+    points: &[Point],
+    color: Color,
+    thickness: i32,
+    closed: bool,
+) {
+    if points.len() < 2 {
+        return;
+    }
+    for segment in points.windows(2) {
+        if let Some(image) = rasterize_line(segment[0], segment[1], color, thickness) {
+            visuals.push(FrameVisual::GeneratedImage(image));
+        }
+    }
+    if closed {
+        if let Some(image) = rasterize_line(
+            *points.last().unwrap_or(&points[0]),
+            points[0],
+            color,
+            thickness,
+        ) {
+            visuals.push(FrameVisual::GeneratedImage(image));
         }
     }
 }

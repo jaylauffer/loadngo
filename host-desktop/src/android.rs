@@ -721,6 +721,8 @@ fn describe_unsupported_gles_command(commands: &[FrameCommand]) -> Option<&'stat
         FrameCommand::Text(_) => Some("Text"),
         FrameCommand::Line { .. } => Some("Line"),
         FrameCommand::Circle { .. } => Some("Circle"),
+        FrameCommand::Polyline { .. } => Some("Polyline"),
+        FrameCommand::ParticleBatch { .. } => Some("ParticleBatch"),
     })
 }
 
@@ -1652,6 +1654,26 @@ fn prepare_gles_frame(
                     }));
                 }
             }
+            FrameCommand::Polyline {
+                points,
+                color,
+                thickness,
+                closed,
+            } => append_rasterized_polyline_textures(
+                &mut next_commands,
+                &mut next_textures,
+                points,
+                *color,
+                *thickness,
+                *closed,
+                &mut generated_index,
+            ),
+            FrameCommand::ParticleBatch { particles } => append_rasterized_particle_textures(
+                &mut next_commands,
+                &mut next_textures,
+                particles,
+                &mut generated_index,
+            ),
             _ => next_commands.push(command.clone()),
         }
     }
@@ -1785,6 +1807,81 @@ fn rasterize_circle_command(
         rect,
         surface.into_texture(),
     ))
+}
+
+fn append_rasterized_polyline_textures(
+    commands: &mut Vec<FrameCommand>,
+    textures: &mut HashMap<String, SoftwareTexture>,
+    points: &[ui_core::geometry::Point],
+    color: UiColor,
+    thickness: i32,
+    closed: bool,
+    generated_index: &mut usize,
+) {
+    if points.len() < 2 {
+        return;
+    }
+    for segment in points.windows(2) {
+        if let Some((image_key, rect, texture)) = rasterize_line_command(
+            segment[0],
+            segment[1],
+            color,
+            thickness,
+            *generated_index,
+        ) {
+            *generated_index += 1;
+            textures.insert(image_key.clone(), texture);
+            commands.push(FrameCommand::Image(ImageRequest {
+                rect,
+                clip_rect: None,
+                image_key,
+                alpha: 1.0,
+            }));
+        }
+    }
+    if closed {
+        if let Some((image_key, rect, texture)) = rasterize_line_command(
+            *points.last().unwrap_or(&points[0]),
+            points[0],
+            color,
+            thickness,
+            *generated_index,
+        ) {
+            *generated_index += 1;
+            textures.insert(image_key.clone(), texture);
+            commands.push(FrameCommand::Image(ImageRequest {
+                rect,
+                clip_rect: None,
+                image_key,
+                alpha: 1.0,
+            }));
+        }
+    }
+}
+
+fn append_rasterized_particle_textures(
+    commands: &mut Vec<FrameCommand>,
+    textures: &mut HashMap<String, SoftwareTexture>,
+    particles: &[ui_core::Particle],
+    generated_index: &mut usize,
+) {
+    for particle in particles {
+        if let Some((image_key, rect, texture)) = rasterize_circle_command(
+            particle.center,
+            particle.radius.round().max(1.0) as i32,
+            particle.color,
+            *generated_index,
+        ) {
+            *generated_index += 1;
+            textures.insert(image_key.clone(), texture);
+            commands.push(FrameCommand::Image(ImageRequest {
+                rect,
+                clip_rect: None,
+                image_key,
+                alpha: 1.0,
+            }));
+        }
+    }
 }
 
 struct OwnedSoftwareSurface {
@@ -2493,6 +2590,22 @@ impl<'a> SoftwareFramebuffer<'a> {
                 radius,
                 color,
             } => self.circle(center.x, center.y, *radius, *color),
+            FrameCommand::Polyline {
+                points,
+                color,
+                thickness,
+                closed,
+            } => self.polyline(points, *color, *thickness, *closed),
+            FrameCommand::ParticleBatch { particles } => {
+                for particle in particles {
+                    self.circle(
+                        particle.center.x,
+                        particle.center.y,
+                        particle.radius.round().max(1.0) as i32,
+                        particle.color,
+                    );
+                }
+            }
             FrameCommand::Image(request) => self.blit_image(request, textures),
             FrameCommand::Text(request) => self.draw_text(request, current_font),
         }
@@ -2555,6 +2668,24 @@ impl<'a> SoftwareFramebuffer<'a> {
             },
             color,
         );
+    }
+
+    fn polyline(
+        &mut self,
+        points: &[ui_core::geometry::Point],
+        color: UiColor,
+        thickness: i32,
+        closed: bool,
+    ) {
+        if points.len() < 2 {
+            return;
+        }
+        for segment in points.windows(2) {
+            self.line(segment[0], segment[1], color, thickness);
+        }
+        if closed {
+            self.line(*points.last().unwrap_or(&points[0]), points[0], color, thickness);
+        }
     }
 
     fn line(

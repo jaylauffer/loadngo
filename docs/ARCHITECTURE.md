@@ -22,8 +22,10 @@ Related design notes:
 - [TEXT_INPUT_MODEL.md](/Users/jay/pudding/loadngo/docs/TEXT_INPUT_MODEL.md)
 - [TEXT_RENDERING_TROUBLESHOOTING.md](/Users/jay/pudding/loadngo/docs/TEXT_RENDERING_TROUBLESHOOTING.md)
 - [PUDDING_CAS_PQ_MODEL.md](/Users/jay/pudding/loadngo/docs/PUDDING_CAS_PQ_MODEL.md)
+- [DETAILS_VIEW_MODEL.md](/Users/jay/pudding/loadngo/docs/DETAILS_VIEW_MODEL.md)
 - [RON_FIRST_EDITOR.md](/Users/jay/pudding/sng-rusty/docs/RON_FIRST_EDITOR.md)
 - [ENGINE_CAPABILITY_MATRIX.md](/Users/jay/pudding/sng-rusty/docs/ENGINE_CAPABILITY_MATRIX.md)
+- [SCENE_BLOCKS_AND_VALVES.md](/Users/jay/pudding/sng-rusty/docs/SCENE_BLOCKS_AND_VALVES.md)
 
 ## Layer model
 1. `ui-core`
@@ -70,6 +72,13 @@ Related design notes:
 - Components (`Button`, `ListCombo`, `TreeCombo`, etc.) belong in `ui-core`/`gui`, not in host backends.
 - Host backends should only adapt platform APIs and execute render/input contracts.
 - App logic should emit actions/state updates and request rendering through host abstractions.
+
+Recent example:
+
+- the scrollable inspector/details path used by `sng_rusty_editor` was promoted
+  into a shared `ui-core` component instead of remaining custom editor glue
+
+See [DETAILS_VIEW_MODEL.md](/Users/jay/pudding/loadngo/docs/DETAILS_VIEW_MODEL.md).
 
 ## Input model
 - `InputSnapshot` carries mouse + touch + key state per frame.

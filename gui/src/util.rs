@@ -96,6 +96,13 @@ pub fn render_paint_ops(dc: HDC, ops: &[PaintOp]) {
                     let _ = SelectObject(dc, old_pen);
                     let _ = DeleteObject(pen);
                 }
+                PaintOp::FillCircle { .. }
+                | PaintOp::StrokeCircle { .. }
+                | PaintOp::Polyline { .. }
+                | PaintOp::Arc { .. }
+                | PaintOp::QuadraticBezier { .. }
+                | PaintOp::CubicBezier { .. }
+                | PaintOp::ParticleBatch { .. } => {}
                 PaintOp::BlitImage { rect, image_key } => render_image(dc, *rect, image_key),
             }
         }

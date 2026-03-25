@@ -226,8 +226,7 @@ mod imp {
             }
         }
 
-        fn align_playlist_to_track(&mut self, path: &str) {
-        }
+        fn align_playlist_to_track(&mut self, path: &str) {}
 
         fn next_playlist_track(&mut self) -> Option<String> {
             if self.playlist_tracks.is_empty() {

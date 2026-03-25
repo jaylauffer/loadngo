@@ -352,6 +352,8 @@ fn describe_unsupported_gles_command(commands: &[FrameCommand]) -> Option<&'stat
         FrameCommand::Text(_) => Some("Text"),
         FrameCommand::Line { .. } => Some("Line"),
         FrameCommand::Circle { .. } => Some("Circle"),
+        FrameCommand::Polyline { .. } => Some("Polyline"),
+        FrameCommand::ParticleBatch { .. } => Some("ParticleBatch"),
     })
 }
 
@@ -1333,6 +1335,32 @@ fn present(
                 radius.max(1),
                 color,
             ),
+            FrameCommand::Polyline {
+                points,
+                color,
+                thickness,
+                closed,
+            } => draw_polyline_rgba(
+                &mut rgba,
+                width as usize,
+                height as usize,
+                points,
+                color,
+                thickness.max(1),
+                *closed,
+            ),
+            FrameCommand::ParticleBatch { particles } => {
+                for particle in particles {
+                    fill_circle_rgba(
+                        &mut rgba,
+                        width as usize,
+                        height as usize,
+                        particle.center,
+                        particle.radius.round().max(1.0) as i32,
+                        particle.color,
+                    );
+                }
+            }
             FrameCommand::Text(request) => {
                 draw_text_request(&mut rgba, width as usize, height as usize, &request)
             }
@@ -1436,6 +1464,30 @@ fn prepare_gles_frame(
                 } else {
                     next_commands.push(command.clone());
                 }
+            }
+            FrameCommand::Polyline {
+                points,
+                color,
+                thickness,
+                closed,
+            } => {
+                append_rasterized_polyline_images(
+                    &mut next_commands,
+                    &mut next_textures,
+                    points,
+                    *color,
+                    *thickness,
+                    *closed,
+                    &mut generated_index,
+                );
+            }
+            FrameCommand::ParticleBatch { particles } => {
+                append_rasterized_particle_images(
+                    &mut next_commands,
+                    &mut next_textures,
+                    particles,
+                    &mut generated_index,
+                );
             }
             _ => next_commands.push(command.clone()),
         }
@@ -1622,6 +1674,81 @@ fn rasterize_circle_command(
     ))
 }
 
+fn append_rasterized_polyline_images(
+    commands: &mut Vec<FrameCommand>,
+    textures: &mut HashMap<String, Arc<DecodedImage>>,
+    points: &[Point],
+    color: UiColor,
+    thickness: i32,
+    closed: bool,
+    generated_index: &mut usize,
+) {
+    if points.len() < 2 {
+        return;
+    }
+    for segment in points.windows(2) {
+        if let Some((image_key, rect, image)) = rasterize_line_command(
+            segment[0],
+            segment[1],
+            color,
+            thickness,
+            *generated_index,
+        ) {
+            *generated_index += 1;
+            textures.insert(image_key.clone(), Arc::new(image));
+            commands.push(FrameCommand::Image(ImageRequest {
+                rect,
+                clip_rect: None,
+                image_key,
+                alpha: 1.0,
+            }));
+        }
+    }
+    if closed {
+        if let Some((image_key, rect, image)) = rasterize_line_command(
+            *points.last().unwrap_or(&points[0]),
+            points[0],
+            color,
+            thickness,
+            *generated_index,
+        ) {
+            *generated_index += 1;
+            textures.insert(image_key.clone(), Arc::new(image));
+            commands.push(FrameCommand::Image(ImageRequest {
+                rect,
+                clip_rect: None,
+                image_key,
+                alpha: 1.0,
+            }));
+        }
+    }
+}
+
+fn append_rasterized_particle_images(
+    commands: &mut Vec<FrameCommand>,
+    textures: &mut HashMap<String, Arc<DecodedImage>>,
+    particles: &[ui_core::Particle],
+    generated_index: &mut usize,
+) {
+    for particle in particles {
+        if let Some((image_key, rect, image)) = rasterize_circle_command(
+            particle.center,
+            particle.radius.round().max(1.0) as i32,
+            particle.color,
+            *generated_index,
+        ) {
+            *generated_index += 1;
+            textures.insert(image_key.clone(), Arc::new(image));
+            commands.push(FrameCommand::Image(ImageRequest {
+                rect,
+                clip_rect: None,
+                image_key,
+                alpha: 1.0,
+            }));
+        }
+    }
+}
+
 fn fill_rect_rgba(buffer: &mut [u8], width: usize, height: usize, rect: UiRect, color: UiColor) {
     let x0 = rect.x.max(0.0) as usize;
     let y0 = rect.y.max(0.0) as usize;
@@ -1734,6 +1861,34 @@ fn draw_line_rgba(
             err += dx;
             y0 += sy;
         }
+    }
+}
+
+fn draw_polyline_rgba(
+    buffer: &mut [u8],
+    width: usize,
+    height: usize,
+    points: &[Point],
+    color: UiColor,
+    thickness: i32,
+    closed: bool,
+) {
+    if points.len() < 2 {
+        return;
+    }
+    for segment in points.windows(2) {
+        draw_line_rgba(buffer, width, height, segment[0], segment[1], color, thickness);
+    }
+    if closed {
+        draw_line_rgba(
+            buffer,
+            width,
+            height,
+            *points.last().unwrap_or(&points[0]),
+            points[0],
+            color,
+            thickness,
+        );
     }
 }
 

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::geometry::{Color, Point, Rect};
+use crate::geometry::{Color, Point, Rect, Scalar};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HorizontalAlign {
@@ -61,6 +61,13 @@ impl Default for TextStyle {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Particle {
+    pub center: Point,
+    pub radius: Scalar,
+    pub color: Color,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PaintOp {
     FillRect {
         rect: Rect,
@@ -74,6 +81,49 @@ pub enum PaintOp {
         from: Point,
         to: Point,
         color: Color,
+    },
+    FillCircle {
+        center: Point,
+        radius: Scalar,
+        color: Color,
+    },
+    StrokeCircle {
+        center: Point,
+        radius: Scalar,
+        color: Color,
+        thickness: i32,
+    },
+    Polyline {
+        points: Vec<Point>,
+        color: Color,
+        thickness: i32,
+        closed: bool,
+    },
+    Arc {
+        center: Point,
+        radius: Scalar,
+        start_angle: Scalar,
+        sweep_angle: Scalar,
+        color: Color,
+        thickness: i32,
+    },
+    QuadraticBezier {
+        start: Point,
+        control: Point,
+        end: Point,
+        color: Color,
+        thickness: i32,
+    },
+    CubicBezier {
+        start: Point,
+        control1: Point,
+        control2: Point,
+        end: Point,
+        color: Color,
+        thickness: i32,
+    },
+    ParticleBatch {
+        particles: Vec<Particle>,
     },
     Text {
         rect: Rect,

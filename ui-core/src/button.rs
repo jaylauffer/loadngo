@@ -1,16 +1,18 @@
 use crate::{
     component::Component,
-    geometry::{Color, Rect},
+    geometry::{Color, Point, Rect},
     input::{Key, PointerButton, UiEvent},
-    paint::{HorizontalAlign, PaintOp, TextLayoutMode, TextStyle, VerticalAlign},
+    paint::{HorizontalAlign, PaintOp, Particle, TextLayoutMode, TextStyle, VerticalAlign},
     widget::{WidgetId, WidgetResponse},
 };
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ButtonModel {
     pub widget_id: WidgetId,
     pub bounds: Rect,
     pub text: String,
+    pub text_align: HorizontalAlign,
     pub hover: bool,
     pub pressed: bool,
     pub focused: bool,
@@ -26,6 +28,7 @@ impl ButtonModel {
             widget_id,
             bounds,
             text: text.into(),
+            text_align: HorizontalAlign::Center,
             hover: false,
             pressed: false,
             focused: false,
@@ -93,40 +96,340 @@ impl ButtonModel {
     }
 
     pub fn paint(&self, scene: &mut Vec<PaintOp>) {
+        let text_inset_x = match self.text_align {
+            HorizontalAlign::Left | HorizontalAlign::Right => 14.0,
+            HorizontalAlign::Center => 0.0,
+        };
+        let pulse = if self.hover || self.focused || self.pressed {
+            let elapsed_s = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64() as f32;
+            Some(hover_pulse(elapsed_s, self.pressed))
+        } else {
+            None
+        };
         let fill = if self.pressed {
-            Color::rgba(0xd4, 0xdd, 0xef, 0xf2)
+            Color::rgba(0xbe, 0xd5, 0xff, 0xf6)
         } else if self.hover || self.focused {
-            Color::rgba(0xe8, 0xee, 0xf8, 0xec)
+            Color::rgba(0xd9, 0xe7, 0xff, 0xf1)
         } else {
             Color::rgba(0xf0, 0xf0, 0xf0, 0xd8)
         };
         let border = if self.pressed {
-            Color::rgba(0x4d, 0x68, 0x9a, 0xf0)
+            Color::rgba(0x3f, 0x6f, 0xb8, 0xf6)
         } else if self.hover || self.focused {
-            Color::rgba(0x70, 0x70, 0x70, 0xdc)
+            Color::rgba(0x58, 0x87, 0xcc, 0xf0)
         } else {
             Color::rgba(0x86, 0x8d, 0xa0, 0xd4)
+        };
+        let text_color = if self.pressed {
+            Color::rgba(0x11, 0x1c, 0x2f, 0xff)
+        } else if self.hover || self.focused {
+            Color::rgba(0x16, 0x24, 0x3d, 0xff)
+        } else {
+            Color::rgba(0x20, 0x20, 0x20, 0xff)
         };
         scene.push(PaintOp::FillRect {
             rect: self.bounds,
             color: fill,
         });
+        if let Some(pulse) = pulse {
+            scene.push(PaintOp::FillRect {
+                rect: Rect {
+                    x: self.bounds.x + 1.0,
+                    y: self.bounds.y + 1.0,
+                    width: (self.bounds.width - 2.0).max(1.0),
+                    height: (self.bounds.height - 2.0).max(1.0),
+                },
+                color: if self.pressed {
+                    Color::rgba(
+                        0xf7,
+                        0xfb,
+                        0xff,
+                        (32.0 + pulse * 96.0).round().clamp(0.0, 255.0) as u8,
+                    )
+                } else {
+                    Color::rgba(
+                        0xf8,
+                        0xfb,
+                        0xff,
+                        (12.0 + pulse * 84.0).round().clamp(0.0, 255.0) as u8,
+                    )
+                },
+            });
+        }
         scene.push(PaintOp::StrokeRect {
             rect: self.bounds,
             color: border,
         });
+        if let Some(pulse) = pulse {
+            scene.push(PaintOp::StrokeRect {
+                rect: self.bounds,
+                color: if self.pressed {
+                    Color::rgba(
+                        0xb4,
+                        0xd8,
+                        0xff,
+                        (40.0 + pulse * 180.0).round().clamp(0.0, 255.0) as u8,
+                    )
+                } else {
+                    Color::rgba(
+                        0xa2,
+                        0xcf,
+                        0xff,
+                        (18.0 + pulse * 170.0).round().clamp(0.0, 255.0) as u8,
+                    )
+                },
+            });
+        }
+        self.paint_trace(scene);
         scene.push(PaintOp::Text {
-            rect: self.bounds,
+            rect: Rect {
+                x: self.bounds.x + text_inset_x,
+                y: self.bounds.y,
+                width: (self.bounds.width - text_inset_x * 2.0).max(1.0),
+                height: self.bounds.height,
+            },
             clip_rect: None,
             text: self.text.clone(),
             style: TextStyle {
-                horizontal_align: HorizontalAlign::Center,
+                color: text_color,
+                horizontal_align: self.text_align,
                 vertical_align: VerticalAlign::Middle,
                 layout_mode: TextLayoutMode::SingleLine,
                 ..TextStyle::default()
             },
         });
     }
+
+    fn paint_trace(&self, scene: &mut Vec<PaintOp>) {
+        if !self.hover && !self.pressed {
+            return;
+        }
+        let elapsed_s = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        let t = elapsed_s as f32;
+        let inset = 5.0;
+        let accent_x = 16.0_f32.min((self.bounds.width * 0.2).max(9.0));
+        let accent_y = 11.0_f32.min((self.bounds.height * 0.36).max(7.0));
+        let trace_thickness = if self.pressed { 2 } else { 1 };
+        let center_x = self.bounds.x + self.bounds.width * 0.5;
+        let tl = Point {
+            x: self.bounds.x - 1.0,
+            y: self.bounds.y - 1.0,
+        };
+        let tr = Point {
+            x: self.bounds.right() + 1.0,
+            y: self.bounds.y - 1.0,
+        };
+        let bl = Point {
+            x: self.bounds.x - 1.0,
+            y: self.bounds.bottom() + 1.0,
+        };
+        let br = Point {
+            x: self.bounds.right() + 1.0,
+            y: self.bounds.bottom() + 1.0,
+        };
+
+        for (phase, points) in [
+            (
+                0.15_f32,
+                vec![
+                    Point {
+                        x: tl.x + inset,
+                        y: tl.y + accent_y,
+                    },
+                    Point {
+                        x: tl.x + inset,
+                        y: tl.y + inset,
+                    },
+                    Point {
+                        x: tl.x + accent_x,
+                        y: tl.y + inset,
+                    },
+                ],
+            ),
+            (
+                1.35_f32,
+                vec![
+                    Point {
+                        x: tr.x - accent_x,
+                        y: tr.y + inset,
+                    },
+                    Point {
+                        x: tr.x - inset,
+                        y: tr.y + inset,
+                    },
+                    Point {
+                        x: tr.x - inset,
+                        y: tr.y + accent_y,
+                    },
+                ],
+            ),
+            (
+                2.55_f32,
+                vec![
+                    Point {
+                        x: bl.x + inset,
+                        y: bl.y - accent_y,
+                    },
+                    Point {
+                        x: bl.x + inset,
+                        y: bl.y - inset,
+                    },
+                    Point {
+                        x: bl.x + accent_x * 0.82,
+                        y: bl.y - inset,
+                    },
+                ],
+            ),
+            (
+                3.95_f32,
+                vec![
+                    Point {
+                        x: br.x - accent_x * 0.9,
+                        y: br.y - inset,
+                    },
+                    Point {
+                        x: br.x - inset,
+                        y: br.y - inset,
+                    },
+                    Point {
+                        x: br.x - inset,
+                        y: br.y - accent_y,
+                    },
+                ],
+            ),
+            (
+                4.8_f32,
+                vec![
+                    Point {
+                        x: center_x - accent_x * 0.35,
+                        y: self.bounds.y - 2.0,
+                    },
+                    Point {
+                        x: center_x + accent_x * 0.35,
+                        y: self.bounds.y - 2.0,
+                    },
+                ],
+            ),
+        ] {
+            let local_pulse = hover_pulse(t + phase * 0.22, self.pressed);
+            scene.push(PaintOp::Polyline {
+                points: points.clone(),
+                color: self.trace_color(local_pulse),
+                thickness: trace_thickness,
+                closed: false,
+            });
+            scene.push(PaintOp::Polyline {
+                points,
+                color: self.trace_color((local_pulse * 0.72).clamp(0.0, 1.0)),
+                thickness: 1,
+                closed: false,
+            });
+        }
+
+        let mut particles = Vec::new();
+        for (phase, anchor, offset_x, offset_y) in [
+            (
+                0.0_f32,
+                Point {
+                    x: tl.x + inset + 2.0,
+                    y: tl.y + inset + 1.0,
+                },
+                -2.2_f32,
+                -1.6_f32,
+            ),
+            (
+                1.2_f32,
+                Point {
+                    x: tr.x - inset - 2.0,
+                    y: tr.y + inset + 2.0,
+                },
+                2.0_f32,
+                -1.4_f32,
+            ),
+            (
+                2.5_f32,
+                Point {
+                    x: br.x - inset - 3.0,
+                    y: br.y - inset - 2.0,
+                },
+                2.0_f32,
+                1.6_f32,
+            ),
+            (
+                4.1_f32,
+                Point {
+                    x: center_x + accent_x * 0.1,
+                    y: self.bounds.y - 3.0,
+                },
+                0.0_f32,
+                -1.8_f32,
+            ),
+        ] {
+            let local_pulse = hover_pulse(t + phase * 0.3, self.pressed);
+            particles.push(Particle {
+                center: Point {
+                    x: anchor.x + offset_x,
+                    y: anchor.y + offset_y,
+                },
+                radius: if local_pulse > 0.72 {
+                    if self.pressed { 2.3 } else { 1.9 }
+                } else {
+                    1.2
+                },
+                color: self.trace_color((local_pulse * 0.9).clamp(0.0, 1.0)),
+            });
+            if local_pulse > 0.42 {
+                particles.push(Particle {
+                    center: Point {
+                        x: anchor.x + offset_x * 1.8,
+                        y: anchor.y + offset_y * 1.8,
+                    },
+                    radius: 1.0,
+                    color: self.trace_color((local_pulse * 0.58).clamp(0.0, 1.0)),
+                });
+            }
+        }
+        if particles.is_empty() {
+            particles.push(Particle {
+                center: Point {
+                    x: tr.x - inset - 1.5,
+                    y: tr.y + inset + 1.0,
+                },
+                radius: if self.pressed { 1.8 } else { 1.4 },
+                color: self.trace_color(0.0),
+            });
+        }
+        if !particles.is_empty() {
+            scene.push(PaintOp::ParticleBatch { particles });
+        }
+    }
+
+    fn trace_color(&self, alpha_scale: f32) -> Color {
+        let base = if self.pressed {
+            Color::rgba(0xa8, 0xd1, 0xff, 0xff)
+        } else if self.hover {
+            Color::rgba(0x98, 0xc6, 0xff, 0xff)
+        } else {
+            Color::rgba(0x89, 0xb8, 0xf5, 0x74)
+        };
+        Color::rgba(
+            base.r,
+            base.g,
+            base.b,
+            ((base.a as f32) * alpha_scale).round().clamp(0.0, 255.0) as u8,
+        )
+    }
+}
+
+fn hover_pulse(t: f32, pressed: bool) -> f32 {
+    let speed = if pressed { 1.05 } else { 0.62 };
+    ((t * speed).sin() * 0.5 + 0.5).powf(1.2)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -294,6 +597,42 @@ mod tests {
         assert_eq!(text.2.horizontal_align, HorizontalAlign::Center);
         assert_eq!(text.2.vertical_align, VerticalAlign::Middle);
         assert_eq!(text.2.layout_mode, TextLayoutMode::SingleLine);
+    }
+
+    #[test]
+    fn paint_emits_trace_segments_around_button_bounds() {
+        let mut button = ButtonModel::new(
+            "Trace",
+            Rect {
+                x: 20.0,
+                y: 30.0,
+                width: 100.0,
+                height: 32.0,
+            },
+        );
+        button.hover = true;
+        let mut scene = Vec::new();
+
+        button.paint(&mut scene);
+
+        let trace_segments: Vec<_> = scene
+            .iter()
+            .filter_map(|op| match op {
+                PaintOp::Polyline { points, .. } => Some(points.clone()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(!trace_segments.is_empty());
+        assert!(trace_segments.iter().flatten().any(|point| {
+            point.x < button.bounds.x
+                || point.y < button.bounds.y
+                || point.x > button.bounds.right()
+                || point.y > button.bounds.bottom()
+        }));
+        assert!(scene
+            .iter()
+            .any(|op| matches!(op, PaintOp::ParticleBatch { .. })));
     }
 
     #[test]

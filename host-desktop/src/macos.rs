@@ -1206,38 +1206,45 @@ fn handle_event(event: *mut AnyObject) {
             NSEVENT_TYPE_LEFT_MOUSE_DOWN
             | NSEVENT_TYPE_RIGHT_MOUSE_DOWN
             | NSEVENT_TYPE_OTHER_MOUSE_DOWN => {
-                let (x, y) = event_point_in_view(&state.view, event);
+                let (x, y, inside) = event_point_in_view(&state.view, event);
                 state.input.snapshot.modifiers = modifiers;
                 state.input.snapshot.mouse_x = x;
                 state.input.snapshot.mouse_y = y;
-                state.input.snapshot.mouse_pressed = true;
-                state.input.snapshot.mouse_down = true;
+                if inside {
+                    state.input.snapshot.mouse_pressed = true;
+                    state.input.snapshot.mouse_down = true;
+                }
             }
             NSEVENT_TYPE_LEFT_MOUSE_UP
             | NSEVENT_TYPE_RIGHT_MOUSE_UP
             | NSEVENT_TYPE_OTHER_MOUSE_UP => {
-                let (x, y) = event_point_in_view(&state.view, event);
+                let (x, y, inside) = event_point_in_view(&state.view, event);
                 state.input.snapshot.modifiers = modifiers;
                 state.input.snapshot.mouse_x = x;
                 state.input.snapshot.mouse_y = y;
-                state.input.snapshot.mouse_released = true;
+                if inside {
+                    state.input.snapshot.mouse_released = true;
+                }
                 state.input.snapshot.mouse_down = false;
             }
             NSEVENT_TYPE_MOUSE_MOVED
             | NSEVENT_TYPE_LEFT_MOUSE_DRAGGED
             | NSEVENT_TYPE_RIGHT_MOUSE_DRAGGED
             | NSEVENT_TYPE_OTHER_MOUSE_DRAGGED => {
-                let (x, y) = event_point_in_view(&state.view, event);
+                let (x, y, _) = event_point_in_view(&state.view, event);
                 state.input.snapshot.modifiers = modifiers;
                 state.input.snapshot.mouse_x = x;
                 state.input.snapshot.mouse_y = y;
             }
             NSEVENT_TYPE_SCROLL_WHEEL => {
-                let delta_x: f64 = unsafe { msg_send![event, scrollingDeltaX] };
-                let delta_y: f64 = unsafe { msg_send![event, scrollingDeltaY] };
-                state.input.snapshot.modifiers = modifiers;
-                state.input.snapshot.mouse_wheel_x += delta_x as f32;
-                state.input.snapshot.mouse_wheel_y += delta_y as f32;
+                let (_, _, inside) = event_point_in_view(&state.view, event);
+                if inside {
+                    let delta_x: f64 = unsafe { msg_send![event, scrollingDeltaX] };
+                    let delta_y: f64 = unsafe { msg_send![event, scrollingDeltaY] };
+                    state.input.snapshot.modifiers = modifiers;
+                    state.input.snapshot.mouse_wheel_x += delta_x as f32;
+                    state.input.snapshot.mouse_wheel_y += delta_y as f32;
+                }
             }
             NSEVENT_TYPE_KEY_DOWN => {
                 let key_code: u16 = unsafe { msg_send![event, keyCode] };
@@ -1257,14 +1264,23 @@ fn handle_event(event: *mut AnyObject) {
     });
 }
 
-fn event_point_in_view(view: &Retained<AnyObject>, event: *mut AnyObject) -> (f32, f32) {
+fn point_in_view_bounds(bounds: CGRect, point_in_view: CGPoint) -> bool {
+    point_in_view.x >= bounds.origin.x
+        && point_in_view.x <= bounds.origin.x + bounds.size.width
+        && point_in_view.y >= bounds.origin.y
+        && point_in_view.y <= bounds.origin.y + bounds.size.height
+}
+
+fn event_point_in_view(view: &Retained<AnyObject>, event: *mut AnyObject) -> (f32, f32, bool) {
     unsafe {
         let point_in_window: CGPoint = msg_send![event, locationInWindow];
         let point_in_view: CGPoint = msg_send![&**view, convertPoint: point_in_window, fromView: std::ptr::null_mut::<AnyObject>()];
         let bounds: CGRect = msg_send![&**view, bounds];
+        let inside = point_in_view_bounds(bounds, point_in_view);
         (
             point_in_view.x as f32,
             (bounds.size.height - point_in_view.y) as f32,
+            inside,
         )
     }
 }
@@ -1593,5 +1609,26 @@ mod tests {
         assert!(texture
             .image_key()
             .starts_with("__loadngo_uploaded_texture_"));
+    }
+
+    #[test]
+    fn point_in_view_bounds_rejects_title_bar_outside_content() {
+        let bounds = CGRect {
+            origin: CGPoint { x: 0.0, y: 0.0 },
+            size: CGSize {
+                width: 1280.0,
+                height: 720.0,
+            },
+        };
+
+        assert!(point_in_view_bounds(bounds, CGPoint { x: 640.0, y: 360.0 }));
+        assert!(!point_in_view_bounds(
+            bounds,
+            CGPoint { x: 640.0, y: 760.0 }
+        ));
+        assert!(!point_in_view_bounds(
+            bounds,
+            CGPoint { x: -10.0, y: 360.0 }
+        ));
     }
 }

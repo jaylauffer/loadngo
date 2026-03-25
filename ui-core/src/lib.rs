@@ -38,8 +38,8 @@ pub use label::{Label, LabelModel};
 pub use list::{ListInteraction, ListState};
 pub use list_row::{ListRow, ListRowModel};
 pub use paint::{
-    HorizontalAlign, PaintOp, TextLayoutMode, TextOverflow, TextStyle, TextVerticalMetricMode,
-    VerticalAlign,
+    HorizontalAlign, PaintOp, Particle, TextLayoutMode, TextOverflow, TextStyle,
+    TextVerticalMetricMode, VerticalAlign,
 };
 pub use panel::{Panel, PanelModel};
 pub use scroll::{

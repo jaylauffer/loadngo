@@ -1,10 +1,13 @@
-use std::path::{Path, PathBuf};
+use std::{
+    f32::consts::TAU,
+    path::{Path, PathBuf},
+};
 
 use loadngo_host_core::{RenderOp, RenderTextStyle};
 use serde::{Deserialize, Serialize};
 use ui_core::{
     geometry::{Color, Point, Rect},
-    paint::PaintOp,
+    paint::{PaintOp, Particle},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -304,6 +307,15 @@ pub enum FrameCommand {
         radius: i32,
         color: Color,
     },
+    Polyline {
+        points: Vec<Point>,
+        color: Color,
+        thickness: i32,
+        closed: bool,
+    },
+    ParticleBatch {
+        particles: Vec<Particle>,
+    },
     Text(TextRequest),
     Image(ImageRequest),
 }
@@ -470,23 +482,96 @@ impl Renderer {
     }
 
     pub fn encode_paint_ops(&self, ops: &[PaintOp]) -> Vec<FrameCommand> {
-        ops.iter()
-            .map(|op| match op {
-                PaintOp::FillRect { rect, color } => FrameCommand::FillRect {
+        let mut commands = Vec::new();
+        for op in ops {
+            match op {
+                PaintOp::FillRect { rect, color } => commands.push(FrameCommand::FillRect {
                     rect: *rect,
                     color: *color,
-                },
-                PaintOp::StrokeRect { rect, color } => FrameCommand::StrokeRect {
+                }),
+                PaintOp::StrokeRect { rect, color } => commands.push(FrameCommand::StrokeRect {
                     rect: *rect,
                     color: *color,
                     thickness: self.config.widget_stroke_thickness,
-                },
-                PaintOp::Line { from, to, color } => FrameCommand::Line {
+                }),
+                PaintOp::Line { from, to, color } => commands.push(FrameCommand::Line {
                     from: *from,
                     to: *to,
                     color: *color,
                     thickness: self.config.widget_stroke_thickness,
-                },
+                }),
+                PaintOp::FillCircle {
+                    center,
+                    radius,
+                    color,
+                } => commands.push(FrameCommand::Circle {
+                    center: *center,
+                    radius: radius.round().max(1.0) as i32,
+                    color: *color,
+                }),
+                PaintOp::StrokeCircle {
+                    center,
+                    radius,
+                    color,
+                    thickness,
+                } => commands.push(FrameCommand::Polyline {
+                    points: approximate_arc_points(*center, *radius, 0.0, TAU),
+                    color: *color,
+                    thickness: *thickness,
+                    closed: true,
+                }),
+                PaintOp::Polyline {
+                    points,
+                    color,
+                    thickness,
+                    closed,
+                } => commands.push(FrameCommand::Polyline {
+                    points: points.clone(),
+                    color: *color,
+                    thickness: *thickness,
+                    closed: *closed,
+                }),
+                PaintOp::Arc {
+                    center,
+                    radius,
+                    start_angle,
+                    sweep_angle,
+                    color,
+                    thickness,
+                } => commands.push(FrameCommand::Polyline {
+                    points: approximate_arc_points(*center, *radius, *start_angle, *sweep_angle),
+                    color: *color,
+                    thickness: *thickness,
+                    closed: false,
+                }),
+                PaintOp::QuadraticBezier {
+                    start,
+                    control,
+                    end,
+                    color,
+                    thickness,
+                } => commands.push(FrameCommand::Polyline {
+                    points: approximate_quadratic_points(*start, *control, *end),
+                    color: *color,
+                    thickness: *thickness,
+                    closed: false,
+                }),
+                PaintOp::CubicBezier {
+                    start,
+                    control1,
+                    control2,
+                    end,
+                    color,
+                    thickness,
+                } => commands.push(FrameCommand::Polyline {
+                    points: approximate_cubic_points(*start, *control1, *control2, *end),
+                    color: *color,
+                    thickness: *thickness,
+                    closed: false,
+                }),
+                PaintOp::ParticleBatch { particles } => commands.push(FrameCommand::ParticleBatch {
+                    particles: particles.clone(),
+                }),
                 PaintOp::Text {
                     rect,
                     clip_rect,
@@ -546,21 +631,24 @@ impl Renderer {
                             }
                         },
                     };
-                    FrameCommand::Text(self.text_request(
+                    commands.push(FrameCommand::Text(self.text_request(
                         *rect,
                         *clip_rect,
                         text.clone(),
                         render_style,
-                    ))
+                    )));
                 }
-                PaintOp::BlitImage { rect, image_key } => FrameCommand::Image(ImageRequest {
-                    rect: *rect,
-                    clip_rect: None,
-                    image_key: image_key.clone(),
-                    alpha: 1.0,
-                }),
-            })
-            .collect()
+                PaintOp::BlitImage { rect, image_key } => commands.push(FrameCommand::Image(
+                    ImageRequest {
+                        rect: *rect,
+                        clip_rect: None,
+                        image_key: image_key.clone(),
+                        alpha: 1.0,
+                    },
+                )),
+            }
+        }
+        commands
     }
 
     pub fn render<B: GraphicsBackend>(
@@ -604,6 +692,76 @@ impl Renderer {
             language: self.config.default_language.clone(),
         }
     }
+}
+
+fn approximate_arc_points(center: Point, radius: f32, start_angle: f32, sweep_angle: f32) -> Vec<Point> {
+    if radius <= 0.0 || sweep_angle.abs() <= f32::EPSILON {
+        return Vec::new();
+    }
+    let segment_count = ((radius.abs() * sweep_angle.abs()) / 10.0)
+        .ceil()
+        .clamp(8.0, 96.0) as usize;
+    (0..=segment_count)
+        .map(|index| {
+            let t = index as f32 / segment_count as f32;
+            let angle = start_angle + sweep_angle * t;
+            Point {
+                x: center.x + radius * angle.cos(),
+                y: center.y + radius * angle.sin(),
+            }
+        })
+        .collect()
+}
+
+fn approximate_quadratic_points(start: Point, control: Point, end: Point) -> Vec<Point> {
+    let segment_count = ((point_distance(start, control) + point_distance(control, end)) / 12.0)
+        .ceil()
+        .clamp(8.0, 64.0) as usize;
+    (0..=segment_count)
+        .map(|index| {
+            let t = index as f32 / segment_count as f32;
+            let one_minus_t = 1.0 - t;
+            Point {
+                x: one_minus_t * one_minus_t * start.x
+                    + 2.0 * one_minus_t * t * control.x
+                    + t * t * end.x,
+                y: one_minus_t * one_minus_t * start.y
+                    + 2.0 * one_minus_t * t * control.y
+                    + t * t * end.y,
+            }
+        })
+        .collect()
+}
+
+fn approximate_cubic_points(start: Point, control1: Point, control2: Point, end: Point) -> Vec<Point> {
+    let segment_count = ((point_distance(start, control1)
+        + point_distance(control1, control2)
+        + point_distance(control2, end))
+        / 12.0)
+        .ceil()
+        .clamp(10.0, 96.0) as usize;
+    (0..=segment_count)
+        .map(|index| {
+            let t = index as f32 / segment_count as f32;
+            let one_minus_t = 1.0 - t;
+            Point {
+                x: one_minus_t.powi(3) * start.x
+                    + 3.0 * one_minus_t.powi(2) * t * control1.x
+                    + 3.0 * one_minus_t * t * t * control2.x
+                    + t.powi(3) * end.x,
+                y: one_minus_t.powi(3) * start.y
+                    + 3.0 * one_minus_t.powi(2) * t * control1.y
+                    + 3.0 * one_minus_t * t * t * control2.y
+                    + t.powi(3) * end.y,
+            }
+        })
+        .collect()
+}
+
+fn point_distance(a: Point, b: Point) -> f32 {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    (dx * dx + dy * dy).sqrt()
 }
 
 #[cfg(test)]
@@ -761,6 +919,80 @@ mod tests {
             }
             other => panic!("expected text request, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn encode_paint_ops_lowers_richer_shapes_into_frame_commands() {
+        let renderer = Renderer::new(RendererConfig::default());
+        let commands = renderer.encode_paint_ops(&[
+            PaintOp::FillCircle {
+                center: Point { x: 10.0, y: 12.0 },
+                radius: 3.5,
+                color: Color::rgba(1, 2, 3, 255),
+            },
+            PaintOp::ParticleBatch {
+                particles: vec![ui_core::Particle {
+                    center: Point { x: 20.0, y: 22.0 },
+                    radius: 2.0,
+                    color: Color::rgba(4, 5, 6, 200),
+                }],
+            },
+            PaintOp::Polyline {
+                points: vec![
+                    Point { x: 0.0, y: 0.0 },
+                    Point { x: 8.0, y: 0.0 },
+                    Point { x: 8.0, y: 8.0 },
+                ],
+                color: Color::rgba(7, 8, 9, 255),
+                thickness: 3,
+                closed: false,
+            },
+            PaintOp::Arc {
+                center: Point { x: 32.0, y: 32.0 },
+                radius: 10.0,
+                start_angle: 0.0,
+                sweep_angle: std::f32::consts::PI * 0.75,
+                color: Color::rgba(10, 11, 12, 255),
+                thickness: 2,
+            },
+            PaintOp::QuadraticBezier {
+                start: Point { x: 2.0, y: 20.0 },
+                control: Point { x: 8.0, y: 12.0 },
+                end: Point { x: 14.0, y: 20.0 },
+                color: Color::rgba(13, 14, 15, 255),
+                thickness: 2,
+            },
+            PaintOp::CubicBezier {
+                start: Point { x: 2.0, y: 30.0 },
+                control1: Point { x: 6.0, y: 22.0 },
+                control2: Point { x: 10.0, y: 38.0 },
+                end: Point { x: 14.0, y: 30.0 },
+                color: Color::rgba(16, 17, 18, 255),
+                thickness: 2,
+            },
+            PaintOp::StrokeCircle {
+                center: Point { x: 44.0, y: 18.0 },
+                radius: 6.0,
+                color: Color::rgba(20, 21, 22, 255),
+                thickness: 2,
+            },
+        ]);
+
+        assert!(matches!(
+            commands[0],
+            FrameCommand::Circle {
+                center: Point { x: 10.0, y: 12.0 },
+                radius: 4,
+                color: Color { r: 1, g: 2, b: 3, a: 255 },
+            }
+        ));
+        assert!(matches!(
+            commands[1],
+            FrameCommand::ParticleBatch { .. }
+        ));
+        assert!(commands
+            .iter()
+            .any(|command| matches!(command, FrameCommand::Polyline { .. })));
     }
 
     #[test]
