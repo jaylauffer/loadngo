@@ -455,15 +455,18 @@ mod windows_backend {
                     return Ok(existing.descriptor_index);
                 }
             }
-            let descriptor_index = self
-                .textures
-                .get(key)
-                .map(|value| value.descriptor_index)
-                .unwrap_or_else(|| {
-                    let next = self.next_descriptor_index;
-                    self.next_descriptor_index = self.next_descriptor_index.saturating_add(1);
-                    next
-                });
+            let descriptor_index = if let Some(existing) = self.textures.get(key) {
+                existing.descriptor_index
+            } else {
+                if self.next_descriptor_index >= MAX_TEXTURES {
+                    return Err(RendererError::Backend(format!(
+                        "texture descriptor heap exhausted: requested key '{key}', capacity {MAX_TEXTURES}"
+                    )));
+                }
+                let next = self.next_descriptor_index;
+                self.next_descriptor_index += 1;
+                next
+            };
             let texture = unsafe { self.upload_texture(image, descriptor_index)? };
             self.textures.insert(
                 key.to_string(),
