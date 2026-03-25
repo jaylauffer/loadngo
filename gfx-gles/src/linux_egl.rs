@@ -415,8 +415,11 @@ pub fn present_scene(
                         gpu_textures,
                     )?;
                 }
-                FrameCommand::Line { .. } | FrameCommand::Circle { .. } | FrameCommand::Text(_) => {
-                }
+                FrameCommand::Line { .. }
+                | FrameCommand::Circle { .. }
+                | FrameCommand::Polyline { .. }
+                | FrameCommand::ParticleBatch { .. }
+                | FrameCommand::Text(_) => {}
             }
         }
 

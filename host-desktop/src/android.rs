@@ -2376,7 +2376,7 @@ pub fn capture_frame() -> HostFrame {
     let frame = HostFrame {
         timing: state.timing,
         surface: state.surface,
-        input: state.input,
+        input: state.input.clone(),
     };
     for touch in &mut state.input.touches {
         match touch {
@@ -2960,6 +2960,8 @@ pub fn render_text_lines(
                     font_size,
                     horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Left,
                     vertical_align: loadngo_host_core::RenderTextVerticalAlign::Top,
+                    vertical_metric_mode:
+                        loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
                     layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
                     overflow: loadngo_host_core::RenderTextOverflow::Clip,
                 },
@@ -3015,6 +3017,8 @@ pub fn draw_plain_text(text: &str, _x: f32, _y: f32, size: f32, _color: UiColor)
             font_size,
             horizontal_align: loadngo_host_core::RenderTextHorizontalAlign::Left,
             vertical_align: loadngo_host_core::RenderTextVerticalAlign::Top,
+            vertical_metric_mode:
+                loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox,
             layout_mode: loadngo_host_core::RenderTextLayoutMode::SingleLine,
             overflow: loadngo_host_core::RenderTextOverflow::Clip,
         },

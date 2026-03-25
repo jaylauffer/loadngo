@@ -705,7 +705,10 @@ mod android {
                             gpu_textures,
                         )?;
                     }
-                    FrameCommand::Line { .. } | FrameCommand::Circle { .. } => {}
+                    FrameCommand::Line { .. }
+                    | FrameCommand::Circle { .. }
+                    | FrameCommand::Polyline { .. }
+                    | FrameCommand::ParticleBatch { .. } => {}
                     FrameCommand::Text(_) => {}
                 }
             }

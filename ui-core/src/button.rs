@@ -16,6 +16,7 @@ pub struct ButtonModel {
     pub hover: bool,
     pub pressed: bool,
     pub focused: bool,
+    pulse_origin_seconds: Option<f64>,
 }
 
 impl ButtonModel {
@@ -32,6 +33,7 @@ impl ButtonModel {
             hover: false,
             pressed: false,
             focused: false,
+            pulse_origin_seconds: None,
         }
     }
 
@@ -45,6 +47,11 @@ impl ButtonModel {
                 let hover = self.bounds.contains(state.position);
                 if hover != self.hover {
                     self.hover = hover;
+                    if hover {
+                        self.restart_pulse_cycle();
+                    } else {
+                        self.clear_pulse_cycle_if_inactive();
+                    }
                     return WidgetResponse::redraw();
                 }
                 WidgetResponse::default()
@@ -52,6 +59,7 @@ impl ButtonModel {
             UiEvent::PointerLeft => {
                 if self.hover {
                     self.hover = false;
+                    self.clear_pulse_cycle_if_inactive();
                     return WidgetResponse::redraw();
                 }
                 WidgetResponse::default()
@@ -62,6 +70,7 @@ impl ButtonModel {
             } => {
                 if self.bounds.contains(state.position) {
                     self.pressed = true;
+                    self.restart_pulse_cycle();
                     return WidgetResponse::redraw_consumed();
                 }
                 WidgetResponse::default()
@@ -72,6 +81,7 @@ impl ButtonModel {
             } => {
                 let was_pressed = self.pressed;
                 self.pressed = false;
+                 self.clear_pulse_cycle_if_inactive();
                 if was_pressed && self.bounds.contains(state.position) {
                     return WidgetResponse::activate(self.widget_id);
                 }
@@ -83,6 +93,11 @@ impl ButtonModel {
             UiEvent::FocusChanged(focused) => {
                 if self.focused != focused {
                     self.focused = focused;
+                    if focused {
+                        self.restart_pulse_cycle();
+                    } else {
+                        self.clear_pulse_cycle_if_inactive();
+                    }
                     return WidgetResponse::redraw();
                 }
                 WidgetResponse::default()
@@ -101,12 +116,15 @@ impl ButtonModel {
             HorizontalAlign::Center => 0.0,
         };
         let pulse = if self.hover || self.focused || self.pressed {
-            let elapsed_s = animation_time_seconds();
+            let elapsed_s = self
+                .pulse_origin_seconds
+                .map(animation_elapsed_seconds)
+                .unwrap_or(0.0);
             Some(hover_pulse(elapsed_s, self.pressed))
         } else {
             None
         };
-        let (fill, border, text_color) = if let Some(pulse) = pulse {
+        let (fill, border) = if let Some(pulse) = pulse {
             if self.pressed {
                 (
                     lerp_color(
@@ -117,11 +135,6 @@ impl ButtonModel {
                     lerp_color(
                         Color::rgba(0x2d, 0x52, 0x90, 0xff),
                         Color::rgba(0xf0, 0xf9, 0xff, 0xff),
-                        pulse,
-                    ),
-                    lerp_color(
-                        Color::rgba(0xf5, 0xfa, 0xff, 0xff),
-                        Color::rgba(0x0d, 0x17, 0x28, 0xff),
                         pulse,
                     ),
                 )
@@ -137,20 +150,15 @@ impl ButtonModel {
                         Color::rgba(0xe1, 0xf1, 0xff, 0xff),
                         pulse,
                     ),
-                    lerp_color(
-                        Color::rgba(0xf3, 0xf8, 0xff, 0xff),
-                        Color::rgba(0x11, 0x1d, 0x30, 0xff),
-                        pulse,
-                    ),
                 )
             }
         } else {
             (
                 Color::rgba(0xf0, 0xf0, 0xf0, 0xd8),
                 Color::rgba(0x86, 0x8d, 0xa0, 0xd4),
-                Color::rgba(0x20, 0x20, 0x20, 0xff),
             )
         };
+        let text_color = Color::rgba(0x12, 0x12, 0x12, 0xff);
         scene.push(PaintOp::FillRect {
             rect: self.bounds,
             color: fill,
@@ -432,6 +440,16 @@ impl ButtonModel {
             ((base.a as f32) * alpha_scale).round().clamp(0.0, 255.0) as u8,
         )
     }
+
+    fn restart_pulse_cycle(&mut self) {
+        self.pulse_origin_seconds = Some(animation_time_seconds_f64());
+    }
+
+    fn clear_pulse_cycle_if_inactive(&mut self) {
+        if !self.hover && !self.pressed && !self.focused {
+            self.pulse_origin_seconds = None;
+        }
+    }
 }
 
 fn hover_pulse(t: f32, pressed: bool) -> f32 {
@@ -439,11 +457,26 @@ fn hover_pulse(t: f32, pressed: bool) -> f32 {
     ((t * speed).sin() * 0.5 + 0.5).powf(1.2)
 }
 
+const ANIMATION_TIME_WRAP_SECONDS: f64 = 4096.0;
+
 fn animation_time_seconds() -> f32 {
+    animation_time_seconds_f64() as f32
+}
+
+fn animation_time_seconds_f64() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs_f64().rem_euclid(4096.0) as f32)
+        .map(|duration| duration.as_secs_f64().rem_euclid(ANIMATION_TIME_WRAP_SECONDS))
         .unwrap_or(0.0)
+}
+
+fn animation_elapsed_seconds(origin: f64) -> f32 {
+    let now = animation_time_seconds_f64();
+    if now >= origin {
+        (now - origin) as f32
+    } else {
+        (ANIMATION_TIME_WRAP_SECONDS - origin + now) as f32
+    }
 }
 
 fn lerp_color(from: Color, to: Color, t: f32) -> Color {
@@ -689,5 +722,25 @@ mod tests {
         assert!(release.request_redraw);
         assert!(release.input_consumed);
         assert_eq!(release.action, None);
+    }
+
+    #[test]
+    fn hover_entry_starts_a_local_pulse_cycle() {
+        let mut button = ButtonModel::with_id(
+            WidgetId(11),
+            "Pulse",
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 80.0,
+                height: 24.0,
+            },
+        );
+
+        assert_eq!(button.pulse_origin_seconds, None);
+        let _ = button.handle_event(UiEvent::PointerMoved(pointer(5.0, 5.0)));
+        assert!(button.pulse_origin_seconds.is_some());
+        let _ = button.handle_event(UiEvent::PointerLeft);
+        assert_eq!(button.pulse_origin_seconds, None);
     }
 }
