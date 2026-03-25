@@ -1344,7 +1344,7 @@ fn present(
                 &mut rgba,
                 width as usize,
                 height as usize,
-                points,
+                points.as_slice(),
                 color,
                 thickness.max(1),
                 *closed,
@@ -1474,7 +1474,7 @@ fn prepare_gles_frame(
                 append_rasterized_polyline_images(
                     &mut next_commands,
                     &mut next_textures,
-                    points,
+                    points.as_slice(),
                     *color,
                     *thickness,
                     *closed,

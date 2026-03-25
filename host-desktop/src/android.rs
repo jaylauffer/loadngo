@@ -1662,7 +1662,7 @@ fn prepare_gles_frame(
             } => append_rasterized_polyline_textures(
                 &mut next_commands,
                 &mut next_textures,
-                points,
+                points.as_slice(),
                 *color,
                 *thickness,
                 *closed,
@@ -2595,7 +2595,7 @@ impl<'a> SoftwareFramebuffer<'a> {
                 color,
                 thickness,
                 closed,
-            } => self.polyline(points, *color, *thickness, *closed),
+            } => self.polyline(points.as_slice(), *color, *thickness, *closed),
             FrameCommand::ParticleBatch { particles } => {
                 for particle in particles {
                     self.circle(

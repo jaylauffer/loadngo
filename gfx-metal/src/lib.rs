@@ -615,7 +615,7 @@ impl MetalBackend {
                     closed,
                 } => append_polyline_generated_images(
                     &mut images,
-                    points,
+                    points.as_slice(),
                     *color,
                     *thickness,
                     *closed,
@@ -790,7 +790,7 @@ impl MetalBackend {
                     closed,
                 } => append_polyline_visuals(
                     &mut visuals,
-                    points,
+                    points.as_slice(),
                     *color,
                     *thickness,
                     *closed,
