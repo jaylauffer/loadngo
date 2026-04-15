@@ -89,9 +89,16 @@ Important current limitations:
 - the Windows `IOCP` backend currently does not satisfy the `Send + Sync`
   requirement of `CompletionPort`, so `loadngo-proactor` does not currently
   build on Windows
-- Linux now has an `epoll` backend in `loadngo-proactor`, but `network` still
-  needs to be refactored to run on that event core instead of blocking socket
-  loops
+- Linux now has an `epoll` backend in `loadngo-proactor`
+- `network` now uses nonblocking UDP receive and the active `SneakerNet` path
+  can be driven either by deferred proactor work or by direct Unix socket
+  readiness registration into `epoll`/`kqueue`
+- multicast bootstrap is no longer IPv4-only; `network::Config` now supports
+  both IPv4 and IPv6 multicast groups
+- the node transport now supports an explicit two-socket shape
+  (`AF_INET` + `AF_INET6` with `V6ONLY`) so one logical node can listen on
+  both families without relying on IPv4-mapped IPv6 behavior
+- Windows parity still needs explicit work for the two-socket node path
 
 ## Deployment Model
 

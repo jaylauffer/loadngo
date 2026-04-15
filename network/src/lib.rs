@@ -28,8 +28,12 @@ use data::{
     netmsg::{self, Header, Message, MessageType},
     p2pmsg, Id, Participant,
 };
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, RawFd};
 use std::{
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket},
+    io::ErrorKind,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs, UdpSocket},
     time::Duration,
 };
 use tracing::info;
@@ -60,30 +64,93 @@ fn init_socket_runtime() -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MulticastConfig {
+    V4 {
+        group: Ipv4Addr,
+        interface: Ipv4Addr,
+    },
+    V6 {
+        group: Ipv6Addr,
+        interface: u32,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub bind_addr: SocketAddr,
-    pub multicast_v4: Option<Ipv4Addr>,
-    pub multicast_iface_v4: Ipv4Addr,
+    pub extra_bind_addrs: Vec<SocketAddr>,
+    pub multicast: Vec<MulticastConfig>,
     pub timeout: Duration,
     pub retries: usize,
+}
+
+impl Config {
+    pub fn dual_stack(port: u16) -> Self {
+        Self {
+            bind_addr: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)),
+            extra_bind_addrs: vec![SocketAddr::V6(SocketAddrV6::new(
+                Ipv6Addr::UNSPECIFIED,
+                port,
+                0,
+                0,
+            ))],
+            ..Self::default()
+        }
+    }
+
+    pub fn bind_addrs(&self) -> Vec<SocketAddr> {
+        let mut addrs = vec![self.bind_addr];
+        for addr in self.extra_bind_addrs.iter().copied() {
+            if !addrs.contains(&addr) {
+                addrs.push(addr);
+            }
+        }
+        addrs
+    }
+
+    pub fn sync_targets(&self) -> Vec<SocketAddr> {
+        if self.multicast.is_empty() {
+            return vec![self.bind_addr];
+        }
+
+        self.multicast
+            .iter()
+            .map(|multicast| match *multicast {
+                MulticastConfig::V4 { group, .. } => {
+                    SocketAddr::V4(SocketAddrV4::new(group, self.bind_addr.port()))
+                }
+                MulticastConfig::V6 { group, interface } => SocketAddr::V6(SocketAddrV6::new(
+                    group,
+                    self.bind_addr.port(),
+                    0,
+                    interface,
+                )),
+            })
+            .collect()
+    }
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             bind_addr: "0.0.0.0:0".parse().unwrap(),
-            multicast_v4: None,
-            multicast_iface_v4: Ipv4Addr::UNSPECIFIED,
+            extra_bind_addrs: Vec::new(),
+            multicast: Vec::new(),
             timeout: Duration::from_millis(500),
             retries: 3,
         }
     }
 }
 
+struct BoundSocket {
+    bind_addr: SocketAddr,
+    socket: UdpSocket,
+}
+
 pub struct Network {
     initialized: bool,
-    socket: Option<UdpSocket>,
+    sockets: Vec<BoundSocket>,
     config: Config,
 }
 
@@ -91,7 +158,7 @@ impl Network {
     pub fn new() -> Self {
         Self {
             initialized: false,
-            socket: None,
+            sockets: Vec::new(),
             config: Config::default(),
         }
     }
@@ -99,7 +166,7 @@ impl Network {
     pub fn with_config(config: Config) -> Self {
         Self {
             initialized: false,
-            socket: None,
+            sockets: Vec::new(),
             config,
         }
     }
@@ -109,24 +176,54 @@ impl Network {
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr> {
-        let sock = self
-            .socket
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("socket not bound"))?;
-        Ok(sock.local_addr()?)
+        self.local_addrs()?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("socket not bound"))
+    }
+
+    pub fn local_addrs(&self) -> Result<Vec<SocketAddr>> {
+        let sockets = self.bound_sockets()?;
+        sockets
+            .iter()
+            .map(|entry| entry.socket.local_addr().map_err(anyhow::Error::from))
+            .collect()
+    }
+
+    #[cfg(unix)]
+    pub fn socket_fds(&self) -> Result<Vec<RawFd>> {
+        let sockets = self.bound_sockets()?;
+        Ok(sockets
+            .iter()
+            .map(|entry| entry.socket.as_raw_fd())
+            .collect())
     }
 
     pub fn init(&mut self) -> Result<()> {
         init_socket_runtime()?;
         self.initialized = true;
         info!("network initialized");
-        if self.socket.is_none() {
-            self.bind(self.config.bind_addr)?;
+        if self.sockets.is_empty() {
+            self.bind_all(self.config.bind_addrs())?;
         }
-        if let Some(group) = self.config.multicast_v4 {
-            if let Some(sock) = &self.socket {
-                sock.join_multicast_v4(&group, &self.config.multicast_iface_v4)?;
-                info!(%group, iface=%self.config.multicast_iface_v4, "joined multicast group");
+        for multicast in self.config.multicast.iter().copied() {
+            for entry in self.bound_sockets()? {
+                match multicast {
+                    MulticastConfig::V4 { group, interface } => {
+                        if !entry.bind_addr.is_ipv4() {
+                            continue;
+                        }
+                        entry.socket.join_multicast_v4(&group, &interface)?;
+                        info!(%group, iface=%interface, "joined IPv4 multicast group");
+                    }
+                    MulticastConfig::V6 { group, interface } => {
+                        if !entry.bind_addr.is_ipv6() {
+                            continue;
+                        }
+                        entry.socket.join_multicast_v6(&group, interface)?;
+                        info!(%group, iface=%interface, "joined IPv6 multicast group");
+                    }
+                }
             }
         }
         Ok(())
@@ -137,21 +234,44 @@ impl Network {
         if !self.initialized {
             anyhow::bail!("network not initialized");
         }
-        let sock = UdpSocket::bind(addr)?;
-        sock.set_nonblocking(false)?;
-        sock.set_read_timeout(Some(self.config.timeout))?;
-        sock.set_write_timeout(Some(self.config.timeout))?;
-        self.socket = Some(sock);
+        let addrs = addr.to_socket_addrs()?.collect::<Vec<_>>();
+        let Some(first) = addrs.first().copied() else {
+            anyhow::bail!("bind address resolution returned no candidates");
+        };
+        self.bind_all([first])
+    }
+
+    pub fn bind_all<I>(&mut self, addrs: I) -> Result<()>
+    where
+        I: IntoIterator<Item = SocketAddr>,
+    {
+        if !self.initialized {
+            anyhow::bail!("network not initialized");
+        }
+
+        let addrs = addrs.into_iter().collect::<Vec<_>>();
+        if addrs.is_empty() {
+            anyhow::bail!("no bind addresses provided");
+        }
+
+        let mut sockets = Vec::with_capacity(addrs.len());
+        for addr in addrs {
+            sockets.push(BoundSocket {
+                bind_addr: addr,
+                socket: bind_socket(addr)?,
+            });
+        }
+        self.sockets = sockets;
         Ok(())
     }
 
     /// Send a raw frame to the target address.
     pub fn send_frame<A: ToSocketAddrs>(&self, target: A, frame: &[u8]) -> Result<usize> {
-        let sock = self
-            .socket
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("socket not bound"))?;
-        Ok(sock.send_to(frame, target)?)
+        let targets = target.to_socket_addrs()?.collect::<Vec<_>>();
+        let Some(target) = targets.first().copied() else {
+            anyhow::bail!("target resolution returned no socket addresses");
+        };
+        self.send_frame_addr(target, frame)
     }
 
     /// Send with simple retry semantics.
@@ -160,11 +280,18 @@ impl Network {
         target: A,
         frame: &[u8],
     ) -> Result<usize> {
+        let targets = target.to_socket_addrs()?.collect::<Vec<_>>();
+        if targets.is_empty() {
+            anyhow::bail!("target resolution returned no socket addresses");
+        }
+
         let mut last_err = None;
         for _ in 0..self.config.retries {
-            match self.send_frame(&target, frame) {
-                Ok(n) => return Ok(n),
-                Err(e) => last_err = Some(e),
+            for target in targets.iter().copied() {
+                match self.send_frame_addr(target, frame) {
+                    Ok(n) => return Ok(n),
+                    Err(e) => last_err = Some(e),
+                }
             }
         }
         Err(last_err.unwrap_or_else(|| anyhow::anyhow!("send failed")))
@@ -172,35 +299,60 @@ impl Network {
 
     /// Receive a raw frame into the provided buffer.
     pub fn recv_frame(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
-        let sock = self
-            .socket
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("socket not bound"))?;
-        Ok(sock.recv_from(buf)?)
+        self.try_recv_frame(buf)?
+            .ok_or_else(|| anyhow::anyhow!(std::io::Error::from(ErrorKind::WouldBlock)))
     }
 
-    /// Receive once and dispatch to a handler; returns Ok(false) on timeout.
+    /// Receive once and dispatch to a handler; returns Ok(false) when no datagram is ready.
     pub fn recv_and_dispatch<F>(&self, handler: &mut F) -> Result<bool>
     where
         F: FnMut(SocketAddr, Header, Message),
     {
-        use std::io::ErrorKind;
-        let sock = self
-            .socket
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("socket not bound"))?;
         let mut buf = [0u8; 64 * 1024];
-        match sock.recv_from(&mut buf) {
-            Ok((len, addr)) => {
+        match self.try_recv_frame(&mut buf)? {
+            Some((len, addr)) => {
                 if let Some((hdr, msg)) = Message::from_bytes(&buf[..len]) {
                     handler(addr, hdr, msg);
                 }
                 Ok(true)
             }
-            Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
-                Ok(false)
+            None => Ok(false),
+        }
+    }
+
+    /// Drain all immediately available datagrams and dispatch the parsed messages.
+    pub fn drain_and_dispatch<F>(&self, handler: &mut F) -> Result<usize>
+    where
+        F: FnMut(SocketAddr, Header, Message),
+    {
+        let mut buf = [0u8; 64 * 1024];
+        let mut received = 0usize;
+        loop {
+            let mut progressed = false;
+            for entry in self.bound_sockets()? {
+                loop {
+                    match entry.socket.recv_from(&mut buf) {
+                        Ok((len, addr)) => {
+                            progressed = true;
+                            received += 1;
+                            if let Some((hdr, msg)) = Message::from_bytes(&buf[..len]) {
+                                handler(addr, hdr, msg);
+                            }
+                        }
+                        Err(e)
+                            if e.kind() == ErrorKind::WouldBlock
+                                || e.kind() == ErrorKind::TimedOut =>
+                        {
+                            break;
+                        }
+                        Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                        Err(e) => return Err(e.into()),
+                    }
+                }
             }
-            Err(e) => Err(e.into()),
+            if !progressed {
+                return Ok(received);
+            }
         }
     }
 
@@ -232,38 +384,130 @@ impl Network {
 
     /// Legacy shim used by task/main: broadcast a simple sync request over multicast or bound port.
     pub fn send_sync_request(&self, since: Id) -> Result<usize> {
-        let target = if let Some(group) = self.config.multicast_v4 {
-            SocketAddr::V4(SocketAddrV4::new(group, self.config.bind_addr.port()))
+        let frame = Message::RequestUserTaskSynch(netmsg::UserTaskSynch { since })
+            .to_bytes(MessageType::RequestUserTaskSynch, false);
+        let mut sent = 0usize;
+        let mut last_err = None;
+        for target in self.config.sync_targets() {
+            match self.send_frame_with_retries(target, &frame) {
+                Ok(bytes) => sent += bytes,
+                Err(err) => last_err = Some(err),
+            }
+        }
+        if sent > 0 {
+            Ok(sent)
         } else {
-            self.config.bind_addr
-        };
-        let msg = Message::RequestUserTaskSynch(netmsg::UserTaskSynch { since });
-        self.send_message(target, msg, MessageType::RequestUserTaskSynch, false)
+            Err(last_err.unwrap_or_else(|| anyhow::anyhow!("sync request had no targets")))
+        }
     }
 
     pub fn recv_and_dispatch_p2p<F>(&self, handler: &mut F) -> Result<bool>
     where
         F: FnMut(SocketAddr, p2pmsg::Header, p2pmsg::Message),
     {
-        use std::io::ErrorKind;
-        let sock = self
-            .socket
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("socket not bound"))?;
         let mut buf = [0u8; 64 * 1024];
-        match sock.recv_from(&mut buf) {
-            Ok((len, addr)) => {
+        match self.try_recv_frame(&mut buf)? {
+            Some((len, addr)) => {
                 if let Some((hdr, msg)) = p2pmsg::Message::from_bytes(&buf[..len]) {
                     handler(addr, hdr, msg);
                 }
                 Ok(true)
             }
-            Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
-                Ok(false)
-            }
-            Err(e) => Err(e.into()),
+            None => Ok(false),
         }
     }
+
+    /// Drain all immediately available datagrams and dispatch parsed p2p messages.
+    pub fn drain_and_dispatch_p2p<F>(&self, handler: &mut F) -> Result<usize>
+    where
+        F: FnMut(SocketAddr, p2pmsg::Header, p2pmsg::Message),
+    {
+        let mut buf = [0u8; 64 * 1024];
+        let mut received = 0usize;
+        loop {
+            let mut progressed = false;
+            for entry in self.bound_sockets()? {
+                loop {
+                    match entry.socket.recv_from(&mut buf) {
+                        Ok((len, addr)) => {
+                            progressed = true;
+                            received += 1;
+                            if let Some((hdr, msg)) = p2pmsg::Message::from_bytes(&buf[..len]) {
+                                handler(addr, hdr, msg);
+                            }
+                        }
+                        Err(e)
+                            if e.kind() == ErrorKind::WouldBlock
+                                || e.kind() == ErrorKind::TimedOut =>
+                        {
+                            break;
+                        }
+                        Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                        Err(e) => return Err(e.into()),
+                    }
+                }
+            }
+            if !progressed {
+                return Ok(received);
+            }
+        }
+    }
+
+    fn bound_sockets(&self) -> Result<&[BoundSocket]> {
+        if self.sockets.is_empty() {
+            anyhow::bail!("socket not bound");
+        }
+        Ok(&self.sockets)
+    }
+
+    fn send_frame_addr(&self, target: SocketAddr, frame: &[u8]) -> Result<usize> {
+        let socket = self.select_socket_for_target(target)?;
+        Ok(socket.send_to(frame, target)?)
+    }
+
+    fn select_socket_for_target(&self, target: SocketAddr) -> Result<&UdpSocket> {
+        let sockets = self.bound_sockets()?;
+        if let Some(entry) = sockets
+            .iter()
+            .find(|entry| entry.bind_addr.is_ipv4() == target.is_ipv4())
+        {
+            return Ok(&entry.socket);
+        }
+        Ok(&sockets[0].socket)
+    }
+
+    fn try_recv_frame(&self, buf: &mut [u8]) -> Result<Option<(usize, SocketAddr)>> {
+        for entry in self.bound_sockets()? {
+            loop {
+                match entry.socket.recv_from(buf) {
+                    Ok(result) => return Ok(Some(result)),
+                    Err(e)
+                        if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut =>
+                    {
+                        break;
+                    }
+                    Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
+fn bind_socket(addr: SocketAddr) -> Result<UdpSocket> {
+    let domain = if addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+    if addr.is_ipv6() {
+        socket.set_only_v6(true)?;
+    }
+    socket.set_nonblocking(true)?;
+    socket.bind(&SockAddr::from(addr))?;
+    Ok(socket.into())
 }
 
 /// Helpers that build legacy-compliant network frames using the shared netmsg module.

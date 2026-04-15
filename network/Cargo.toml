@@ -9,6 +9,8 @@ license.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 data = { path = "../data" }
+loadngo-proactor = { path = "../proactor" }
+socket2 = "0.5"
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true

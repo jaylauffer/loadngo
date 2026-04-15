@@ -1,11 +1,12 @@
-use crate::{CompletionEnvelope, CompletionPort, PollEvent};
+use crate::{CompletionEnvelope, CompletionPort, PollEvent, ReadinessEvent, ReadinessPort};
 use libc::{
     c_int, close, epoll_create1, epoll_ctl, epoll_event, epoll_wait, eventfd, read, write,
-    EFD_CLOEXEC, EFD_NONBLOCK, EINTR, EINVAL, EPOLLIN, EPOLL_CLOEXEC, EPOLL_CTL_ADD,
+    EFD_CLOEXEC, EFD_NONBLOCK, EINTR, EINVAL, EPOLLIN, EPOLL_CLOEXEC, EPOLL_CTL_ADD, EPOLL_CTL_DEL,
 };
 use std::collections::VecDeque;
 use std::io;
 use std::mem::MaybeUninit;
+use std::os::fd::RawFd;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -55,7 +56,7 @@ impl EpollPort {
             queue: Mutex::new(VecDeque::new()),
         };
 
-        if let Err(err) = port.register_fd(queue_fd, QUEUE_TOKEN) {
+        if let Err(err) = port.register_fd(queue_fd, EPOLLIN as u32, QUEUE_TOKEN) {
             unsafe {
                 close(wake_fd);
                 close(queue_fd);
@@ -64,7 +65,7 @@ impl EpollPort {
             return Err(err);
         }
 
-        if let Err(err) = port.register_fd(wake_fd, WAKE_TOKEN) {
+        if let Err(err) = port.register_fd(wake_fd, EPOLLIN as u32, WAKE_TOKEN) {
             unsafe {
                 close(wake_fd);
                 close(queue_fd);
@@ -85,8 +86,8 @@ impl EpollPort {
         }
     }
 
-    fn register_fd(&self, fd: c_int, token: u64) -> io::Result<()> {
-        let mut event = Self::event(EPOLLIN as u32, token);
+    fn register_fd(&self, fd: c_int, events: u32, token: u64) -> io::Result<()> {
+        let mut event = Self::event(events, token);
         let rc = unsafe { epoll_ctl(self.epoll_fd, EPOLL_CTL_ADD, fd, &mut event) };
         if rc == -1 {
             Err(io::Error::last_os_error())
@@ -209,13 +210,34 @@ impl CompletionPort for EpollPort {
                     Self::clear_signal(self.wake_fd)?;
                     return Ok(PollEvent::Wake);
                 }
-                _ => return Ok(PollEvent::Wake),
+                token => return Ok(PollEvent::Readiness(ReadinessEvent { token })),
             }
         }
     }
 
     fn wake(&self) -> io::Result<()> {
         Self::signal(self.wake_fd)
+    }
+}
+
+impl ReadinessPort for EpollPort {
+    fn register_readable(&self, fd: RawFd, token: u64) -> io::Result<()> {
+        if token == QUEUE_TOKEN || token == WAKE_TOKEN {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("token {token} is reserved for epoll port internals"),
+            ));
+        }
+        self.register_fd(fd, EPOLLIN as u32, token)
+    }
+
+    fn deregister(&self, fd: RawFd) -> io::Result<()> {
+        let rc = unsafe { epoll_ctl(self.epoll_fd, EPOLL_CTL_DEL, fd, std::ptr::null_mut()) };
+        if rc == -1 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
     }
 }
 

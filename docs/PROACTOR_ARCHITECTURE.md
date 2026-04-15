@@ -56,6 +56,17 @@ The proactor core is the first step toward:
 - host wakeups on input, timers, I/O, and task completion
 - removal of fixed-sleep frame loops
 
+The current network refactor now uses this model for active `SneakerNet`
+dispatch in two ways:
+
+- generic fallback: nonblocking UDP receive plus deferred proactor work
+- Unix fast path: direct socket-fd readiness registration into `epoll`/`kqueue`
+- node transport fast path: one logical node can register multiple UDP sockets
+  (for example separate IPv4 and IPv6 sockets) against the same proactor
+
+That gives the current codebase a real path toward node runtimes that sleep
+until actual network activity instead of keeping a timer-driven pump alive.
+
 ## Scheduling policy
 
 The proactor supports two legitimate presentation modes:

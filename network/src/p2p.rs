@@ -7,7 +7,14 @@ use data::{
         RequestContent,
     },
 };
-use std::net::SocketAddr;
+use loadngo_proactor::{CompletionKind, CompletionPort, ProactorHandle};
+#[cfg(unix)]
+use loadngo_proactor::{ReadinessEvent, ReadinessPort};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 pub fn user_intro(name: &str, is_response: bool) -> Vec<u8> {
     Message::UserIntroduction(name.to_string()).to_bytes(is_response)
@@ -287,6 +294,212 @@ impl SneakerNet {
             outbound: handled.outbound,
             events: handled.events,
         })
+    }
+}
+
+type DispatchCallback = Box<dyn FnMut(Result<DispatchResult>) + Send + 'static>;
+type CleanupCallback = Box<dyn FnMut() + Send + 'static>;
+
+#[cfg(unix)]
+const SNEAKERNET_READINESS_TOKEN: u64 = 0x4c4e_475f_4e45_5431;
+
+pub struct ProactorSneakerNet<P>
+where
+    P: CompletionPort,
+{
+    inner: Arc<ProactorSneakerNetInner<P>>,
+}
+
+struct ProactorSneakerNetInner<P>
+where
+    P: CompletionPort,
+{
+    network: Arc<Network>,
+    storage: Arc<CasStorage>,
+    sneakernet: Mutex<SneakerNet>,
+    handle: ProactorHandle<P>,
+    idle_interval: Duration,
+    on_dispatch: Mutex<DispatchCallback>,
+    cleanup: Mutex<Option<CleanupCallback>>,
+}
+
+impl<P> ProactorSneakerNet<P>
+where
+    P: CompletionPort,
+{
+    pub fn start(
+        network: Arc<Network>,
+        storage: Arc<CasStorage>,
+        handle: ProactorHandle<P>,
+        idle_interval: Duration,
+        on_dispatch: impl FnMut(Result<DispatchResult>) + Send + 'static,
+    ) -> Result<Self> {
+        Self::start_with_chunk_size(
+            network,
+            storage,
+            handle,
+            idle_interval,
+            16 * 1024,
+            on_dispatch,
+        )
+    }
+
+    pub fn start_with_chunk_size(
+        network: Arc<Network>,
+        storage: Arc<CasStorage>,
+        handle: ProactorHandle<P>,
+        idle_interval: Duration,
+        chunk_size: usize,
+        on_dispatch: impl FnMut(Result<DispatchResult>) + Send + 'static,
+    ) -> Result<Self> {
+        let inner = Arc::new(ProactorSneakerNetInner {
+            network,
+            storage,
+            sneakernet: Mutex::new(SneakerNet::with_chunk_size(chunk_size)),
+            handle,
+            idle_interval: if idle_interval.is_zero() {
+                Duration::from_millis(1)
+            } else {
+                idle_interval
+            },
+            on_dispatch: Mutex::new(Box::new(on_dispatch)),
+            cleanup: Mutex::new(None),
+        });
+        inner.schedule(Duration::ZERO)?;
+        Ok(Self { inner })
+    }
+
+    pub fn schedule_now(&self) -> Result<()> {
+        self.inner.schedule(Duration::ZERO)
+    }
+
+    #[cfg(unix)]
+    pub fn start_registered(
+        network: Arc<Network>,
+        storage: Arc<CasStorage>,
+        handle: ProactorHandle<P>,
+        chunk_size: usize,
+        on_dispatch: impl FnMut(Result<DispatchResult>) + Send + 'static,
+    ) -> Result<Self>
+    where
+        P: ReadinessPort,
+    {
+        let socket_fds = network.socket_fds()?;
+        let cleanup_fds = socket_fds.clone();
+        let cleanup_handle = handle.clone();
+        let inner = Arc::new(ProactorSneakerNetInner {
+            network,
+            storage,
+            sneakernet: Mutex::new(SneakerNet::with_chunk_size(chunk_size)),
+            handle,
+            idle_interval: Duration::from_millis(1),
+            on_dispatch: Mutex::new(Box::new(on_dispatch)),
+            cleanup: Mutex::new(Some(Box::new(move || {
+                for (index, fd) in cleanup_fds.iter().copied().enumerate() {
+                    let _ = cleanup_handle
+                        .deregister_readable(fd, SNEAKERNET_READINESS_TOKEN + index as u64);
+                }
+            }))),
+        });
+
+        for (index, fd) in socket_fds.into_iter().enumerate() {
+            let driver = Arc::clone(&inner);
+            inner.handle.register_readable(
+                fd,
+                SNEAKERNET_READINESS_TOKEN + index as u64,
+                move |_readiness: ReadinessEvent| {
+                    driver.drain_and_report();
+                },
+            )?;
+        }
+
+        Ok(Self { inner })
+    }
+}
+
+impl<P> Drop for ProactorSneakerNet<P>
+where
+    P: CompletionPort,
+{
+    fn drop(&mut self) {
+        if let Some(mut cleanup) = self
+            .inner
+            .cleanup
+            .lock()
+            .expect("proactor sneaker net cleanup lock poisoned")
+            .take()
+        {
+            cleanup();
+        }
+    }
+}
+
+impl<P> ProactorSneakerNetInner<P>
+where
+    P: CompletionPort,
+{
+    fn schedule(self: &Arc<Self>, delay: Duration) -> Result<()> {
+        let driver = Arc::clone(self);
+        self.handle
+            .defer_for(delay, CompletionKind::Net, 0, move |_| {
+                driver.run();
+            })?;
+        Ok(())
+    }
+
+    fn run(self: Arc<Self>) {
+        let drained = self.drain_and_report();
+
+        if !self.handle.is_running() {
+            return;
+        }
+
+        let delay = if drained == 0 {
+            self.idle_interval
+        } else {
+            Duration::ZERO
+        };
+        if let Err(err) = self.schedule(delay) {
+            self.report(Err(err));
+        }
+    }
+
+    fn drain_and_report(&self) -> usize {
+        match self.drain_dispatches() {
+            Ok(drained) => drained,
+            Err(err) => {
+                self.report(Err(err));
+                0
+            }
+        }
+    }
+
+    fn drain_dispatches(&self) -> Result<usize> {
+        self.network
+            .drain_and_dispatch_p2p(&mut |source, header, message| {
+                let result = {
+                    let mut sneakernet = self
+                        .sneakernet
+                        .lock()
+                        .expect("sneakernet state lock poisoned");
+                    sneakernet.dispatch_message(
+                        &self.network,
+                        source,
+                        header,
+                        message,
+                        &self.storage,
+                    )
+                };
+                self.report(result);
+            })
+    }
+
+    fn report(&self, result: Result<DispatchResult>) {
+        let mut on_dispatch = self
+            .on_dispatch
+            .lock()
+            .expect("proactor sneaker net callback lock poisoned");
+        (on_dispatch)(result);
     }
 }
 

@@ -1,11 +1,12 @@
-use crate::{CompletionEnvelope, CompletionPort, PollEvent};
+use crate::{CompletionEnvelope, CompletionPort, PollEvent, ReadinessEvent, ReadinessPort};
 use libc::{
-    c_int, close, kevent, kqueue, timespec, EVFILT_USER, EV_ADD, EV_CLEAR, EV_ENABLE, EV_ERROR,
-    EV_RECEIPT, NOTE_TRIGGER,
+    c_int, close, kevent, kqueue, timespec, EVFILT_READ, EVFILT_USER, EV_ADD, EV_CLEAR, EV_DELETE,
+    EV_ENABLE, EV_ERROR, EV_RECEIPT, NOTE_TRIGGER,
 };
 use std::collections::VecDeque;
 use std::io;
 use std::mem::MaybeUninit;
+use std::os::fd::RawFd;
 use std::ptr;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -82,6 +83,17 @@ impl KqueuePort {
         }
     }
 
+    fn read_event(fd: RawFd, flags: u16, token: u64) -> kevent {
+        kevent {
+            ident: fd as _,
+            filter: EVFILT_READ,
+            flags,
+            fflags: 0,
+            data: 0,
+            udata: token as usize as *mut _,
+        }
+    }
+
     fn empty_event() -> kevent {
         unsafe { MaybeUninit::<kevent>::zeroed().assume_init() }
     }
@@ -145,11 +157,39 @@ impl CompletionPort for KqueuePort {
             }
         }
 
+        if event.filter == EVFILT_READ {
+            return Ok(PollEvent::Readiness(ReadinessEvent {
+                token: event.udata as usize as u64,
+            }));
+        }
+
         Ok(PollEvent::Wake)
     }
 
     fn wake(&self) -> io::Result<()> {
         self.trigger_user_event(WAKE_IDENT)
+    }
+}
+
+impl ReadinessPort for KqueuePort {
+    fn register_readable(&self, fd: RawFd, token: u64) -> io::Result<()> {
+        let change = Self::read_event(fd, EV_ADD | EV_ENABLE | EV_CLEAR | EV_RECEIPT, token);
+        let mut receipt = Self::empty_event();
+        let result = unsafe { kevent(self.kq, &change, 1, &mut receipt, 1, ptr::null()) };
+        if result == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        Self::check_receipt(&receipt)
+    }
+
+    fn deregister(&self, fd: RawFd) -> io::Result<()> {
+        let change = Self::read_event(fd, EV_DELETE | EV_RECEIPT, 0);
+        let mut receipt = Self::empty_event();
+        let result = unsafe { kevent(self.kq, &change, 1, &mut receipt, 1, ptr::null()) };
+        if result == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        Self::check_receipt(&receipt)
     }
 }
 
