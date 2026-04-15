@@ -40,7 +40,7 @@ Backend status:
 
 - BSD/macOS: `kqueue` backend implemented in `loadngo-proactor`
 - Windows: `IOCP` backend implemented in `loadngo-proactor`
-- Linux: `epoll` + wake fd still to port
+- Linux: `epoll` + wake-fd backend implemented in `loadngo-proactor`
 - Android: `ALooper` integration still to port onto this core
 
 The current in-memory `ChannelPort` exists only as a test/reference backend. It proves the core semantics without baking in any OS choice.

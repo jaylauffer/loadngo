@@ -89,6 +89,9 @@ Important current limitations:
 - the Windows `IOCP` backend currently does not satisfy the `Send + Sync`
   requirement of `CompletionPort`, so `loadngo-proactor` does not currently
   build on Windows
+- Linux now has an `epoll` backend in `loadngo-proactor`, but `network` still
+  needs to be refactored to run on that event core instead of blocking socket
+  loops
 
 ## Deployment Model
 
@@ -305,7 +308,6 @@ Build:
 - integrate network and sync work with `loadngo-proactor`
 - remove dependence on blocking polling loops for active sync paths
 - finish Windows IOCP integration
-- add Linux `epoll` backend
 - add Android `ALooper` backend if mobile field nodes are required
 
 Immediate Windows fix:

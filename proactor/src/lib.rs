@@ -1,5 +1,7 @@
 mod channel;
 mod deferred;
+#[cfg(target_os = "linux")]
+mod epoll;
 mod error;
 #[cfg(windows)]
 mod iocp;
@@ -22,6 +24,8 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 pub use channel::ChannelPort;
+#[cfg(target_os = "linux")]
+pub use epoll::EpollPort;
 pub use error::ProactorError;
 #[cfg(windows)]
 pub use iocp::IocpPort;
