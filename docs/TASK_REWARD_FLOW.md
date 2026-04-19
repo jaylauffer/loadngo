@@ -57,10 +57,13 @@ For current repo-owned skills, the intended split is:
 The current runtime adds the minimum submitter and worker roles needed for
 reward closure:
 
+- `task_node`: a standing worker node on top of `loadngo-proactor`; it stays on
+  the task plane, accepts bounded assignments, and keeps assignment state until
+  `TaskAck` or timeout
 - `task_worker`: listens for `TaskRequest`, emits `TaskOffer`, accepts one
   assignment, executes the bounded task command, sends `TaskStatus`, then
-  `TaskResult`. For standing worker posture, run it with `--serve-forever` so
-  the node remains available after idle windows and completed assignments.
+  `TaskResult`. It remains useful as a bounded helper, but it is not the
+  preferred standing worker runtime anymore.
 - `task_submitter`: multicasts `TaskRequest`, collects concurrent `TaskOffer`
   messages, selects one worker with `TaskAccept`, verifies the returned
   artifact, writes a deterministic completion receipt, submits the qcoin anchor,

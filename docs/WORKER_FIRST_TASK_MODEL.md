@@ -24,9 +24,10 @@ Important activation point:
 - a skill file does not make an agent automatically listen
 - a worker only participates when it is explicitly put into worker posture
 - on current `dev`, that usually means the local agent is told to listen for
-  `TaskRequest` or a local `task_worker` process is started
-- for an actually standing listener, use `task_worker --serve-forever`; the
-  one-shot default is only appropriate for a bounded listening window
+  `TaskRequest` or a local task runtime is started
+- for an actually standing listener, use the proactor-backed `task_node`
+- `task_worker` is still useful for bounded/manual windows, but it is not the
+  preferred standing participant
 
 So "has the skill" and "is currently available on the task plane" are not the
 same thing.
