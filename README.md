@@ -53,3 +53,6 @@ cargo run -p host-mac
 - [`docs/TASK_OFFER_PROTOCOL.md`](docs/TASK_OFFER_PROTOCOL.md): submitter/worker task coordination protocol over multicast discovery and direct unicast follow-up.
 - [`docs/TASK_EXECUTION_TEST_PLAN.md`](docs/TASK_EXECUTION_TEST_PLAN.md): lab validation plan for correlation, worker selection, status cadence, and reward closure.
 - [`docs/WORKER_FIRST_TASK_MODEL.md`](docs/WORKER_FIRST_TASK_MODEL.md): worker posture and reward-gating model inside the submitter-driven task protocol.
+
+## Codex skill
+- [`skills/loadngo-task/SKILL.md`](skills/loadngo-task/SKILL.md): repo-owned Codex skill for meaningful `loadngo` task work and qcoin-backed reward closure.

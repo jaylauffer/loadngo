@@ -1,0 +1,7 @@
+interface:
+  display_name: "Loadngo Tasks"
+  short_description: "Run meaningful loadngo tasks with verified qcoin closure"
+  default_prompt: "Use $loadngo-task to request or perform meaningful loadngo lab work, verify the completion artifact, and only then close the task with qcoin-backed reward anchoring."
+
+policy:
+  allow_implicit_invocation: true
