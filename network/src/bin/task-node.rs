@@ -226,7 +226,7 @@ impl TaskNode {
             Ok(drained) => drained,
             Err(err) => {
                 eprintln!(
-                    "task_node_error worker_node_id={} error={err:#}",
+                    "task-node_error worker_node_id={} error={err:#}",
                     self.args.worker_node_id
                 );
                 let _ = self.handle.stop();
@@ -245,7 +245,7 @@ impl TaskNode {
         };
         if let Err(err) = self.schedule(delay) {
             eprintln!(
-                "task_node_schedule_error worker_node_id={} error={err:#}",
+                "task-node_schedule_error worker_node_id={} error={err:#}",
                 self.args.worker_node_id
             );
             let _ = self.handle.stop();
@@ -289,7 +289,7 @@ impl TaskNode {
             .iter()
             .all(|tag| self.args.capability_tags.contains(tag));
         println!(
-            "task_node_request request_id={} submitter_node_id={} source={} capabilities_match={} summary={}",
+            "task-node_request request_id={} submitter_node_id={} source={} capabilities_match={} summary={}",
             request.request_id,
             request.submitter_node_id,
             source,
@@ -356,7 +356,7 @@ impl TaskNode {
         }
 
         println!(
-            "task_node_offer_sent request_id={} offer_id={} worker_node_id={} targets={} expires_at={}",
+            "task-node_offer_sent request_id={} offer_id={} worker_node_id={} targets={} expires_at={}",
             offer.request_id, offer.offer_id, offer.worker_node_id, sent_targets, offer.expires_at
         );
         Ok(())
@@ -415,7 +415,7 @@ impl TaskNode {
             return Err(err).context("failed to send initial task status");
         }
         println!(
-            "task_node_status assignment_id={} state={} target={}",
+            "task-node_status assignment_id={} state={} target={}",
             status.assignment_id, status.state, result_target
         );
 
@@ -450,13 +450,13 @@ impl TaskNode {
                     output,
                 ) {
                     eprintln!(
-                        "task_node_result_error assignment_id={} error={report_err:#}",
+                        "task-node_result_error assignment_id={} error={report_err:#}",
                         accept_for_completion.assignment_id
                     );
                 }
             }) {
                 eprintln!(
-                    "task_node_enqueue_error assignment_id={} error={err:#}",
+                    "task-node_enqueue_error assignment_id={} error={err:#}",
                     accept_assignment_id
                 );
                 node.clear_assignment(accept_assignment_id, accept_request_id, accept_offer_id);
@@ -513,7 +513,7 @@ impl TaskNode {
         self.network
             .send_p2p_message(result_target, Message::TaskResult(result.clone()), true)?;
         println!(
-            "task_node_result assignment_id={} target={} status_success={}",
+            "task-node_result assignment_id={} target={} status_success={}",
             result.assignment_id, result_target, status_success
         );
 
@@ -542,7 +542,7 @@ impl TaskNode {
         }
 
         println!(
-            "task_node_ack assignment_id={} source={} accepted={} qcoin_tx_hint={} note={}",
+            "task-node_ack assignment_id={} source={} accepted={} qcoin_tx_hint={} note={}",
             ack.assignment_id,
             source,
             ack.accepted,
@@ -556,7 +556,7 @@ impl TaskNode {
     fn handle_ack_timeout(&self, assignment_id: u64, request_id: u64, offer_id: u64) {
         if self.clear_assignment(assignment_id, request_id, offer_id) {
             eprintln!(
-                "task_node_ack_timeout assignment_id={} worker_node_id={} result=no-ack",
+                "task-node_ack_timeout assignment_id={} worker_node_id={} result=no-ack",
                 assignment_id, self.args.worker_node_id
             );
         }
@@ -666,7 +666,7 @@ fn main() -> Result<()> {
     }
 
     println!(
-        "task_node_started worker_node_id={} bind_port={} idle_interval_millis={}",
+        "task-node_started worker_node_id={} bind_port={} idle_interval_millis={}",
         args.worker_node_id, args.bind_port, args.idle_interval_millis
     );
     proactor.run_until_stopped()?;
@@ -675,7 +675,7 @@ fn main() -> Result<()> {
 
 fn print_usage() {
     eprintln!(
-        "usage: cargo run -p network --bin task_node -- \
+        "usage: cargo run -p network --bin task-node -- \
          --worker-node-id <node> \
          --reply-endpoint <addr:port> \
          --execute-command <shell command> \

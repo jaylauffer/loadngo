@@ -60,6 +60,6 @@ cargo run -p host-mac
 - [`skills/loadngo-worker/SKILL.md`](skills/loadngo-worker/SKILL.md): repo-owned Codex skill for active worker/listener posture, including capability, time, and energy-based offer discipline.
 
 ## Task runtimes
-- `cargo run -p network --bin task_node -- ...`: standing worker node on top of `loadngo-proactor`.
+- `cargo run -p network --bin task-node -- ...`: standing worker node on top of `loadngo-proactor`.
 - `cargo run -p network --bin task_worker -- ...`: bounded/manual worker helper for a single listening window or a narrow local session.
 - `cargo run -p network --bin task_submitter -- ...`: submitter-side request, selection, verification, and qcoin reward closure flow.

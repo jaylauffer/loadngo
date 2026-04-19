@@ -25,7 +25,7 @@ Important activation point:
 - a worker only participates when it is explicitly put into worker posture
 - on current `dev`, that usually means the local agent is told to listen for
   `TaskRequest` or a local task runtime is started
-- for an actually standing listener, use the proactor-backed `task_node`
+- for an actually standing listener, use the proactor-backed `task-node`
 - `task_worker` is still useful for bounded/manual windows, but it is not the
   preferred standing participant
 

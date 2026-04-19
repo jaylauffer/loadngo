@@ -123,7 +123,7 @@ If the task becomes impossible or too expensive after acceptance, report that in
 
 On current `loadngo/dev`, there are two worker-side runtimes:
 
-- `task_node` for standing listener posture on top of `loadngo-proactor`
+- `task-node` for standing listener posture on top of `loadngo-proactor`
 - `task_worker` for bounded/manual worker windows
 
 This skill should guide when to use those runtimes, and when not to use them.
@@ -132,7 +132,7 @@ Examples of activation:
 
 - a local user instructs the agent to listen for one bounded task window
 - a local user instructs the agent to act as a standing worker for a session
-  with `task_node`
+  with `task-node`
 - a constrained node runs `task_worker` with narrow capability tags
 
 But the skill itself is not the daemon.

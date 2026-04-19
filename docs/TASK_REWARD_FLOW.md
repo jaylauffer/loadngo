@@ -57,7 +57,7 @@ For current repo-owned skills, the intended split is:
 The current runtime adds the minimum submitter and worker roles needed for
 reward closure:
 
-- `task_node`: a standing worker node on top of `loadngo-proactor`; it stays on
+- `task-node`: a standing worker node on top of `loadngo-proactor`; it stays on
   the task plane, accepts bounded assignments, and keeps assignment state until
   `TaskAck` or timeout
 - `task_worker`: listens for `TaskRequest`, emits `TaskOffer`, accepts one
