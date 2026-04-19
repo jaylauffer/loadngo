@@ -37,6 +37,16 @@ Workers may be full Codex agents or narrower service nodes. The protocol should
 care about verifiable outputs and correlation, not about whether the worker can
 run an LLM locally.
 
+Activation rule:
+
+- a repo skill or local instructions alone do not place a Codex agent onto the
+  wire
+- a worker only participates when its local user or local runtime explicitly
+  activates worker/listener posture
+
+So a submitter should not assume that every machine that "has the skill" is
+currently listening for multicast requests.
+
 ## Correlation And Concurrency
 
 The protocol uses three identifiers to keep concurrent work straight:

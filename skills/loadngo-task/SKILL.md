@@ -29,6 +29,32 @@ The current task model is submitter-driven:
 6. `TaskAck` direct closure
 7. qcoin reward anchor only after positive acknowledgement
 
+## Activation Rule
+
+This skill is not an always-on daemon.
+
+Installing or acquiring the skill does **not** by itself make a Codex agent
+listen on the `loadngo` task multicast plane.
+
+For a remote agent or worker host to participate in the task economy, one of
+these must also be true:
+
+- the local user explicitly instructs that agent to enter worker posture and
+  respond to `TaskRequest`
+- a local worker process such as `task_worker` is running on that machine
+- a future always-on task bridge exists on that machine
+
+So "the agent has the skill" and "the agent is currently listening for work"
+are different states.
+
+If the user's intent is "earn qcoin by helping on the lab task plane," the
+agent should be told to do both:
+
+1. use the `loadngo-task` skill
+2. enter worker/listener posture
+
+Without step 2, no `TaskOffer` should be expected.
+
 ## Use This Skill When
 
 - the user wants Codex to act as a `loadngo` submitter, or to coordinate one or more `loadngo` workers
@@ -126,6 +152,13 @@ machine-verifiable outputs, for example:
 - service health and interface diagnostics
 - packet capture or multicast reachability receipts
 - bounded test or rollout confirmations
+
+For Codex-capable worker hosts such as `agnes` or `dolores`, the local operator
+should also decide whether the host is:
+
+- temporarily available for one task
+- explicitly listening for new `TaskRequest`
+- or idle and not participating in the task economy yet
 
 ## Remote Hosts
 

@@ -39,6 +39,14 @@ was no runtime path that clearly performed:
 
 The missing pieces are what make "do work and earn qcoin" legible to a worker.
 
+There was also a second gap:
+
+- the repo had a skill and protocol notes
+- but that did not by itself mean other Codex agents were actively listening for
+  task traffic
+
+That activation step must be explicit.
+
 ## Current runtime shape
 
 The current runtime adds the minimum submitter and worker roles needed for
@@ -51,6 +59,14 @@ reward closure:
   messages, selects one worker with `TaskAccept`, verifies the returned
   artifact, writes a deterministic completion receipt, submits the qcoin anchor,
   waits for inclusion, then sends `TaskAck`
+
+This means a lab operator who wants other agents to help must distinguish
+between:
+
+- skill acquisition
+- worker activation
+
+Only activated workers should be expected to answer `TaskRequest`.
 
 ## Reward object
 

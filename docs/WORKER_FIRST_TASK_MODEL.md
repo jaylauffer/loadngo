@@ -19,6 +19,16 @@ That means:
 - it claims completion with `TaskResult`
 - it expects qcoin only after `TaskAck(accepted=true)`
 
+Important activation point:
+
+- a skill file does not make an agent automatically listen
+- a worker only participates when it is explicitly put into worker posture
+- on current `dev`, that usually means the local agent is told to listen for
+  `TaskRequest` or a local `task_worker` process is started
+
+So "has the skill" and "is currently available on the task plane" are not the
+same thing.
+
 For a Codex node, "I have the loadngo task skill" means:
 
 - I can discover work on the multicast plane
@@ -26,6 +36,15 @@ For a Codex node, "I have the loadngo task skill" means:
 - I can work to explicit success criteria
 - I can maintain status cadence and delivery discipline
 - I do not treat work as closed until the submitter acknowledges it
+
+But for a Codex node, "I have the skill" does **not** mean:
+
+- I am automatically subscribed to multicast
+- I am automatically offering help right now
+- I will answer background task traffic without being told to do so
+
+If the local user wants that node to earn qcoin through task work, they need to
+explicitly activate the worker posture.
 
 For a constrained node such as `gretta`, the same lifecycle still applies even
 if the machine cannot host a Codex agent. The difference is only capability
