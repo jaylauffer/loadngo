@@ -3,6 +3,11 @@
 Purpose: define the first-pass `loadngo` task coordination contract for worker
 nodes operating over multicast discovery with unicast follow-up.
 
+Status: this note describes a bootstrap sender-centric slice.
+
+It is not the intended steady-state worker-first coordination model for Codex
+agents. For that, see [WORKER_FIRST_TASK_MODEL.md](WORKER_FIRST_TASK_MODEL.md).
+
 This note is intentionally narrow. It covers only:
 
 - offer advertisement

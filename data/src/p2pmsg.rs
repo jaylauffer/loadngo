@@ -26,6 +26,7 @@ pub enum MessageType {
     DeployComplete,
     TaskOffer,
     TaskAccept,
+    TaskRequest,
     MessageCount,
 }
 
@@ -80,7 +81,8 @@ impl Header {
             15 => MessageType::DeployComplete,
             16 => MessageType::TaskOffer,
             17 => MessageType::TaskAccept,
-            18 => MessageType::MessageCount,
+            18 => MessageType::TaskRequest,
+            19 => MessageType::MessageCount,
             _ => return None,
         };
         let is_response = u32::from_le_bytes(buf[8..12].try_into().ok()?) != 0;
@@ -193,6 +195,17 @@ pub struct TaskAccept {
     pub note: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskRequest {
+    pub request_id: u64,
+    pub worker_node_id: String,
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub capability_tags: Vec<String>,
+    pub reply_endpoints: Vec<String>,
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
     Empty,
@@ -213,6 +226,7 @@ pub enum Message {
     DeployComplete(Vec<u8>),
     TaskOffer(TaskOffer),
     TaskAccept(TaskAccept),
+    TaskRequest(TaskRequest),
 }
 
 impl Message {
@@ -236,6 +250,7 @@ impl Message {
             Message::DeployComplete(_) => MessageType::DeployComplete,
             Message::TaskOffer(_) => MessageType::TaskOffer,
             Message::TaskAccept(_) => MessageType::TaskAccept,
+            Message::TaskRequest(_) => MessageType::TaskRequest,
         }
     }
 
@@ -323,6 +338,9 @@ impl Message {
             }
             Message::TaskAccept(accept) => {
                 serde_json::to_vec(accept).expect("task accept serialization should succeed")
+            }
+            Message::TaskRequest(request) => {
+                serde_json::to_vec(request).expect("task request serialization should succeed")
             }
         };
         let header = Header::new(self.message_type(), is_response, payload.len() as u32);
@@ -485,6 +503,9 @@ impl Message {
             MessageType::TaskAccept => {
                 Message::TaskAccept(serde_json::from_slice(body).ok()?)
             }
+            MessageType::TaskRequest => {
+                Message::TaskRequest(serde_json::from_slice(body).ok()?)
+            }
             MessageType::MessageCount => return None,
         };
         Some((header, message))
@@ -497,7 +518,7 @@ fn parse_hash(body: &[u8]) -> Option<CasHash> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Message, TaskAccept, TaskOffer};
+    use super::{Message, TaskAccept, TaskOffer, TaskRequest};
 
     #[test]
     fn task_offer_round_trips() {
@@ -533,5 +554,23 @@ mod tests {
         let (_, decoded) = Message::from_bytes(&bytes).expect("task accept frame should parse");
 
         assert_eq!(decoded, Message::TaskAccept(accept));
+    }
+
+    #[test]
+    fn task_request_round_trips() {
+        let request = TaskRequest {
+            request_id: 99,
+            worker_node_id: "worker-b".to_string(),
+            created_at: 300,
+            expires_at: 360,
+            capability_tags: vec!["codex".to_string(), "loadngo-task".to_string()],
+            reply_endpoints: vec!["10.10.10.6:9850".to_string()],
+            note: Some("ready for work".to_string()),
+        };
+
+        let bytes = Message::TaskRequest(request.clone()).to_bytes(false);
+        let (_, decoded) = Message::from_bytes(&bytes).expect("task request frame should parse");
+
+        assert_eq!(decoded, Message::TaskRequest(request));
     }
 }

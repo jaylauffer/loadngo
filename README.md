@@ -50,4 +50,4 @@ cargo run -p host-mac
 - [`docs/PQ_AUTHENTICATOR.md`](docs/PQ_AUTHENTICATOR.md): repo-owned post-quantum authenticator model for signed challenge tokens.
 - [`docs/PUDDING_CAS_PQ_MODEL.md`](docs/PUDDING_CAS_PQ_MODEL.md): native pudding CAS repository model design.
 - [`docs/FIELD_NETWORK_BACKLOG.md`](docs/FIELD_NETWORK_BACKLOG.md): network and replication considerations.
-
+- [`docs/WORKER_FIRST_TASK_MODEL.md`](docs/WORKER_FIRST_TASK_MODEL.md): worker-first task acquisition and reward-gating model for `loadngo`.

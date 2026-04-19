@@ -4,7 +4,7 @@ use data::{
     cas::{CasHash, CasStorage},
     p2pmsg::{
         self, EncodingBitset, FileData, FileEnd, FileMissed, FileStart, Message, Ping,
-        RequestContent, TaskAccept, TaskOffer,
+        RequestContent, TaskAccept, TaskOffer, TaskRequest,
     },
 };
 use loadngo_proactor::{CompletionKind, CompletionPort, ProactorHandle};
@@ -93,6 +93,10 @@ pub fn task_offer(offer: TaskOffer) -> Vec<u8> {
 
 pub fn task_accept(accept: TaskAccept) -> Vec<u8> {
     Message::TaskAccept(accept).to_bytes(true)
+}
+
+pub fn task_request(request: TaskRequest) -> Vec<u8> {
+    Message::TaskRequest(request).to_bytes(false)
 }
 
 pub fn parse_frame(buf: &[u8]) -> Option<(p2pmsg::Header, p2pmsg::Message)> {
