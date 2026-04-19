@@ -1,4 +1,5 @@
 use crate::cas::CasHash;
+use serde::{Deserialize, Serialize};
 
 pub const PACKET_HDR: u32 = 0x6c6e6774;
 pub const HDR_LEN: usize = 16;
@@ -23,6 +24,8 @@ pub enum MessageType {
     TransferFileEnd,
     TransferFileMissed,
     DeployComplete,
+    TaskOffer,
+    TaskAccept,
     MessageCount,
 }
 
@@ -75,7 +78,9 @@ impl Header {
             13 => MessageType::TransferFileEnd,
             14 => MessageType::TransferFileMissed,
             15 => MessageType::DeployComplete,
-            16 => MessageType::MessageCount,
+            16 => MessageType::TaskOffer,
+            17 => MessageType::TaskAccept,
+            18 => MessageType::MessageCount,
             _ => return None,
         };
         let is_response = u32::from_le_bytes(buf[8..12].try_into().ok()?) != 0;
@@ -166,6 +171,28 @@ pub enum RequestContent {
     Response { hash: CasHash, data: Vec<u8> },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskOffer {
+    pub offer_id: u64,
+    pub task_id: u64,
+    pub offerer_node_id: String,
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub summary: String,
+    pub capability_tags: Vec<String>,
+    pub reply_endpoints: Vec<String>,
+    pub artifact_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskAccept {
+    pub offer_id: u64,
+    pub task_id: u64,
+    pub worker_node_id: String,
+    pub accepted_at: u64,
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
     Empty,
@@ -184,6 +211,8 @@ pub enum Message {
     TransferFileEnd(FileEnd),
     TransferFileMissed(FileMissed),
     DeployComplete(Vec<u8>),
+    TaskOffer(TaskOffer),
+    TaskAccept(TaskAccept),
 }
 
 impl Message {
@@ -205,6 +234,8 @@ impl Message {
             Message::TransferFileEnd(_) => MessageType::TransferFileEnd,
             Message::TransferFileMissed(_) => MessageType::TransferFileMissed,
             Message::DeployComplete(_) => MessageType::DeployComplete,
+            Message::TaskOffer(_) => MessageType::TaskOffer,
+            Message::TaskAccept(_) => MessageType::TaskAccept,
         }
     }
 
@@ -287,6 +318,12 @@ impl Message {
                 buf
             }
             Message::DeployComplete(data) => data.clone(),
+            Message::TaskOffer(offer) => {
+                serde_json::to_vec(offer).expect("task offer serialization should succeed")
+            }
+            Message::TaskAccept(accept) => {
+                serde_json::to_vec(accept).expect("task accept serialization should succeed")
+            }
         };
         let header = Header::new(self.message_type(), is_response, payload.len() as u32);
         let mut out = header.to_bytes().to_vec();
@@ -442,6 +479,12 @@ impl Message {
                 Message::TransferFileMissed(FileMissed { time, seq })
             }
             MessageType::DeployComplete => Message::DeployComplete(body.to_vec()),
+            MessageType::TaskOffer => {
+                Message::TaskOffer(serde_json::from_slice(body).ok()?)
+            }
+            MessageType::TaskAccept => {
+                Message::TaskAccept(serde_json::from_slice(body).ok()?)
+            }
             MessageType::MessageCount => return None,
         };
         Some((header, message))
@@ -450,4 +493,45 @@ impl Message {
 
 fn parse_hash(body: &[u8]) -> Option<CasHash> {
     CasHash::from_slice(body).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Message, TaskAccept, TaskOffer};
+
+    #[test]
+    fn task_offer_round_trips() {
+        let offer = TaskOffer {
+            offer_id: 1,
+            task_id: 2,
+            offerer_node_id: "worker-a".to_string(),
+            created_at: 100,
+            expires_at: 140,
+            summary: "Drain multicast offer without amplification".to_string(),
+            capability_tags: vec!["codex".to_string(), "doc".to_string()],
+            reply_endpoints: vec!["192.168.1.129:9850".to_string()],
+            artifact_hint: Some("docs/TASK_OFFER_PROTOCOL.md".to_string()),
+        };
+
+        let bytes = Message::TaskOffer(offer.clone()).to_bytes(false);
+        let (_, decoded) = Message::from_bytes(&bytes).expect("task offer frame should parse");
+
+        assert_eq!(decoded, Message::TaskOffer(offer));
+    }
+
+    #[test]
+    fn task_accept_round_trips() {
+        let accept = TaskAccept {
+            offer_id: 10,
+            task_id: 20,
+            worker_node_id: "worker-b".to_string(),
+            accepted_at: 200,
+            note: Some("I can take this".to_string()),
+        };
+
+        let bytes = Message::TaskAccept(accept.clone()).to_bytes(true);
+        let (_, decoded) = Message::from_bytes(&bytes).expect("task accept frame should parse");
+
+        assert_eq!(decoded, Message::TaskAccept(accept));
+    }
 }

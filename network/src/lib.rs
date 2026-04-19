@@ -378,6 +378,27 @@ impl Network {
         self.send_frame_with_retries(target, &frame)
     }
 
+    pub fn send_p2p_multicast_message(
+        &self,
+        msg: p2pmsg::Message,
+        is_response: bool,
+    ) -> Result<usize> {
+        let frame = msg.to_bytes(is_response);
+        let mut sent = 0usize;
+        let mut last_err = None;
+        for target in self.config.sync_targets() {
+            match self.send_frame_with_retries(target, &frame) {
+                Ok(bytes) => sent += bytes,
+                Err(err) => last_err = Some(err),
+            }
+        }
+        if sent > 0 {
+            Ok(sent)
+        } else {
+            Err(last_err.unwrap_or_else(|| anyhow::anyhow!("multicast send had no targets")))
+        }
+    }
+
     pub fn register_participant(&self, participant: &Participant) {
         info!(ip = %participant.ip, "registering participant placeholder");
     }

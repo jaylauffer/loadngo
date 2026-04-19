@@ -1,6 +1,6 @@
 use data::{
     cas::CasHash,
-    p2pmsg::{self, EncodingBitset, Message, MessageType, RequestContent},
+    p2pmsg::{self, EncodingBitset, Message, MessageType, RequestContent, TaskAccept, TaskOffer},
 };
 use network::p2p;
 
@@ -132,4 +132,42 @@ fn p2p_encoding_bitset_matches_legacy_layout() {
         }
         other => panic!("unexpected parsed variant: {other:?}"),
     }
+}
+
+#[test]
+fn p2p_task_offer_round_trips() {
+    let offer = TaskOffer {
+        offer_id: 10,
+        task_id: 20,
+        offerer_node_id: "node-a".to_string(),
+        created_at: 100,
+        expires_at: 160,
+        summary: "Publish a task receipt".to_string(),
+        capability_tags: vec!["codex".to_string(), "docs".to_string()],
+        reply_endpoints: vec!["192.168.1.129:9850".to_string()],
+        artifact_hint: Some("docs/TASK_OFFER_PROTOCOL.md".to_string()),
+    };
+    let frame = p2p::task_offer(offer.clone());
+
+    let (header, parsed) = p2p::parse_frame(&frame).expect("parse task offer");
+    assert_eq!(header.msg_type, MessageType::TaskOffer);
+    assert!(!header.is_response);
+    assert_eq!(parsed, Message::TaskOffer(offer));
+}
+
+#[test]
+fn p2p_task_accept_round_trips() {
+    let accept = TaskAccept {
+        offer_id: 10,
+        task_id: 20,
+        worker_node_id: "node-b".to_string(),
+        accepted_at: 130,
+        note: Some("available".to_string()),
+    };
+    let frame = p2p::task_accept(accept.clone());
+
+    let (header, parsed) = p2p::parse_frame(&frame).expect("parse task accept");
+    assert_eq!(header.msg_type, MessageType::TaskAccept);
+    assert!(header.is_response);
+    assert_eq!(parsed, Message::TaskAccept(accept));
 }
