@@ -24,3 +24,7 @@ target
 # Local LLM runtime artifacts
 /agentd.local.json
 /models/
+
+# Local task proof outputs
+/task-artifacts/
+/task-receipts/
