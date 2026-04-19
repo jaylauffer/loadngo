@@ -26,8 +26,10 @@ use std::{
 
 struct Args {
     bind_port: u16,
+    multicast_port: Option<u16>,
     submitter_node_id: String,
     reply_endpoints: Vec<String>,
+    request_targets: Vec<String>,
     summary: String,
     capability_tags: Vec<String>,
     requested_duration_secs: Option<u64>,
@@ -79,8 +81,10 @@ struct RewardClosureRecord {
 impl Args {
     fn parse() -> Result<Self> {
         let mut bind_port = 9850u16;
+        let mut multicast_port = None;
         let mut submitter_node_id = None;
         let mut reply_endpoints = Vec::new();
+        let mut request_targets = Vec::new();
         let mut summary = None;
         let mut capability_tags = Vec::new();
         let mut requested_duration_secs = None;
@@ -111,6 +115,14 @@ impl Args {
                         .parse()
                         .context("invalid --bind-port")?;
                 }
+                "--multicast-port" => {
+                    multicast_port = Some(
+                        args.next()
+                            .context("missing value for --multicast-port")?
+                            .parse()
+                            .context("invalid --multicast-port")?,
+                    );
+                }
                 "--submitter-node-id" => {
                     submitter_node_id = Some(
                         args.next()
@@ -120,6 +132,10 @@ impl Args {
                 "--reply-endpoint" => {
                     reply_endpoints
                         .push(args.next().context("missing value for --reply-endpoint")?);
+                }
+                "--request-target" => {
+                    request_targets
+                        .push(args.next().context("missing value for --request-target")?);
                 }
                 "--summary" => {
                     summary = Some(args.next().context("missing value for --summary")?);
@@ -231,9 +247,11 @@ impl Args {
 
         Ok(Self {
             bind_port,
+            multicast_port,
             submitter_node_id: submitter_node_id
                 .ok_or_else(|| anyhow!("--submitter-node-id is required"))?,
             reply_endpoints,
+            request_targets,
             summary: summary.ok_or_else(|| anyhow!("--summary is required"))?,
             capability_tags,
             requested_duration_secs,
@@ -267,7 +285,8 @@ fn main() -> Result<()> {
         bail!("at least one multicast target is required");
     }
 
-    let config = task_network_config(args.bind_port, &args.multicast_v6, &args.multicast_v4);
+    let mut config = task_network_config(args.bind_port, &args.multicast_v6, &args.multicast_v4);
+    config.multicast_target_port = args.multicast_port;
     let mut network = Network::with_config(config);
     network.init()?;
 
@@ -286,7 +305,11 @@ fn main() -> Result<()> {
         note: args.note.clone(),
     };
 
-    let sent = network.send_p2p_multicast_message(Message::TaskRequest(request.clone()), false)?;
+    let mut sent =
+        network.send_p2p_multicast_message(Message::TaskRequest(request.clone()), false)?;
+    for target in &args.request_targets {
+        sent += network.send_p2p_message(target, Message::TaskRequest(request.clone()), false)?;
+    }
     println!(
         "task_submitter_request_sent request_id={} submitter_node_id={} bytes={} expires_at={}",
         request.request_id, request.submitter_node_id, sent, request.expires_at
@@ -792,8 +815,10 @@ fn shell_command(script: &str) -> Command {
 fn print_usage() {
     eprintln!(
         "usage: cargo run -p network --bin task_submitter -- \
+         --multicast-port <port> \
          --submitter-node-id <node> \
          --reply-endpoint <addr:port> \
+         [--request-target <addr:port>] \
          --summary <text> \
          --verify-command <shell command> \
          --qcoin-target <host:port> \

@@ -82,6 +82,7 @@ pub struct Config {
     pub bind_addr: SocketAddr,
     pub extra_bind_addrs: Vec<SocketAddr>,
     pub multicast: Vec<MulticastConfig>,
+    pub multicast_target_port: Option<u16>,
     pub timeout: Duration,
     pub retries: usize,
 }
@@ -111,6 +112,7 @@ impl Config {
     }
 
     pub fn sync_targets(&self) -> Vec<SocketAddr> {
+        let target_port = self.multicast_target_port.unwrap_or(self.bind_addr.port());
         if self.multicast.is_empty() {
             return vec![self.bind_addr];
         }
@@ -119,14 +121,11 @@ impl Config {
             .iter()
             .map(|multicast| match *multicast {
                 MulticastConfig::V4 { group, .. } => {
-                    SocketAddr::V4(SocketAddrV4::new(group, self.bind_addr.port()))
+                    SocketAddr::V4(SocketAddrV4::new(group, target_port))
                 }
-                MulticastConfig::V6 { group, interface } => SocketAddr::V6(SocketAddrV6::new(
-                    group,
-                    self.bind_addr.port(),
-                    0,
-                    interface,
-                )),
+                MulticastConfig::V6 { group, interface } => {
+                    SocketAddr::V6(SocketAddrV6::new(group, target_port, 0, interface))
+                }
             })
             .collect()
     }
@@ -138,6 +137,7 @@ impl Default for Config {
             bind_addr: "0.0.0.0:0".parse().unwrap(),
             extra_bind_addrs: Vec::new(),
             multicast: Vec::new(),
+            multicast_target_port: None,
             timeout: Duration::from_millis(500),
             retries: 3,
         }
@@ -526,6 +526,9 @@ fn bind_socket(addr: SocketAddr) -> Result<UdpSocket> {
     let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
     if addr.is_ipv6() {
         socket.set_only_v6(true)?;
+        socket.set_multicast_loop_v6(true)?;
+    } else {
+        socket.set_multicast_loop_v4(true)?;
     }
     socket.set_nonblocking(true)?;
     socket.bind(&SockAddr::from(addr))?;

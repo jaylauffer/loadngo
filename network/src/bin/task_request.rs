@@ -160,6 +160,7 @@ fn main() -> Result<()> {
                     }),
             )
             .collect(),
+        multicast_target_port: None,
         timeout: Duration::from_millis(250),
         retries: 1,
     };
