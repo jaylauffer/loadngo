@@ -1,11 +1,14 @@
 # Worker-First Task Model
 
-Purpose: describe how a Codex-style agent should think about itself on the
+Purpose: describe how a capable worker node should think about itself on the
 `loadngo` network even though the wire protocol is submitter-driven.
+
+That worker may be a Codex-style agent, but it may also be a constrained
+machine with a bounded command surface.
 
 ## Core Rule
 
-The agent is primarily valuable as a worker.
+The worker is primarily valuable as a worker.
 
 That means:
 
@@ -16,13 +19,17 @@ That means:
 - it claims completion with `TaskResult`
 - it expects qcoin only after `TaskAck(accepted=true)`
 
-So "I have the loadngo task skill" means:
+For a Codex node, "I have the loadngo task skill" means:
 
 - I can discover work on the multicast plane
 - I can respond by unicast with a concrete offer
 - I can work to explicit success criteria
 - I can maintain status cadence and delivery discipline
 - I do not treat work as closed until the submitter acknowledges it
+
+For a constrained node such as `gretta`, the same lifecycle still applies even
+if the machine cannot host a Codex agent. The difference is only capability
+breadth, not protocol role.
 
 ## Relationship To The Submitter-Driven Wire
 
@@ -46,7 +53,8 @@ It just means the worker posture is:
 
 ## Worker Discipline
 
-The worker should not treat any of the following as rewardable completion:
+Any worker, including a non-Codex service node, should not treat any of the
+following as rewardable completion:
 
 - seeing a request
 - sending an offer
@@ -93,7 +101,8 @@ allowed to reissue the request or self-perform the work.
 ## Relationship To qcoin
 
 The worker earns qcoin by satisfying the submitter's criteria, not by merely
-participating in discovery traffic.
+participating in discovery traffic or by pretending that reasoning depth is the
+same thing as useful work.
 
 So the reward order is:
 

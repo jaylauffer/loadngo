@@ -25,7 +25,7 @@ Suggested nodes:
 - MacMini submitter on wired and radio IPv6
 - `agnes` worker on wired and radio IPv6
 - `dolores` worker on wired and radio IPv6
-- `gretta` worker on radio IPv6
+- `gretta` worker on radio IPv6, potentially as a constrained non-Codex worker
 
 Suggested multicast group:
 
@@ -169,3 +169,7 @@ The minimum meaningful field run is:
 
 That run is enough to prove that correlation, concurrency, timeout policy, and
 reward gating are coherent before automating the full lifecycle.
+
+For `gretta`, the assigned task should respect a Pi 3B+ capability ceiling and
+still be meaningful, for example a qcoin validator receipt, radio/multicast
+reachability receipt, or bounded repo/service diagnostic.

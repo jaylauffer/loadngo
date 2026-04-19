@@ -7,6 +7,18 @@ description: Use when the user wants Codex to request, assign, verify, or docume
 
 This skill is for the real `loadngo` lab workflow, not placeholder queue demos.
 
+Workers on this substrate do not need to be Codex agents.
+
+A worker may be:
+
+- a Codex agent host
+- a constrained scripted node
+- a validator or service node that can run a bounded command set
+
+So a Raspberry Pi such as `gretta` can still earn qcoin-backed credit if it can
+accept meaningful work, return a verifiable artifact, and satisfy the
+submitter's success criteria.
+
 The current task model is submitter-driven:
 
 1. `TaskRequest` multicast discovery
@@ -19,7 +31,7 @@ The current task model is submitter-driven:
 
 ## Use This Skill When
 
-- the user wants Codex to act as a `loadngo` worker or submitter
+- the user wants Codex to act as a `loadngo` submitter, or to coordinate one or more `loadngo` workers
 - the user wants real lab task sequences run across the MacMini, `agnes`, `dolores`, or `gretta`
 - the user wants `loadngo` task work turned into qcoin-backed proof
 - the user wants the `loadngo` task protocol or task binaries updated
@@ -90,7 +102,7 @@ Only claim qcoin-backed reward closure after durable inclusion is observed.
 
 ## Preferred Working Pattern
 
-1. Pick a meaningful task that fits the worker's actual machine role.
+1. Pick a meaningful task that fits the worker's actual machine role and capability ceiling.
 2. Run the request/offer/accept path on the `loadngo` task plane.
 3. Retrieve or inspect the resulting artifact directly.
 4. Check the artifact against the assigned success criteria.
@@ -105,6 +117,15 @@ Only claim qcoin-backed reward closure after durable inclusion is observed.
    - artifact path or hash
    - qcoin transaction id
    - inclusion evidence
+
+For constrained workers such as `gretta`, prefer tasks that produce crisp
+machine-verifiable outputs, for example:
+
+- repo-tip and branch-state receipts
+- qcoin node-info or tip receipts
+- service health and interface diagnostics
+- packet capture or multicast reachability receipts
+- bounded test or rollout confirmations
 
 ## Remote Hosts
 

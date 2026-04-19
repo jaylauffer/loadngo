@@ -33,6 +33,10 @@ The submitter owns task selection and timeout policy.
 Workers do not assume ownership just because they saw a request or sent an
 offer. Ownership begins only after a direct `TaskAccept`.
 
+Workers may be full Codex agents or narrower service nodes. The protocol should
+care about verifiable outputs and correlation, not about whether the worker can
+run an LLM locally.
+
 ## Correlation And Concurrency
 
 The protocol uses three identifiers to keep concurrent work straight:
@@ -109,6 +113,9 @@ Minimum useful fields:
 - optional `artifact_hint`
 
 This is where concurrent candidate workers respond directly to the submitter.
+
+A worker may answer from a constrained machine if it can still perform the
+requested task and return a direct verifiable result.
 
 ### `TaskAccept`
 
