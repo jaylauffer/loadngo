@@ -1,160 +1,262 @@
-# Task Offer Protocol
+# Task Coordination Protocol
 
-Purpose: define the first-pass `loadngo` task coordination contract for worker
-nodes operating over multicast discovery with unicast follow-up.
+Purpose: define the `loadngo` task coordination contract for submitters and
+workers operating over IPv6 multicast discovery with direct unicast follow-up.
 
-Status: this note describes a bootstrap sender-centric slice.
+Status: this is the current intended direction for `loadngo/dev`.
 
-It is not the intended steady-state worker-first coordination model for Codex
-agents. For that, see [WORKER_FIRST_TASK_MODEL.md](WORKER_FIRST_TASK_MODEL.md).
+It replaces the earlier "multicast the offer itself" bootstrap with a
+submitter-driven lifecycle:
 
-This note is intentionally narrow. It covers only:
+1. the submitter multicasts a `TaskRequest`
+2. candidate workers reply directly with `TaskOffer`
+3. the submitter selects one worker with `TaskAccept`
+4. the worker maintains direct `TaskStatus` updates
+5. the worker submits `TaskResult`
+6. the submitter closes the record with `TaskAck`
+7. qcoin reward happens only after a positive acknowledgement
 
-- offer advertisement
-- worker response
-- anti-amplification rules
-- immediate execution posture for worker nodes
+## Core Rules
 
-It does not define the full authority, acknowledgement, or qcoin reward
-contract. Those remain follow-on layers above this transport shape.
+`TaskRequest` is the only discovery-plane task message that should be multicast.
 
-## Core Rule
+Everything after discovery is unicast:
 
-`TaskOffer` is multicast advertisement.
+- `TaskOffer`
+- `TaskAccept`
+- `TaskStatus`
+- `TaskResult`
+- `TaskAck`
 
-It is not authoritative assignment.
+The submitter owns task selection and timeout policy.
 
-That means:
+Workers do not assume ownership just because they saw a request or sent an
+offer. Ownership begins only after a direct `TaskAccept`.
 
-- an offerer announces available work to reachable peers
-- worker nodes may respond directly to the offerer
-- only the offerer chooses which worker, if any, should execute the task
+## Correlation And Concurrency
+
+The protocol uses three identifiers to keep concurrent work straight:
+
+- `request_id`: one multicast request published by one submitter
+- `offer_id`: one worker's response to that request
+- `assignment_id`: the chosen execution path after the submitter selects a worker
+
+Required behavior:
+
+- every `TaskOffer` must carry the originating `request_id`
+- every `TaskAccept` must carry `request_id`, `offer_id`, and `assignment_id`
+- every later `TaskStatus`, `TaskResult`, and `TaskAck` must carry the same tuple
+- workers must emit at most one live `TaskOffer` per `request_id`
+- submitters must tolerate multiple concurrent offers for one `request_id`
+- submitters must deduplicate repeated offers by `offer_id`
+- only one `TaskAccept` should be considered authoritative for a given `assignment_id`
+
+This is what lets one submitter solicit multiple workers on the same multicast
+channel without losing correlation.
 
 ## Traffic Shape
 
-The first-pass flow is:
+The intended execution flow is:
 
-1. `TaskOffer` goes to multicast discovery targets
-2. `TaskAccept` goes back to the offerer via unicast
-3. `TaskConfirm` goes from the offerer to one chosen worker via unicast
-4. `WorkClaim` goes from the worker to the offerer or authority via unicast
-5. `AckResponse` goes back via unicast
+1. `TaskRequest` goes to the IPv6 multicast discovery group
+2. candidate workers reply directly to the submitter's reply endpoints with `TaskOffer`
+3. the submitter may exchange additional direct details before choosing a worker
+4. `TaskAccept` selects one worker and sets execution expectations
+5. the selected worker sends periodic `TaskStatus`
+6. the selected worker sends `TaskResult` when the success criteria are met
+7. the submitter validates the result and responds with `TaskAck`
+8. only after positive `TaskAck` should qcoin reward be minted or anchored
 
-Multicast is for discovery and lightweight offer visibility only.
+## Message Semantics
 
-All follow-up traffic is direct.
+### `TaskRequest`
 
-## Anti-Amplification Rule
+Multicast advertisement from the submitter.
 
-`TaskOffer` must drain, not amplify.
+Minimum useful fields:
 
-Required rules:
-
-- workers must never rebroadcast a received `TaskOffer`
-- workers must reply only to the offerer, never to multicast
-- workers must emit at most one `TaskAccept` per `offer_id`
-- offerers must deduplicate repeated accepts from the same worker
-- offerers must not acknowledge accepts by multicast
-- large payloads, artifacts, and result data must never be sent by multicast
-
-The intended behavior is:
-
-- one multicast offer
-- a bounded set of direct unicast responses
-- one direct assignment decision
-
-That keeps a busy subnet from turning one work announcement into packet fanout.
-
-## Offer Semantics
-
-A `TaskOffer` should carry only the minimum data needed for a worker to decide
-whether to respond:
-
-- `offer_id`
-- `task_id`
-- `offerer_node_id`
+- `request_id`
+- `submitter_node_id`
 - `created_at`
 - `expires_at`
 - `summary`
 - `capability_tags`
 - `reply_endpoints`
+- optional `requested_duration_secs`
+- optional `success_criteria`
+- optional `artifact_hint`
+- optional `note`
+
+This message should stay lightweight. It is for discovery and initial matching,
+not for shipping large artifacts.
+
+### `TaskOffer`
+
+Direct worker response to one `TaskRequest`.
+
+Minimum useful fields:
+
+- `offer_id`
+- `request_id`
+- `worker_node_id`
+- `created_at`
+- `expires_at`
+- `capability_tags`
+- `reply_endpoints`
+- optional `estimated_duration_secs`
+- optional `max_status_interval_secs`
+- optional `note`
 - optional `artifact_hint`
 
-It should not carry:
+This is where concurrent candidate workers respond directly to the submitter.
 
-- full artifacts
-- large embedded prompts
-- result payloads
-- qcoin reward material
+### `TaskAccept`
 
-If a worker needs more context, it should request it over direct follow-up or
-receive it in the later unicast assignment path.
+Direct submitter-to-worker selection and execution terms.
 
-## Worker Semantics
+Minimum useful fields:
 
-A worker node should treat a multicast offer as visibility, not ownership.
+- `assignment_id`
+- `request_id`
+- `offer_id`
+- `submitter_node_id`
+- `worker_node_id`
+- `accepted_at`
+- `status_check_interval_secs`
+- optional `expected_duration_secs`
+- optional `expected_delivery_by`
+- optional `submitter_reply_endpoint`
+- optional `success_criteria`
+- optional `artifact_hint`
+- optional `note`
 
-Worker behavior:
+This is the authority handoff. It defines the cadence and delivery threshold
+that the submitter will enforce.
 
-- inspect the offer once
-- decide whether it can perform the work
-- send one unicast `TaskAccept` if it is willing
-- wait for explicit confirmation before assuming ownership
+### `TaskStatus`
 
-If no confirmation arrives before the offer expiry, the worker should discard
-the pending interest state.
+Direct worker heartbeat or progress update.
 
-## Offerer Semantics
+Fields should include:
 
-The offerer is responsible for race closure.
+- `assignment_id`
+- `request_id`
+- `offer_id`
+- `worker_node_id`
+- `status_at`
+- `state`
+- optional `next_check_in_by`
+- optional `note`
+- optional `artifact_hint`
 
-Offerer behavior:
+### `TaskResult`
 
-- announce the offer by multicast
-- collect direct accepts during a bounded response window
-- choose one worker or self-execute
-- send direct confirmation to the selected worker
-- optionally send direct decline notices to others
+Direct worker submission that claims the work satisfies the assigned criteria.
 
-If no acceptable worker responds, the offerer may become the worker of record
-and execute locally.
+Fields should include:
 
-## Discovery And Transport
+- `assignment_id`
+- `request_id`
+- `offer_id`
+- `worker_node_id`
+- `submitted_at`
+- optional `artifact_hint`
+- optional `note`
 
-Preferred order:
+### `TaskAck`
 
-1. IPv6 multicast discovery
-2. IPv4 multicast discovery when available
-3. direct unicast follow-up over the most recently working path
+Direct submitter closure decision after inspecting the result.
 
-The transport rule remains:
+Fields should include:
 
-- multicast for advertisement only
-- unicast for negotiation, progress, claims, and acknowledgements
+- `assignment_id`
+- `request_id`
+- `offer_id`
+- `submitter_node_id`
+- `acked_at`
+- `accepted`
+- optional `qcoin_tx_hint`
+- optional `note`
+
+If `accepted` is false, the task remains unclosed from the worker's perspective
+and may need resubmission, reassignment, or local execution by the submitter.
+
+## Negotiation
+
+The request does not have to carry every execution detail up front.
+
+The intended pattern is:
+
+- the submitter publishes a bounded `TaskRequest`
+- workers reply with direct `TaskOffer`
+- the submitter may exchange more direct details before choosing a worker
+- the chosen terms are fixed in `TaskAccept`
+
+The values that matter operationally are:
+
+- status check interval
+- expected delivery duration
+- expected delivery deadline
+- success criteria
+- artifact references or proof expectations
+
+These belong in the selected assignment path, not in unauthenticated multicast.
+
+## Timeout And Recovery
+
+The submitter is responsible for stale-work handling.
+
+At minimum:
+
+- if no acceptable offer arrives before request expiry, the submitter may reissue the request or self-execute
+- if the worker misses the negotiated status interval, the submitter may reissue the request or self-execute
+- if the expected delivery threshold is exceeded, the submitter may reissue the request or self-execute
+- if a result fails the success criteria, the submitter may reject it with `TaskAck(accepted=false)` and either reopen or self-perform the work
+
+The important point is that timeout policy is attached to the assignment and the
+submitter's success criteria, not to multicast visibility alone.
+
+## Anti-Amplification Rules
+
+Required rules:
+
+- workers must never rebroadcast a received `TaskRequest`
+- workers must reply only to the submitter's direct endpoints
+- submitters must never multicast selection, status, result, or acknowledgement traffic
+- large prompts, artifacts, and results must stay off the multicast plane
+- concurrent offers must remain bounded by per-request response windows
+
+The network goal is:
+
+- one multicast request
+- a bounded set of direct offers
+- one direct assignment
+- periodic direct status
+- one direct result
+- one direct acknowledgement
 
 ## Relationship To qcoin
 
-`TaskOffer` does not mint qcoin.
+`loadngo` coordinates the work.
 
-At most, completed and acknowledged work may later become eligible for a qcoin
-reward or anchor flow.
+`qcoin` rewards acknowledged completion.
 
-That reward decision belongs to a later authority layer.
+That means:
 
-So the transport stack should remain cleanly separated:
+- no qcoin award on `TaskRequest`
+- no qcoin award on `TaskOffer`
+- no qcoin award on `TaskAccept`
+- no qcoin award on `TaskStatus`
+- no qcoin award on speculative completion alone
+- qcoin award only after the submitter confirms that the worker met the success criteria
 
-- `loadngo` discovers peers and carries task traffic
-- authority decides whether work is complete and acknowledged
-- qcoin only receives selected post-acknowledgement reward or proof material
+`TaskAck(accepted=true)` is the reward gate.
 
-## Immediate First Pass
+The actual qcoin mint or anchor may happen immediately after that acknowledgement
+or through a downstream authority path, but it must remain downstream of the
+positive acknowledgement.
 
-The first useful implementation slice is:
+## Execution Test Plan
 
-1. encode `TaskOffer` and `TaskAccept`
-2. send offers by multicast
-3. receive accepts by unicast
-4. self-execute on timeout when no peer is chosen
-
-That is enough to exercise real worker-node behavior without pretending the
-full authority and reward layers already exist.
+The intended lab validation matrix is documented in
+[TASK_EXECUTION_TEST_PLAN.md](TASK_EXECUTION_TEST_PLAN.md).

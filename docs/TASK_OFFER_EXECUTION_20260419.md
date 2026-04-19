@@ -6,6 +6,11 @@ Purpose: record one real `TaskOffer` execution attempt on the `loadngo`
  network, including multicast advertisement, worker response outcome,
  self-execution fallback, and qcoin reward transaction state.
 
+Status: historical bootstrap note. It exercised the earlier multicast-offer
+slice that has since been replaced by the submitter-driven
+`TaskRequest -> TaskOffer -> TaskAccept` model in
+[TASK_OFFER_PROTOCOL.md](TASK_OFFER_PROTOCOL.md).
+
 ## Offer Summary
 
 - `offer_id`: `13860972921647677382`

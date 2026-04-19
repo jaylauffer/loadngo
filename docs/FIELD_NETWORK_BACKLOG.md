@@ -6,7 +6,7 @@ This document turns the current `loadngo` architecture into an implementation
 backlog for an offline-first field network that can operate under weak,
 intermittent, or absent connectivity.
 
-Task-plane coordination details for multicast offer advertisement and direct
+Task-plane coordination details for multicast request discovery and direct
 worker replies are documented separately in
 [TASK_OFFER_PROTOCOL.md](TASK_OFFER_PROTOCOL.md).
 

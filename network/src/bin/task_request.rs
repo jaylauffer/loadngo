@@ -1,8 +1,8 @@
 use anyhow::{anyhow, bail, Context, Result};
 use data::{
+    generate_id,
     model_utils::now_timestamp,
     p2pmsg::{Message, TaskOffer, TaskRequest},
-    generate_id,
 };
 use network::{Config, MulticastConfig, Network};
 use std::{
@@ -15,9 +15,13 @@ use std::{
 
 struct Args {
     bind_port: u16,
-    worker_node_id: String,
+    submitter_node_id: String,
     reply_endpoints: Vec<String>,
+    summary: String,
     capability_tags: Vec<String>,
+    requested_duration_secs: Option<u64>,
+    success_criteria: Option<String>,
+    artifact_hint: Option<String>,
     note: Option<String>,
     timeout_seconds: u64,
     multicast_v6: Vec<(Ipv6Addr, u32)>,
@@ -27,9 +31,13 @@ struct Args {
 impl Args {
     fn parse() -> Result<Self> {
         let mut bind_port = 9850u16;
-        let mut worker_node_id = None;
+        let mut submitter_node_id = None;
         let mut reply_endpoints = Vec::new();
+        let mut summary = None;
         let mut capability_tags = Vec::new();
+        let mut requested_duration_secs = None;
+        let mut success_criteria = None;
+        let mut artifact_hint = None;
         let mut note = None;
         let mut timeout_seconds = 5u64;
         let mut multicast_v6 = Vec::new();
@@ -45,20 +53,38 @@ impl Args {
                         .parse()
                         .context("invalid --bind-port")?;
                 }
-                "--worker-node-id" => {
-                    worker_node_id = Some(
+                "--submitter-node-id" => {
+                    submitter_node_id = Some(
                         args.next()
-                            .context("missing value for --worker-node-id")?,
+                            .context("missing value for --submitter-node-id")?,
                     );
                 }
                 "--reply-endpoint" => {
-                    reply_endpoints.push(
-                        args.next()
-                            .context("missing value for --reply-endpoint")?,
-                    );
+                    reply_endpoints
+                        .push(args.next().context("missing value for --reply-endpoint")?);
+                }
+                "--summary" => {
+                    summary = Some(args.next().context("missing value for --summary")?);
                 }
                 "--capability" => {
                     capability_tags.push(args.next().context("missing value for --capability")?);
+                }
+                "--requested-duration-seconds" => {
+                    requested_duration_secs = Some(
+                        args.next()
+                            .context("missing value for --requested-duration-seconds")?
+                            .parse()
+                            .context("invalid --requested-duration-seconds")?,
+                    );
+                }
+                "--success-criteria" => {
+                    success_criteria = Some(
+                        args.next()
+                            .context("missing value for --success-criteria")?,
+                    );
+                }
+                "--artifact-hint" => {
+                    artifact_hint = Some(args.next().context("missing value for --artifact-hint")?);
                 }
                 "--note" => {
                     note = Some(args.next().context("missing value for --note")?);
@@ -90,10 +116,14 @@ impl Args {
 
         Ok(Self {
             bind_port,
-            worker_node_id: worker_node_id
-                .ok_or_else(|| anyhow!("--worker-node-id is required"))?,
+            submitter_node_id: submitter_node_id
+                .ok_or_else(|| anyhow!("--submitter-node-id is required"))?,
             reply_endpoints,
+            summary: summary.ok_or_else(|| anyhow!("--summary is required"))?,
             capability_tags,
+            requested_duration_secs,
+            success_criteria,
+            artifact_hint,
             note,
             timeout_seconds,
             multicast_v6,
@@ -121,10 +151,14 @@ fn main() -> Result<()> {
                 group: *group,
                 interface: *interface,
             })
-            .chain(args.multicast_v4.iter().map(|(group, interface)| MulticastConfig::V4 {
-                group: *group,
-                interface: *interface,
-            }))
+            .chain(
+                args.multicast_v4
+                    .iter()
+                    .map(|(group, interface)| MulticastConfig::V4 {
+                        group: *group,
+                        interface: *interface,
+                    }),
+            )
             .collect(),
         timeout: Duration::from_millis(250),
         retries: 1,
@@ -135,18 +169,22 @@ fn main() -> Result<()> {
     let created_at = now_timestamp();
     let request = TaskRequest {
         request_id: generate_id(),
-        worker_node_id: args.worker_node_id,
+        submitter_node_id: args.submitter_node_id,
         created_at,
         expires_at: created_at.saturating_add(args.timeout_seconds),
+        summary: args.summary,
         capability_tags: args.capability_tags,
         reply_endpoints: args.reply_endpoints,
+        requested_duration_secs: args.requested_duration_secs,
+        success_criteria: args.success_criteria,
+        artifact_hint: args.artifact_hint,
         note: args.note,
     };
 
     let sent = network.send_p2p_multicast_message(Message::TaskRequest(request.clone()), false)?;
     println!(
-        "task_request_sent request_id={} worker_node_id={} bytes={} expires_at={}",
-        request.request_id, request.worker_node_id, sent, request.expires_at
+        "task_request_sent request_id={} submitter_node_id={} bytes={} expires_at={}",
+        request.request_id, request.submitter_node_id, sent, request.expires_at
     );
 
     let mut seen_offers = HashSet::new();
@@ -186,23 +224,30 @@ fn handle_offer(
     source: SocketAddr,
     offer: TaskOffer,
 ) {
+    if offer.request_id != request.request_id {
+        return;
+    }
+
     if !seen_offers.insert(offer.offer_id) {
         return;
     }
 
-    let matches_request = offer
+    let offer_capability_tags = &offer.capability_tags;
+    let matches_request = request
         .capability_tags
         .iter()
-        .all(|tag| request.capability_tags.contains(tag));
+        .all(|tag| offer_capability_tags.contains(tag));
 
     println!(
-        "task_request_offer request_id={} offer_id={} task_id={} source={} matches_request={} summary={}",
+        "task_request_offer request_id={} offer_id={} source={} matches_request={} worker_node_id={} estimated_duration_secs={} max_status_interval_secs={} note={}",
         request.request_id,
         offer.offer_id,
-        offer.task_id,
         source,
         matches_request,
-        offer.summary
+        offer.worker_node_id,
+        offer.estimated_duration_secs.unwrap_or_default(),
+        offer.max_status_interval_secs.unwrap_or_default(),
+        offer.note.unwrap_or_default()
     );
 }
 
@@ -229,10 +274,12 @@ fn parse_multicast_v4(value: &str) -> Result<(Ipv4Addr, Ipv4Addr)> {
 fn print_usage() {
     eprintln!(
         "usage: cargo run -p network --bin task_request -- \
-         --worker-node-id <node> \
+         --submitter-node-id <node> \
          --reply-endpoint <addr:port> \
+         --summary <text> \
          --multicast-v6 <group%iface> [--multicast-v4 <group@interface>] \
-         [--bind-port <port>] [--capability <tag>] [--note <text>] \
+         [--bind-port <port>] [--capability <tag>] [--requested-duration-seconds <n>] \
+         [--success-criteria <text>] [--artifact-hint <path>] [--note <text>] \
          [--timeout-seconds <n>]"
     );
 }

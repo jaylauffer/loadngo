@@ -1,111 +1,111 @@
 # Worker-First Task Model
 
-Purpose: define the intended `loadngo` coordination stance for Codex-style
-agents operating as workers on the network plane.
-
-This note supersedes any assumption that the local agent is primarily the
-offerer or dispatcher.
+Purpose: describe how a Codex-style agent should think about itself on the
+`loadngo` network even though the wire protocol is submitter-driven.
 
 ## Core Rule
 
-The agent is the worker.
+The agent is primarily valuable as a worker.
 
-It uses `loadngo` to discover or request work, executes that work to explicit
-success criteria, and only then becomes eligible for `qcoin` reward minting or
-reward anchoring.
+That means:
 
-So the intended control flow is:
+- it listens for `TaskRequest`
+- it offers itself directly to submitters when it can satisfy the request
+- it executes only after it is selected with `TaskAccept`
+- it maintains status on the negotiated cadence
+- it claims completion with `TaskResult`
+- it expects qcoin only after `TaskAck(accepted=true)`
 
-1. worker asks for work or advertises availability
-2. authority or broker responds with concrete work
-3. worker executes to stated success criteria
-4. authority validates completion
-5. reward logic runs only after validation
+So "I have the loadngo task skill" means:
 
-## Transport Shape
+- I can discover work on the multicast plane
+- I can respond by unicast with a concrete offer
+- I can work to explicit success criteria
+- I can maintain status cadence and delivery discipline
+- I do not treat work as closed until the submitter acknowledges it
 
-Preferred flow:
+## Relationship To The Submitter-Driven Wire
 
-1. `TaskRequest` or `WorkerHello` goes out over multicast discovery
-2. `TaskOffer` or `TaskAssignment` comes back by unicast
-3. `TaskAccept` goes back by unicast
-4. progress, artifact references, and `WorkClaim` stay on unicast
-5. `AckResponse` closes the work record
-6. `qcoin` reward or proof material is produced only after acknowledgement
+The wire is intentionally submitter-driven:
 
-Multicast should carry only lightweight discovery and availability signals.
+1. submitter multicasts `TaskRequest`
+2. worker replies with `TaskOffer`
+3. submitter selects with `TaskAccept`
+4. worker reports `TaskStatus`
+5. worker submits `TaskResult`
+6. submitter closes with `TaskAck`
 
-Unicast should carry:
+This does not conflict with a worker-first mental model.
 
-- assignment
+It just means the worker posture is:
+
+- discover incoming requests
+- evaluate whether the request matches local capabilities
+- offer only when the worker can plausibly satisfy the success criteria
+- respect the submitter's status and delivery requirements once selected
+
+## Worker Discipline
+
+The worker should not treat any of the following as rewardable completion:
+
+- seeing a request
+- sending an offer
+- being selected
+- sending progress
+- sending an unvalidated result
+
+For a worker, rewardable completion means:
+
+- the worker received a direct `TaskAccept`
+- the worker met the assigned success criteria
+- the submitter explicitly acknowledged that result
+
+Only then should downstream qcoin reward be minted or anchored.
+
+## Why Correlation Matters
+
+Workers may see many concurrent requests on the same multicast channel.
+
+The worker should treat the identifiers as:
+
+- `request_id`: one submitter asking for help
+- `offer_id`: this worker's answer to that request
+- `assignment_id`: the selected execution path after acceptance
+
+That is what keeps the worker from confusing one submitter's task with another
+or from mixing multiple candidate offers into one execution record.
+
+## Timeout Discipline
+
+Once selected, the worker must treat these values as operational commitments:
+
+- status check interval
+- expected duration
+- expected delivery threshold
 - success criteria
-- artifact references
-- progress
-- completion claim
-- acknowledgement
 
-## Success Criteria
+If the worker cannot meet them, it should say so in `TaskStatus` before the
+submitter has to infer a silent failure.
 
-A worker should not treat "task performed" as sufficient.
-
-A task is complete only when:
-
-- the assignment included explicit success criteria
-- the worker returned the required artifact references or proof material
-- the authority acknowledged that the criteria were satisfied
-
-That acknowledgement is the gate for downstream reward handling.
+If the worker goes silent or overruns the delivery threshold, the submitter is
+allowed to reissue the request or self-perform the work.
 
 ## Relationship To qcoin
 
-`qcoin` should not mint on:
+The worker earns qcoin by satisfying the submitter's criteria, not by merely
+participating in discovery traffic.
 
-- worker discovery
-- availability advertisement
-- task request
-- task acceptance
-- speculative completion
+So the reward order is:
 
-`qcoin` should only mint or anchor reward material after:
+1. worker performs task
+2. worker submits result
+3. submitter verifies success criteria
+4. submitter acknowledges completion
+5. qcoin reward is minted or anchored
 
-- work completion was claimed
-- the claim was checked against the assigned success criteria
-- an acknowledgement closed the task
+That keeps reward downstream of accountable completion.
 
-That keeps the reward plane downstream of the coordination plane.
+## See Also
 
-## Relationship To The Existing TaskOffer Note
-
-[TASK_OFFER_PROTOCOL.md](TASK_OFFER_PROTOCOL.md) is still useful as a bootstrap
-description for multicast advertisement with unicast follow-up.
-
-But it is sender-centric.
-
-It is not the intended steady-state mental model for Codex workers.
-
-The intended mental model is worker-first:
-
-- workers seek or request work
-- authorities assign work
-- rewards follow acknowledgement
-
-## Immediate Implementation Order
-
-The correct implementation order is:
-
-1. add a worker-originated discovery/request message
-2. add a long-running worker process that advertises capabilities and reply
-   endpoints on the local network plane
-3. let authorities respond by unicast with concrete assignments
-4. define acknowledgement and reward-closing messages
-5. bridge acknowledged work into `qcoin`
-
-## Practical Working Assumption
-
-For agent behavior in this repository:
-
-- "I have the loadngo task skill" means:
-- I am a worker on the `loadngo` substrate
-- I should seek or request work through that substrate
-- I should complete work to explicit success criteria
-- I should expect reward logic only after acknowledgement
+- [TASK_OFFER_PROTOCOL.md](TASK_OFFER_PROTOCOL.md)
+- [TASK_EXECUTION_TEST_PLAN.md](TASK_EXECUTION_TEST_PLAN.md)

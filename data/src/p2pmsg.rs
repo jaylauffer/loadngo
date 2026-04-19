@@ -27,6 +27,9 @@ pub enum MessageType {
     TaskOffer,
     TaskAccept,
     TaskRequest,
+    TaskStatus,
+    TaskResult,
+    TaskAck,
     MessageCount,
 }
 
@@ -82,7 +85,10 @@ impl Header {
             16 => MessageType::TaskOffer,
             17 => MessageType::TaskAccept,
             18 => MessageType::TaskRequest,
-            19 => MessageType::MessageCount,
+            19 => MessageType::TaskStatus,
+            20 => MessageType::TaskResult,
+            21 => MessageType::TaskAck,
+            22 => MessageType::MessageCount,
             _ => return None,
         };
         let is_response = u32::from_le_bytes(buf[8..12].try_into().ok()?) != 0;
@@ -176,33 +182,83 @@ pub enum RequestContent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskOffer {
     pub offer_id: u64,
-    pub task_id: u64,
-    pub offerer_node_id: String,
-    pub created_at: u64,
-    pub expires_at: u64,
-    pub summary: String,
-    pub capability_tags: Vec<String>,
-    pub reply_endpoints: Vec<String>,
-    pub artifact_hint: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TaskAccept {
-    pub offer_id: u64,
-    pub task_id: u64,
-    pub worker_node_id: String,
-    pub accepted_at: u64,
-    pub note: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TaskRequest {
     pub request_id: u64,
     pub worker_node_id: String,
     pub created_at: u64,
     pub expires_at: u64,
     pub capability_tags: Vec<String>,
     pub reply_endpoints: Vec<String>,
+    pub estimated_duration_secs: Option<u64>,
+    pub max_status_interval_secs: Option<u64>,
+    pub note: Option<String>,
+    pub artifact_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskAccept {
+    pub assignment_id: u64,
+    pub request_id: u64,
+    pub offer_id: u64,
+    pub submitter_node_id: String,
+    pub worker_node_id: String,
+    pub accepted_at: u64,
+    pub status_check_interval_secs: u64,
+    pub expected_duration_secs: Option<u64>,
+    pub expected_delivery_by: Option<u64>,
+    pub submitter_reply_endpoint: Option<String>,
+    pub success_criteria: Option<String>,
+    pub artifact_hint: Option<String>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskRequest {
+    pub request_id: u64,
+    pub submitter_node_id: String,
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub summary: String,
+    pub capability_tags: Vec<String>,
+    pub reply_endpoints: Vec<String>,
+    pub requested_duration_secs: Option<u64>,
+    pub success_criteria: Option<String>,
+    pub artifact_hint: Option<String>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskStatus {
+    pub assignment_id: u64,
+    pub request_id: u64,
+    pub offer_id: u64,
+    pub worker_node_id: String,
+    pub status_at: u64,
+    pub state: String,
+    pub next_check_in_by: Option<u64>,
+    pub note: Option<String>,
+    pub artifact_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskResult {
+    pub assignment_id: u64,
+    pub request_id: u64,
+    pub offer_id: u64,
+    pub worker_node_id: String,
+    pub submitted_at: u64,
+    pub artifact_hint: Option<String>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskAck {
+    pub assignment_id: u64,
+    pub request_id: u64,
+    pub offer_id: u64,
+    pub submitter_node_id: String,
+    pub acked_at: u64,
+    pub accepted: bool,
+    pub qcoin_tx_hint: Option<String>,
     pub note: Option<String>,
 }
 
@@ -227,6 +283,9 @@ pub enum Message {
     TaskOffer(TaskOffer),
     TaskAccept(TaskAccept),
     TaskRequest(TaskRequest),
+    TaskStatus(TaskStatus),
+    TaskResult(TaskResult),
+    TaskAck(TaskAck),
 }
 
 impl Message {
@@ -251,6 +310,9 @@ impl Message {
             Message::TaskOffer(_) => MessageType::TaskOffer,
             Message::TaskAccept(_) => MessageType::TaskAccept,
             Message::TaskRequest(_) => MessageType::TaskRequest,
+            Message::TaskStatus(_) => MessageType::TaskStatus,
+            Message::TaskResult(_) => MessageType::TaskResult,
+            Message::TaskAck(_) => MessageType::TaskAck,
         }
     }
 
@@ -341,6 +403,15 @@ impl Message {
             }
             Message::TaskRequest(request) => {
                 serde_json::to_vec(request).expect("task request serialization should succeed")
+            }
+            Message::TaskStatus(status) => {
+                serde_json::to_vec(status).expect("task status serialization should succeed")
+            }
+            Message::TaskResult(result) => {
+                serde_json::to_vec(result).expect("task result serialization should succeed")
+            }
+            Message::TaskAck(ack) => {
+                serde_json::to_vec(ack).expect("task ack serialization should succeed")
             }
         };
         let header = Header::new(self.message_type(), is_response, payload.len() as u32);
@@ -497,15 +568,12 @@ impl Message {
                 Message::TransferFileMissed(FileMissed { time, seq })
             }
             MessageType::DeployComplete => Message::DeployComplete(body.to_vec()),
-            MessageType::TaskOffer => {
-                Message::TaskOffer(serde_json::from_slice(body).ok()?)
-            }
-            MessageType::TaskAccept => {
-                Message::TaskAccept(serde_json::from_slice(body).ok()?)
-            }
-            MessageType::TaskRequest => {
-                Message::TaskRequest(serde_json::from_slice(body).ok()?)
-            }
+            MessageType::TaskOffer => Message::TaskOffer(serde_json::from_slice(body).ok()?),
+            MessageType::TaskAccept => Message::TaskAccept(serde_json::from_slice(body).ok()?),
+            MessageType::TaskRequest => Message::TaskRequest(serde_json::from_slice(body).ok()?),
+            MessageType::TaskStatus => Message::TaskStatus(serde_json::from_slice(body).ok()?),
+            MessageType::TaskResult => Message::TaskResult(serde_json::from_slice(body).ok()?),
+            MessageType::TaskAck => Message::TaskAck(serde_json::from_slice(body).ok()?),
             MessageType::MessageCount => return None,
         };
         Some((header, message))
@@ -518,19 +586,21 @@ fn parse_hash(body: &[u8]) -> Option<CasHash> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Message, TaskAccept, TaskOffer, TaskRequest};
+    use super::{Message, TaskAccept, TaskAck, TaskOffer, TaskRequest, TaskResult, TaskStatus};
 
     #[test]
     fn task_offer_round_trips() {
         let offer = TaskOffer {
             offer_id: 1,
-            task_id: 2,
-            offerer_node_id: "worker-a".to_string(),
+            request_id: 2,
+            worker_node_id: "worker-a".to_string(),
             created_at: 100,
             expires_at: 140,
-            summary: "Drain multicast offer without amplification".to_string(),
             capability_tags: vec!["codex".to_string(), "doc".to_string()],
             reply_endpoints: vec!["192.168.1.129:9850".to_string()],
+            estimated_duration_secs: Some(600),
+            max_status_interval_secs: Some(60),
+            note: Some("can take this on the wired side".to_string()),
             artifact_hint: Some("docs/TASK_OFFER_PROTOCOL.md".to_string()),
         };
 
@@ -543,14 +613,22 @@ mod tests {
     #[test]
     fn task_accept_round_trips() {
         let accept = TaskAccept {
+            assignment_id: 9,
+            request_id: 10,
             offer_id: 10,
-            task_id: 20,
+            submitter_node_id: "submitter-a".to_string(),
             worker_node_id: "worker-b".to_string(),
             accepted_at: 200,
-            note: Some("I can take this".to_string()),
+            status_check_interval_secs: 30,
+            expected_duration_secs: Some(900),
+            expected_delivery_by: Some(1100),
+            submitter_reply_endpoint: Some("[fd10:10:10::2]:9850".to_string()),
+            success_criteria: Some("commit pushed and tests green".to_string()),
+            artifact_hint: Some("docs/TASK_EXECUTION_TEST_PLAN.md".to_string()),
+            note: Some("selected for execution".to_string()),
         };
 
-        let bytes = Message::TaskAccept(accept.clone()).to_bytes(true);
+        let bytes = Message::TaskAccept(accept.clone()).to_bytes(false);
         let (_, decoded) = Message::from_bytes(&bytes).expect("task accept frame should parse");
 
         assert_eq!(decoded, Message::TaskAccept(accept));
@@ -560,17 +638,78 @@ mod tests {
     fn task_request_round_trips() {
         let request = TaskRequest {
             request_id: 99,
-            worker_node_id: "worker-b".to_string(),
+            submitter_node_id: "submitter-a".to_string(),
             created_at: 300,
             expires_at: 360,
+            summary: "Review a patch and return acceptance criteria evidence".to_string(),
             capability_tags: vec!["codex".to_string(), "loadngo-task".to_string()],
             reply_endpoints: vec!["10.10.10.6:9850".to_string()],
-            note: Some("ready for work".to_string()),
+            requested_duration_secs: Some(1200),
+            success_criteria: Some("review notes posted with file references".to_string()),
+            artifact_hint: Some("docs/TASK_OFFER_PROTOCOL.md".to_string()),
+            note: Some("prefer the wired lab path".to_string()),
         };
 
         let bytes = Message::TaskRequest(request.clone()).to_bytes(false);
         let (_, decoded) = Message::from_bytes(&bytes).expect("task request frame should parse");
 
         assert_eq!(decoded, Message::TaskRequest(request));
+    }
+
+    #[test]
+    fn task_status_round_trips() {
+        let status = TaskStatus {
+            assignment_id: 500,
+            request_id: 99,
+            offer_id: 77,
+            worker_node_id: "worker-b".to_string(),
+            status_at: 350,
+            state: "in-progress".to_string(),
+            next_check_in_by: Some(380),
+            note: Some("drafting notes now".to_string()),
+            artifact_hint: None,
+        };
+
+        let bytes = Message::TaskStatus(status.clone()).to_bytes(true);
+        let (_, decoded) = Message::from_bytes(&bytes).expect("task status frame should parse");
+
+        assert_eq!(decoded, Message::TaskStatus(status));
+    }
+
+    #[test]
+    fn task_result_round_trips() {
+        let result = TaskResult {
+            assignment_id: 500,
+            request_id: 99,
+            offer_id: 77,
+            worker_node_id: "worker-b".to_string(),
+            submitted_at: 400,
+            artifact_hint: Some("docs/TASK_EXECUTION_TEST_PLAN.md".to_string()),
+            note: Some("all success criteria addressed".to_string()),
+        };
+
+        let bytes = Message::TaskResult(result.clone()).to_bytes(true);
+        let (_, decoded) = Message::from_bytes(&bytes).expect("task result frame should parse");
+
+        assert_eq!(decoded, Message::TaskResult(result));
+    }
+
+    #[test]
+    fn task_ack_round_trips() {
+        let ack = TaskAck {
+            assignment_id: 500,
+            request_id: 99,
+            offer_id: 77,
+            submitter_node_id: "submitter-a".to_string(),
+            acked_at: 420,
+            accepted: true,
+            qcoin_tx_hint: Some("qcoin:tx:abc123".to_string()),
+            note: Some("success criteria met and reward issued".to_string()),
+        };
+
+        let bytes = Message::TaskAck(ack.clone()).to_bytes(true);
+        let (_, decoded) = Message::from_bytes(&bytes).expect("task ack frame should parse");
+
+        assert_eq!(decoded, Message::TaskAck(ack));
     }
 }
