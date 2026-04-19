@@ -57,3 +57,4 @@ cargo run -p host-mac
 
 ## Codex skill
 - [`skills/loadngo-task/SKILL.md`](skills/loadngo-task/SKILL.md): repo-owned Codex skill for meaningful `loadngo` task work and qcoin-backed reward closure.
+- [`skills/loadngo-worker/SKILL.md`](skills/loadngo-worker/SKILL.md): repo-owned Codex skill for active worker/listener posture, including capability, time, and energy-based offer discipline.

@@ -44,6 +44,10 @@ these must also be true:
 - a local worker process such as `task_worker` is running on that machine
 - a future always-on task bridge exists on that machine
 
+The recommended activation skill for that role is:
+
+- [`../loadngo-worker/SKILL.md`](../loadngo-worker/SKILL.md)
+
 So "the agent has the skill" and "the agent is currently listening for work"
 are different states.
 

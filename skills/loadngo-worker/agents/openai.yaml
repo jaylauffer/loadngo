@@ -1,0 +1,7 @@
+interface:
+  display_name: "Loadngo Worker"
+  short_description: "Enter active worker posture for meaningful loadngo tasks"
+  default_prompt: "Use $loadngo-worker to decide whether this machine should listen for loadngo task requests, offer for suitable work, and stay accountable until qcoin-backed closure."
+
+policy:
+  allow_implicit_invocation: true

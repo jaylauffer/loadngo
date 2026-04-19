@@ -47,6 +47,11 @@ There was also a second gap:
 
 That activation step must be explicit.
 
+For current repo-owned skills, the intended split is:
+
+- `loadngo-task`: protocol and reward lifecycle knowledge
+- `loadngo-worker`: active listener/worker posture plus local offer policy
+
 ## Current runtime shape
 
 The current runtime adds the minimum submitter and worker roles needed for

@@ -29,6 +29,12 @@ Important activation point:
 So "has the skill" and "is currently available on the task plane" are not the
 same thing.
 
+The clean repo-owned split is now:
+
+- `loadngo-task` for the general task economy
+- `loadngo-worker` for explicit worker/listener activation and local offer
+  policy
+
 For a Codex node, "I have the loadngo task skill" means:
 
 - I can discover work on the multicast plane
@@ -45,6 +51,13 @@ But for a Codex node, "I have the skill" does **not** mean:
 
 If the local user wants that node to earn qcoin through task work, they need to
 explicitly activate the worker posture.
+
+That activation should include local policy questions such as:
+
+- capability ceiling
+- current time budget
+- current energy budget
+- current machine/network suitability
 
 For a constrained node such as `gretta`, the same lifecycle still applies even
 if the machine cannot host a Codex agent. The difference is only capability
