@@ -29,6 +29,7 @@ struct Args {
     execute_command: String,
     result_note: Option<String>,
     listen_seconds: u64,
+    serve_forever: bool,
     ack_timeout_seconds: u64,
     multicast_v6: Vec<(Ipv6Addr, u32)>,
     multicast_v4: Vec<(Ipv4Addr, Ipv4Addr)>,
@@ -53,6 +54,7 @@ impl Args {
         let mut execute_command = None;
         let mut result_note = None;
         let mut listen_seconds = 300u64;
+        let mut serve_forever = false;
         let mut ack_timeout_seconds = 90u64;
         let mut multicast_v6 = Vec::new();
         let mut multicast_v4 = Vec::new();
@@ -114,6 +116,9 @@ impl Args {
                         .parse()
                         .context("invalid --listen-seconds")?;
                 }
+                "--serve-forever" => {
+                    serve_forever = true;
+                }
                 "--ack-timeout-seconds" => {
                     ack_timeout_seconds = args
                         .next()
@@ -151,6 +156,7 @@ impl Args {
                 .ok_or_else(|| anyhow!("--execute-command is required"))?,
             result_note,
             listen_seconds,
+            serve_forever,
             ack_timeout_seconds,
             multicast_v6,
             multicast_v4,
@@ -173,42 +179,75 @@ fn main() -> Result<()> {
 
     let mut responded_requests = HashSet::new();
     let mut offers = HashMap::<u64, OfferedRequest>::new();
-    let deadline = Instant::now() + Duration::from_secs(args.listen_seconds);
-    while Instant::now() < deadline {
+    let listen_window = listen_window_duration(args.listen_seconds);
+    loop {
+        let deadline = Instant::now() + listen_window;
+        let mut handled_assignment = false;
         let mut captured = None;
-        if network.recv_and_dispatch_p2p(&mut |source, _header, message| {
-            captured = Some((source, message));
-        })? {
-            match captured {
-                Some((source, Message::TaskRequest(request))) => {
-                    if let Some(offered) =
-                        handle_request(&network, &args, &mut responded_requests, source, request)?
-                    {
-                        offers.insert(offered.request.request_id, offered);
-                    }
-                }
-                Some((source, Message::TaskAccept(accept))) => {
-                    if let Some(offered) = offers.get(&accept.request_id).cloned() {
-                        if offered.offer.offer_id == accept.offer_id
-                            && accept.worker_node_id == args.worker_node_id
-                        {
-                            execute_assignment(&network, &args, source, &offered, accept)?;
-                            return Ok(());
+        while Instant::now() < deadline {
+            if network.recv_and_dispatch_p2p(&mut |source, _header, message| {
+                captured = Some((source, message));
+            })? {
+                match captured.take() {
+                    Some((source, Message::TaskRequest(request))) => {
+                        if let Some(offered) = handle_request(
+                            &network,
+                            &args,
+                            &mut responded_requests,
+                            source,
+                            request,
+                        )? {
+                            offers.insert(offered.request.request_id, offered);
                         }
                     }
+                    Some((source, Message::TaskAccept(accept))) => {
+                        if let Some(offered) = offers.get(&accept.request_id).cloned() {
+                            if offered.offer.offer_id == accept.offer_id
+                                && accept.worker_node_id == args.worker_node_id
+                            {
+                                execute_assignment(&network, &args, source, &offered, accept)?;
+                                offers.remove(&offered.request.request_id);
+                                handled_assignment = true;
+                                break;
+                            }
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
+            } else {
+                thread::sleep(Duration::from_millis(25));
             }
-        } else {
-            thread::sleep(Duration::from_millis(25));
         }
-    }
 
-    println!(
-        "task_worker_timeout worker_node_id={} listen_seconds={} result=no-assignment",
-        args.worker_node_id, args.listen_seconds
-    );
-    Ok(())
+        if handled_assignment {
+            if args.serve_forever {
+                println!(
+                    "task_worker_continue worker_node_id={} mode=serve-forever listen_seconds={}",
+                    args.worker_node_id, args.listen_seconds
+                );
+                continue;
+            }
+            return Ok(());
+        }
+
+        if args.serve_forever {
+            println!(
+                "task_worker_idle worker_node_id={} listen_seconds={} result=no-assignment",
+                args.worker_node_id, args.listen_seconds
+            );
+            continue;
+        }
+
+        println!(
+            "task_worker_timeout worker_node_id={} listen_seconds={} result=no-assignment",
+            args.worker_node_id, args.listen_seconds
+        );
+        return Ok(());
+    }
+}
+
+fn listen_window_duration(listen_seconds: u64) -> Duration {
+    Duration::from_secs(listen_seconds.max(1))
 }
 
 fn handle_request(
@@ -435,6 +474,19 @@ fn print_usage() {
          --multicast-v6 <group%iface> [--multicast-v4 <group@interface>] \
          [--bind-port <port>] [--capability <tag>] [--artifact-hint <path>] \
          [--estimated-duration-seconds <n>] [--max-status-interval-seconds <n>] \
-         [--note <text>] [--result-note <text>] [--listen-seconds <n>] [--ack-timeout-seconds <n>]"
+         [--note <text>] [--result-note <text>] [--listen-seconds <n>] \
+         [--serve-forever] [--ack-timeout-seconds <n>]"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::listen_window_duration;
+    use std::time::Duration;
+
+    #[test]
+    fn listen_window_duration_never_returns_zero() {
+        assert_eq!(listen_window_duration(0), Duration::from_secs(1));
+        assert_eq!(listen_window_duration(45), Duration::from_secs(45));
+    }
 }

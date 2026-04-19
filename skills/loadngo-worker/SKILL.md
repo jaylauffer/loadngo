@@ -129,6 +129,7 @@ Examples of activation:
 
 - a local user instructs the agent to listen for one bounded task window
 - a local user instructs the agent to act as a standing worker for a session
+  with `task_worker --serve-forever`
 - a constrained node runs `task_worker` with narrow capability tags
 
 But the skill itself is not the daemon.

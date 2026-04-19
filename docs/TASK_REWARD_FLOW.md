@@ -59,7 +59,8 @@ reward closure:
 
 - `task_worker`: listens for `TaskRequest`, emits `TaskOffer`, accepts one
   assignment, executes the bounded task command, sends `TaskStatus`, then
-  `TaskResult`
+  `TaskResult`. For standing worker posture, run it with `--serve-forever` so
+  the node remains available after idle windows and completed assignments.
 - `task_submitter`: multicasts `TaskRequest`, collects concurrent `TaskOffer`
   messages, selects one worker with `TaskAccept`, verifies the returned
   artifact, writes a deterministic completion receipt, submits the qcoin anchor,
