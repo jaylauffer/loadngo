@@ -6,6 +6,10 @@ This document turns the current `loadngo` architecture into an implementation
 backlog for an offline-first field network that can operate under weak,
 intermittent, or absent connectivity.
 
+Task-plane coordination details for multicast offer advertisement and direct
+worker replies are documented separately in
+[TASK_OFFER_PROTOCOL.md](TASK_OFFER_PROTOCOL.md).
+
 The intended use is not "replace all cloud systems." The intended use is:
 
 - keep a local authority node working when the internet is absent
