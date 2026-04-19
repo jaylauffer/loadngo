@@ -1454,8 +1454,14 @@ name = "network"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blake3",
  "data",
+ "hex",
  "loadngo-proactor",
+ "qcoin-crypto",
+ "qcoin-types",
+ "serde",
+ "serde_json",
  "socket2",
  "tempfile",
  "tracing",
@@ -2166,6 +2172,16 @@ dependencies = [
  "serde",
  "thiserror 1.0.69",
  "zeroize",
+]
+
+[[package]]
+name = "qcoin-types"
+version = "0.1.1"
+dependencies = [
+ "blake3",
+ "qcoin-crypto",
+ "serde",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

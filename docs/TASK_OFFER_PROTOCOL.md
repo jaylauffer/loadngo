@@ -259,6 +259,10 @@ That means:
 
 `TaskAck(accepted=true)` is the reward gate.
 
+For the current runtime, the submitter may withhold the positive wire-level
+`TaskAck` until the qcoin reward anchor is durably included, so the worker gets
+one closure message that carries the qcoin reference.
+
 The actual qcoin mint or anchor may happen immediately after that acknowledgement
 or through a downstream authority path, but it must remain downstream of the
 positive acknowledgement.

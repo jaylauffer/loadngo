@@ -22,6 +22,7 @@
 
 mod core;
 pub mod p2p;
+pub mod task_runtime;
 
 use anyhow::Result;
 use data::{

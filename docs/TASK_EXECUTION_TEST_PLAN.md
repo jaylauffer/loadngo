@@ -164,8 +164,9 @@ The minimum meaningful field run is:
 2. `agnes`, `dolores`, and `gretta` run worker-side `task_offer`
 3. verify at least two concurrent offers arrive directly at the MacMini
 4. manually select one worker with a direct `TaskAccept`
-5. simulate `TaskStatus`, `TaskResult`, and `TaskAck`
-6. record the qcoin reward trigger after successful acknowledgement
+5. run a real worker-side task command that produces a durable artifact
+6. verify the artifact from the submitter side
+7. record `TaskAck(accepted=true)` with the included qcoin transaction reference
 
 That run is enough to prove that correlation, concurrency, timeout policy, and
 reward gating are coherent before automating the full lifecycle.

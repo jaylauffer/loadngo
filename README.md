@@ -52,6 +52,7 @@ cargo run -p host-mac
 - [`docs/FIELD_NETWORK_BACKLOG.md`](docs/FIELD_NETWORK_BACKLOG.md): network and replication considerations.
 - [`docs/TASK_OFFER_PROTOCOL.md`](docs/TASK_OFFER_PROTOCOL.md): submitter/worker task coordination protocol over multicast discovery and direct unicast follow-up.
 - [`docs/TASK_EXECUTION_TEST_PLAN.md`](docs/TASK_EXECUTION_TEST_PLAN.md): lab validation plan for correlation, worker selection, status cadence, and reward closure.
+- [`docs/TASK_REWARD_FLOW.md`](docs/TASK_REWARD_FLOW.md): explicit worker-facing explanation of how accepted task work becomes qcoin-backed reward proof.
 - [`docs/WORKER_FIRST_TASK_MODEL.md`](docs/WORKER_FIRST_TASK_MODEL.md): worker posture and reward-gating model inside the submitter-driven task protocol.
 
 ## Codex skill

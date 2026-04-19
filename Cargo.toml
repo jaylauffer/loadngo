@@ -69,3 +69,4 @@ image = { version = "0.24.9", default-features = false, features = ["png", "jpeg
 hex = "0.4"
 getrandom = "0.2"
 qcoin-crypto = { path = "../qcoin/qcoin-crypto" }
+qcoin-types = { path = "../qcoin/qcoin-types" }
