@@ -16,6 +16,19 @@ members = [
     "renderer",
     "ui-core",
 ]
+default-members = [
+    "task",
+    "touch",
+    "data",
+    "pq-auth",
+    "proactor",
+    "network",
+    "gui",
+    "host-desktop",
+    "host-core",
+    "renderer",
+    "ui-core",
+]
 resolver = "2"
 
 [workspace.package]

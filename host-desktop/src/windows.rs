@@ -2357,9 +2357,7 @@ fn blend_pixel(buffer: &mut [u8], width: usize, x: usize, y: usize, color: UiCol
 #[cfg(test)]
 mod tests {
     use super::*;
-    use loadngo_renderer::{
-        rgba as renderer_rgba, FrameCommand, TextDirection, TextRequest, TextScript,
-    };
+    use loadngo_renderer::{FrameCommand, TextDirection, TextRequest, TextScript};
 
     fn sample_text_request() -> TextRequest {
         TextRequest {
@@ -2372,7 +2370,7 @@ mod tests {
             clip_rect: None,
             text: "Custom font".to_string(),
             style: RenderTextStyle {
-                color: renderer_rgba(255, 255, 255, 255),
+                color: UiColor::rgba(255, 255, 255, 255),
                 font_size: 18,
                 horizontal_align: RenderTextHorizontalAlign::Left,
                 vertical_align: RenderTextVerticalAlign::Top,
@@ -2405,7 +2403,7 @@ mod tests {
         let mut commands = vec![
             FrameCommand::Text(sample_text_request()),
             FrameCommand::Clear {
-                color: renderer_rgba(0, 0, 0, 255),
+                color: UiColor::rgba(0, 0, 0, 255),
             },
         ];
 

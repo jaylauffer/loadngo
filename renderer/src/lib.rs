@@ -1004,7 +1004,7 @@ mod tests {
             commands[0],
             FrameCommand::Circle {
                 center: Point { x: 10.0, y: 12.0 },
-                radius: 4.0,
+                radius: 3.5,
                 color: Color {
                     r: 1,
                     g: 2,
