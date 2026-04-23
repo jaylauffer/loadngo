@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
@@ -105,6 +105,9 @@ struct ActiveStream {
     stdout_fd: RawFd,
     stderr_text: Arc<Mutex<String>>,
     stderr_join: Option<JoinHandle<()>>,
+    frame_width: u32,
+    frame_height: u32,
+    frame_len: usize,
     pending: Vec<u8>,
     delivered_frame: bool,
 }
@@ -199,6 +202,8 @@ impl CaptureController {
         )));
         loadngo_host_desktop::wake_host();
 
+        let (frame_width, frame_height) = preview_frame_dimensions(&self.options)?;
+        let frame_len = frame_width as usize * frame_height as usize * 4;
         let mut child = spawn_stream_process(&self.options)?;
         let stderr_text = Arc::new(Mutex::new(String::new()));
         let stderr_text_thread = Arc::clone(&stderr_text);
@@ -232,6 +237,9 @@ impl CaptureController {
                 stdout_fd,
                 stderr_text,
                 stderr_join: Some(stderr_join),
+                frame_width,
+                frame_height,
+                frame_len,
                 pending: Vec::new(),
                 delivered_frame: false,
             });
@@ -283,21 +291,14 @@ impl CaptureController {
                     }
                     Ok(read) => {
                         stream.pending.extend_from_slice(&scratch[..read]);
-                        while let Some(frame_bytes) = extract_next_jpeg_frame(&mut stream.pending) {
-                            match decode_image_from_memory(&frame_bytes) {
-                                Ok(image) => {
-                                    stream.delivered_frame = true;
-                                    frames.push(image);
-                                }
-                                Err(err) => {
-                                    restart_reason =
-                                        Some(format!("failed to decode camera frame: {err}"));
-                                    break;
-                                }
-                            }
-                        }
-                        if restart_reason.is_some() {
-                            break;
+                        while let Some(image) = extract_next_raw_rgba_frame(
+                            &mut stream.pending,
+                            stream.frame_width,
+                            stream.frame_height,
+                            stream.frame_len,
+                        ) {
+                            stream.delivered_frame = true;
+                            frames.push(image);
                         }
                     }
                     Err(err) if err.kind() == ErrorKind::WouldBlock => break,
@@ -494,6 +495,16 @@ fn main() -> Result<(), String> {
     Ok(())
 }
 
+fn preview_trace_enabled() -> bool {
+    match std::env::var("LOADNGO_CAMERA_PREVIEW_TRACE") {
+        Ok(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            !matches!(normalized.as_str(), "" | "0" | "false" | "no" | "off")
+        }
+        Err(_) => false,
+    }
+}
+
 fn parse_args() -> Result<AppOptions, String> {
     let mut options = AppOptions::default();
     let mut args = std::env::args();
@@ -611,6 +622,10 @@ async fn run_preview(options: AppOptions) {
         )
     };
     let mut last_saved: Option<PathBuf> = None;
+    let trace_enabled = preview_trace_enabled();
+    let mut trace_started = Instant::now();
+    let mut trace_frames_since_log: u64 = 0;
+    let mut trace_total_frames: u64 = 0;
 
     loop {
         let frame = loadngo_host_desktop::capture_frame();
@@ -622,6 +637,27 @@ async fn run_preview(options: AppOptions) {
             while let Ok(event) = active_worker.try_recv() {
                 match event {
                     CaptureEvent::Frame(image) => {
+                        trace_total_frames = trace_total_frames.saturating_add(1);
+                        trace_frames_since_log = trace_frames_since_log.saturating_add(1);
+                        if trace_enabled && trace_total_frames == 1 {
+                            eprintln!(
+                                "[camera_preview] first live frame {}x{} from {}",
+                                image.width, image.height, capture_options.device
+                            );
+                        }
+                        if trace_enabled
+                            && trace_started.elapsed() >= Duration::from_secs(1)
+                            && trace_frames_since_log > 0
+                        {
+                            let elapsed = trace_started.elapsed().as_secs_f32().max(0.001);
+                            let fps = trace_frames_since_log as f32 / elapsed;
+                            eprintln!(
+                                "[camera_preview] live preview receiving {:.2} fps ({} frames / {:.2}s)",
+                                fps, trace_frames_since_log, elapsed
+                            );
+                            trace_started = Instant::now();
+                            trace_frames_since_log = 0;
+                        }
                         match loadngo_host_desktop::upload_texture_with_image_key(
                             Some(PREVIEW_IMAGE_KEY),
                             &image,
@@ -980,8 +1016,12 @@ fn pointer_pressed_in_rect(input: &loadngo_host_core::InputSnapshot, rect: ui_co
 }
 
 fn spawn_stream_process(options: &CaptureOptions) -> Result<Child, String> {
+    let (frame_width, frame_height) = preview_frame_dimensions(options)?;
     let mut command = base_capture_command(options);
-    command.args(["-an", "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"]);
+    let filter = preview_filter_spec(options, frame_width, frame_height);
+    command.args([
+        "-an", "-vf", &filter, "-pix_fmt", "rgba", "-f", "rawvideo", "pipe:1",
+    ]);
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
     command
@@ -1025,29 +1065,53 @@ fn set_nonblocking(fd: RawFd) -> Result<(), String> {
     Ok(())
 }
 
-fn extract_next_jpeg_frame(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
-    let start = find_marker(buffer, &[0xff, 0xd8])?;
-    if start > 0 {
-        buffer.drain(..start);
+fn preview_frame_dimensions(options: &CaptureOptions) -> Result<(u32, u32), String> {
+    let video_size = options
+        .video_size
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(DEFAULT_VIDEO_SIZE);
+    parse_video_size_spec(video_size)
+}
+
+fn preview_filter_spec(options: &CaptureOptions, frame_width: u32, frame_height: u32) -> String {
+    format!(
+        "fps={},scale={}x{}",
+        options.frame_rate.max(1),
+        frame_width,
+        frame_height
+    )
+}
+
+fn parse_video_size_spec(value: &str) -> Result<(u32, u32), String> {
+    let (width, height) = value
+        .trim()
+        .split_once('x')
+        .ok_or_else(|| format!("invalid video size: {value}"))?;
+    let width = width
+        .parse::<u32>()
+        .map_err(|_| format!("invalid video width: {value}"))?;
+    let height = height
+        .parse::<u32>()
+        .map_err(|_| format!("invalid video height: {value}"))?;
+    if width == 0 || height == 0 {
+        return Err(format!("video size must be positive: {value}"));
     }
-    let end = find_marker_from(buffer, &[0xff, 0xd9], 2)?;
-    let frame = buffer[..end + 2].to_vec();
-    buffer.drain(..end + 2);
-    Some(frame)
+    Ok((width, height))
 }
 
-fn find_marker(buffer: &[u8], marker: &[u8]) -> Option<usize> {
-    buffer
-        .windows(marker.len())
-        .position(|window| window == marker)
-}
-
-fn find_marker_from(buffer: &[u8], marker: &[u8], offset: usize) -> Option<usize> {
-    buffer
-        .get(offset..)?
-        .windows(marker.len())
-        .position(|window| window == marker)
-        .map(|index| index + offset)
+fn extract_next_raw_rgba_frame(
+    buffer: &mut Vec<u8>,
+    width: u32,
+    height: u32,
+    frame_len: usize,
+) -> Option<DecodedImage> {
+    if buffer.len() < frame_len {
+        return None;
+    }
+    let tail = buffer.split_off(frame_len);
+    let frame = std::mem::replace(buffer, tail);
+    Some(DecodedImage::new(width, height, frame))
 }
 
 fn parse_format(value: &str) -> Result<SaveFormat, String> {
@@ -1222,17 +1286,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extract_next_jpeg_frame_skips_prefix_bytes() {
-        let mut buffer = vec![0x00, 0x11, 0xff, 0xd8, 0x01, 0x02, 0xff, 0xd9, 0x99];
-        let frame = extract_next_jpeg_frame(&mut buffer).unwrap();
-        assert_eq!(frame, vec![0xff, 0xd8, 0x01, 0x02, 0xff, 0xd9]);
-        assert_eq!(buffer, vec![0x99]);
+    fn parse_video_size_spec_accepts_dimensions() {
+        assert_eq!(parse_video_size_spec("1280x720").unwrap(), (1280, 720));
     }
 
     #[test]
-    fn extract_next_jpeg_frame_waits_for_complete_frame() {
-        let mut buffer = vec![0xff, 0xd8, 0x01, 0x02];
-        assert!(extract_next_jpeg_frame(&mut buffer).is_none());
-        assert_eq!(buffer, vec![0xff, 0xd8, 0x01, 0x02]);
+    fn preview_filter_spec_enforces_requested_frame_rate() {
+        let options = CaptureOptions {
+            device: "/dev/video0".to_string(),
+            video_size: Some("1280x720".to_string()),
+            frame_rate: 6,
+        };
+        assert_eq!(preview_filter_spec(&options, 1280, 720), "fps=6,scale=1280x720");
+    }
+
+    #[test]
+    fn extract_next_raw_rgba_frame_waits_for_complete_frame() {
+        let mut buffer = vec![1u8; 15];
+        assert!(extract_next_raw_rgba_frame(&mut buffer, 2, 2, 16).is_none());
+        assert_eq!(buffer.len(), 15);
+    }
+
+    #[test]
+    fn extract_next_raw_rgba_frame_returns_one_frame_and_keeps_tail() {
+        let mut buffer = vec![7u8; 20];
+        let frame = extract_next_raw_rgba_frame(&mut buffer, 2, 2, 16).unwrap();
+        assert_eq!(frame.width, 2);
+        assert_eq!(frame.height, 2);
+        assert_eq!(frame.rgba8.len(), 16);
+        assert_eq!(buffer, vec![7u8; 4]);
     }
 }

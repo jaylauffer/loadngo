@@ -407,7 +407,9 @@ pub fn launch(
         state.event_proxy = Some(event_loop.create_proxy());
     }
     let mut app = LinuxApp::new(window, icon, shared, Box::pin(entry));
-    let _ = event_loop.run_app(&mut app);
+    if let Err(err) = event_loop.run_app(&mut app) {
+        eprintln!("[loadngo/linux] event loop failed: {err}");
+    }
 }
 
 pub fn capture_frame() -> HostFrame {
