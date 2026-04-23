@@ -26,6 +26,14 @@ pub struct GlesImageResource {
     pub width: i32,
     pub height: i32,
     pub rgba8: Arc<[u8]>,
+    pub identity: usize,
+}
+
+#[cfg(any(target_os = "android", target_os = "linux"))]
+fn image_resource_changed(previous: &GlesImageResource, next: &GlesImageResource) -> bool {
+    previous.width != next.width
+        || previous.height != next.height
+        || previous.identity != next.identity
 }
 
 pub struct GlesBackend {
@@ -168,6 +176,24 @@ impl GlesBackend {
             let mut next = HashMap::new();
             for (key, resource) in resources {
                 next.insert(key, resource);
+            }
+            let mut changed_keys = Vec::new();
+            for (key, resource) in next.iter_mut() {
+                if let Some(previous) = self.image_resources.get(key) {
+                    if image_resource_changed(previous, resource) {
+                        changed_keys.push(key.clone());
+                    } else {
+                        *resource = previous.clone();
+                    }
+                }
+            }
+            for key in changed_keys {
+                if let Some(texture) = self.gpu_textures.remove(&key) {
+                    #[cfg(target_os = "android")]
+                    android::destroy_texture(&texture);
+                    #[cfg(target_os = "linux")]
+                    linux_egl::destroy_texture(&texture);
+                }
             }
             self.image_resources.retain(|key, _| next.contains_key(key));
             self.gpu_textures.retain(|key, texture| {
@@ -1625,5 +1651,57 @@ mod tests {
         );
         assert!(points.len() >= 9);
         assert_ne!(points.first(), points.last());
+    }
+
+    #[test]
+    fn image_resource_change_detects_new_pixels_for_same_key() {
+        let previous = GlesImageResource {
+            width: 2,
+            height: 2,
+            rgba8: Arc::<[u8]>::from(vec![1u8; 16]),
+            identity: 1,
+        };
+        let next = GlesImageResource {
+            width: 2,
+            height: 2,
+            rgba8: Arc::<[u8]>::from(vec![2u8; 16]),
+            identity: 2,
+        };
+        assert!(image_resource_changed(&previous, &next));
+    }
+
+    #[test]
+    fn image_resource_change_allows_reusing_same_pixels() {
+        let rgba = Arc::<[u8]>::from(vec![3u8; 16]);
+        let previous = GlesImageResource {
+            width: 2,
+            height: 2,
+            rgba8: Arc::clone(&rgba),
+            identity: 7,
+        };
+        let next = GlesImageResource {
+            width: 2,
+            height: 2,
+            rgba8: rgba,
+            identity: 7,
+        };
+        assert!(!image_resource_changed(&previous, &next));
+    }
+
+    #[test]
+    fn image_resource_change_allows_rebuilt_pixels_for_same_identity() {
+        let previous = GlesImageResource {
+            width: 2,
+            height: 2,
+            rgba8: Arc::<[u8]>::from(vec![4u8; 16]),
+            identity: 11,
+        };
+        let next = GlesImageResource {
+            width: 2,
+            height: 2,
+            rgba8: Arc::<[u8]>::from(vec![4u8; 16]),
+            identity: 11,
+        };
+        assert!(!image_resource_changed(&previous, &next));
     }
 }

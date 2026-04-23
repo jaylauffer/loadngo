@@ -1,4 +1,4 @@
-use std::collections::{hash_map::DefaultHasher, HashMap};
+use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
@@ -125,6 +125,7 @@ struct HostSharedState {
     image_registry: ImageRegistry,
     textures: HashMap<String, Arc<DecodedImage>>,
     generated_texture_cache: HashMap<String, Arc<DecodedImage>>,
+    gles_upload_cache: HashMap<usize, Arc<[u8]>>,
     pending_redraw: bool,
     last_backend_used: DesktopRenderBackendKind,
     backend_detail: String,
@@ -240,6 +241,7 @@ impl Default for HostSharedState {
             image_registry: ImageRegistry::new(),
             textures: HashMap::new(),
             generated_texture_cache: HashMap::new(),
+            gles_upload_cache: HashMap::new(),
             pending_redraw: true,
             last_backend_used: DesktopRenderBackendKind::Unavailable,
             backend_detail: "Linux host waiting for the first frame".to_string(),
@@ -259,6 +261,24 @@ fn shared() -> &'static LinuxHostShared {
 
 fn lock_state() -> std::sync::MutexGuard<'static, HostSharedState> {
     shared().state.0.lock().expect("linux host state poisoned")
+}
+
+pub fn wake_host() {
+    let Some(shared) = HOST_SHARED.get() else {
+        return;
+    };
+    let (lock, cvar) = &*shared.state;
+    let mut state = lock.lock().expect("linux host state poisoned");
+    if !state.running {
+        return;
+    }
+    advance_frame_clock(&mut state);
+    let proxy = state.event_proxy.clone();
+    cvar.notify_all();
+    drop(state);
+    if let Some(proxy) = proxy {
+        let _ = proxy.send_event(LinuxUserEvent::Wake);
+    }
 }
 
 fn font_cache() -> &'static Mutex<HashMap<String, DesktopFont>> {
@@ -1196,34 +1216,49 @@ fn present(
     let width = size.width.max(1);
     let height = size.height.max(1);
 
-    let (clear_color, commands, textures, generated_cache) = {
+    let (clear_color, commands, textures, generated_cache, gles_upload_cache) = {
         let state = lock_state();
         (
             state.clear_color,
             state.commands.clone(),
             state.textures.clone(),
             state.generated_texture_cache.clone(),
+            state.gles_upload_cache.clone(),
         )
     };
 
     if let Some(backend) = gles_backend.as_mut() {
         let (gles_commands, gles_textures, next_generated_cache) =
             prepare_gles_frame(&commands, &textures, generated_cache);
+        let mut next_gles_upload_cache = gles_upload_cache;
+        let mut active_gles_uploads = HashSet::with_capacity(gles_textures.len());
         {
             let mut state = lock_state();
             state.generated_texture_cache = next_generated_cache;
         }
         backend.update_surface_size(width as i32, height as i32);
         backend.sync_image_resources(gles_textures.iter().map(|(key, image)| {
+            let identity = Arc::as_ptr(image) as usize;
+            active_gles_uploads.insert(identity);
+            let rgba8 = next_gles_upload_cache
+                .entry(identity)
+                .or_insert_with(|| Arc::from(image.rgba8.clone()))
+                .clone();
             (
                 key.clone(),
                 loadngo_gfx_gles::GlesImageResource {
                     width: image.width as i32,
                     height: image.height as i32,
-                    rgba8: Arc::from(image.rgba8.clone()),
+                    rgba8,
+                    identity,
                 },
             )
         }));
+        next_gles_upload_cache.retain(|identity, _| active_gles_uploads.contains(identity));
+        {
+            let mut state = lock_state();
+            state.gles_upload_cache = next_gles_upload_cache;
+        }
         if backend.supports_commands(&gles_commands) {
             match Renderer::new(RendererConfig::default()).render(backend, &gles_commands) {
                 Ok(()) => {

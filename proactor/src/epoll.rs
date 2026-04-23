@@ -1,7 +1,8 @@
 use crate::{CompletionEnvelope, CompletionPort, PollEvent, ReadinessEvent, ReadinessPort};
 use libc::{
     c_int, close, epoll_create1, epoll_ctl, epoll_event, epoll_wait, eventfd, read, write,
-    EFD_CLOEXEC, EFD_NONBLOCK, EINTR, EINVAL, EPOLLIN, EPOLL_CLOEXEC, EPOLL_CTL_ADD, EPOLL_CTL_DEL,
+    EFD_CLOEXEC, EFD_NONBLOCK, EINTR, EINVAL, EPOLLERR, EPOLLHUP, EPOLLIN, EPOLLRDHUP,
+    EPOLL_CLOEXEC, EPOLL_CTL_ADD, EPOLL_CTL_DEL,
 };
 use std::collections::VecDeque;
 use std::io;
@@ -228,7 +229,11 @@ impl ReadinessPort for EpollPort {
                 format!("token {token} is reserved for epoll port internals"),
             ));
         }
-        self.register_fd(fd, EPOLLIN as u32, token)
+        self.register_fd(
+            fd,
+            (EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP) as u32,
+            token,
+        )
     }
 
     fn deregister(&self, fd: RawFd) -> io::Result<()> {

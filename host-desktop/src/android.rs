@@ -108,6 +108,7 @@ impl SoftwareTexture {
             width: self.width as i32,
             height: self.height as i32,
             rgba8: self.rgba8.clone(),
+            identity: self.rgba8.as_ptr() as usize,
         }
     }
 }
