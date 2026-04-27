@@ -20,6 +20,7 @@ pub mod file_manager;
 pub mod listener;
 pub mod machine;
 pub mod p2pmsg;
+pub mod pudding;
 pub mod service;
 
 pub mod types {

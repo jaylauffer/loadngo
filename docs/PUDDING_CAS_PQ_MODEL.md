@@ -43,8 +43,16 @@ CAS layer is not yet a complete post-quantum repository model.
 - blob storage in [cas.rs](../data/src/cas.rs)
 - fixed 32-byte `CasHash`
 - current blob addressing by `blake3`
+- reusable `pudding` manifest types in [pudding.rs](../data/src/pudding.rs):
+  - tagged digest references
+  - workspace manifests
+  - transitional root manifests
+  - signed root-manifest envelopes
 - post-quantum signature tooling above the blob layer in
   [loadngo_cas.rs](../../sng-rusty/src/loadngo_cas.rs)
+- root-manifest signing in
+  [pudding_cas_ingest.rs](../data/src/bin/pudding_cas_ingest.rs), using
+  `qcoin-crypto` key material
 - initial post-quantum signed challenge-token tooling in
   [PQ_AUTHENTICATOR.md](PQ_AUTHENTICATOR.md)
 - transitional tarball/signature workflows documented in
@@ -52,9 +60,11 @@ CAS layer is not yet a complete post-quantum repository model.
 
 ### What does not exist yet
 
-- algorithm-tagged CAS addresses
-- a first-class `pudding` repository identity
-- signed ancestor-bearing root manifests inside the CAS model itself
+- algorithm-tagged CAS addresses at the storage layer
+- final repository identity and trust-root policy for promoted `pudding`
+  manifests
+- automatic ancestor selection for new root manifests
+- per-child repository file-manifest roots
 - an explicit distinction between:
   - blob integrity
   - manifest authenticity
@@ -64,8 +74,35 @@ CAS layer is not yet a complete post-quantum repository model.
 So the current state is:
 
 - CAS for storage
-- PQ signatures for some exported bundles
-- no full PQ-native repository lineage yet
+- native manifest structs for the first `pudding` root layer
+- PQ signatures for signed root-manifest envelopes
+- no full PQ-native repository lineage or replica policy yet
+
+## Current Transitional Slice
+
+The current implementation intentionally lands the smallest useful native
+`pudding` layer without pretending the repository model is complete.
+
+`pudding_cas_ingest` now emits:
+
+- a workspace CAS manifest that records captured files and child repository
+  state
+- a transitional root manifest whose content root points at that workspace
+  manifest
+- an optional signed root-manifest envelope when `--signer-identity`,
+  `--public-key`, and `--private-key` are supplied together
+
+This gives the workspace a signed, CAS-addressed root statement today. It is
+still transitional because:
+
+- child repository entries record branch/head/status, but not their own
+  per-repository file-manifest roots
+- ancestor links are accepted by the type model, but not selected automatically
+  by the ingest command
+- signing keys are provided directly by path, not resolved through a trust-root
+  store
+- `CasHash` itself remains blake3-only even though manifest references are now
+  algorithm-tagged
 
 ## Design Goals
 
@@ -341,24 +378,136 @@ But that should be understood as transitional, not final.
 
 Recommended order:
 
-1. Introduce algorithm-tagged CAS hash identities.
-2. Define the `pudding` root manifest schema.
-3. Make the root manifest reference child manifests and blob roots instead of tarballs.
-4. Sign promoted root manifests with PQ signatures.
-5. Add replica records for Google Drive or other offsite relays.
-6. Keep tarball export only as a compatibility fallback.
+1. Stabilize the current signed-root slice.
+2. Add per-child repository file manifests and fill each child
+   `file_manifest_root`.
+3. Add explicit ancestor discovery and promotion rules.
+4. Introduce algorithm-tagged CAS hash identities at the storage layer.
+5. Add repository trust-root policy and signer rotation rules.
+6. Add replica records for Google Drive or other offsite relays.
+7. Keep tarball export only as a compatibility fallback.
+
+## Next Evolution Steps
+
+### 1. Stabilize the current signed-root slice
+
+The current slice should remain small and testable:
+
+- `pudding_cas_ingest` emits a workspace manifest, transitional root manifest,
+  and optional signed root envelope
+- key files are hex-encoded `qcoin-crypto` key material, matching
+  `loadngo_pq_auth keygen`
+- smoke tests should cover unsigned ingest, signed ingest, and verification of
+  the envelope payload
+- generated manifests should remain deterministic for identical inputs
+
+This step is about making the landed format safe to build on before widening
+the repository semantics.
+
+### 2. Split child repositories into their own file manifests
+
+Each child repository entry should stop being only branch/head/status metadata.
+It should point at a child file-manifest root that captures the included files
+for that child.
+
+That gives the parent root a clean shape:
+
+- parent `pudding` root manifest
+- workspace manifest
+- child repository metadata
+- child repository file-manifest roots
+- blob references below those roots
+
+This also prevents one child repository's changing working state from being
+confused with the identity of another child or the parent repository itself.
+
+### 3. Define ancestor discovery and promotion policy
+
+The type model can already carry ancestor references, but the ingest command
+does not yet decide which prior manifest is authoritative.
+
+The next policy work is:
+
+- accept an explicit `--ancestor-manifest` path or CAS reference
+- verify the ancestor hash before signing a descendant
+- support a local pointer to the latest promoted root
+- reject accidental promotion from an unverified or mismatched ancestor
+- keep unpromoted local materializations separate from promoted lineage
+
+Without this step, signed roots prove snapshot authenticity but not repository
+continuity.
+
+### 4. Make CAS addresses algorithm-agile
+
+Manifest references can already carry digest algorithm tags, but the storage
+layer still uses fixed blake3-backed `CasHash` values.
+
+The migration should introduce a tagged CAS address beside the existing type,
+then migrate call sites deliberately:
+
+- preserve existing blake3 content without rewriting it
+- make new manifest/root references include algorithm labels
+- add verification code that rejects unknown or disallowed algorithms
+- keep compatibility readers for current `CasHash` blobs during the transition
+
+### 5. Add trust-root and signer policy
+
+Direct key-file signing is useful for bootstrapping, but promoted roots need a
+separate trust policy.
+
+The trust-root store should define:
+
+- accepted signer identities
+- accepted PQ signature schemes
+- public keys and key epochs
+- key rotation and revocation records
+- verification outcomes such as accept, quarantine, or reject
+
+This keeps repository authority separate from whichever local file path happened
+to contain a signing key during ingest.
+
+### 6. Record replicas as replicas, not authority
+
+Google Drive or other relays should store signed manifests and referenced blobs.
+They should not become the source of truth by path alone.
+
+Replica records should describe:
+
+- provider and remote object identity
+- upload timestamp
+- referenced manifest hash
+- optional remote checksum or generation id
+- last verified timestamp
+
+The signed root lineage remains authoritative; replicas are transport and
+recovery observations.
+
+### 7. Add verification and repair commands
+
+The long-term command set should make recovery mechanical:
+
+- verify a signed root envelope
+- verify all child manifests and blobs below that root
+- explain missing, corrupt, unknown, or untrusted content
+- materialize a verified root into a working directory
+- repair a partial materialization from local or replica CAS stores
+
+This is the point where `pudding` becomes more than backup metadata: it becomes
+an inspectable, recoverable, PQ-authenticated workspace lineage.
 
 ## Immediate Next Steps
 
 The next implementation steps implied by this note are:
 
-1. make `CasHash` algorithm-agile
-2. add a native `pudding` manifest type in `loadngo`
-3. sign that manifest with PQ tooling
-4. separate:
-   - local materialization state
-   - promoted ancestor state
-   - offsite replica state
+1. Add CLI and tests for explicit ancestor manifest selection.
+2. Split the workspace manifest into parent and per-child file manifests.
+3. Add a trust-root file for accepted signer identities and PQ public keys.
+4. Add a verification command for signed root envelopes.
+5. Introduce tagged CAS storage addresses while retaining `CasHash`
+   compatibility readers.
+6. Add replica records for offsite providers.
+7. Keep full-workspace ingestion intentional; large children such as `zhoenus`
+   should use explicit include policy and lightweight smoke fixtures by default.
 
 ## Related Notes
 

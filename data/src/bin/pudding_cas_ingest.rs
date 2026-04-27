@@ -1,7 +1,11 @@
 use anyhow::{anyhow, bail, Context, Result};
 use data::cas::CasStorage;
-use serde::Deserialize;
-use serde::Serialize;
+use data::pudding::{
+    DigestRef, FileSnapshotState, RootManifest, SignedRootManifest, WorkspaceChildInclude,
+    WorkspaceConfig, WorkspaceFileManifestEntry, WorkspaceManifest, WorkspaceRepoState,
+    WORKSPACE_CONFIG_FORMAT_V1,
+};
+use qcoin_crypto::{PrivateKey, PublicKey};
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs;
@@ -11,69 +15,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const FORMAT: &str = "pudding-workspace-cas-v1";
 const DEFAULT_CAS_DIR: &str = ".loadngo-cas";
 const DEFAULT_MANIFEST_DIR: &str = "build_tmp/pudding-cas-manifests";
 const DEFAULT_WORKSPACE_CONFIG: &str = "pudding.workspace.ron";
 const ROOT_TEXT_EXTENSIONS: &[&str] = &["md", "sh", "txt", "ron", "json", "toml"];
-
-#[derive(Debug, Serialize)]
-struct WorkspaceCasManifest {
-    format: String,
-    workspace_root: String,
-    cas_root: String,
-    workspace_config: String,
-    created_at_unix_secs: u64,
-    files: Vec<WorkspaceCasFile>,
-    repos: Vec<WorkspaceRepoState>,
-}
-
-#[derive(Debug, Serialize)]
-struct WorkspaceCasFile {
-    path: String,
-    hash: String,
-    size: u32,
-    inserted: bool,
-    captured: FileSnapshotState,
-    verified: FileSnapshotState,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct WorkspaceRepoState {
-    name: String,
-    path: String,
-    branch: String,
-    head: String,
-    status_short: Vec<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct WorkspaceConfig {
-    format: String,
-    children: Vec<WorkspaceChildConfig>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct WorkspaceChildConfig {
-    name: String,
-    path: PathBuf,
-    #[serde(default = "default_true")]
-    required: bool,
-    #[serde(default)]
-    include: WorkspaceChildInclude,
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
-enum WorkspaceChildInclude {
-    #[default]
-    GitVisible,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct FileSnapshotState {
-    size_bytes: u64,
-    modified_unix_millis: Option<u64>,
-}
 
 #[derive(Debug, Clone)]
 struct CapturedWorkspaceFile {
@@ -104,7 +49,7 @@ fn run() -> Result<()> {
             .with_context(|| format!("failed to ingest {}", file.absolute_path.display()))?;
         let verified = stat_file(&file.absolute_path)?;
         ensure_file_state_unchanged(&file.relative_path, &file.captured, &verified)?;
-        manifest_files.push(WorkspaceCasFile {
+        manifest_files.push(WorkspaceFileManifestEntry {
             path: file.relative_path,
             hash: hash.to_hex(),
             size,
@@ -117,15 +62,15 @@ fn run() -> Result<()> {
     let final_repo_state = collect_repo_state(&args.workspace_root, &config)?;
     ensure_repo_state_unchanged(&initial_repo_state, &final_repo_state)?;
 
-    let manifest = WorkspaceCasManifest {
-        format: FORMAT.to_string(),
-        workspace_root: args.workspace_root.display().to_string(),
-        cas_root: args.cas_root.display().to_string(),
-        workspace_config: args.workspace_config.display().to_string(),
-        created_at_unix_secs: unix_now()?,
-        files: manifest_files,
-        repos: initial_repo_state,
-    };
+    let created_at_unix_secs = unix_now()?;
+    let manifest = WorkspaceManifest::new(
+        args.workspace_root.display().to_string(),
+        args.cas_root.display().to_string(),
+        args.workspace_config.display().to_string(),
+        created_at_unix_secs,
+        manifest_files,
+        initial_repo_state,
+    );
 
     fs::create_dir_all(&args.manifest_dir)
         .with_context(|| format!("failed to create {}", args.manifest_dir.display()))?;
@@ -138,11 +83,82 @@ fn run() -> Result<()> {
     let (manifest_hash, manifest_inserted) = store
         .add_content(&manifest_bytes)
         .context("failed to add manifest to CAS")?;
+    let root_manifest = RootManifest::from_workspace_manifest(
+        "pudding",
+        DigestRef::from_cas_hash(manifest_hash),
+        &manifest,
+        None,
+        vec![
+            "transitional root manifest generated from workspace CAS manifest".to_string(),
+            "child file_manifest_root fields are not populated yet".to_string(),
+        ],
+    );
+    let root_manifest_name = format!("pudding-root-{}.json", created_at_unix_secs);
+    let root_manifest_path = args.manifest_dir.join(root_manifest_name);
+    let root_manifest_bytes =
+        serde_json::to_vec_pretty(&root_manifest).context("failed to serialize root manifest")?;
+    fs::write(&root_manifest_path, &root_manifest_bytes)
+        .with_context(|| format!("failed to write {}", root_manifest_path.display()))?;
+    let (root_manifest_hash, root_manifest_inserted) = store
+        .add_content(&root_manifest_bytes)
+        .context("failed to add root manifest to CAS")?;
+    let signed_root_result = if let Some(signing) = args.signing.as_ref() {
+        let public_key = read_public_key(&signing.public_key)?;
+        let private_key = read_private_key(&signing.private_key)?;
+        let signed_root_manifest = SignedRootManifest::sign(
+            root_manifest.clone(),
+            signing.signer_identity.clone(),
+            &public_key,
+            &private_key,
+        )
+        .context("failed to sign root manifest")?;
+        signed_root_manifest
+            .verify()
+            .context("signed root manifest self-verification failed")?;
+        let signed_root_manifest_name =
+            format!("pudding-root-signed-{}.json", created_at_unix_secs);
+        let signed_root_manifest_path = args.manifest_dir.join(signed_root_manifest_name);
+        let signed_root_manifest_bytes = serde_json::to_vec_pretty(&signed_root_manifest)
+            .context("failed to serialize signed root manifest")?;
+        fs::write(&signed_root_manifest_path, &signed_root_manifest_bytes)
+            .with_context(|| format!("failed to write {}", signed_root_manifest_path.display()))?;
+        let (signed_root_manifest_hash, signed_root_manifest_inserted) = store
+            .add_content(&signed_root_manifest_bytes)
+            .context("failed to add signed root manifest to CAS")?;
+        Some((
+            signed_root_manifest_path,
+            signed_root_manifest_hash,
+            signed_root_manifest_inserted,
+        ))
+    } else {
+        None
+    };
 
     println!("CAS root: {}", args.cas_root.display());
+    println!("Workspace root: {}", args.workspace_root.display());
+    println!("Workspace config: {}", args.workspace_config.display());
     println!("Manifest: {}", manifest_path.display());
     println!("Manifest hash: {}", manifest_hash);
     println!("Manifest inserted: {}", manifest_inserted);
+    println!("Root manifest: {}", root_manifest_path.display());
+    println!("Root manifest hash: {}", root_manifest_hash);
+    println!("Root manifest inserted: {}", root_manifest_inserted);
+    if let Some((
+        signed_root_manifest_path,
+        signed_root_manifest_hash,
+        signed_root_manifest_inserted,
+    )) = signed_root_result
+    {
+        println!(
+            "Signed root manifest: {}",
+            signed_root_manifest_path.display()
+        );
+        println!("Signed root manifest hash: {}", signed_root_manifest_hash);
+        println!(
+            "Signed root manifest inserted: {}",
+            signed_root_manifest_inserted
+        );
+    }
     println!("Files ingested: {}", manifest.files.len());
     Ok(())
 }
@@ -152,6 +168,14 @@ struct Args {
     cas_root: PathBuf,
     manifest_dir: PathBuf,
     workspace_config: PathBuf,
+    signing: Option<SigningArgs>,
+}
+
+#[derive(Debug)]
+struct SigningArgs {
+    signer_identity: String,
+    public_key: PathBuf,
+    private_key: PathBuf,
 }
 
 impl Args {
@@ -161,6 +185,9 @@ impl Args {
         let mut cas_root = None;
         let mut manifest_dir = None;
         let mut workspace_config = None;
+        let mut signer_identity = None;
+        let mut public_key = None;
+        let mut private_key = None;
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -168,6 +195,9 @@ impl Args {
                 "--cas-root" => cas_root = args.next().map(PathBuf::from),
                 "--manifest-dir" => manifest_dir = args.next().map(PathBuf::from),
                 "--workspace-config" => workspace_config = args.next().map(PathBuf::from),
+                "--signer-identity" => signer_identity = args.next(),
+                "--public-key" => public_key = args.next().map(PathBuf::from),
+                "--private-key" => private_key = args.next().map(PathBuf::from),
                 "--help" | "-h" => {
                     print_usage();
                     std::process::exit(0);
@@ -176,26 +206,92 @@ impl Args {
             }
         }
 
-        let workspace_root = workspace_root.unwrap_or_else(|| PathBuf::from("/Users/jay/pudding"));
+        let cwd = std::env::current_dir().context("failed to determine current directory")?;
+        let workspace_root =
+            resolve_workspace_root(workspace_root, workspace_config.as_deref(), &cwd);
         let cas_root = cas_root.unwrap_or_else(|| workspace_root.join(DEFAULT_CAS_DIR));
         let manifest_dir =
             manifest_dir.unwrap_or_else(|| workspace_root.join(DEFAULT_MANIFEST_DIR));
-        let workspace_config =
-            workspace_config.unwrap_or_else(|| workspace_root.join(DEFAULT_WORKSPACE_CONFIG));
+        let workspace_config = resolve_workspace_config_path(workspace_config, &workspace_root);
+        let signing = resolve_signing_args(signer_identity, public_key, private_key)?;
 
         Ok(Self {
             workspace_root,
             cas_root,
             manifest_dir,
             workspace_config,
+            signing,
         })
     }
 }
 
 fn print_usage() {
     eprintln!(
-        "Usage: cargo run -p data --bin pudding_cas_ingest -- [--workspace-root <path>] [--cas-root <path>] [--manifest-dir <path>] [--workspace-config <path>]"
+        "Usage: cargo run -p data --bin pudding_cas_ingest -- [--workspace-root <path>] [--cas-root <path>] [--manifest-dir <path>] [--workspace-config <path>] [--signer-identity <name> --public-key <path> --private-key <path>]"
     );
+}
+
+fn resolve_workspace_root(
+    workspace_root: Option<PathBuf>,
+    workspace_config: Option<&Path>,
+    cwd: &Path,
+) -> PathBuf {
+    if let Some(workspace_root) = workspace_root {
+        return workspace_root;
+    }
+
+    if let Some(workspace_config) = workspace_config {
+        let config_path = if workspace_config.is_absolute() {
+            workspace_config.to_path_buf()
+        } else {
+            cwd.join(workspace_config)
+        };
+        if let Some(parent) = config_path.parent() {
+            return parent.to_path_buf();
+        }
+    }
+
+    for ancestor in cwd.ancestors() {
+        if ancestor.join(DEFAULT_WORKSPACE_CONFIG).is_file() {
+            return ancestor.to_path_buf();
+        }
+    }
+
+    cwd.to_path_buf()
+}
+
+fn resolve_workspace_config_path(
+    workspace_config: Option<PathBuf>,
+    workspace_root: &Path,
+) -> PathBuf {
+    match workspace_config {
+        Some(path) if path.is_absolute() => path,
+        Some(path) => workspace_root.join(path),
+        None => workspace_root.join(DEFAULT_WORKSPACE_CONFIG),
+    }
+}
+
+fn resolve_signing_args(
+    signer_identity: Option<String>,
+    public_key: Option<PathBuf>,
+    private_key: Option<PathBuf>,
+) -> Result<Option<SigningArgs>> {
+    match (signer_identity, public_key, private_key) {
+        (None, None, None) => Ok(None),
+        (Some(signer_identity), Some(public_key), Some(private_key)) => {
+            if signer_identity.trim().is_empty() {
+                bail!("--signer-identity must not be empty");
+            }
+            Ok(Some(SigningArgs {
+                signer_identity,
+                public_key,
+                private_key,
+            }))
+        }
+        _ => bail!(
+            "root manifest signing requires --signer-identity, --public-key, and --private-key together"
+        ),
+    }
 }
 
 fn load_workspace_config(path: &Path) -> Result<WorkspaceConfig> {
@@ -207,7 +303,7 @@ fn load_workspace_config(path: &Path) -> Result<WorkspaceConfig> {
 }
 
 fn validate_workspace_config(workspace_root: &Path, config: &WorkspaceConfig) -> Result<()> {
-    if config.format != "pudding-workspace-v1" {
+    if config.format != WORKSPACE_CONFIG_FORMAT_V1 {
         bail!(
             "unsupported workspace config format {:?}; expected \"pudding-workspace-v1\"",
             config.format
@@ -382,10 +478,6 @@ fn collect_repo_state(
     Ok(states)
 }
 
-fn default_true() -> bool {
-    true
-}
-
 fn stat_file(path: &Path) -> Result<FileSnapshotState> {
     let metadata =
         fs::metadata(path).with_context(|| format!("failed to stat {}", path.display()))?;
@@ -493,6 +585,23 @@ fn git_stdout(repo_root: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+fn read_public_key(path: &Path) -> Result<PublicKey> {
+    let bytes = read_hex_file(path)?;
+    PublicKey::from_bytes(&bytes).with_context(|| format!("invalid public key {}", path.display()))
+}
+
+fn read_private_key(path: &Path) -> Result<PrivateKey> {
+    let bytes = read_hex_file(path)?;
+    PrivateKey::from_bytes(&bytes)
+        .with_context(|| format!("invalid private key {}", path.display()))
+}
+
+fn read_hex_file(path: &Path) -> Result<Vec<u8>> {
+    let text =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    hex::decode(text.trim()).with_context(|| format!("invalid hex in {}", path.display()))
+}
+
 fn unix_now() -> Result<u64> {
     Ok(SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -503,6 +612,7 @@ fn unix_now() -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qcoin_crypto::{default_registry, PqSchemeRegistry, SignatureSchemeId};
 
     #[test]
     fn parse_git_ls_files_output_uses_nul_delimiters() {
@@ -514,6 +624,82 @@ mod tests {
                 PathBuf::from("dir/line\nbreak.ron")
             ]
         );
+    }
+
+    #[test]
+    fn resolve_workspace_root_prefers_ancestor_config() {
+        let root = tempfile::tempdir().unwrap();
+        let nested = root.path().join("loadngo/data");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(
+            root.path().join(DEFAULT_WORKSPACE_CONFIG),
+            "(format:\"pudding-workspace-v1\",children:[])",
+        )
+        .unwrap();
+
+        let resolved = resolve_workspace_root(None, None, &nested);
+        assert_eq!(resolved, root.path());
+    }
+
+    #[test]
+    fn resolve_workspace_root_uses_explicit_config_parent() {
+        let cwd = Path::new("/tmp/current");
+        let resolved = resolve_workspace_root(
+            None,
+            Some(Path::new("/var/pudding/pudding.workspace.ron")),
+            cwd,
+        );
+        assert_eq!(resolved, Path::new("/var/pudding"));
+    }
+
+    #[test]
+    fn resolve_signing_args_requires_complete_set() {
+        let err = resolve_signing_args(
+            Some("jay".to_string()),
+            Some(PathBuf::from("public.hex")),
+            None,
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}")
+            .contains("requires --signer-identity, --public-key, and --private-key together"));
+    }
+
+    #[test]
+    fn resolve_signing_args_accepts_complete_set() {
+        let signing = resolve_signing_args(
+            Some("jay".to_string()),
+            Some(PathBuf::from("public.hex")),
+            Some(PathBuf::from("private.hex")),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(signing.signer_identity, "jay");
+        assert_eq!(signing.public_key, PathBuf::from("public.hex"));
+        assert_eq!(signing.private_key, PathBuf::from("private.hex"));
+    }
+
+    #[test]
+    fn read_key_files_accept_hex_encoded_qcoin_keys() {
+        let registry = default_registry();
+        let scheme = registry.get(&SignatureSchemeId::Dilithium2).unwrap();
+        let (public_key, private_key) = scheme.keygen().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let public_key_path = dir.path().join("public.hex");
+        let private_key_path = dir.path().join("private.hex");
+
+        fs::write(
+            &public_key_path,
+            format!("{}\n", hex::encode(public_key.to_bytes().unwrap())),
+        )
+        .unwrap();
+        fs::write(
+            &private_key_path,
+            format!("{}\n", hex::encode(private_key.to_bytes().unwrap())),
+        )
+        .unwrap();
+
+        assert_eq!(read_public_key(&public_key_path).unwrap(), public_key);
+        assert_eq!(read_private_key(&private_key_path).unwrap(), private_key);
     }
 
     #[test]
@@ -553,7 +739,7 @@ mod tests {
     #[test]
     fn validate_workspace_config_requires_children() {
         let config = WorkspaceConfig {
-            format: "pudding-workspace-v1".to_string(),
+            format: WORKSPACE_CONFIG_FORMAT_V1.to_string(),
             children: Vec::new(),
         };
         let err = validate_workspace_config(Path::new("/tmp"), &config).unwrap_err();
@@ -564,8 +750,8 @@ mod tests {
     fn validate_workspace_config_rejects_missing_required_child() {
         let root = tempfile::tempdir().unwrap();
         let config = WorkspaceConfig {
-            format: "pudding-workspace-v1".to_string(),
-            children: vec![WorkspaceChildConfig {
+            format: WORKSPACE_CONFIG_FORMAT_V1.to_string(),
+            children: vec![data::pudding::WorkspaceChildConfig {
                 name: "loadngo".to_string(),
                 path: PathBuf::from("loadngo"),
                 required: true,
@@ -580,8 +766,8 @@ mod tests {
     fn validate_workspace_config_allows_missing_optional_child() {
         let root = tempfile::tempdir().unwrap();
         let config = WorkspaceConfig {
-            format: "pudding-workspace-v1".to_string(),
-            children: vec![WorkspaceChildConfig {
+            format: WORKSPACE_CONFIG_FORMAT_V1.to_string(),
+            children: vec![data::pudding::WorkspaceChildConfig {
                 name: "legacy".to_string(),
                 path: PathBuf::from("legacy"),
                 required: false,
