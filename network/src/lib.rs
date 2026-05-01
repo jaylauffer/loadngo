@@ -21,6 +21,7 @@
 //! ```
 
 mod core;
+pub mod model_service;
 pub mod p2p;
 pub mod task_runtime;
 

@@ -679,7 +679,133 @@ mod imp {
     }
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(target_os = "netbsd")]
+mod imp {
+    use std::time::Duration;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum MusicCueMode {
+        OneShot,
+        Loop,
+    }
+
+    pub struct MusicController {
+        active_track: Option<String>,
+        playlist_tracks: Vec<String>,
+        playlist_index: usize,
+        boot_track_path: String,
+        cue_mode: MusicCueMode,
+        mix_volume: f32,
+        bass_boost: f32,
+    }
+
+    impl MusicController {
+        pub fn new(
+            boot_track_path: String,
+            playlist_tracks: Vec<String>,
+            cue_mode: MusicCueMode,
+            bass_boost: f32,
+        ) -> Self {
+            Self {
+                active_track: None,
+                playlist_tracks,
+                playlist_index: 0,
+                boot_track_path,
+                cue_mode,
+                mix_volume: 1.0,
+                bass_boost: bass_boost.clamp(0.0, 1.0),
+            }
+        }
+
+        pub fn play_track_path(
+            &mut self,
+            path: &str,
+            _fade: f32,
+            _looped: bool,
+        ) -> Result<(), String> {
+            let selected_path = if path.trim().is_empty() {
+                self.boot_track_path.clone()
+            } else {
+                path.trim().to_string()
+            };
+            self.active_track = Some(selected_path);
+            Ok(())
+        }
+
+        pub fn start_playlist(&mut self, fade: f32) -> Result<(), String> {
+            self.playlist_index = 0;
+            let path = self
+                .playlist_tracks
+                .get(self.playlist_index)
+                .cloned()
+                .unwrap_or_else(|| self.boot_track_path.clone());
+            self.play_track_path(&path, fade, false)
+        }
+
+        pub fn fade_to_path(&mut self, path: &str, fade: f32) -> Result<(), String> {
+            let looped = self.playlist_tracks.is_empty() && self.cue_mode == MusicCueMode::Loop;
+            self.play_track_path(path, fade, looped)
+        }
+
+        pub fn update(&mut self, _dt: f32) {}
+
+        pub fn set_mix_volume(&mut self, volume: f32) {
+            self.mix_volume = volume.clamp(0.0, 2.0);
+        }
+
+        pub fn set_bass_boost(&mut self, bass_boost: f32) {
+            self.bass_boost = bass_boost.clamp(0.0, 1.0);
+        }
+
+        pub fn active_track(&self) -> Option<&str> {
+            self.active_track.as_deref()
+        }
+
+        pub fn frame_demand(&self) -> Option<Duration> {
+            None
+        }
+    }
+
+    pub struct VoiceController {
+        enabled: bool,
+        volume: f32,
+    }
+
+    impl VoiceController {
+        pub fn new(enabled: bool, volume: f32) -> Self {
+            Self { enabled, volume }
+        }
+
+        pub fn play_path(&mut self, _path: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        pub fn set_volume(&mut self, volume: f32) {
+            self.volume = volume.clamp(0.0, 2.0);
+        }
+
+        pub fn set_enabled(&mut self, enabled: bool) -> bool {
+            self.enabled = enabled;
+            self.enabled
+        }
+
+        pub fn is_playing(&self) -> bool {
+            false
+        }
+
+        pub fn stop(&mut self) {}
+
+        pub fn is_enabled(&self) -> bool {
+            self.enabled
+        }
+
+        pub fn frame_demand(&self) -> Option<Duration> {
+            None
+        }
+    }
+}
+
+#[cfg(all(not(target_os = "android"), not(target_os = "netbsd")))]
 mod imp {
     use std::collections::HashMap;
     use std::fs::File;
