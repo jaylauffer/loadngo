@@ -54,6 +54,7 @@ cargo run -p host-mac
 - [`docs/TASK_EXECUTION_TEST_PLAN.md`](docs/TASK_EXECUTION_TEST_PLAN.md): lab validation plan for correlation, worker selection, status cadence, and reward closure.
 - [`docs/TASK_REWARD_FLOW.md`](docs/TASK_REWARD_FLOW.md): explicit worker-facing explanation of how accepted task work becomes qcoin-backed reward proof.
 - [`docs/WORKER_FIRST_TASK_MODEL.md`](docs/WORKER_FIRST_TASK_MODEL.md): worker posture and reward-gating model inside the submitter-driven task protocol.
+- [`docs/ZHOENUS_HEAD_MODEL_RUNNER.md`](docs/ZHOENUS_HEAD_MODEL_RUNNER.md): local `llama-server` supervision path for the Zhoenus talking-head assistant.
 
 ## Codex skill
 - [`skills/loadngo-task/SKILL.md`](skills/loadngo-task/SKILL.md): repo-owned Codex skill for meaningful `loadngo` task work and qcoin-backed reward closure.
@@ -63,3 +64,4 @@ cargo run -p host-mac
 - `cargo run -p network --bin task-node -- ...`: standing worker node on top of `loadngo-proactor`.
 - `cargo run -p network --bin task_worker -- ...`: bounded/manual worker helper for a single listening window or a narrow local session.
 - `cargo run -p network --bin task_submitter -- ...`: submitter-side request, selection, verification, and qcoin reward closure flow.
+- `cargo run -p network --bin zhoenus_head_model -- --dry-run`: inspect the supervised local model service command for the Zhoenus talking head.

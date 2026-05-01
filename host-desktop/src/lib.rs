@@ -20,6 +20,10 @@ mod ios;
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "netbsd")]
+pub mod netbsd_wsdesktop;
+#[cfg(target_os = "netbsd")]
+pub mod netbsd_wsdisplay;
 #[cfg(target_os = "windows")]
 mod windows;
 

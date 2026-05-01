@@ -72,22 +72,22 @@ impl KqueuePort {
             .pop_front()
     }
 
-    fn user_event(ident: usize, flags: u16, fflags: u32) -> kevent {
+    fn user_event(ident: usize, flags: impl Into<u32>, fflags: u32) -> kevent {
         kevent {
             ident: ident as _,
             filter: EVFILT_USER,
-            flags,
+            flags: flags.into() as _,
             fflags,
             data: 0,
             udata: ptr::null_mut(),
         }
     }
 
-    fn read_event(fd: RawFd, flags: u16, token: u64) -> kevent {
+    fn read_event(fd: RawFd, flags: impl Into<u32>, token: u64) -> kevent {
         kevent {
             ident: fd as _,
             filter: EVFILT_READ,
-            flags,
+            flags: flags.into() as _,
             fflags: 0,
             data: 0,
             udata: token as usize as *mut _,

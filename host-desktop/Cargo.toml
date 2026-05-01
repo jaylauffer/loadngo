@@ -6,12 +6,16 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-futures = "0.3"
 image.workspace = true
 loadngo-host-core = { path = "../host-core" }
 loadngo-renderer = { path = "../renderer" }
-rodio = { version = "0.17", features = ["vorbis"] }
 ui-core = { path = "../ui-core" }
+
+[target.'cfg(any(target_os = "ios", target_os = "linux", target_os = "windows"))'.dependencies]
+futures = "0.3"
+
+[target.'cfg(all(not(target_os = "android"), not(target_os = "netbsd")))'.dependencies]
+rodio = { version = "0.17", features = ["vorbis"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 loadngo-gfx-metal = { path = "../gfx-metal" }
@@ -43,6 +47,10 @@ loadngo-gfx-gles = { path = "../gfx-gles" }
 loadngo-proactor = { path = "../proactor" }
 softbuffer = "0.4"
 winit = { version = "0.30", default-features = false, features = ["wayland", "x11", "rwh_06"] }
+
+[target.'cfg(target_os = "netbsd")'.dependencies]
+libc = "0.2"
+loadngo-proactor = { path = "../proactor" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 arboard = "3"
