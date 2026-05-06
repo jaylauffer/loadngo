@@ -1297,7 +1297,10 @@ mod tests {
             video_size: Some("1280x720".to_string()),
             frame_rate: 6,
         };
-        assert_eq!(preview_filter_spec(&options, 1280, 720), "fps=6,scale=1280x720");
+        assert_eq!(
+            preview_filter_spec(&options, 1280, 720),
+            "fps=6,scale=1280x720"
+        );
     }
 
     #[test]

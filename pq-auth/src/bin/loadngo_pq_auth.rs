@@ -34,6 +34,7 @@ fn run() -> Result<()> {
 }
 
 fn command_keygen(args: Vec<String>) -> Result<()> {
+    let quiet = has_flag(&args, "--quiet");
     let scheme = parse_flag_value(&args, "--scheme")
         .map(parse_scheme)
         .transpose()?
@@ -56,16 +57,26 @@ fn command_keygen(args: Vec<String>) -> Result<()> {
         &private_key.to_bytes().context("encode private key")?,
     )?;
 
-    println!(
-        "Generated {} auth keypair:\n  public: {}\n  private: {}",
-        scheme,
-        public_key_path.display(),
-        private_key_path.display()
-    );
+    if quiet {
+        println!(
+            "keygen ok scheme={} public={} private={}",
+            scheme,
+            public_key_path.display(),
+            private_key_path.display()
+        );
+    } else {
+        println!(
+            "Generated {} auth keypair:\n  public: {}\n  private: {}",
+            scheme,
+            public_key_path.display(),
+            private_key_path.display()
+        );
+    }
     Ok(())
 }
 
 fn command_issue(args: Vec<String>) -> Result<()> {
+    let quiet = has_flag(&args, "--quiet");
     let challenge_path = required_path(&args, "--challenge")?;
     let public_key_path = required_path(&args, "--public-key")?;
     let private_key_path = required_path(&args, "--private-key")?;
@@ -107,18 +118,31 @@ fn command_issue(args: Vec<String>) -> Result<()> {
     .sign(&public_key, &private_key)?;
     save_token(&out_path, &token)?;
 
-    println!(
-        "Issued PQ auth token:\n  token: {}\n  audience: {}\n  subject: {}\n  expires_at_unix_s: {}\n  scheme: {}",
-        out_path.display(),
-        token.audience,
-        token.subject.as_deref().unwrap_or("<none>"),
-        token.expires_at_unix_s,
-        token.signature_scheme
-    );
+    if quiet {
+        println!(
+            "issue ok token={} audience={} subject={} scopes={} expires_at_unix_s={} scheme={}",
+            out_path.display(),
+            token.audience,
+            token.subject.as_deref().unwrap_or("<none>"),
+            token.scopes.join(","),
+            token.expires_at_unix_s,
+            token.signature_scheme
+        );
+    } else {
+        println!(
+            "Issued PQ auth token:\n  token: {}\n  audience: {}\n  subject: {}\n  expires_at_unix_s: {}\n  scheme: {}",
+            out_path.display(),
+            token.audience,
+            token.subject.as_deref().unwrap_or("<none>"),
+            token.expires_at_unix_s,
+            token.signature_scheme
+        );
+    }
     Ok(())
 }
 
 fn command_verify(args: Vec<String>) -> Result<()> {
+    let quiet = has_flag(&args, "--quiet");
     let token_path = required_path(&args, "--token")?;
     let token = load_token(&token_path)?;
     let expected_challenge_sha256 =
@@ -144,15 +168,27 @@ fn command_verify(args: Vec<String>) -> Result<()> {
     };
     token.verify_with_policy(&policy)?;
 
-    println!(
-        "Verified PQ auth token:\n  token: {}\n  issuer: {}\n  audience: {}\n  subject: {}\n  scopes: {}\n  expires_at_unix_s: {}",
-        token_path.display(),
-        token.issuer,
-        token.audience,
-        token.subject.as_deref().unwrap_or("<none>"),
-        token.scopes.join(","),
-        token.expires_at_unix_s
-    );
+    if quiet {
+        println!(
+            "verify ok token={} issuer={} audience={} subject={} scopes={} expires_at_unix_s={}",
+            token_path.display(),
+            token.issuer,
+            token.audience,
+            token.subject.as_deref().unwrap_or("<none>"),
+            token.scopes.join(","),
+            token.expires_at_unix_s
+        );
+    } else {
+        println!(
+            "Verified PQ auth token:\n  token: {}\n  issuer: {}\n  audience: {}\n  subject: {}\n  scopes: {}\n  expires_at_unix_s: {}",
+            token_path.display(),
+            token.issuer,
+            token.audience,
+            token.subject.as_deref().unwrap_or("<none>"),
+            token.scopes.join(","),
+            token.expires_at_unix_s
+        );
+    }
     Ok(())
 }
 
@@ -193,6 +229,10 @@ fn repeated_flag_values(args: &[String], flag: &str) -> Vec<String> {
         .collect()
 }
 
+fn has_flag(args: &[String], flag: &str) -> bool {
+    args.iter().any(|arg| arg == flag)
+}
+
 fn required_path(args: &[String], flag: &str) -> Result<PathBuf> {
     parse_flag_value(args, flag)
         .map(PathBuf::from)
@@ -206,8 +246,24 @@ fn required_value<'a>(args: &'a [String], flag: &str) -> Result<&'a str> {
 fn print_usage() {
     eprintln!(
         "Usage:
-  cargo run -p loadngo-pq-auth --bin loadngo_pq_auth -- keygen --scheme <dilithium2|falcon512> --public-key <path> --private-key <path>
-  cargo run -p loadngo-pq-auth --bin loadngo_pq_auth -- issue --challenge <path> --issuer <name> --audience <name> --public-key <path> --private-key <path> --out <token.ron> [--subject <name>] [--scope <scope>]... [--ttl-seconds <seconds>] [--issued-at <unix-seconds>] [--nonce <32-hex>] [--notes <text>]
-  cargo run -p loadngo-pq-auth --bin loadngo_pq_auth -- verify --token <token.ron> [--challenge <path>] [--audience <name>] [--subject <name>] [--require-scope <scope>]... [--trusted-public-key <path>] [--now <unix-seconds>]"
+  cargo run -p loadngo-pq-auth --bin loadngo_pq_auth -- keygen --scheme <dilithium2|falcon512> --public-key <path> --private-key <path> [--quiet]
+  cargo run -p loadngo-pq-auth --bin loadngo_pq_auth -- issue --challenge <path> --issuer <name> --audience <name> --public-key <path> --private-key <path> --out <token.ron> [--subject <name>] [--scope <scope>]... [--ttl-seconds <seconds>] [--issued-at <unix-seconds>] [--nonce <32-hex>] [--notes <text>] [--quiet]
+  cargo run -p loadngo-pq-auth --bin loadngo_pq_auth -- verify --token <token.ron> [--challenge <path>] [--audience <name>] [--subject <name>] [--require-scope <scope>]... [--trusted-public-key <path>] [--now <unix-seconds>] [--quiet]"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn has_flag_detects_quiet_without_treating_values_as_flags() {
+        let args = vec![
+            "--scope".to_string(),
+            "netbsd-deploy".to_string(),
+            "--quiet".to_string(),
+        ];
+        assert!(has_flag(&args, "--quiet"));
+        assert!(!has_flag(&args, "--verbose"));
+    }
 }

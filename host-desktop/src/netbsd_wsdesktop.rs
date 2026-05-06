@@ -3,6 +3,7 @@ use std::{
     io,
     mem::{self, MaybeUninit},
     os::fd::RawFd,
+    ptr,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -28,6 +29,36 @@ const WSCONS_EVENT_VSCROLL: u32 = 17;
 const WSEVENT_VERSION: i32 = 1;
 const WSDESKTOP_MOUSE_TOKEN: u64 = 200;
 const WSDESKTOP_KEYBOARD_TOKEN: u64 = 201;
+const WSDESKTOP_TERMINAL_TOKEN: u64 = 202;
+
+const USB_KEY_A: i32 = 4;
+const USB_KEY_Q: i32 = 20;
+const USB_KEY_Z: i32 = 29;
+const USB_KEY_1: i32 = 30;
+const USB_KEY_0: i32 = 39;
+const USB_KEY_RETURN: i32 = 40;
+const USB_KEY_ESCAPE: i32 = 41;
+const USB_KEY_BACKSPACE: i32 = 42;
+const USB_KEY_TAB: i32 = 43;
+const USB_KEY_SPACE: i32 = 44;
+const USB_KEY_MINUS: i32 = 45;
+const USB_KEY_EQUAL: i32 = 46;
+const USB_KEY_LEFT_BRACKET: i32 = 47;
+const USB_KEY_RIGHT_BRACKET: i32 = 48;
+const USB_KEY_BACKSLASH: i32 = 49;
+const USB_KEY_SEMICOLON: i32 = 51;
+const USB_KEY_APOSTROPHE: i32 = 52;
+const USB_KEY_GRAVE: i32 = 53;
+const USB_KEY_COMMA: i32 = 54;
+const USB_KEY_PERIOD: i32 = 55;
+const USB_KEY_SLASH: i32 = 56;
+const USB_KEY_CAPS_LOCK: i32 = 57;
+const USB_KEY_RIGHT: i32 = 79;
+const USB_KEY_LEFT: i32 = 80;
+const USB_KEY_DOWN: i32 = 81;
+const USB_KEY_UP: i32 = 82;
+const USB_KEY_LEFT_SHIFT: i32 = 225;
+const USB_KEY_RIGHT_SHIFT: i32 = 229;
 
 const WSCONS_GROUP: u8 = b'W';
 const IOC_IN: u64 = 0x8000_0000;
@@ -79,6 +110,24 @@ pub fn run_desktop(options: WsDesktopOptions) -> Result<(), String> {
         cursor_period,
     )));
     let mut cursor_presenter = CursorPresenter::new(info);
+    let terminal_session = match TerminalSession::spawn() {
+        Ok(session) => {
+            let session = Arc::new(session);
+            register_terminal_output(&handle, Arc::clone(&state), session.output_fd())?;
+            {
+                let mut state = state.lock().expect("desktop state poisoned");
+                state.push_log("terminal shell started");
+                state.push_terminal_line("LOADNGO SHELL ATTACHED TO /BIN/SH");
+            }
+            Some(session)
+        }
+        Err(err) => {
+            let mut state = state.lock().expect("desktop state poisoned");
+            state.push_log(format!("terminal unavailable: {err}"));
+            state.push_terminal_line(format!("SHELL UNAVAILABLE: {err}"));
+            None
+        }
+    };
     let mut input_devices = Vec::new();
 
     if let Some(path) = options.mouse_path.as_deref() {
@@ -90,6 +139,7 @@ pub fn run_desktop(options: WsDesktopOptions) -> Result<(), String> {
                     device.fd,
                     WSDESKTOP_MOUSE_TOKEN,
                     InputKind::Mouse,
+                    None,
                 )?;
                 input_devices.push(device);
             }
@@ -109,6 +159,7 @@ pub fn run_desktop(options: WsDesktopOptions) -> Result<(), String> {
                     device.fd,
                     WSDESKTOP_KEYBOARD_TOKEN,
                     InputKind::Keyboard,
+                    terminal_session.clone(),
                 )?;
                 input_devices.push(device);
             }
@@ -219,6 +270,108 @@ impl BackBuffer {
 
     fn pixels_mut(&mut self) -> &mut [u8] {
         &mut self.pixels
+    }
+}
+
+struct TerminalSession {
+    input_fd: RawFd,
+    output_fd: RawFd,
+    child_pid: libc::pid_t,
+}
+
+impl TerminalSession {
+    fn spawn() -> Result<Self, String> {
+        let mut input_pipe = [-1; 2];
+        let mut output_pipe = [-1; 2];
+        if unsafe { libc::pipe(input_pipe.as_mut_ptr()) } < 0 {
+            return Err(format!("create shell input pipe: {}", last_error()));
+        }
+        if unsafe { libc::pipe(output_pipe.as_mut_ptr()) } < 0 {
+            close_if_valid(input_pipe[0]);
+            close_if_valid(input_pipe[1]);
+            return Err(format!("create shell output pipe: {}", last_error()));
+        }
+
+        let pid = unsafe { libc::fork() };
+        if pid < 0 {
+            close_if_valid(input_pipe[0]);
+            close_if_valid(input_pipe[1]);
+            close_if_valid(output_pipe[0]);
+            close_if_valid(output_pipe[1]);
+            return Err(format!("fork shell: {}", last_error()));
+        }
+
+        if pid == 0 {
+            unsafe {
+                libc::close(input_pipe[1]);
+                libc::close(output_pipe[0]);
+                libc::dup2(input_pipe[0], libc::STDIN_FILENO);
+                libc::dup2(output_pipe[1], libc::STDOUT_FILENO);
+                libc::dup2(output_pipe[1], libc::STDERR_FILENO);
+                libc::close(input_pipe[0]);
+                libc::close(output_pipe[1]);
+
+                let shell = CString::new("/bin/sh").expect("static shell path has no NUL");
+                let arg0 = CString::new("sh").expect("static shell arg has no NUL");
+                libc::execl(shell.as_ptr(), arg0.as_ptr(), ptr::null::<libc::c_char>());
+                libc::_exit(127);
+            }
+        }
+
+        close_if_valid(input_pipe[0]);
+        close_if_valid(output_pipe[1]);
+        if let Err(err) = set_nonblocking(output_pipe[0]) {
+            close_if_valid(input_pipe[1]);
+            close_if_valid(output_pipe[0]);
+            unsafe {
+                libc::kill(pid, libc::SIGHUP);
+            }
+            return Err(format!("set shell output nonblocking: {err}"));
+        }
+
+        Ok(Self {
+            input_fd: input_pipe[1],
+            output_fd: output_pipe[0],
+            child_pid: pid,
+        })
+    }
+
+    fn output_fd(&self) -> RawFd {
+        self.output_fd
+    }
+
+    fn write_input(&self, bytes: &[u8]) -> Result<(), String> {
+        let mut written = 0;
+        while written < bytes.len() {
+            let rc = unsafe {
+                libc::write(
+                    self.input_fd,
+                    bytes[written..].as_ptr() as *const libc::c_void,
+                    bytes.len() - written,
+                )
+            };
+            if rc < 0 {
+                return Err(format!("write shell input: {}", last_error()));
+            }
+            if rc == 0 {
+                return Err("write shell input returned zero bytes".to_string());
+            }
+            written += rc as usize;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for TerminalSession {
+    fn drop(&mut self) {
+        close_if_valid(self.input_fd);
+        close_if_valid(self.output_fd);
+        if self.child_pid > 0 {
+            unsafe {
+                libc::kill(self.child_pid, libc::SIGHUP);
+                libc::waitpid(self.child_pid, ptr::null_mut(), libc::WNOHANG);
+            }
+        }
     }
 }
 
@@ -386,12 +539,59 @@ fn request_cursor(
         .map_err(|err| format!("failed to request cursor frame: {err}"))
 }
 
+fn register_terminal_output(
+    handle: &ProactorHandle<KqueuePort>,
+    state: Arc<Mutex<DesktopState>>,
+    fd: RawFd,
+) -> Result<(), String> {
+    let frame_handle = handle.clone();
+    let output_handle = handle.clone();
+    handle
+        .register_readable(fd, WSDESKTOP_TERMINAL_TOKEN, move |_: ReadinessEvent| {
+            let mut needs_scene = false;
+            let mut shell_closed = false;
+            let result = drain_terminal_output(fd, |bytes| {
+                let mut state = state.lock().expect("desktop state poisoned");
+                state.append_terminal_bytes(bytes);
+                state.request_repaint();
+                needs_scene = true;
+            });
+
+            match result {
+                Ok(TerminalDrain::Open) => {}
+                Ok(TerminalDrain::Closed) => {
+                    let mut state = state.lock().expect("desktop state poisoned");
+                    state.push_terminal_line("SHELL EXITED");
+                    state.request_repaint();
+                    needs_scene = true;
+                    shell_closed = true;
+                }
+                Err(err) => {
+                    let mut state = state.lock().expect("desktop state poisoned");
+                    state.push_terminal_line(format!("SHELL READ FAILED: {err}"));
+                    state.request_repaint();
+                    needs_scene = true;
+                    shell_closed = true;
+                }
+            }
+
+            if shell_closed {
+                let _ = output_handle.deregister_readable(fd, WSDESKTOP_TERMINAL_TOKEN);
+            }
+            if needs_scene {
+                let _ = request_frame(&frame_handle, Arc::clone(&state));
+            }
+        })
+        .map_err(|err| format!("failed to register shell output readiness: {err}"))
+}
+
 fn register_input(
     handle: &ProactorHandle<KqueuePort>,
     state: Arc<Mutex<DesktopState>>,
     fd: RawFd,
     token: u64,
     kind: InputKind,
+    terminal: Option<Arc<TerminalSession>>,
 ) -> Result<(), String> {
     let stop_handle = handle.clone();
     let frame_handle = handle.clone();
@@ -402,14 +602,48 @@ fn register_input(
             let mut needs_scene = false;
             let mut needs_cursor = false;
             let result = drain_wscons_events(fd, |event| {
-                let mut state = state.lock().expect("desktop state poisoned");
-                let damage = state.apply_event(kind, event);
-                if damage.scene {
-                    state.request_repaint();
-                    needs_scene = true;
+                let terminal_action = {
+                    let mut state = state.lock().expect("desktop state poisoned");
+                    if kind == InputKind::Keyboard && state.captures_terminal_event(event) {
+                        Some(state.apply_terminal_event(kind, event))
+                    } else {
+                        let damage = state.apply_event(kind, event);
+                        if damage.scene {
+                            state.request_repaint();
+                            needs_scene = true;
+                        }
+                        needs_cursor |= damage.cursor;
+                        quit |= state.quit_requested;
+                        None
+                    }
+                };
+
+                if let Some(action) = terminal_action {
+                    if action.damage.scene {
+                        let mut state = state.lock().expect("desktop state poisoned");
+                        state.request_repaint();
+                        needs_scene = true;
+                    }
+                    if let Some(bytes) = action.write_bytes {
+                        match terminal.as_ref() {
+                            Some(terminal) => {
+                                if let Err(err) = terminal.write_input(&bytes) {
+                                    let mut state = state.lock().expect("desktop state poisoned");
+                                    state.push_terminal_line(format!("SHELL WRITE FAILED: {err}"));
+                                    state.request_repaint();
+                                    needs_scene = true;
+                                }
+                            }
+                            None => {
+                                let mut state = state.lock().expect("desktop state poisoned");
+                                state.push_terminal_line("SHELL IS NOT AVAILABLE");
+                                state.request_repaint();
+                                needs_scene = true;
+                            }
+                        }
+                    }
+                    needs_cursor |= action.damage.cursor;
                 }
-                needs_cursor |= damage.cursor;
-                quit |= state.quit_requested;
             });
             if let Err(err) = result {
                 let mut state = state.lock().expect("desktop state poisoned");
@@ -430,7 +664,7 @@ fn register_input(
         .map_err(|err| format!("failed to register {kind:?} readiness: {err}"))
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InputKind {
     Mouse,
     Keyboard,
@@ -513,6 +747,60 @@ fn drain_wscons_events(fd: RawFd, mut on_event: impl FnMut(WsconsEvent)) -> Resu
     }
 }
 
+enum TerminalDrain {
+    Open,
+    Closed,
+}
+
+fn drain_terminal_output(
+    fd: RawFd,
+    mut on_bytes: impl FnMut(&[u8]),
+) -> Result<TerminalDrain, io::Error> {
+    let mut buffer = [0u8; 4096];
+    loop {
+        let read_len =
+            unsafe { libc::read(fd, buffer.as_mut_ptr() as *mut libc::c_void, buffer.len()) };
+        if read_len > 0 {
+            on_bytes(&buffer[..read_len as usize]);
+            continue;
+        }
+        if read_len == 0 {
+            return Ok(TerminalDrain::Closed);
+        }
+        let err = io::Error::last_os_error();
+        if matches!(
+            err.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+        ) {
+            return Ok(TerminalDrain::Open);
+        }
+        return Err(err);
+    }
+}
+
+fn set_nonblocking(fd: RawFd) -> Result<(), io::Error> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn close_if_valid(fd: RawFd) {
+    if fd >= 0 {
+        unsafe {
+            libc::close(fd);
+        }
+    }
+}
+
+fn last_error() -> io::Error {
+    io::Error::last_os_error()
+}
+
 #[derive(Clone, Copy)]
 struct WindowModel {
     app: AppKind,
@@ -522,7 +810,7 @@ struct WindowModel {
     height: i32,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AppKind {
     Terminal,
     Files,
@@ -562,6 +850,11 @@ struct DamageRequest {
     cursor: bool,
 }
 
+struct TerminalAction {
+    damage: DamageRequest,
+    write_bytes: Option<Vec<u8>>,
+}
+
 struct DesktopState {
     width: i32,
     height: i32,
@@ -587,6 +880,12 @@ struct DesktopState {
     cursor_pending: bool,
     logs: Vec<String>,
     last_input: String,
+    terminal_lines: Vec<String>,
+    terminal_current: String,
+    terminal_input: String,
+    terminal_escape: bool,
+    terminal_shift_down: bool,
+    terminal_caps_lock: bool,
 }
 
 impl DesktopState {
@@ -642,6 +941,15 @@ impl DesktopState {
             cursor_pending: false,
             logs: Vec::new(),
             last_input: "READY".to_string(),
+            terminal_lines: vec![
+                "LOADNGO NETBSD DESKTOP".to_string(),
+                "SHELL READY".to_string(),
+            ],
+            terminal_current: String::new(),
+            terminal_input: String::new(),
+            terminal_escape: false,
+            terminal_shift_down: false,
+            terminal_caps_lock: false,
         }
     }
 
@@ -656,6 +964,238 @@ impl DesktopState {
         self.repaint_requested = true;
     }
 
+    fn push_terminal_line(&mut self, line: impl Into<String>) {
+        self.terminal_lines.push(line.into());
+        self.trim_terminal_lines();
+    }
+
+    fn trim_terminal_lines(&mut self) {
+        let excess = self.terminal_lines.len().saturating_sub(256);
+        if excess > 0 {
+            self.terminal_lines.drain(0..excess);
+        }
+    }
+
+    fn append_terminal_bytes(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            if self.terminal_escape {
+                if (0x40..=0x7e).contains(byte) {
+                    self.terminal_escape = false;
+                }
+                continue;
+            }
+
+            match *byte {
+                0x1b => self.terminal_escape = true,
+                b'\r' => {}
+                b'\n' => {
+                    let line = mem::take(&mut self.terminal_current);
+                    self.push_terminal_line(line);
+                }
+                b'\t' => self.terminal_current.push_str("    "),
+                8 | 127 => {
+                    self.terminal_current.pop();
+                }
+                32..=126 => {
+                    if self.terminal_current.len() < 240 {
+                        self.terminal_current.push(*byte as char);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn captures_terminal_event(&self, event: WsconsEvent) -> bool {
+        self.active_app == AppKind::Terminal
+            && matches!(
+                event.event_type,
+                WSCONS_EVENT_ASCII
+                    | WSCONS_EVENT_KEY_DOWN
+                    | WSCONS_EVENT_KEY_UP
+                    | WSCONS_EVENT_ALL_KEYS_UP
+            )
+    }
+
+    fn apply_terminal_event(&mut self, kind: InputKind, event: WsconsEvent) -> TerminalAction {
+        self.input_count = self.input_count.saturating_add(1);
+        let mut action = TerminalAction {
+            damage: DamageRequest::default(),
+            write_bytes: None,
+        };
+
+        match event.event_type {
+            WSCONS_EVENT_ASCII => self.apply_terminal_ascii(event.value, &mut action),
+            WSCONS_EVENT_KEY_DOWN => {
+                if !self.set_terminal_modifier(event.value, true) {
+                    if event.value == USB_KEY_CAPS_LOCK {
+                        self.terminal_caps_lock = !self.terminal_caps_lock;
+                    } else if let Some(value) = self.terminal_ascii_for_key_code(event.value) {
+                        self.apply_terminal_ascii(value, &mut action);
+                    }
+                }
+            }
+            WSCONS_EVENT_KEY_UP => {
+                self.set_terminal_modifier(event.value, false);
+            }
+            WSCONS_EVENT_ALL_KEYS_UP => {
+                self.terminal_shift_down = false;
+            }
+            _ => {}
+        }
+
+        self.last_input = format!("{kind:?} type={} value={}", event.event_type, event.value);
+        action
+    }
+
+    fn apply_terminal_ascii(&mut self, value: i32, action: &mut TerminalAction) {
+        match value {
+            10 | 13 => {
+                let command = mem::take(&mut self.terminal_input);
+                self.push_terminal_line(format!("$ {command}"));
+                let mut bytes = command.into_bytes();
+                bytes.push(b'\n');
+                action.write_bytes = Some(bytes);
+                action.damage.scene = true;
+            }
+            8 | 127 => {
+                self.terminal_input.pop();
+                action.damage.scene = true;
+            }
+            9 => {
+                if self.terminal_input.len() < 220 {
+                    self.terminal_input.push_str("    ");
+                    action.damage.scene = true;
+                }
+            }
+            32..=126 => {
+                if self.terminal_input.len() < 220 {
+                    self.terminal_input.push(value as u8 as char);
+                    action.damage.scene = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn set_terminal_modifier(&mut self, key_code: i32, pressed: bool) -> bool {
+        match key_code {
+            USB_KEY_LEFT_SHIFT | USB_KEY_RIGHT_SHIFT => {
+                self.terminal_shift_down = pressed;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn terminal_ascii_for_key_code(&self, key_code: i32) -> Option<i32> {
+        if (USB_KEY_A..=USB_KEY_Z).contains(&key_code) {
+            let letter = (b'a' + (key_code - USB_KEY_A) as u8) as char;
+            let uppercase = self.terminal_shift_down ^ self.terminal_caps_lock;
+            return Some(if uppercase {
+                letter.to_ascii_uppercase() as i32
+            } else {
+                letter as i32
+            });
+        }
+
+        if (USB_KEY_1..=USB_KEY_0).contains(&key_code) {
+            let index = (key_code - USB_KEY_1) as usize;
+            let chars = if self.terminal_shift_down {
+                b"!@#$%^&*()"
+            } else {
+                b"1234567890"
+            };
+            return Some(chars[index] as i32);
+        }
+
+        let value = match key_code {
+            USB_KEY_RETURN => 13,
+            USB_KEY_BACKSPACE => 8,
+            USB_KEY_TAB => 9,
+            USB_KEY_SPACE => b' ',
+            USB_KEY_MINUS => {
+                if self.terminal_shift_down {
+                    b'_'
+                } else {
+                    b'-'
+                }
+            }
+            USB_KEY_EQUAL => {
+                if self.terminal_shift_down {
+                    b'+'
+                } else {
+                    b'='
+                }
+            }
+            USB_KEY_LEFT_BRACKET => {
+                if self.terminal_shift_down {
+                    b'{'
+                } else {
+                    b'['
+                }
+            }
+            USB_KEY_RIGHT_BRACKET => {
+                if self.terminal_shift_down {
+                    b'}'
+                } else {
+                    b']'
+                }
+            }
+            USB_KEY_BACKSLASH => {
+                if self.terminal_shift_down {
+                    b'|'
+                } else {
+                    b'\\'
+                }
+            }
+            USB_KEY_SEMICOLON => {
+                if self.terminal_shift_down {
+                    b':'
+                } else {
+                    b';'
+                }
+            }
+            USB_KEY_APOSTROPHE => {
+                if self.terminal_shift_down {
+                    b'"'
+                } else {
+                    b'\''
+                }
+            }
+            USB_KEY_GRAVE => {
+                if self.terminal_shift_down {
+                    b'~'
+                } else {
+                    b'`'
+                }
+            }
+            USB_KEY_COMMA => {
+                if self.terminal_shift_down {
+                    b'<'
+                } else {
+                    b','
+                }
+            }
+            USB_KEY_PERIOD => {
+                if self.terminal_shift_down {
+                    b'>'
+                } else {
+                    b'.'
+                }
+            }
+            USB_KEY_SLASH => {
+                if self.terminal_shift_down {
+                    b'?'
+                } else {
+                    b'/'
+                }
+            }
+            _ => return None,
+        };
+        Some(value as i32)
+    }
+
     fn apply_event(&mut self, kind: InputKind, event: WsconsEvent) -> DamageRequest {
         self.input_count = self.input_count.saturating_add(1);
         let mut damage = DamageRequest::default();
@@ -668,7 +1208,7 @@ impl DesktopState {
             }
             WSCONS_EVENT_MOUSE_DELTA_Y => {
                 let before = self.cursor_y;
-                self.cursor_y = (self.cursor_y + event.value).clamp(0, self.height - 1);
+                self.cursor_y = (self.cursor_y - event.value).clamp(0, self.height - 1);
                 damage.cursor |= before != self.cursor_y;
                 damage.scene |= self.update_drag();
             }
@@ -813,12 +1353,12 @@ impl DesktopState {
 
     fn handle_key_code(&mut self, value: i32) {
         match value {
-            1 | 16 => self.quit_requested = true,
-            15 | 28 => self.cycle_app(),
-            72 | 200 => self.cursor_y = (self.cursor_y - 20).clamp(0, self.height - 1),
-            80 | 208 => self.cursor_y = (self.cursor_y + 20).clamp(0, self.height - 1),
-            75 | 203 => self.cursor_x = (self.cursor_x - 20).clamp(0, self.width - 1),
-            77 | 205 => self.cursor_x = (self.cursor_x + 20).clamp(0, self.width - 1),
+            USB_KEY_ESCAPE | USB_KEY_Q => self.quit_requested = true,
+            USB_KEY_TAB | USB_KEY_RETURN => self.cycle_app(),
+            USB_KEY_UP => self.cursor_y = (self.cursor_y - 20).clamp(0, self.height - 1),
+            USB_KEY_DOWN => self.cursor_y = (self.cursor_y + 20).clamp(0, self.height - 1),
+            USB_KEY_LEFT => self.cursor_x = (self.cursor_x - 20).clamp(0, self.width - 1),
+            USB_KEY_RIGHT => self.cursor_x = (self.cursor_x + 20).clamp(0, self.width - 1),
             _ => {}
         }
     }
@@ -978,7 +1518,7 @@ fn draw_window(canvas: &mut Canvas<'_>, state: &DesktopState, window: WindowMode
 
 fn draw_terminal(canvas: &mut Canvas<'_>, state: &DesktopState, window: WindowModel) {
     let x = window.x + 18;
-    let mut y = window.y + 54;
+    let y = window.y + 54;
     canvas.fill_rect(
         x - 8,
         y - 8,
@@ -986,20 +1526,22 @@ fn draw_terminal(canvas: &mut Canvas<'_>, state: &DesktopState, window: WindowMo
         window.height - 68,
         (18, 24, 25),
     );
-    for line in [
-        "$ LOADNGO DESKTOP",
-        "WSDISPLAY FRAMEBUFFER ONLINE",
-        "INPUT THROUGH WSCONS EVENTS",
-        "CLICK ICONS OR DRAG TITLE BAR",
-        "PRESS Q OR CLICK QUIT TO EXIT",
-    ] {
-        canvas.text(x, y, line, 2, (130, 229, 184));
-        y += 28;
+    let scale = 1;
+    let line_height = 12;
+    let max_chars = ((window.width - 36) / 6).max(1) as usize;
+    let visible_rows = ((window.height - 90) / line_height).max(1) as usize;
+    let mut lines = state.terminal_lines.clone();
+    if !state.terminal_current.is_empty() {
+        lines.push(state.terminal_current.clone());
     }
-    y += 8;
-    for log in state.logs.iter().rev().take(4) {
-        canvas.text(x, y, log, 1, (210, 218, 213));
-        y += 16;
+    lines.push(format!("$ {}_", state.terminal_input));
+
+    let start = lines.len().saturating_sub(visible_rows);
+    let mut draw_y = y;
+    for line in lines.iter().skip(start) {
+        let display = fit_terminal_line(line, max_chars);
+        canvas.text(x, draw_y, &display, scale, (130, 229, 184));
+        draw_y += line_height;
     }
 }
 
@@ -1038,7 +1580,13 @@ fn draw_monitor(canvas: &mut Canvas<'_>, state: &DesktopState, window: WindowMod
 
 fn draw_bottom_bar(canvas: &mut Canvas<'_>, state: &DesktopState) {
     let y = state.height - 31;
-    canvas.text(16, y, "TAB/ENTER CYCLE  Q QUIT", 2, (213, 219, 213));
+    canvas.text(
+        16,
+        y,
+        &format!("ACTIVE {}", state.active_app.title()),
+        2,
+        (213, 219, 213),
+    );
     canvas.text(
         420,
         y,
@@ -1214,6 +1762,10 @@ fn point_in_rect(px: i32, py: i32, x: i32, y: i32, width: i32, height: i32) -> b
     px >= x && px < x + width && py >= y && py < y + height
 }
 
+fn fit_terminal_line(line: &str, max_chars: usize) -> String {
+    line.chars().take(max_chars).collect()
+}
+
 const fn iow_const(group: u8, number: u8, len: usize) -> libc::c_ulong {
     (IOC_IN | (((len & IOCPARM_MASK) as u64) << 16) | ((group as u64) << 8) | number as u64)
         as libc::c_ulong
@@ -1222,6 +1774,26 @@ const fn iow_const(group: u8, number: u8, len: usize) -> libc::c_ulong {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_info() -> WsdisplayInfo {
+        WsdisplayInfo {
+            width: 100,
+            height: 80,
+            stride: 400,
+            bits_per_pixel: 32,
+            fb_size: 32000,
+            fb_offset: 0,
+            pixel_type: 0,
+            red_offset: 16,
+            red_size: 8,
+            green_offset: 8,
+            green_size: 8,
+            blue_offset: 0,
+            blue_size: 8,
+            alpha_offset: 0,
+            alpha_size: 0,
+        }
+    }
 
     #[test]
     fn wscons_event_shape_matches_netbsd_header() {
@@ -1265,6 +1837,44 @@ mod tests {
         assert_eq!(state.cursor_x, 99);
         assert!(damage.cursor);
         assert!(!damage.scene);
+    }
+
+    #[test]
+    fn desktop_mouse_delta_y_moves_cursor_in_screen_direction() {
+        let mut state = DesktopState::new(
+            test_info(),
+            Duration::from_millis(50),
+            Duration::from_millis(16),
+        );
+        state.cursor_y = 40;
+
+        let up = state.apply_event(
+            InputKind::Mouse,
+            WsconsEvent {
+                event_type: WSCONS_EVENT_MOUSE_DELTA_Y,
+                value: 5,
+                time: libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+        );
+        assert!(up.cursor);
+        assert_eq!(state.cursor_y, 35);
+
+        let down = state.apply_event(
+            InputKind::Mouse,
+            WsconsEvent {
+                event_type: WSCONS_EVENT_MOUSE_DELTA_Y,
+                value: -7,
+                time: libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+        );
+        assert!(down.cursor);
+        assert_eq!(state.cursor_y, 42);
     }
 
     #[test]
@@ -1320,5 +1930,296 @@ mod tests {
             })
         );
         assert_eq!(DamageRect::clipped(info, 10, 8, 20, 26), None);
+    }
+
+    #[test]
+    fn terminal_editor_buffers_until_enter() {
+        let mut state = DesktopState::new(
+            test_info(),
+            Duration::from_millis(50),
+            Duration::from_millis(16),
+        );
+
+        let first = state.apply_terminal_event(
+            InputKind::Keyboard,
+            WsconsEvent {
+                event_type: WSCONS_EVENT_ASCII,
+                value: 'p' as i32,
+                time: libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+        );
+        assert!(first.write_bytes.is_none());
+        assert_eq!(state.terminal_input, "p");
+
+        let enter = state.apply_terminal_event(
+            InputKind::Keyboard,
+            WsconsEvent {
+                event_type: WSCONS_EVENT_ASCII,
+                value: 13,
+                time: libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+        );
+        assert_eq!(enter.write_bytes, Some(b"p\n".to_vec()));
+        assert_eq!(state.terminal_input, "");
+        assert_eq!(state.terminal_lines.last().map(String::as_str), Some("$ p"));
+    }
+
+    #[test]
+    fn terminal_editor_buffers_usb_keycodes_until_enter() {
+        let mut state = DesktopState::new(
+            test_info(),
+            Duration::from_millis(50),
+            Duration::from_millis(16),
+        );
+
+        let first = state.apply_terminal_event(
+            InputKind::Keyboard,
+            WsconsEvent {
+                event_type: WSCONS_EVENT_KEY_DOWN,
+                value: 19,
+                time: libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+        );
+        assert!(first.write_bytes.is_none());
+        assert_eq!(state.terminal_input, "p");
+
+        let _ = state.apply_terminal_event(
+            InputKind::Keyboard,
+            WsconsEvent {
+                event_type: WSCONS_EVENT_KEY_DOWN,
+                value: USB_KEY_LEFT_SHIFT,
+                time: libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+        );
+        let _ = state.apply_terminal_event(
+            InputKind::Keyboard,
+            WsconsEvent {
+                event_type: WSCONS_EVENT_KEY_DOWN,
+                value: USB_KEY_A,
+                time: libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+        );
+        let _ = state.apply_terminal_event(
+            InputKind::Keyboard,
+            WsconsEvent {
+                event_type: WSCONS_EVENT_KEY_UP,
+                value: USB_KEY_LEFT_SHIFT,
+                time: libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+        );
+        let _ = state.apply_terminal_event(
+            InputKind::Keyboard,
+            WsconsEvent {
+                event_type: WSCONS_EVENT_KEY_DOWN,
+                value: USB_KEY_1,
+                time: libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+        );
+        let _ = state.apply_terminal_event(
+            InputKind::Keyboard,
+            WsconsEvent {
+                event_type: WSCONS_EVENT_KEY_DOWN,
+                value: USB_KEY_LEFT_SHIFT,
+                time: libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+        );
+        let _ = state.apply_terminal_event(
+            InputKind::Keyboard,
+            WsconsEvent {
+                event_type: WSCONS_EVENT_KEY_DOWN,
+                value: USB_KEY_1,
+                time: libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+        );
+        let _ = state.apply_terminal_event(
+            InputKind::Keyboard,
+            WsconsEvent {
+                event_type: WSCONS_EVENT_KEY_DOWN,
+                value: USB_KEY_BACKSPACE,
+                time: libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+        );
+        assert_eq!(state.terminal_input, "pA1");
+
+        let enter = state.apply_terminal_event(
+            InputKind::Keyboard,
+            WsconsEvent {
+                event_type: WSCONS_EVENT_KEY_DOWN,
+                value: USB_KEY_RETURN,
+                time: libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+        );
+        assert_eq!(enter.write_bytes, Some(b"pA1\n".to_vec()));
+        assert_eq!(state.terminal_input, "");
+        assert_eq!(
+            state.terminal_lines.last().map(String::as_str),
+            Some("$ pA1")
+        );
+    }
+
+    #[test]
+    fn terminal_all_keys_up_resets_shift_state() {
+        let mut state = DesktopState::new(
+            test_info(),
+            Duration::from_millis(50),
+            Duration::from_millis(16),
+        );
+
+        let _ = state.apply_terminal_event(
+            InputKind::Keyboard,
+            WsconsEvent {
+                event_type: WSCONS_EVENT_KEY_DOWN,
+                value: USB_KEY_LEFT_SHIFT,
+                time: libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+        );
+        let _ = state.apply_terminal_event(
+            InputKind::Keyboard,
+            WsconsEvent {
+                event_type: WSCONS_EVENT_ALL_KEYS_UP,
+                value: 0,
+                time: libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+        );
+        let _ = state.apply_terminal_event(
+            InputKind::Keyboard,
+            WsconsEvent {
+                event_type: WSCONS_EVENT_KEY_DOWN,
+                value: USB_KEY_A,
+                time: libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+        );
+
+        assert_eq!(state.terminal_input, "a");
+    }
+
+    #[test]
+    fn desktop_uses_usb_keycodes_for_global_controls() {
+        let mut state = DesktopState::new(
+            test_info(),
+            Duration::from_millis(50),
+            Duration::from_millis(16),
+        );
+        state.active_app = AppKind::Files;
+
+        let tab = state.apply_event(
+            InputKind::Keyboard,
+            WsconsEvent {
+                event_type: WSCONS_EVENT_KEY_DOWN,
+                value: USB_KEY_TAB,
+                time: libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+        );
+        assert!(tab.scene);
+        assert_eq!(state.active_app, AppKind::Monitor);
+
+        let y = state.cursor_y;
+        let up = state.apply_event(
+            InputKind::Keyboard,
+            WsconsEvent {
+                event_type: WSCONS_EVENT_KEY_DOWN,
+                value: USB_KEY_UP,
+                time: libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+        );
+        assert!(up.cursor);
+        assert_eq!(state.cursor_y, y - 20);
+
+        let quit = state.apply_event(
+            InputKind::Keyboard,
+            WsconsEvent {
+                event_type: WSCONS_EVENT_KEY_DOWN,
+                value: USB_KEY_Q,
+                time: libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+        );
+        assert!(quit.scene);
+        assert!(state.quit_requested);
+    }
+
+    #[test]
+    fn terminal_output_parses_newlines_and_backspace() {
+        let mut state = DesktopState::new(
+            test_info(),
+            Duration::from_millis(50),
+            Duration::from_millis(16),
+        );
+
+        state.append_terminal_bytes(b"abc\x08d\nnext");
+        assert_eq!(state.terminal_lines.last().map(String::as_str), Some("abd"));
+        assert_eq!(state.terminal_current, "next");
+    }
+
+    #[test]
+    fn terminal_session_runs_shell_command() {
+        let session = TerminalSession::spawn().expect("spawn shell session");
+        session
+            .write_input(b"echo LOADNGO_TERMINAL_TEST\n")
+            .expect("write command");
+
+        let mut output = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            drain_terminal_output(session.output_fd(), |bytes| output.extend_from_slice(bytes))
+                .expect("drain shell output");
+            let output_text = String::from_utf8_lossy(&output);
+            if output_text.contains("LOADNGO_TERMINAL_TEST") {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        panic!("shell output did not include test marker: {output:?}");
     }
 }

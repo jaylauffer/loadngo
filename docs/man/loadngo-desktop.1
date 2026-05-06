@@ -1,0 +1,169 @@
+.Dd May 1, 2026
+.Dt LOADNGO-DESKTOP 1
+.Os
+.Sh NAME
+.Nm loadngo-desktop
+.Nd direct wsdisplay desktop shell for loadngo on NetBSD
+.Sh SYNOPSIS
+.Nm netbsd_wsdesktop
+.Op Fl -device Ar display
+.Op Fl -mouse Ar device
+.Op Fl -keyboard Ar device
+.Op Fl -fps Ar rate
+.Op Fl -cursor-hz Ar rate
+.Op Fl -seconds Ar count
+.Op Fl -no-input
+.Op Fl -continuous
+.Sh DESCRIPTION
+.Nm
+is the first direct framebuffer desktop shell for loadngo on
+.Nx .
+The current binary is named
+.Nm netbsd_wsdesktop .
+It opens a
+.Xr wsdisplay 4
+framebuffer, renders a small desktop scene, reads keyboard and mouse input
+from wscons devices, and drives timers and readiness through the loadngo
+kqueue proactor.
+.Pp
+The desktop is intentionally small and operational rather than decorative.
+It provides a launcher, draggable application windows, a cursor overlay, a
+status bar, and a first Terminal application.
+.Pp
+The Terminal application starts a persistent
+.Pa /bin/sh
+process.
+Command lines are edited inside the desktop and submitted to the shell when
+Enter is pressed.
+Shell stdout and stderr are read back through
+proactor readiness and displayed in the Terminal window.
+.Pp
+The Terminal is currently line-oriented.
+It is useful for normal shell
+commands and persistent shell state such as
+.Ic cd ,
+but it is not yet a full tty or pty emulator.
+Curses applications, job
+control, terminal modes, and interactive programs that require a real
+controlling terminal are outside the current milestone.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl -device Ar display
+Open the wsdisplay framebuffer at
+.Ar display .
+The default is
+.Pa /dev/ttyE0 .
+.It Fl -mouse Ar device
+Read mouse events from
+.Ar device .
+The default is
+.Pa /dev/wsmouse .
+.It Fl -keyboard Ar device
+Read keyboard events from
+.Ar device .
+The default is
+.Pa /dev/wskbd .
+.It Fl -fps Ar rate
+Set the maximum full-scene presentation rate.
+The default is 2 frames per second.
+This is a damage cap, not an animation target.
+.It Fl -cursor-hz Ar rate
+Set the maximum cursor damage presentation rate.
+The default is 60 Hz.
+Cursor movement restores the previous cursor rectangle from the back buffer
+and redraws only the cursor region on the mapped front buffer.
+.It Fl -seconds Ar count
+Stop the desktop after
+.Ar count
+seconds.
+This is intended for bounded smoke tests over SSH.
+.It Fl -no-input
+Disable keyboard and mouse devices.
+This is useful for display-only smoke tests.
+.It Fl -continuous
+Continuously request scene repaints.
+This is a diagnostic mode for repaint testing and should not be used as the
+normal desktop mode.
+.El
+.Sh KEYBOARD
+.Bl -tag -width Ds
+.It Terminal active
+Printable ASCII characters edit the command line.
+On USB
+.Xr wskbd 4
+devices, key-down events are translated through the US keycode fallback when
+ASCII events are not emitted.
+Enter submits the command to the persistent shell.
+Backspace removes the previous character.
+.It Other app active
+Tab or Enter cycles apps.
+Q or Escape quits.
+.El
+.Sh FILES
+.Bl -tag -width /dev/wsmouse
+.It Pa /dev/ttyE0
+Default wsdisplay framebuffer device.
+.It Pa /dev/wsmouse
+Default wscons mouse event source.
+.It Pa /dev/wskbd
+Default wscons keyboard event source.
+.It Pa /bin/sh
+Shell process used by the Terminal application.
+.El
+.Sh EXIT STATUS
+.Ex -std netbsd_wsdesktop
+.Sh EXAMPLES
+Build the desktop on the
+.Nx
+target:
+.Bd -literal -offset indent
+cargo build --offline -p loadngo-host-desktop --bin netbsd_wsdesktop
+.Ed
+.Pp
+Run the desktop using default devices:
+.Bd -literal -offset indent
+\&./target/debug/netbsd_wsdesktop
+.Ed
+.Pp
+Run a bounded smoke test:
+.Bd -literal -offset indent
+\&./target/debug/netbsd_wsdesktop --seconds 10
+.Ed
+.Pp
+Run without input devices:
+.Bd -literal -offset indent
+\&./target/debug/netbsd_wsdesktop --no-input --seconds 10
+.Ed
+.Sh NOTES
+The desktop keeps a native-format RAM back buffer for full scene rendering.
+Full scene presentation copies a completed frame to wsdisplay.
+Cursor motion
+uses a smaller damage path: the previous cursor rectangle is restored from the
+back buffer, and the new cursor is drawn directly on the mapped framebuffer.
+.Pp
+The
+.Fl -fps
+and
+.Fl -cursor-hz
+options are independent.
+The default desktop is event-driven; it does not
+redraw merely because time has passed.
+.Pp
+The wsdisplay mapping can behave like slow device memory on the current target.
+Avoid raw mouse-event-rate full redraws.
+.Sh SEE ALSO
+.Xr sh 1 ,
+.Xr kqueue 2 ,
+.Xr wsdisplay 4 ,
+.Xr wskbd 4 ,
+.Xr wsmouse 4
+.Sh HISTORY
+The loadngo
+.Nx
+desktop was first brought up on
+.Nx 11 RC
+on an
+aarch64 host at
+.Pa 10.10.10.3 .
+.Sh AUTHORS
+.An The loadngo project

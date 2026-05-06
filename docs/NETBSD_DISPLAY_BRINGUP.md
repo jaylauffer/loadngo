@@ -92,6 +92,12 @@ For bounded testing over SSH or during bring-up:
 ./target/debug/netbsd_wsdesktop --seconds 30
 ```
 
+Repo-local manual page:
+
+```bash
+mandoc -Tutf8 docs/man/loadngo-desktop.1
+```
+
 The shell currently provides:
 
 - direct wsdisplay framebuffer presentation
@@ -102,8 +108,15 @@ The shell currently provides:
   60 Hz
 - proactor-driven damage presentation through `loadngo-proactor` / `KqueuePort`
 - wscons mouse and keyboard readiness through the same proactor
+- a first interactive Terminal app backed by a persistent `/bin/sh` process;
+  command lines are edited in the desktop and submitted to the shell on Enter,
+  while shell stdout/stderr are read through proactor readiness
+- USB `wskbd` key-down fallback for the Terminal line editor, so targets that
+  do not emit `WSCONS_EVENT_ASCII` still accept printable keys, Shift
+  punctuation, Backspace, Tab, and Enter
 - a launcher, draggable app window, status bar, pointer cursor, and quit action
-- keyboard fallbacks: `Tab` / `Enter` cycle apps, `Q` / `Esc` quits
+- keyboard fallbacks outside the Terminal app: `Tab` / `Enter` cycle apps,
+  `Q` / `Esc` quits
 
 Default devices:
 
@@ -123,6 +136,20 @@ Useful options:
 ./target/debug/netbsd_wsdesktop --continuous --fps 1 --seconds 10
 ```
 
+PQ-authenticated deployment discipline:
+
+- create a challenge payload that names `root@10.10.10.3`, the touched files,
+  the build/test command, and the intended restart action
+- issue a `loadngo-pq-auth` token with audience `netbsd-rpi3b` and scope
+  `netbsd-deploy`
+- verify that token against the same challenge and trusted public key before
+  changing the live target
+- use `--quiet` for auth issue/verify and keep build output in target-local log
+  files unless failure detail is needed
+
+This keeps routine bring-up transcripts to concise signed receipts instead of
+scrollback-heavy command noise.
+
 Continuity contract:
 
 - Default mode renders once, then presents only after input or shell state
@@ -133,6 +160,9 @@ Continuity contract:
 - `--continuous` is a diagnostic mode for repaint testing only.
 - Avoid animated status counters as default behavior on wsdisplay until damage
   tracking is in place.
+- The Terminal app is intentionally line-oriented for this milestone. It is
+  useful for shell commands and persistent shell state such as `cd`, but it is
+  not yet a full tty/pty emulator for curses programs or job-control workflows.
 
 The wsdisplay mmap can behave like slow device memory. The desktop must not
 redraw at raw mouse event rate, and it must not repaint merely because time has

@@ -84,6 +84,9 @@ cargo run -p loadngo-pq-auth --bin loadngo_pq_auth -- verify \
   --now 1711929600
 ```
 
+Add `--quiet` to any command when the caller needs a single-line receipt for
+logs, deployment scripts, or agent transcripts.
+
 ## Token Model
 
 The signed token envelope currently binds:
@@ -113,6 +116,21 @@ This is intentionally parallel to, but distinct from, the CAS signing model.
 
 Both should eventually feed a common trust-root story, but they are not the
 same artifact.
+
+## Quiet Operational Receipts
+
+For noisy bring-up work, prefer a small challenge payload plus quiet receipts
+over raw command transcripts. The challenge should state:
+
+- target node or audience
+- intended action
+- files or manifest roots being moved
+- validation command
+- expected scope, such as `netbsd-deploy`
+
+Then issue and verify a token with `--quiet`, archive the challenge and token,
+and only surface the concise `issue ok ...` / `verify ok ...` lines unless a
+failure needs full logs.
 
 ## Near-Term Next Steps
 
