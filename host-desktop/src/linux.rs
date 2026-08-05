@@ -1236,6 +1236,7 @@ fn map_host_key(event: &winit::event::KeyEvent) -> Option<HostKey> {
             "F" => Some(HostKey::F),
             "R" => Some(HostKey::R),
             "S" => Some(HostKey::S),
+            "T" => Some(HostKey::T),
             "V" => Some(HostKey::V),
             "W" => Some(HostKey::W),
             "Y" => Some(HostKey::Y),

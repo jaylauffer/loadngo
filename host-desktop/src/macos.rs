@@ -299,6 +299,7 @@ const KEYCODE_D: u16 = 2;
 const KEYCODE_C: u16 = 8;
 const KEYCODE_F: u16 = 3;
 const KEYCODE_S: u16 = 1;
+const KEYCODE_T: u16 = 17;
 const KEYCODE_W: u16 = 13;
 const KEYCODE_V: u16 = 9;
 const KEYCODE_Y: u16 = 16;
@@ -1455,6 +1456,7 @@ fn host_key_from_key_code(key_code: u16) -> Option<HostKey> {
         KEYCODE_C => HostKey::C,
         KEYCODE_F => HostKey::F,
         KEYCODE_S => HostKey::S,
+        KEYCODE_T => HostKey::T,
         KEYCODE_W => HostKey::W,
         KEYCODE_V => HostKey::V,
         KEYCODE_Y => HostKey::Y,
@@ -1667,6 +1669,23 @@ mod tests {
         input.apply_key_up(KEYCODE_D, modifiers);
         assert!(!input.snapshot.key_down(HostKey::D));
         assert!(input.snapshot.key_down(HostKey::Left));
+    }
+
+    #[test]
+    fn input_state_reports_t_as_pressed_then_held_until_key_up() {
+        let mut input = InputState::default();
+        let modifiers = ui_core::Modifiers::default();
+
+        input.apply_key_down(KEYCODE_T, modifiers, "t");
+        assert!(input.snapshot.key_pressed(HostKey::T));
+        assert!(input.snapshot.key_down(HostKey::T));
+
+        input.clear_transients();
+        assert!(!input.snapshot.key_pressed(HostKey::T));
+        assert!(input.snapshot.key_down(HostKey::T));
+
+        input.apply_key_up(KEYCODE_T, modifiers);
+        assert!(!input.snapshot.key_down(HostKey::T));
     }
 
     #[test]

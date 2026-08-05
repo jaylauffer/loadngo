@@ -241,6 +241,7 @@ pub enum HostKey {
     D,
     F,
     W,
+    T,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
