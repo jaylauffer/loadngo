@@ -927,6 +927,7 @@ fn blank_snapshot() -> InputSnapshot {
         down_pressed: false,
         modifiers: ui_core::Modifiers::default(),
         key_events: Vec::new(),
+        keys_down: Vec::new(),
         typed_text: String::new(),
     }
 }

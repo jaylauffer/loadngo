@@ -150,6 +150,7 @@ struct PendingInput {
     down_pressed: bool,
     modifiers: Modifiers,
     key_events: Vec<HostKeyEvent>,
+    keys_down: Vec<HostKey>,
     typed_text: String,
 }
 
@@ -172,6 +173,7 @@ impl Default for PendingInput {
             down_pressed: false,
             modifiers: Modifiers::default(),
             key_events: Vec::new(),
+            keys_down: Vec::new(),
             typed_text: String::new(),
         }
     }
@@ -197,6 +199,7 @@ impl PendingInput {
             down_pressed: self.down_pressed,
             modifiers: self.modifiers,
             key_events: self.key_events.clone(),
+            keys_down: self.keys_down.clone(),
             typed_text: self.typed_text.clone(),
         }
     }
@@ -214,6 +217,16 @@ impl PendingInput {
         self.down_pressed = false;
         self.key_events.clear();
         self.typed_text.clear();
+    }
+
+    fn set_key_down(&mut self, key: HostKey, down: bool) {
+        if down {
+            if !self.keys_down.contains(&key) {
+                self.keys_down.push(key);
+            }
+        } else {
+            self.keys_down.retain(|held| *held != key);
+        }
     }
 }
 
@@ -1143,8 +1156,13 @@ fn advance_frame_clock(state: &mut HostSharedState) {
 
 fn handle_keyboard_input(event: winit::event::KeyEvent) {
     let pressed = event.state == ElementState::Pressed;
+    let host_key = map_host_key(&event);
     let mut state = lock_state();
     let modifiers = state.pending_input.modifiers;
+
+    if let Some(host_key) = host_key {
+        state.pending_input.set_key_down(host_key, pressed);
+    }
 
     match event.physical_key {
         PhysicalKey::Code(KeyCode::Escape) if pressed => state.pending_input.escape_pressed = true,
@@ -1169,7 +1187,7 @@ fn handle_keyboard_input(event: winit::event::KeyEvent) {
                 }
             }
         }
-        if let Some(host_key) = map_host_key(&event) {
+        if let Some(host_key) = host_key {
             state.pending_input.key_events.push(HostKeyEvent {
                 key: host_key,
                 modifiers,
@@ -1195,10 +1213,12 @@ fn map_host_key(event: &winit::event::KeyEvent) -> Option<HostKey> {
         WinitKey::Character(text) => match text.to_ascii_uppercase().as_str() {
             "A" => Some(HostKey::A),
             "C" => Some(HostKey::C),
+            "D" => Some(HostKey::D),
             "F" => Some(HostKey::F),
             "R" => Some(HostKey::R),
             "S" => Some(HostKey::S),
             "V" => Some(HostKey::V),
+            "W" => Some(HostKey::W),
             "Y" => Some(HostKey::Y),
             "Z" => Some(HostKey::Z),
             _ => None,

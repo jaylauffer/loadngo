@@ -179,6 +179,7 @@ impl Default for InputState {
                 down_pressed: false,
                 modifiers: ui_core::Modifiers::default(),
                 key_events: Vec::new(),
+                keys_down: Vec::new(),
                 typed_text: String::new(),
             },
         }
@@ -206,6 +207,9 @@ impl InputState {
         self.snapshot.modifiers = modifiers;
         let host_key = host_key_from_key_code(key_code);
         if let Some(host_key) = host_key {
+            if !self.snapshot.keys_down.contains(&host_key) {
+                self.snapshot.keys_down.push(host_key);
+            }
             self.snapshot.key_events.push(HostKeyEvent {
                 key: host_key,
                 modifiers,
@@ -232,6 +236,9 @@ impl InputState {
 
     fn apply_key_up(&mut self, key_code: u16, modifiers: ui_core::Modifiers) {
         self.snapshot.modifiers = modifiers;
+        if let Some(host_key) = host_key_from_key_code(key_code) {
+            self.snapshot.keys_down.retain(|key| *key != host_key);
+        }
         if key_code == KEYCODE_SPACE {
             self.snapshot.space_down = false;
         }
@@ -284,9 +291,11 @@ const KEYCODE_ESCAPE: u16 = 53;
 const KEYCODE_SPACE: u16 = 49;
 const KEYCODE_R: u16 = 15;
 const KEYCODE_A: u16 = 0;
+const KEYCODE_D: u16 = 2;
 const KEYCODE_C: u16 = 8;
 const KEYCODE_F: u16 = 3;
 const KEYCODE_S: u16 = 1;
+const KEYCODE_W: u16 = 13;
 const KEYCODE_V: u16 = 9;
 const KEYCODE_Y: u16 = 16;
 const KEYCODE_Z: u16 = 6;
@@ -1434,9 +1443,11 @@ fn host_key_from_key_code(key_code: u16) -> Option<HostKey> {
         KEYCODE_SPACE => HostKey::Space,
         KEYCODE_R => HostKey::R,
         KEYCODE_A => HostKey::A,
+        KEYCODE_D => HostKey::D,
         KEYCODE_C => HostKey::C,
         KEYCODE_F => HostKey::F,
         KEYCODE_S => HostKey::S,
+        KEYCODE_W => HostKey::W,
         KEYCODE_V => HostKey::V,
         KEYCODE_Y => HostKey::Y,
         KEYCODE_Z => HostKey::Z,
@@ -1632,5 +1643,21 @@ mod tests {
             bounds,
             CGPoint { x: -10.0, y: 360.0 }
         ));
+    }
+
+    #[test]
+    fn input_state_preserves_simultaneous_held_keys_until_key_up() {
+        let mut input = InputState::default();
+        let modifiers = ui_core::Modifiers::default();
+
+        input.apply_key_down(KEYCODE_D, modifiers, "d");
+        input.apply_key_down(KEYCODE_LEFT, modifiers, "");
+        input.clear_transients();
+
+        assert!(input.snapshot.key_down(HostKey::D));
+        assert!(input.snapshot.key_down(HostKey::Left));
+        input.apply_key_up(KEYCODE_D, modifiers);
+        assert!(!input.snapshot.key_down(HostKey::D));
+        assert!(input.snapshot.key_down(HostKey::Left));
     }
 }

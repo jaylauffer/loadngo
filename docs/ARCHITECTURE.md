@@ -85,6 +85,12 @@ See [DETAILS_VIEW_MODEL.md](DETAILS_VIEW_MODEL.md).
 
 ## Input model
 - `InputSnapshot` carries mouse + touch + key state per frame.
+- `keys_down` carries the generic held-key set independently from transient
+  `key_events`, allowing simultaneous movement, aiming, and other continuous
+  controls without turning platform events into app-specific booleans.
+- `key_pressed` remains the one-frame/event-backed query; `key_down` queries the
+  persistent held set (with the legacy `space_down` field retained for existing
+  consumers).
 - Text-editing surfaces now also depend on:
   - per-frame typed text
   - key events with modifiers

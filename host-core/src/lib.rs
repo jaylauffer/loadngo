@@ -238,7 +238,9 @@ pub enum HostKey {
     Backspace,
     Delete,
     A,
+    D,
     F,
+    W,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -283,6 +285,8 @@ pub struct InputSnapshot {
     pub down_pressed: bool,
     pub modifiers: Modifiers,
     pub key_events: Vec<HostKeyEvent>,
+    #[serde(default)]
+    pub keys_down: Vec<HostKey>,
     pub typed_text: String,
 }
 
@@ -300,10 +304,7 @@ impl InputSnapshot {
     }
 
     pub fn key_down(&self, key: HostKey) -> bool {
-        match key {
-            HostKey::Space => self.space_down,
-            _ => self.key_pressed(key),
-        }
+        (key == HostKey::Space && self.space_down) || self.keys_down.contains(&key)
     }
 
     pub fn active_touches(&self) -> impl Iterator<Item = TouchPoint> + '_ {
@@ -535,6 +536,7 @@ mod tests {
             down_pressed: false,
             modifiers: Modifiers::default(),
             key_events: Vec::new(),
+            keys_down: Vec::new(),
             typed_text: String::new(),
         }
     }
@@ -601,12 +603,16 @@ mod tests {
         let snapshot = InputSnapshot {
             escape_pressed: true,
             space_down: true,
+            keys_down: vec![HostKey::A, HostKey::Up],
             ..blank_snapshot()
         };
 
         assert!(snapshot.key_pressed(HostKey::Escape));
         assert!(!snapshot.key_pressed(HostKey::Space));
         assert!(snapshot.key_down(HostKey::Space));
+        assert!(snapshot.key_down(HostKey::A));
+        assert!(snapshot.key_down(HostKey::Up));
+        assert!(!snapshot.key_down(HostKey::D));
     }
 
     #[test]
