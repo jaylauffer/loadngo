@@ -291,6 +291,24 @@ pub struct InputSnapshot {
 }
 
 impl InputSnapshot {
+    /// Discards keyboard state when the host loses input focus.
+    ///
+    /// Pointer and touch state are intentionally left unchanged because their
+    /// lifecycle is reported independently by the host backend.
+    pub fn clear_keyboard_state(&mut self) {
+        self.escape_pressed = false;
+        self.space_pressed = false;
+        self.space_down = false;
+        self.f3_pressed = false;
+        self.r_pressed = false;
+        self.up_pressed = false;
+        self.down_pressed = false;
+        self.modifiers = Modifiers::default();
+        self.key_events.clear();
+        self.keys_down.clear();
+        self.typed_text.clear();
+    }
+
     pub fn key_pressed(&self, key: HostKey) -> bool {
         match key {
             HostKey::Escape => self.escape_pressed,
@@ -634,6 +652,52 @@ mod tests {
         assert!(snapshot.key_pressed(HostKey::Left));
         assert_eq!(snapshot.typed_text, "abc");
         assert!(snapshot.key_events[0].modifiers.shift);
+    }
+
+    #[test]
+    fn input_snapshot_clears_keyboard_state_without_touching_pointer_state() {
+        let mut snapshot = InputSnapshot {
+            mouse_x: 12.0,
+            mouse_y: 34.0,
+            mouse_down: true,
+            escape_pressed: true,
+            space_pressed: true,
+            space_down: true,
+            f3_pressed: true,
+            r_pressed: true,
+            up_pressed: true,
+            down_pressed: true,
+            modifiers: Modifiers {
+                shift: true,
+                ctrl: true,
+                alt: true,
+                meta: true,
+            },
+            key_events: vec![HostKeyEvent {
+                key: HostKey::D,
+                modifiers: Modifiers::default(),
+            }],
+            keys_down: vec![HostKey::D, HostKey::Left, HostKey::Space],
+            typed_text: "queued".to_string(),
+            ..blank_snapshot()
+        };
+
+        snapshot.clear_keyboard_state();
+
+        assert!(!snapshot.escape_pressed);
+        assert!(!snapshot.space_pressed);
+        assert!(!snapshot.space_down);
+        assert!(!snapshot.f3_pressed);
+        assert!(!snapshot.r_pressed);
+        assert!(!snapshot.up_pressed);
+        assert!(!snapshot.down_pressed);
+        assert_eq!(snapshot.modifiers, Modifiers::default());
+        assert!(snapshot.key_events.is_empty());
+        assert!(snapshot.keys_down.is_empty());
+        assert!(snapshot.typed_text.is_empty());
+        assert_eq!(snapshot.mouse_x, 12.0);
+        assert_eq!(snapshot.mouse_y, 34.0);
+        assert!(snapshot.mouse_down);
     }
 
     #[test]

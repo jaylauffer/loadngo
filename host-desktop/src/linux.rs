@@ -219,6 +219,20 @@ impl PendingInput {
         self.typed_text.clear();
     }
 
+    fn clear_keyboard_state(&mut self) {
+        self.escape_pressed = false;
+        self.space_pressed = false;
+        self.space_down = false;
+        self.f3_pressed = false;
+        self.r_pressed = false;
+        self.up_pressed = false;
+        self.down_pressed = false;
+        self.modifiers = Modifiers::default();
+        self.key_events.clear();
+        self.keys_down.clear();
+        self.typed_text.clear();
+    }
+
     fn set_key_down(&mut self, key: HostKey, down: bool) {
         if down {
             if !self.keys_down.contains(&key) {
@@ -1049,6 +1063,11 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
                 if let Some(backend) = self.gles_backend.as_mut() {
                     backend.update_surface_size(size.width as i32, size.height as i32);
                 }
+                should_publish_frame = true;
+            }
+            WindowEvent::Focused(false) => {
+                let mut state = lock_state();
+                state.pending_input.clear_keyboard_state();
                 should_publish_frame = true;
             }
             WindowEvent::CursorMoved { position, .. } => {

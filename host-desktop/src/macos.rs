@@ -187,6 +187,10 @@ impl Default for InputState {
 }
 
 impl InputState {
+    fn clear_keyboard_state(&mut self) {
+        self.snapshot.clear_keyboard_state();
+    }
+
     fn clear_transients(&mut self) {
         self.snapshot.mouse_wheel_x = 0.0;
         self.snapshot.mouse_wheel_y = 0.0;
@@ -1178,6 +1182,10 @@ fn pump_events_until(timeout: Option<Duration>) {
             if !visible {
                 state.should_close = true;
             }
+            let is_key_window: bool = unsafe { msg_send![&*state.window, isKeyWindow] };
+            if !is_key_window {
+                state.input.clear_keyboard_state();
+            }
             let bounds: CGRect = unsafe { msg_send![&*state.view, bounds] };
             state.surface = SurfaceInfo {
                 width: bounds.size.width as f32,
@@ -1659,5 +1667,26 @@ mod tests {
         input.apply_key_up(KEYCODE_D, modifiers);
         assert!(!input.snapshot.key_down(HostKey::D));
         assert!(input.snapshot.key_down(HostKey::Left));
+    }
+
+    #[test]
+    fn input_state_discards_held_and_queued_keyboard_input_on_focus_loss() {
+        let mut input = InputState::default();
+        let modifiers = ui_core::Modifiers {
+            shift: true,
+            ctrl: false,
+            alt: false,
+            meta: false,
+        };
+
+        input.apply_key_down(KEYCODE_D, modifiers, "d");
+        input.apply_key_down(KEYCODE_LEFT, modifiers, "");
+        input.clear_keyboard_state();
+
+        assert!(!input.snapshot.key_down(HostKey::D));
+        assert!(!input.snapshot.key_down(HostKey::Left));
+        assert!(input.snapshot.key_events.is_empty());
+        assert!(input.snapshot.typed_text.is_empty());
+        assert_eq!(input.snapshot.modifiers, ui_core::Modifiers::default());
     }
 }

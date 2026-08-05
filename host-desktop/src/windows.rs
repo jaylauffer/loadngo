@@ -218,6 +218,20 @@ impl PendingInput {
         self.typed_text.clear();
     }
 
+    fn clear_keyboard_state(&mut self) {
+        self.escape_pressed = false;
+        self.space_pressed = false;
+        self.space_down = false;
+        self.f3_pressed = false;
+        self.r_pressed = false;
+        self.up_pressed = false;
+        self.down_pressed = false;
+        self.modifiers = Modifiers::default();
+        self.key_events.clear();
+        self.keys_down.clear();
+        self.typed_text.clear();
+    }
+
     fn set_key_down(&mut self, key: HostKey, down: bool) {
         if down {
             if !self.keys_down.contains(&key) {
@@ -1053,6 +1067,11 @@ impl ApplicationHandler<WindowsUserEvent> for WindowsApp {
                 state.dpi_scale = dpi_scale;
                 state.latest_frame.surface = logical_surface_info(size, dpi_scale);
                 state.pending_redraw = true;
+                should_publish_frame = true;
+            }
+            WindowEvent::Focused(false) => {
+                let mut state = lock_state();
+                state.pending_input.clear_keyboard_state();
                 should_publish_frame = true;
             }
             WindowEvent::CursorMoved { position, .. } => {

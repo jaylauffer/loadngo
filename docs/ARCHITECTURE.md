@@ -91,6 +91,10 @@ See [DETAILS_VIEW_MODEL.md](DETAILS_VIEW_MODEL.md).
 - `key_pressed` remains the one-frame/event-backed query; `key_down` queries the
   persistent held set (with the legacy `space_down` field retained for existing
   consumers).
+- When a host window loses keyboard focus, its backend clears held keys,
+  modifiers, queued key events, and queued typed text before publishing the
+  next frame. Pointer and touch lifecycles remain independent. Refocusing does
+  not restore old held state; a new native key-down event must establish it.
 - Text-editing surfaces now also depend on:
   - per-frame typed text
   - key events with modifiers
