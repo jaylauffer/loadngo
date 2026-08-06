@@ -47,6 +47,7 @@ cargo run -p host-mac
 ## Architecture docs
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): layering and ownership boundaries.
 - [`docs/RENDERER_ROADMAP.md`](docs/RENDERER_ROADMAP.md): macOS-first renderer ownership plan and multilingual requirements.
+- [`docs/AUDIO.md`](docs/AUDIO.md): music/voice separation and the reusable overlapping sound-effect controller contract.
 - [`docs/PQ_AUTHENTICATOR.md`](docs/PQ_AUTHENTICATOR.md): repo-owned post-quantum authenticator model for signed challenge tokens.
 - [`docs/PUDDING_CAS_PQ_MODEL.md`](docs/PUDDING_CAS_PQ_MODEL.md): native pudding CAS repository model design.
 - [`docs/FIELD_NETWORK_BACKLOG.md`](docs/FIELD_NETWORK_BACKLOG.md): network and replication considerations.

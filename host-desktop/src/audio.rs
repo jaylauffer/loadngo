@@ -1,12 +1,106 @@
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SfxSettings {
+    pub enabled: bool,
+    pub mix_volume: f32,
+    pub maximum_voices: usize,
+}
+
+impl Default for SfxSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            mix_volume: 1.0,
+            maximum_voices: 24,
+        }
+    }
+}
+
+impl SfxSettings {
+    fn normalized(self) -> Self {
+        Self {
+            enabled: self.enabled,
+            mix_volume: finite_clamped(self.mix_volume, 0.0, 2.0, 1.0),
+            maximum_voices: self.maximum_voices.max(1),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SfxPlayRequest<'a> {
+    pub path: &'a str,
+    pub volume: f32,
+    pub pan: f32,
+    pub playback_rate: f32,
+    pub looped: bool,
+    pub priority: u8,
+}
+
+impl<'a> SfxPlayRequest<'a> {
+    #[must_use]
+    pub const fn one_shot(path: &'a str) -> Self {
+        Self {
+            path,
+            volume: 1.0,
+            pan: 0.0,
+            playback_rate: 1.0,
+            looped: false,
+            priority: 128,
+        }
+    }
+
+    fn normalized(self) -> Self {
+        Self {
+            path: self.path.trim(),
+            volume: finite_clamped(self.volume, 0.0, 2.0, 1.0),
+            pan: finite_clamped(self.pan, -1.0, 1.0, 0.0),
+            playback_rate: finite_clamped(self.playback_rate, 0.5, 2.0, 1.0),
+            looped: self.looped,
+            priority: self.priority,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SfxVoiceId(u64);
+
+impl SfxVoiceId {
+    #[must_use]
+    pub const fn value(self) -> u64 {
+        self.0
+    }
+}
+
+fn finite_clamped(value: f32, minimum: f32, maximum: f32, fallback: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(minimum, maximum)
+    } else {
+        fallback
+    }
+}
+
+fn oldest_evictable_voice(
+    order: &std::collections::VecDeque<SfxVoiceId>,
+    incoming_priority: u8,
+    mut priority_for: impl FnMut(SfxVoiceId) -> Option<u8>,
+) -> Option<usize> {
+    order
+        .iter()
+        .position(|id| priority_for(*id).is_some_and(|priority| priority <= incoming_priority))
+}
+
 #[cfg(target_os = "android")]
 mod imp {
+    use super::{SfxPlayRequest, SfxSettings, SfxVoiceId};
     use crate::android;
     use jni::{
         objects::{GlobalRef, JObject, JValue},
         JNIEnv, JavaVM,
     };
     use ndk_context::android_context;
-    use std::time::{Duration, Instant};
+    use std::{
+        collections::{HashMap, VecDeque},
+        time::{Duration, Instant},
+    };
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum MusicCueMode {
@@ -182,13 +276,19 @@ mod imp {
 
         fn set_volume(&mut self, volume: f32) -> Result<(), String> {
             let volume = volume.clamp(0.0, 2.0);
+            self.set_stereo_volume(volume, volume)
+        }
+
+        fn set_stereo_volume(&mut self, left: f32, right: f32) -> Result<(), String> {
+            let left = left.clamp(0.0, 2.0);
+            let right = right.clamp(0.0, 2.0);
             with_env(|env| {
                 call_void(
                     env,
                     &self.player,
                     "setVolume",
                     "(FF)V",
-                    &[JValue::Float(volume), JValue::Float(volume)],
+                    &[JValue::Float(left), JValue::Float(right)],
                 )
             })
         }
@@ -677,10 +777,164 @@ mod imp {
             None
         }
     }
+
+    struct SfxVoice {
+        player: MediaPlayerHandle,
+        volume: f32,
+        pan: f32,
+        priority: u8,
+    }
+
+    pub struct SfxController {
+        settings: SfxSettings,
+        voices: HashMap<SfxVoiceId, SfxVoice>,
+        order: VecDeque<SfxVoiceId>,
+        next_voice_id: u64,
+    }
+
+    impl SfxController {
+        pub fn new(settings: SfxSettings) -> Self {
+            Self {
+                settings: settings.normalized(),
+                voices: HashMap::new(),
+                order: VecDeque::new(),
+                next_voice_id: 1,
+            }
+        }
+
+        pub fn play(&mut self, request: SfxPlayRequest<'_>) -> Result<Option<SfxVoiceId>, String> {
+            let request = request.normalized();
+            if request.path.is_empty() {
+                return Err("SFX path must not be empty".to_string());
+            }
+            if !self.settings.enabled {
+                return Ok(None);
+            }
+            if (request.playback_rate - 1.0).abs() > 0.001 {
+                return Err("Android SFX playback-rate control is not implemented".to_string());
+            }
+
+            self.update();
+            if !self.make_voice_capacity(request.priority) {
+                return Ok(None);
+            }
+            let path = android::ensure_materialized_asset_path(request.path)?;
+            let mut player = MediaPlayerHandle::create(&path, request.looped)?;
+            let (left, right) =
+                stereo_volume(request.volume * self.settings.mix_volume, request.pan);
+            player.set_stereo_volume(left, right)?;
+            player.play()?;
+
+            let id = self.allocate_voice_id();
+            self.voices.insert(
+                id,
+                SfxVoice {
+                    player,
+                    volume: request.volume,
+                    pan: request.pan,
+                    priority: request.priority,
+                },
+            );
+            self.order.push_back(id);
+            Ok(Some(id))
+        }
+
+        pub fn stop(&mut self, voice: SfxVoiceId) {
+            if let Some(mut state) = self.voices.remove(&voice) {
+                let _ = state.player.stop();
+            }
+            self.order.retain(|candidate| *candidate != voice);
+        }
+
+        pub fn stop_all(&mut self) {
+            for state in self.voices.values_mut() {
+                let _ = state.player.stop();
+            }
+            self.voices.clear();
+            self.order.clear();
+        }
+
+        pub fn update(&mut self) {
+            let finished = self
+                .voices
+                .iter()
+                .filter_map(|(id, state)| (!state.player.is_playing()).then_some(*id))
+                .collect::<Vec<_>>();
+            for id in finished {
+                self.voices.remove(&id);
+                self.order.retain(|candidate| *candidate != id);
+            }
+        }
+
+        pub fn set_mix_volume(&mut self, volume: f32) {
+            self.settings.mix_volume = super::finite_clamped(volume, 0.0, 2.0, 1.0);
+            for state in self.voices.values_mut() {
+                let (left, right) =
+                    stereo_volume(state.volume * self.settings.mix_volume, state.pan);
+                let _ = state.player.set_stereo_volume(left, right);
+            }
+        }
+
+        pub fn set_enabled(&mut self, enabled: bool) {
+            self.settings.enabled = enabled;
+            if !enabled {
+                self.stop_all();
+            }
+        }
+
+        pub fn is_enabled(&self) -> bool {
+            self.settings.enabled
+        }
+
+        pub fn active_voice_count(&self) -> usize {
+            self.voices.len()
+        }
+
+        pub fn is_playing(&self, voice: SfxVoiceId) -> bool {
+            self.voices
+                .get(&voice)
+                .is_some_and(|state| state.player.is_playing())
+        }
+
+        pub fn frame_demand(&self) -> Option<Duration> {
+            (!self.voices.is_empty()).then_some(Duration::from_millis(100))
+        }
+
+        fn make_voice_capacity(&mut self, incoming_priority: u8) -> bool {
+            while self.voices.len() >= self.settings.maximum_voices {
+                let Some(index) =
+                    super::oldest_evictable_voice(&self.order, incoming_priority, |id| {
+                        self.voices.get(&id).map(|voice| voice.priority)
+                    })
+                else {
+                    return false;
+                };
+                let Some(oldest) = self.order.remove(index) else {
+                    return false;
+                };
+                if let Some(mut state) = self.voices.remove(&oldest) {
+                    let _ = state.player.stop();
+                }
+            }
+            true
+        }
+
+        fn allocate_voice_id(&mut self) -> SfxVoiceId {
+            let id = SfxVoiceId(self.next_voice_id);
+            self.next_voice_id = self.next_voice_id.wrapping_add(1).max(1);
+            id
+        }
+    }
+
+    fn stereo_volume(volume: f32, pan: f32) -> (f32, f32) {
+        let pan = pan.clamp(-1.0, 1.0);
+        (volume * (1.0 - pan.max(0.0)), volume * (1.0 + pan.min(0.0)))
+    }
 }
 
 #[cfg(target_os = "netbsd")]
 mod imp {
+    use super::{SfxPlayRequest, SfxSettings, SfxVoiceId};
     use std::time::Duration;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -803,18 +1057,70 @@ mod imp {
             None
         }
     }
+
+    pub struct SfxController {
+        settings: SfxSettings,
+    }
+
+    impl SfxController {
+        pub fn new(settings: SfxSettings) -> Self {
+            Self {
+                settings: settings.normalized(),
+            }
+        }
+
+        pub fn play(&mut self, request: SfxPlayRequest<'_>) -> Result<Option<SfxVoiceId>, String> {
+            if request.normalized().path.is_empty() {
+                return Err("SFX path must not be empty".to_string());
+            }
+            Ok(None)
+        }
+
+        pub fn stop(&mut self, _voice: SfxVoiceId) {}
+
+        pub fn stop_all(&mut self) {}
+
+        pub fn update(&mut self) {}
+
+        pub fn set_mix_volume(&mut self, volume: f32) {
+            self.settings.mix_volume = super::finite_clamped(volume, 0.0, 2.0, 1.0);
+        }
+
+        pub fn set_enabled(&mut self, enabled: bool) {
+            self.settings.enabled = enabled;
+        }
+
+        pub fn is_enabled(&self) -> bool {
+            self.settings.enabled
+        }
+
+        pub fn active_voice_count(&self) -> usize {
+            0
+        }
+
+        pub fn is_playing(&self, _voice: SfxVoiceId) -> bool {
+            false
+        }
+
+        pub fn frame_demand(&self) -> Option<Duration> {
+            None
+        }
+    }
 }
 
 #[cfg(all(not(target_os = "android"), not(target_os = "netbsd")))]
 mod imp {
-    use std::collections::HashMap;
+    use super::{SfxPlayRequest, SfxSettings, SfxVoiceId};
+    use std::collections::{HashMap, VecDeque};
     use std::fs::File;
     use std::io::BufReader;
     use std::sync::OnceLock;
     use std::time::{Duration, Instant};
 
     use rodio::cpal::traits::HostTrait;
-    use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
+    use rodio::{
+        buffer::SamplesBuffer, Decoder, OutputStream, OutputStreamHandle, Sink, Source, SpatialSink,
+    };
 
     const MUSIC_BASE_VOLUME: f32 = 0.8;
     const MUSIC_BASS_CUTOFF_HZ: u32 = 180;
@@ -1355,6 +1661,277 @@ mod imp {
             None
         }
     }
+
+    #[derive(Clone)]
+    struct CachedSfxClip {
+        channels: u16,
+        sample_rate: u32,
+        samples: Vec<f32>,
+    }
+
+    struct SfxVoice {
+        sink: SpatialSink,
+        volume: f32,
+        priority: u8,
+    }
+
+    pub struct SfxController {
+        settings: SfxSettings,
+        clips: HashMap<String, CachedSfxClip>,
+        voices: HashMap<SfxVoiceId, SfxVoice>,
+        order: VecDeque<SfxVoiceId>,
+        next_voice_id: u64,
+        _stream: Option<OutputStream>,
+        stream_handle: Option<OutputStreamHandle>,
+    }
+
+    impl SfxController {
+        pub fn new(settings: SfxSettings) -> Self {
+            let settings = settings.normalized();
+            match open_output_stream() {
+                Ok((stream, stream_handle)) => Self {
+                    settings,
+                    clips: HashMap::new(),
+                    voices: HashMap::new(),
+                    order: VecDeque::new(),
+                    next_voice_id: 1,
+                    _stream: Some(stream),
+                    stream_handle: Some(stream_handle),
+                },
+                Err(err) => {
+                    eprintln!("Audio backend unavailable ({err}), running without sound effects.");
+                    Self {
+                        settings,
+                        clips: HashMap::new(),
+                        voices: HashMap::new(),
+                        order: VecDeque::new(),
+                        next_voice_id: 1,
+                        _stream: None,
+                        stream_handle: None,
+                    }
+                }
+            }
+        }
+
+        pub fn play(&mut self, request: SfxPlayRequest<'_>) -> Result<Option<SfxVoiceId>, String> {
+            let request = request.normalized();
+            if request.path.is_empty() {
+                return Err("SFX path must not be empty".to_string());
+            }
+            if !self.settings.enabled || self.stream_handle.is_none() {
+                return Ok(None);
+            }
+
+            self.update();
+            if !self.make_voice_capacity(request.priority) {
+                return Ok(None);
+            }
+            let clip = self.load_clip(request.path)?.clone();
+            let Some(stream_handle) = self.stream_handle.as_ref() else {
+                return Ok(None);
+            };
+            let sink = SpatialSink::try_new(
+                stream_handle,
+                [request.pan, 0.0, 1.0],
+                [-1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+            )
+            .map_err(|err| format!("Failed to create SFX voice for {}: {err}", request.path))?;
+            sink.set_volume(request.volume * self.settings.mix_volume);
+            sink.set_speed(request.playback_rate);
+            let source = SamplesBuffer::new(clip.channels, clip.sample_rate, clip.samples);
+            if request.looped {
+                sink.append(source.repeat_infinite());
+            } else {
+                sink.append(source);
+            }
+
+            let id = self.allocate_voice_id();
+            self.voices.insert(
+                id,
+                SfxVoice {
+                    sink,
+                    volume: request.volume,
+                    priority: request.priority,
+                },
+            );
+            self.order.push_back(id);
+            Ok(Some(id))
+        }
+
+        pub fn stop(&mut self, voice: SfxVoiceId) {
+            if let Some(state) = self.voices.remove(&voice) {
+                state.sink.stop();
+            }
+            self.order.retain(|candidate| *candidate != voice);
+        }
+
+        pub fn stop_all(&mut self) {
+            for state in self.voices.values() {
+                state.sink.stop();
+            }
+            self.voices.clear();
+            self.order.clear();
+        }
+
+        pub fn update(&mut self) {
+            let finished = self
+                .voices
+                .iter()
+                .filter_map(|(id, state)| state.sink.empty().then_some(*id))
+                .collect::<Vec<_>>();
+            for id in finished {
+                self.voices.remove(&id);
+                self.order.retain(|candidate| *candidate != id);
+            }
+        }
+
+        pub fn set_mix_volume(&mut self, volume: f32) {
+            self.settings.mix_volume = super::finite_clamped(volume, 0.0, 2.0, 1.0);
+            for state in self.voices.values() {
+                state
+                    .sink
+                    .set_volume(state.volume * self.settings.mix_volume);
+            }
+        }
+
+        pub fn set_enabled(&mut self, enabled: bool) {
+            self.settings.enabled = enabled;
+            if !enabled {
+                self.stop_all();
+            }
+        }
+
+        pub fn is_enabled(&self) -> bool {
+            self.settings.enabled
+        }
+
+        pub fn active_voice_count(&self) -> usize {
+            self.voices.len()
+        }
+
+        pub fn is_playing(&self, voice: SfxVoiceId) -> bool {
+            self.voices
+                .get(&voice)
+                .is_some_and(|state| !state.sink.empty())
+        }
+
+        pub fn cached_clip_count(&self) -> usize {
+            self.clips.len()
+        }
+
+        pub fn frame_demand(&self) -> Option<Duration> {
+            (!self.voices.is_empty()).then_some(Duration::from_millis(100))
+        }
+
+        fn load_clip(&mut self, path: &str) -> Result<&CachedSfxClip, String> {
+            if !self.clips.contains_key(path) {
+                let file = File::open(path).map_err(|err| format!("Missing SFX {path}: {err}"))?;
+                let decoder = Decoder::new(BufReader::new(file))
+                    .map_err(|err| format!("Failed to decode SFX {path}: {err}"))?;
+                let channels = decoder.channels();
+                let sample_rate = decoder.sample_rate();
+                let samples = decoder.convert_samples::<f32>().collect::<Vec<_>>();
+                if samples.is_empty() {
+                    return Err(format!("SFX {path} contains no audio samples"));
+                }
+                self.clips.insert(
+                    path.to_string(),
+                    CachedSfxClip {
+                        channels,
+                        sample_rate,
+                        samples,
+                    },
+                );
+            }
+            self.clips
+                .get(path)
+                .ok_or_else(|| format!("SFX cache lost {path}"))
+        }
+
+        fn make_voice_capacity(&mut self, incoming_priority: u8) -> bool {
+            while self.voices.len() >= self.settings.maximum_voices {
+                let Some(index) =
+                    super::oldest_evictable_voice(&self.order, incoming_priority, |id| {
+                        self.voices.get(&id).map(|voice| voice.priority)
+                    })
+                else {
+                    return false;
+                };
+                let Some(oldest) = self.order.remove(index) else {
+                    return false;
+                };
+                if let Some(state) = self.voices.remove(&oldest) {
+                    state.sink.stop();
+                }
+            }
+            true
+        }
+
+        fn allocate_voice_id(&mut self) -> SfxVoiceId {
+            let id = SfxVoiceId(self.next_voice_id);
+            self.next_voice_id = self.next_voice_id.wrapping_add(1).max(1);
+            id
+        }
+    }
 }
 
 pub use imp::*;
+
+#[cfg(test)]
+mod tests {
+    use super::{oldest_evictable_voice, SfxPlayRequest, SfxSettings, SfxVoiceId};
+    use std::collections::{HashMap, VecDeque};
+
+    #[test]
+    fn sfx_settings_enforce_finite_volume_and_nonzero_polyphony() {
+        let settings = SfxSettings {
+            enabled: true,
+            mix_volume: f32::NAN,
+            maximum_voices: 0,
+        }
+        .normalized();
+
+        assert_eq!(settings.mix_volume, 1.0);
+        assert_eq!(settings.maximum_voices, 1);
+    }
+
+    #[test]
+    fn sfx_requests_trim_paths_and_bound_mix_controls() {
+        let request = SfxPlayRequest {
+            path: "  effect.ogg  ",
+            volume: 4.0,
+            pan: -4.0,
+            playback_rate: f32::INFINITY,
+            looped: true,
+            priority: 240,
+        }
+        .normalized();
+
+        assert_eq!(request.path, "effect.ogg");
+        assert_eq!(request.volume, 2.0);
+        assert_eq!(request.pan, -1.0);
+        assert_eq!(request.playback_rate, 1.0);
+        assert!(request.looped);
+        assert_eq!(request.priority, 240);
+    }
+
+    #[test]
+    fn voice_pressure_sheds_the_oldest_voice_not_more_important_than_incoming() {
+        let order = VecDeque::from([SfxVoiceId(1), SfxVoiceId(2), SfxVoiceId(3)]);
+        let priorities = HashMap::from([
+            (SfxVoiceId(1), 220),
+            (SfxVoiceId(2), 40),
+            (SfxVoiceId(3), 80),
+        ]);
+
+        assert_eq!(
+            oldest_evictable_voice(&order, 100, |id| priorities.get(&id).copied()),
+            Some(1)
+        );
+        assert_eq!(
+            oldest_evictable_voice(&order, 20, |id| priorities.get(&id).copied()),
+            None
+        );
+    }
+}
