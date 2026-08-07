@@ -92,6 +92,15 @@ The current implementation intentionally lands the smallest useful native
 - an optional signed root-manifest envelope when `--signer-identity`,
   `--public-key`, and `--private-key` are supplied together
 
+`pudding_cas_verify` now verifies:
+
+- the signed root-envelope format
+- the root manifest digest
+- the PQ signature over the root manifest
+- optional expected signer identity and trusted public key
+- the root manifest's workspace-manifest CAS reference
+- all workspace file blobs, unless `--manifest-only` is requested
+
 This gives the workspace a signed, CAS-addressed root statement today. It is
 still transitional because:
 
@@ -99,8 +108,8 @@ still transitional because:
   per-repository file-manifest roots
 - ancestor links are accepted by the type model, but not selected automatically
   by the ingest command
-- signing keys are provided directly by path, not resolved through a trust-root
-  store
+- signing and verification keys are provided directly by path, not resolved
+  through a trust-root store
 - `CasHash` itself remains blake3-only even though manifest references are now
   algorithm-tagged
 
@@ -482,12 +491,13 @@ Replica records should describe:
 The signed root lineage remains authoritative; replicas are transport and
 recovery observations.
 
-### 7. Add verification and repair commands
+### 7. Extend verification and add repair commands
 
 The long-term command set should make recovery mechanical:
 
-- verify a signed root envelope
-- verify all child manifests and blobs below that root
+- verify a signed root envelope, which `pudding_cas_verify` now starts
+- verify all child manifests and blobs below that root as child file manifests
+  land
 - explain missing, corrupt, unknown, or untrusted content
 - materialize a verified root into a working directory
 - repair a partial materialization from local or replica CAS stores
@@ -502,7 +512,7 @@ The next implementation steps implied by this note are:
 1. Add CLI and tests for explicit ancestor manifest selection.
 2. Split the workspace manifest into parent and per-child file manifests.
 3. Add a trust-root file for accepted signer identities and PQ public keys.
-4. Add a verification command for signed root envelopes.
+4. Wire trust-root policy into `pudding_cas_verify`.
 5. Introduce tagged CAS storage addresses while retaining `CasHash`
    compatibility readers.
 6. Add replica records for offsite providers.
