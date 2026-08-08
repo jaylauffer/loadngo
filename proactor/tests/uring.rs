@@ -1,6 +1,6 @@
 #![cfg(target_os = "linux")]
 
-use loadngo_proactor::{Completion, CompletionKind, IoUringPort, Proactor, ReadinessEvent};
+use loadngo_proactor::{Completion, CompletionKind, IoUringPort, Proactor};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
