@@ -1,6 +1,11 @@
 #[cfg(not(target_os = "linux"))]
-compile_error!("camera_preview currently supports Linux only");
+fn main() {
+    eprintln!("camera_preview only supported on linux (todo other platforms).");
+}
+// compile_error!("camera_preview currently supports Linux only");
 
+#[cfg(target_os = "linux")]
+mod linux_harness {
 use std::fs;
 use std::io::{ErrorKind, Read};
 use std::os::fd::{AsRawFd, RawFd};
@@ -458,41 +463,6 @@ struct ButtonSpec {
     rect: ui_core::Rect,
     label: &'static str,
     tint: Color,
-}
-
-fn main() -> Result<(), String> {
-    let options = parse_args()?;
-    if options.list_devices {
-        for (device, label) in available_camera_devices_with_labels() {
-            println!("{device}\t{label}");
-        }
-        return Ok(());
-    }
-
-    if options.once {
-        let image = capture_single_frame(&CaptureOptions {
-            device: options.device.clone(),
-            video_size: options.video_size.clone(),
-            frame_rate: options.frame_rate,
-        })?;
-        let output = if let Some(path) = options.once_output.clone() {
-            path
-        } else {
-            build_output_path(&options.output_dir, options.once_format)
-        };
-        let saved = save_image(&image, options.once_format, &output, options.jpeg_quality)?;
-        println!(
-            "Saved {} to {}",
-            options.once_format.label(),
-            saved.display()
-        );
-        return Ok(());
-    }
-
-    loadngo_host_desktop::launch(window_descriptor(), None, async move {
-        run_preview(options).await;
-    });
-    Ok(())
 }
 
 fn preview_trace_enabled() -> bool {
@@ -1319,4 +1289,41 @@ mod tests {
         assert_eq!(frame.rgba8.len(), 16);
         assert_eq!(buffer, vec![7u8; 4]);
     }
+}
+}
+
+#[cfg(target_os = "linux")]
+fn main() -> Result<(), String> {
+    let options = parse_args()?;
+    if options.list_devices {
+        for (device, label) in available_camera_devices_with_labels() {
+            println!("{device}\t{label}");
+        }
+        return Ok(());
+    }
+
+    if options.once {
+        let image = capture_single_frame(&CaptureOptions {
+            device: options.device.clone(),
+            video_size: options.video_size.clone(),
+            frame_rate: options.frame_rate,
+        })?;
+        let output = if let Some(path) = options.once_output.clone() {
+            path
+        } else {
+            build_output_path(&options.output_dir, options.once_format)
+        };
+        let saved = save_image(&image, options.once_format, &output, options.jpeg_quality)?;
+        println!(
+            "Saved {} to {}",
+            options.once_format.label(),
+            saved.display()
+        );
+        return Ok(());
+    }
+
+    loadngo_host_desktop::launch(window_descriptor(), None, async move {
+        run_preview(options).await;
+    });
+    Ok(())
 }
