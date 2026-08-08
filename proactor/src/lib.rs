@@ -1,7 +1,7 @@
 mod channel;
 mod deferred;
 #[cfg(target_os = "linux")]
-mod epoll;
+mod uring;
 mod error;
 #[cfg(windows)]
 mod iocp;
@@ -27,7 +27,7 @@ use std::{collections::HashMap, os::fd::RawFd};
 
 pub use channel::ChannelPort;
 #[cfg(target_os = "linux")]
-pub use epoll::EpollPort;
+pub use uring::IoUringPort;
 pub use error::ProactorError;
 #[cfg(windows)]
 pub use iocp::IocpPort;
@@ -99,31 +99,9 @@ impl CompletionEnvelope {
     }
 }
 
-#[cfg(unix)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ReadinessEvent {
-    pub token: u64,
-}
-
-#[cfg(unix)]
-pub trait ReadinessHandler: Send + 'static {
-    fn on_ready(&mut self, readiness: ReadinessEvent);
-}
-
-#[cfg(unix)]
-impl<F> ReadinessHandler for F
-where
-    F: FnMut(ReadinessEvent) + Send + 'static,
-{
-    fn on_ready(&mut self, readiness: ReadinessEvent) {
-        (self)(readiness);
-    }
-}
 
 pub enum PollEvent {
     Completion(CompletionEnvelope),
-    #[cfg(unix)]
-    Readiness(ReadinessEvent),
     Wake,
     Timeout,
 }
@@ -132,12 +110,6 @@ pub trait CompletionPort: Send + Sync + 'static {
     fn post(&self, envelope: CompletionEnvelope) -> io::Result<()>;
     fn poll(&self, timeout: Option<Duration>) -> io::Result<PollEvent>;
     fn wake(&self) -> io::Result<()>;
-}
-
-#[cfg(unix)]
-pub trait ReadinessPort: CompletionPort {
-    fn register_readable(&self, fd: RawFd, token: u64) -> io::Result<()>;
-    fn deregister(&self, fd: RawFd) -> io::Result<()>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,8 +134,6 @@ impl RunReport {
 struct Shared<P> {
     port: P,
     deferred: Mutex<DeferredQueue>,
-    #[cfg(unix)]
-    readiness: Mutex<HashMap<u64, Arc<Mutex<Box<dyn ReadinessHandler>>>>>,
     next_sequence: AtomicU64,
     running: AtomicBool,
 }
@@ -199,8 +169,6 @@ where
             shared: Arc::new(Shared {
                 port,
                 deferred: Mutex::new(DeferredQueue::default()),
-                #[cfg(unix)]
-                readiness: Mutex::new(HashMap::new()),
                 next_sequence: AtomicU64::new(1),
                 running: AtomicBool::new(true),
             }),
@@ -236,11 +204,6 @@ where
                 envelope.dispatch();
                 report.dispatched_completions += 1;
             }
-            #[cfg(unix)]
-            PollEvent::Readiness(readiness) => {
-                self.dispatch_readiness(readiness);
-                report.woke = true;
-            }
             PollEvent::Wake => {
                 report.woke = true;
             }
@@ -275,11 +238,6 @@ where
             PollEvent::Completion(envelope) => {
                 envelope.dispatch();
                 report.dispatched_completions += 1;
-            }
-            #[cfg(unix)]
-            PollEvent::Readiness(readiness) => {
-                self.dispatch_readiness(readiness);
-                report.woke = true;
             }
             PollEvent::Wake => {
                 report.woke = true;
@@ -318,24 +276,6 @@ where
         Ok(count)
     }
 
-    #[cfg(unix)]
-    fn dispatch_readiness(&self, readiness: ReadinessEvent) {
-        let handler = {
-            let readiness_handlers = self
-                .shared
-                .readiness
-                .lock()
-                .expect("readiness handler registry poisoned");
-            readiness_handlers.get(&readiness.token).cloned()
-        };
-
-        if let Some(handler) = handler {
-            handler
-                .lock()
-                .expect("readiness handler poisoned")
-                .on_ready(readiness);
-        }
-    }
 }
 
 impl<P> ProactorHandle<P>
@@ -400,54 +340,5 @@ where
 
     pub fn is_running(&self) -> bool {
         self.shared.running.load(Ordering::Acquire)
-    }
-}
-
-#[cfg(unix)]
-impl<P> ProactorHandle<P>
-where
-    P: ReadinessPort,
-{
-    pub fn register_readable(
-        &self,
-        fd: RawFd,
-        token: u64,
-        handler: impl ReadinessHandler,
-    ) -> io::Result<()> {
-        let shared_handler = Arc::new(Mutex::new(Box::new(handler) as Box<dyn ReadinessHandler>));
-        {
-            let mut readiness_handlers = self
-                .shared
-                .readiness
-                .lock()
-                .expect("readiness handler registry poisoned");
-            if readiness_handlers.contains_key(&token) {
-                return Err(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    format!("readiness token {token} already registered"),
-                ));
-            }
-            readiness_handlers.insert(token, Arc::clone(&shared_handler));
-        }
-
-        if let Err(err) = self.shared.port.register_readable(fd, token) {
-            self.shared
-                .readiness
-                .lock()
-                .expect("readiness handler registry poisoned")
-                .remove(&token);
-            return Err(err);
-        }
-
-        Ok(())
-    }
-
-    pub fn deregister_readable(&self, fd: RawFd, token: u64) -> io::Result<()> {
-        self.shared
-            .readiness
-            .lock()
-            .expect("readiness handler registry poisoned")
-            .remove(&token);
-        self.shared.port.deregister(fd)
     }
 }
