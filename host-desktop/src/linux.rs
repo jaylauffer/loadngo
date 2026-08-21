@@ -18,6 +18,7 @@ use loadngo_host_core::{
     RenderTextStyle, RenderTextVerticalAlign, RenderTextVerticalMetricMode, SurfaceInfo,
     TextMetrics, WindowDescriptor, WindowIconSet,
 };
+use loadngo_proactor::{CompletionKind, KqueuePort, Proactor, ProactorHandle, RunReport};
 use loadngo_renderer::{FrameCommand, ImageRequest, Renderer, RendererConfig, TextRequest};
 use softbuffer::{Context, Surface};
 use ui_core::{
