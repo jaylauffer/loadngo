@@ -1,3 +1,7 @@
+mod joystick;
+
+pub use joystick::VirtualJoystick;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TouchRect {
     pub x: f32,

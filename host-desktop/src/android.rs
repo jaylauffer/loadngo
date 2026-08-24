@@ -258,6 +258,10 @@ const AMOTION_EVENT_ACTION_CANCEL_I32: i32 = ndk_sys::AMOTION_EVENT_ACTION_CANCE
 const AMOTION_EVENT_ACTION_POINTER_DOWN_I32: i32 =
     ndk_sys::AMOTION_EVENT_ACTION_POINTER_DOWN as i32;
 const AMOTION_EVENT_ACTION_POINTER_UP_I32: i32 = ndk_sys::AMOTION_EVENT_ACTION_POINTER_UP as i32;
+const AMOTION_EVENT_ACTION_POINTER_INDEX_MASK_I32: i32 =
+    ndk_sys::AMOTION_EVENT_ACTION_POINTER_INDEX_MASK as i32;
+const AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT_I32: i32 =
+    ndk_sys::AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT as i32;
 const AKEYCODE_BACK_I32: i32 = ndk_sys::AKEYCODE_BACK as i32;
 const AKEYCODE_ESCAPE_I32: i32 = ndk_sys::AKEYCODE_ESCAPE as i32;
 const AKEYCODE_SPACE_I32: i32 = ndk_sys::AKEYCODE_SPACE as i32;
@@ -2397,14 +2401,34 @@ unsafe fn handle_key_event(event: *const ndk_sys::AInputEvent) -> bool {
 unsafe fn handle_motion_event(event: *const ndk_sys::AInputEvent) {
     let action = unsafe { ndk_sys::AMotionEvent_getAction(event) };
     let action_masked = action & AMOTION_EVENT_ACTION_MASK;
+    // For a POINTER_DOWN/POINTER_UP event, `getPointerCount`/`getX`/`getY` report
+    // every currently-active pointer, not just the one whose state actually
+    // changed — the acting pointer is identified separately by this index. A
+    // DOWN/UP (non-pointer) event always has exactly one pointer, so
+    // `action_index` is trivially 0 there and this has no effect on the
+    // single-touch case.
+    let action_index = ((action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK_I32)
+        >> AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT_I32) as usize;
     let pointer_count = unsafe { ndk_sys::AMotionEvent_getPointerCount(event) }.min(8);
 
     {
         let mut state = app_state().lock().expect("android app state poisoned");
         let display_scale = state.display_scale;
         let input = &mut state.input;
-        input.touches = [None; 8];
-
+        // `input.touches` is persistent multi-touch state, not a per-event
+        // snapshot: it must NOT be wiped and rebuilt from this event's own
+        // pointer list. Android only lists currently-active pointers in each
+        // event, so a pointer that already went Ended (and hasn't been
+        // consumed by `capture_frame`'s decay yet) is legitimately absent from
+        // a later, unrelated event's pointer list. Wiping the array here used
+        // to silently erase that still-pending `Ended` phase before the game
+        // ever read it — the game would then keep tracking a touch id that no
+        // longer exists on the digitizer at all, with no further phase
+        // transition ever arriving to release it, which is exactly what
+        // "the stick sticks at its last touch position" looks like from the
+        // game side. Instead, look up each reported pointer by id and update
+        // its existing slot in place (or claim a free slot for a genuinely
+        // new pointer); slots this event doesn't mention are left untouched.
         for index in 0..pointer_count {
             let x = logical_point(
                 unsafe { ndk_sys::AMotionEvent_getX(event, index) },
@@ -2415,25 +2439,55 @@ unsafe fn handle_motion_event(event: *const ndk_sys::AInputEvent) {
                 display_scale,
             );
             let id = unsafe { ndk_sys::AMotionEvent_getPointerId(event, index) as u64 };
-            let phase = match action_masked {
-                x if x == AMOTION_EVENT_ACTION_DOWN_I32
-                    || x == AMOTION_EVENT_ACTION_POINTER_DOWN_I32 =>
-                {
-                    TouchPhase::Started
+            // MOVE and CANCEL apply uniformly to every currently-listed pointer.
+            // DOWN/POINTER_DOWN/UP/POINTER_UP only describe a phase transition
+            // for the specific pointer at `action_index`; every other pointer
+            // reported alongside it in this same event is just continuing to
+            // be held, unchanged, so it must not be stamped Started/Ended too
+            // (that previously ended or re-began every other active touch —
+            // including live joystick drags — whenever any other finger, such
+            // as a tap on a separate on-screen button, went down or up).
+            let phase = if action_masked == AMOTION_EVENT_ACTION_CANCEL_I32 {
+                TouchPhase::Cancelled
+            } else if action_masked == AMOTION_EVENT_ACTION_MOVE_I32 {
+                TouchPhase::Moved
+            } else if index == action_index {
+                match action_masked {
+                    x if x == AMOTION_EVENT_ACTION_DOWN_I32
+                        || x == AMOTION_EVENT_ACTION_POINTER_DOWN_I32 =>
+                    {
+                        TouchPhase::Started
+                    }
+                    x if x == AMOTION_EVENT_ACTION_UP_I32
+                        || x == AMOTION_EVENT_ACTION_POINTER_UP_I32 =>
+                    {
+                        TouchPhase::Ended
+                    }
+                    _ => TouchPhase::Stationary,
                 }
-                x if x == AMOTION_EVENT_ACTION_UP_I32
-                    || x == AMOTION_EVENT_ACTION_POINTER_UP_I32 =>
-                {
-                    TouchPhase::Ended
-                }
-                x if x == AMOTION_EVENT_ACTION_CANCEL_I32 => TouchPhase::Cancelled,
-                x if x == AMOTION_EVENT_ACTION_MOVE_I32 => TouchPhase::Moved,
-                _ => TouchPhase::Stationary,
+            } else {
+                TouchPhase::Stationary
             };
-            input.touches[index] = Some(TouchPoint { id, x, y, phase });
+            if let Some(existing) = input.touches.iter_mut().flatten().find(|p| p.id == id) {
+                existing.x = x;
+                existing.y = y;
+                existing.phase = phase;
+            } else if let Some(free_slot) = input.touches.iter_mut().find(|slot| slot.is_none()) {
+                *free_slot = Some(TouchPoint { id, x, y, phase });
+            }
             if index == 0 {
                 input.mouse_x = x;
                 input.mouse_y = y;
+            }
+        }
+        if action_masked == AMOTION_EVENT_ACTION_CANCEL_I32 {
+            // A cancel applies to the whole gesture: every pointer this
+            // AInputEvent's own pointer list didn't already cover (e.g. one
+            // already mid-decay to Stationary from an earlier event) must
+            // still be released, or it would be the exact same kind of
+            // permanently stuck touch this whole rewrite exists to prevent.
+            for slot in input.touches.iter_mut().flatten() {
+                slot.phase = TouchPhase::Cancelled;
             }
         }
 
