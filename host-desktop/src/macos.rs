@@ -584,6 +584,7 @@ pub fn capture_frame() -> HostFrame {
             timing: state.timing,
             surface: state.surface,
             input: state.input.snapshot.clone(),
+            foreground: true,
         };
         state.input.clear_transients();
         frame

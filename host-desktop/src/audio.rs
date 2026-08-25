@@ -297,6 +297,10 @@ mod imp {
             with_env(|env| call_void(env, &self.player, "start", "()V", &[]))
         }
 
+        fn pause(&mut self) -> Result<(), String> {
+            with_env(|env| call_void(env, &self.player, "pause", "()V", &[]))
+        }
+
         fn stop(&mut self) -> Result<(), String> {
             with_env(|env| call_void(env, &self.player, "stop", "()V", &[]))
         }
@@ -395,6 +399,7 @@ mod imp {
         playlist_index: usize,
         boot_track_path: String,
         loop_current_track: bool,
+        paused: bool,
     }
 
     impl MusicController {
@@ -419,6 +424,30 @@ mod imp {
                 playlist_index: 0,
                 boot_track_path,
                 loop_current_track: false,
+                paused: false,
+            }
+        }
+
+        /// Pauses playback in place (Android `MediaPlayer.pause`, resumable
+        /// from the same position). Also suspends `update`'s finished-track
+        /// detection: `MediaPlayer.isPlaying()` goes false while paused,
+        /// which would otherwise look identical to the track having ended
+        /// and trigger a from-the-top restart instead of a true resume.
+        pub fn pause(&mut self) {
+            self.paused = true;
+            if let Some(player) = self.player.as_mut() {
+                if let Err(err) = player.pause() {
+                    android::android_log_error(&format!("Android music pause failed: {err}"));
+                }
+            }
+        }
+
+        pub fn resume(&mut self) {
+            self.paused = false;
+            if let Some(player) = self.player.as_mut() {
+                if let Err(err) = player.play() {
+                    android::android_log_error(&format!("Android music resume failed: {err}"));
+                }
             }
         }
 
@@ -581,6 +610,9 @@ mod imp {
         }
 
         pub fn update(&mut self, _dt: f32) {
+            if self.paused {
+                return;
+            }
             let finished = self
                 .player
                 .as_ref()
@@ -1003,6 +1035,10 @@ mod imp {
 
         pub fn update(&mut self, _dt: f32) {}
 
+        pub fn pause(&mut self) {}
+
+        pub fn resume(&mut self) {}
+
         pub fn set_mix_volume(&mut self, volume: f32) {
             self.mix_volume = volume.clamp(0.0, 2.0);
         }
@@ -1272,6 +1308,7 @@ mod imp {
         boot_track_path: String,
         stream: Option<OutputStream>,
         stream_handle: Option<OutputStreamHandle>,
+        music_paused: bool,
     }
 
     impl MusicController {
@@ -1298,6 +1335,7 @@ mod imp {
                     boot_track_path,
                     stream: Some(stream),
                     stream_handle: Some(stream_handle),
+                    music_paused: false,
                 },
                 Err(err) => {
                     eprintln!("Audio backend unavailable ({err}), running without music.");
@@ -1317,7 +1355,30 @@ mod imp {
                         boot_track_path,
                         stream: None,
                         stream_handle: None,
+                        music_paused: false,
                     }
+                }
+            }
+        }
+
+        /// Pauses every currently-playing track's sink in place (resumable
+        /// from the same position) and suspends `update`'s fade/finished
+        /// bookkeeping, matching the Android impl's `pause`/`resume`
+        /// contract.
+        pub fn pause(&mut self) {
+            self.music_paused = true;
+            for state in self.tracks.values_mut() {
+                if state.playing {
+                    state.sink.pause();
+                }
+            }
+        }
+
+        pub fn resume(&mut self) {
+            self.music_paused = false;
+            for state in self.tracks.values_mut() {
+                if state.playing {
+                    state.sink.play();
                 }
             }
         }
@@ -1438,7 +1499,7 @@ mod imp {
         }
 
         pub fn update(&mut self, dt: f32) {
-            if self.tracks.is_empty() || self.stream.is_none() {
+            if self.music_paused || self.tracks.is_empty() || self.stream.is_none() {
                 return;
             }
             let fade = self.fade_duration.max(0.001);

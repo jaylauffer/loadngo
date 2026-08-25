@@ -255,6 +255,7 @@ impl Default for HostSharedState {
                     height: 720.0,
                 },
                 input: PendingInput::default().snapshot(),
+                foreground: true,
             },
             pending_input: PendingInput::default(),
             frame_epoch: 0,
@@ -1192,6 +1193,7 @@ fn advance_frame_clock(state: &mut HostSharedState) {
         },
         surface: state.latest_frame.surface,
         input: state.pending_input.snapshot(),
+        foreground: true,
     };
     state.frame_epoch = state.frame_epoch.saturating_add(1);
     state.pending_redraw = true;

@@ -151,6 +151,11 @@ struct AndroidAppState {
     asset_manager_ptr: Option<usize>,
     internal_data_path: Option<PathBuf>,
     display_scale: f32,
+    /// Mirrors the platform's own foreground/background signal: set to
+    /// `false` by `onPause` (screen lock, task switch, an incoming call
+    /// covering the activity, ...) and back to `true` by `onResume`. Starts
+    /// `true` since the activity is always foregrounded at process launch.
+    foreground: bool,
     surface: SurfaceInfo,
     input: InputSnapshot,
     timing: FrameTiming,
@@ -193,6 +198,7 @@ impl Default for AndroidAppState {
             asset_manager_ptr: None,
             internal_data_path: None,
             display_scale: 1.0,
+            foreground: true,
             surface: SurfaceInfo {
                 width: 0.0,
                 height: 0.0,
@@ -1400,6 +1406,8 @@ pub unsafe fn android_native_activity_on_create(
         callbacks.onNativeWindowDestroyed = Some(on_native_window_destroyed);
         callbacks.onInputQueueCreated = Some(on_input_queue_created);
         callbacks.onInputQueueDestroyed = Some(on_input_queue_destroyed);
+        callbacks.onPause = Some(on_pause);
+        callbacks.onResume = Some(on_resume);
         callbacks.onDestroy = Some(on_destroy);
     }
 
@@ -1511,6 +1519,27 @@ unsafe extern "C" fn on_input_queue_destroyed(
     drop(state);
     pump_main_thread_reactor(false);
     android_log_info("Android input queue destroyed");
+}
+
+/// Android's own signal that the activity has stopped being the interactive,
+/// visible foreground — screen lock, an incoming call, the recents overlay,
+/// another app covering it, and so on all reach here. Unlike
+/// `on_native_window_destroyed`, this reliably fires immediately on a plain
+/// screen lock (the native window itself is often kept alive across a lock),
+/// which is exactly the case that let audio (and simulation time) keep
+/// running silently off-screen before this callback existed.
+unsafe extern "C" fn on_pause(_activity: *mut ndk_sys::ANativeActivity) {
+    let mut state = app_state().lock().expect("android app state poisoned");
+    state.foreground = false;
+    drop(state);
+    android_log_info("Android activity paused (backgrounded)");
+}
+
+unsafe extern "C" fn on_resume(_activity: *mut ndk_sys::ANativeActivity) {
+    let mut state = app_state().lock().expect("android app state poisoned");
+    state.foreground = true;
+    drop(state);
+    android_log_info("Android activity resumed (foregrounded)");
 }
 
 unsafe extern "C" fn on_destroy(_activity: *mut ndk_sys::ANativeActivity) {
@@ -2572,6 +2601,7 @@ pub fn capture_frame() -> HostFrame {
         timing: state.timing,
         surface: state.surface,
         input: state.input.clone(),
+        foreground: state.foreground,
     };
     for touch in &mut state.input.touches {
         match touch {

@@ -125,6 +125,7 @@ impl DesktopPlatformBackend for LoadngoPlaceholderPlatformHost {
                 keys_down: Vec::new(),
                 typed_text: String::new(),
             },
+            foreground: true,
         }
     }
 

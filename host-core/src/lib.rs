@@ -214,6 +214,15 @@ pub struct HostFrame {
     pub timing: FrameTiming,
     pub surface: SurfaceInfo,
     pub input: InputSnapshot,
+    /// Whether the host process is currently in the foreground (visible and
+    /// interactive) according to the platform's own lifecycle signal. On
+    /// Android this reflects `onResume`/`onPause` (screen lock, task switch,
+    /// an incoming call, etc. all report `false` here); platforms with no
+    /// such background/foreground distinction yet wired up always report
+    /// `true`. Games should stop advancing simulation time and pause audio
+    /// while this is `false`, matching platform-expected app-lifecycle
+    /// behavior instead of continuing to run (and make noise) off-screen.
+    pub foreground: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
