@@ -18,7 +18,6 @@ use loadngo_host_core::{
     RenderTextStyle, RenderTextVerticalAlign, RenderTextVerticalMetricMode, SurfaceInfo,
     TextMetrics, WindowDescriptor, WindowIconSet,
 };
-use loadngo_proactor::{CompletionKind, KqueuePort, Proactor, ProactorHandle, RunReport};
 use loadngo_renderer::{FrameCommand, ImageRequest, Renderer, RendererConfig, TextRequest};
 use softbuffer::{Context, Surface};
 use ui_core::{
@@ -301,7 +300,7 @@ pub fn wake_host() {
     if !state.running {
         return;
     }
-    advance_frame_clock(&mut state);
+    advance_frame_clock(&mut state, "wake_host");
     let proxy = state.event_proxy.clone();
     cvar.notify_all();
     drop(state);
@@ -508,7 +507,7 @@ pub async fn next_frame(demand: FrameDemand) {
                         if !state.running {
                             return;
                         }
-                        advance_frame_clock(&mut state);
+                        advance_frame_clock(&mut state, "timer");
                         let proxy = state.event_proxy.clone();
                         cvar.notify_all();
                         drop(state);
@@ -886,10 +885,10 @@ impl LinuxApp {
         }
     }
 
-    fn publish_frame(&mut self) {
+    fn publish_frame(&mut self, source: &str) {
         let (lock, cvar) = &*self.shared.state;
         let mut state = lock.lock().expect("linux host state poisoned");
-        advance_frame_clock(&mut state);
+        advance_frame_clock(&mut state, source);
         cvar.notify_all();
     }
 
@@ -910,11 +909,15 @@ impl LinuxApp {
         if let Some(window) = &self.window {
             let state = lock_state();
             if state.pending_redraw {
+                REDRAW_REQUEST_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 window.request_redraw();
             }
         }
     }
 }
+
+static REDRAW_REQUEST_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ABOUT_TO_WAIT_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -1026,7 +1029,7 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
                 })
                 .expect("failed to spawn Linux runtime future");
         }
-        self.publish_frame();
+        self.publish_frame("resumed");
         self.request_redraw_if_needed();
     }
 
@@ -1036,7 +1039,18 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
-        let mut should_publish_frame = false;
+        // Note: these handlers deliberately do NOT call `publish_frame()` /
+        // bump `frame_epoch`. That used to happen on every raw window event
+        // (including OS keyboard auto-repeat), which meant `next_frame()`
+        // resolved at raw input-event rate instead of the caller's requested
+        // `FrameDemand` cadence -- e.g. holding a key down drove the game's
+        // simulate+render+present loop at OS key-repeat rate rather than
+        // ~60 Hz, degrading both tick pacing and input responsiveness the
+        // longer the key stayed held. `pending_input` is still updated
+        // directly here so the next real tick (driven by the `next_frame`
+        // timer, `resumed`, or an explicit `wake_host()` call) observes the
+        // latest state; only `pending_redraw` is set so the compositor can
+        // repaint promptly without forcing an extra logical frame.
         match event {
             WindowEvent::CloseRequested => {
                 trace_linux("window_event CloseRequested");
@@ -1050,7 +1064,18 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
             }
             WindowEvent::RedrawRequested => {
                 if let (Some(window), Some(surface)) = (&self.window, &mut self.surface) {
+                    let started = Instant::now();
                     present(surface, window.inner_size(), &mut self.gles_backend);
+                    if trace_enabled() {
+                        let redraw_requests =
+                            REDRAW_REQUEST_COUNT.swap(0, std::sync::atomic::Ordering::Relaxed);
+                        let about_to_wait_calls =
+                            ABOUT_TO_WAIT_COUNT.swap(0, std::sync::atomic::Ordering::Relaxed);
+                        trace_linux(format!(
+                            "present duration_ms={:.3} redraw_requests_since_last={redraw_requests} about_to_wait_calls_since_last={about_to_wait_calls}",
+                            started.elapsed().as_secs_f64() * 1000.0,
+                        ));
+                    }
                 }
                 let mut state = lock_state();
                 state.pending_redraw = false;
@@ -1065,18 +1090,17 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
                 if let Some(backend) = self.gles_backend.as_mut() {
                     backend.update_surface_size(size.width as i32, size.height as i32);
                 }
-                should_publish_frame = true;
             }
             WindowEvent::Focused(false) => {
                 let mut state = lock_state();
                 state.pending_input.clear_keyboard_state();
-                should_publish_frame = true;
+                state.pending_redraw = true;
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let mut state = lock_state();
                 state.pending_input.mouse_x = position.x as f32;
                 state.pending_input.mouse_y = position.y as f32;
-                should_publish_frame = true;
+                state.pending_redraw = true;
             }
             WindowEvent::MouseInput {
                 state: button_state,
@@ -1095,7 +1119,7 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
                             state.pending_input.mouse_down = false;
                         }
                     }
-                    should_publish_frame = true;
+                    state.pending_redraw = true;
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -1110,14 +1134,14 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
                         state.pending_input.mouse_wheel_y += y as f32 / 24.0;
                     }
                 }
-                should_publish_frame = true;
+                state.pending_redraw = true;
             }
             WindowEvent::Ime(Ime::Commit(text)) => {
                 let mut state = lock_state();
                 if let Some(filtered) = sanitized_typed_text(&text) {
                     state.pending_input.typed_text.push_str(&filtered);
                 }
-                should_publish_frame = true;
+                state.pending_redraw = true;
             }
             WindowEvent::ModifiersChanged(mods) => {
                 let mut state = lock_state();
@@ -1127,21 +1151,19 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
                     alt: mods.state().alt_key(),
                     meta: mods.state().super_key(),
                 };
-                should_publish_frame = true;
+                state.pending_redraw = true;
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 handle_keyboard_input(event);
-                should_publish_frame = true;
+                lock_state().pending_redraw = true;
             }
             _ => {}
-        }
-        if should_publish_frame {
-            self.publish_frame();
         }
         self.request_redraw_if_needed();
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        ABOUT_TO_WAIT_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.pool.run_until_stalled();
         {
             let state = lock_state();
@@ -1160,7 +1182,7 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
     }
 }
 
-fn advance_frame_clock(state: &mut HostSharedState) {
+fn advance_frame_clock(state: &mut HostSharedState, source: &str) {
     let now = Instant::now();
     let dt = now.saturating_duration_since(state.last_frame_instant);
     state.last_frame_instant = now;
@@ -1174,11 +1196,26 @@ fn advance_frame_clock(state: &mut HostSharedState) {
     };
     state.frame_epoch = state.frame_epoch.saturating_add(1);
     state.pending_redraw = true;
+    if trace_enabled() {
+        trace_linux(format!(
+            "advance_frame_clock source={source} epoch={} dt_ms={:.3} key_events={} keys_down={}",
+            state.frame_epoch,
+            dt.as_secs_f64() * 1000.0,
+            state.latest_frame.input.key_events.len(),
+            state.latest_frame.input.keys_down.len(),
+        ));
+    }
 }
 
 fn handle_keyboard_input(event: winit::event::KeyEvent) {
     let pressed = event.state == ElementState::Pressed;
     let host_key = map_host_key(&event);
+    if trace_enabled() {
+        trace_linux(format!(
+            "handle_keyboard_input key={host_key:?} pressed={pressed} repeat={}",
+            event.repeat,
+        ));
+    }
     let mut state = lock_state();
     let modifiers = state.pending_input.modifiers;
 

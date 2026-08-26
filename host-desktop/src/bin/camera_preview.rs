@@ -23,7 +23,7 @@ use image::{ColorType, ImageEncoder};
 use loadngo_host_core::{
     decode_image_from_memory, DecodedImage, FrameDemand, HostKey, RectF, WindowDescriptor,
 };
-use loadngo_proactor::{CompletionKind, EpollPort, Proactor, ProactorHandle, ReadinessEvent};
+use loadngo_proactor::{CompletionKind, IoUringPort, Proactor, ProactorHandle, ReadinessEvent};
 use ui_core::Color;
 
 const WINDOW_WIDTH: i32 = 1320;
@@ -152,7 +152,7 @@ struct StreamOutcome {
 struct CaptureController {
     options: CaptureOptions,
     sender: Sender<CaptureEvent>,
-    handle: ProactorHandle<EpollPort>,
+    handle: ProactorHandle<IoUringPort>,
     running: AtomicBool,
     restart_pending: AtomicBool,
     active_stream: Mutex<Option<ActiveStream>>,
@@ -162,7 +162,7 @@ impl CaptureController {
     fn new(
         options: CaptureOptions,
         sender: Sender<CaptureEvent>,
-        handle: ProactorHandle<EpollPort>,
+        handle: ProactorHandle<IoUringPort>,
     ) -> Self {
         Self {
             options,
@@ -174,7 +174,7 @@ impl CaptureController {
         }
     }
 
-    fn run(self: Arc<Self>, proactor: Proactor<EpollPort>) {
+    fn run(self: Arc<Self>, proactor: Proactor<IoUringPort>) {
         if let Err(err) = self.start_stream() {
             self.schedule_restart(err);
         }
@@ -260,7 +260,7 @@ impl CaptureController {
         ) {
             let _ = self.shutdown_active_stream(true);
             return Err(format!(
-                "failed to register camera stream with epoll: {err}"
+                "failed to register camera stream with io_uring: {err}"
             ));
         }
 
@@ -426,7 +426,7 @@ impl CaptureWorker {
     fn start(options: CaptureOptions) -> Result<Self, String> {
         let (tx, rx) = mpsc::channel();
         let proactor = Proactor::new(
-            EpollPort::new().map_err(|err| format!("failed to create epoll port: {err}"))?,
+            IoUringPort::new().map_err(|err| format!("failed to create io_uring port: {err}"))?,
         );
         let handle = proactor.handle();
         let controller = Arc::new(CaptureController::new(options, tx, handle));
@@ -1290,10 +1290,8 @@ mod tests {
         assert_eq!(buffer, vec![7u8; 4]);
     }
 }
-}
 
-#[cfg(target_os = "linux")]
-fn main() -> Result<(), String> {
+pub(crate) fn run() -> Result<(), String> {
     let options = parse_args()?;
     if options.list_devices {
         for (device, label) in available_camera_devices_with_labels() {
@@ -1326,4 +1324,10 @@ fn main() -> Result<(), String> {
         run_preview(options).await;
     });
     Ok(())
+}
+}
+
+#[cfg(target_os = "linux")]
+fn main() -> Result<(), String> {
+    linux_harness::run()
 }

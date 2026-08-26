@@ -1,7 +1,7 @@
-use crate::{CompletionEnvelope, CompletionPort, PollEvent};
+use crate::{CompletionEnvelope, CompletionPort, PollEvent, ReadinessEvent, ReadinessPort};
 use io_uring::{opcode, types, IoUring};
 use libc::{c_int, timespec, POLLERR, POLLHUP, POLLIN, POLLRDHUP};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::os::fd::RawFd;
 use std::sync::Mutex;
@@ -10,11 +10,13 @@ use std::time::Duration;
 const QUEUE_TOKEN: u64 = 1;
 const WAKE_TOKEN: u64 = 2;
 const MAX_EVENTS: usize = 256;
+const READINESS_POLL_MASK: u32 = (POLLIN | POLLERR | POLLHUP | POLLRDHUP) as u32;
 
 pub struct IoUringPort {
     ring: Mutex<IoUring>,
     queue: Mutex<VecDeque<CompletionEnvelope>>,
     wake_fd: RawFd,  // eventfd for waking
+    registered: Mutex<HashMap<RawFd, u64>>,
 }
 
 impl IoUringPort {
@@ -31,6 +33,7 @@ impl IoUringPort {
             ring: Mutex::new(ring),
             queue: Mutex::new(VecDeque::new()),
             wake_fd,
+            registered: Mutex::new(HashMap::new()),
         })
     }
 
@@ -172,7 +175,21 @@ impl CompletionPort for IoUringPort {
                     Self::clear_eventfd(self.wake_fd)?;
                     Ok(PollEvent::Wake)
                 }
-                _ => Ok(PollEvent::Wake),
+                token => {
+                    let is_registered = self
+                        .registered
+                        .lock()
+                        .expect("io_uring readiness registry poisoned")
+                        .values()
+                        .any(|registered_token| *registered_token == token);
+                    if is_registered {
+                        Ok(PollEvent::Readiness(ReadinessEvent { token }))
+                    } else {
+                        // Stray completion (e.g. the ack for a cancelled poll). Treat
+                        // it as a benign wake rather than an unknown readiness token.
+                        Ok(PollEvent::Wake)
+                    }
+                }
             }
         } else {
             Ok(PollEvent::Timeout)
@@ -181,5 +198,83 @@ impl CompletionPort for IoUringPort {
 
     fn wake(&self) -> io::Result<()> {
         Self::signal_eventfd(self.wake_fd)
+    }
+}
+
+impl ReadinessPort for IoUringPort {
+    fn register_readable(&self, fd: RawFd, token: u64) -> io::Result<()> {
+        {
+            let mut registered = self
+                .registered
+                .lock()
+                .expect("io_uring readiness registry poisoned");
+            if registered.contains_key(&fd) {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("fd {fd} already registered"),
+                ));
+            }
+            registered.insert(fd, token);
+        }
+
+        let poll_op = opcode::PollAdd::new(types::Fd(fd), READINESS_POLL_MASK)
+            .multi(true)
+            .build()
+            .user_data(token);
+
+        let mut ring = self.ring.lock().map_err(|e| {
+            io::Error::new(io::ErrorKind::Other, format!("lock poisoned: {}", e))
+        })?;
+
+        let submit_result: io::Result<()> = (|| {
+            unsafe {
+                ring.submission()
+                    .push(&poll_op)
+                    .map_err(|_| io::Error::new(io::ErrorKind::Other, "submission queue full"))?;
+            }
+            ring.submit()
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            Ok(())
+        })();
+        drop(ring);
+
+        if let Err(err) = submit_result {
+            self.registered
+                .lock()
+                .expect("io_uring readiness registry poisoned")
+                .remove(&fd);
+            return Err(err);
+        }
+
+        Ok(())
+    }
+
+    fn deregister(&self, fd: RawFd) -> io::Result<()> {
+        let token = self
+            .registered
+            .lock()
+            .expect("io_uring readiness registry poisoned")
+            .remove(&fd);
+
+        let Some(token) = token else {
+            return Ok(());
+        };
+
+        let remove_op = opcode::PollRemove::new(token).build().user_data(WAKE_TOKEN);
+
+        let mut ring = self.ring.lock().map_err(|e| {
+            io::Error::new(io::ErrorKind::Other, format!("lock poisoned: {}", e))
+        })?;
+
+        unsafe {
+            ring.submission()
+                .push(&remove_op)
+                .map_err(|_| io::Error::new(io::ErrorKind::Other, "submission queue full"))?;
+        }
+
+        ring.submit()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+
+        Ok(())
     }
 }

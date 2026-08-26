@@ -1,7 +1,7 @@
 mod channel;
 mod deferred;
 #[cfg(target_os = "linux")]
-mod epoll;
+mod uring;
 mod error;
 #[cfg(windows)]
 mod iocp;
@@ -27,7 +27,7 @@ use std::{collections::HashMap, os::fd::RawFd};
 
 pub use channel::ChannelPort;
 #[cfg(target_os = "linux")]
-pub use epoll::EpollPort;
+pub use uring::IoUringPort;
 pub use error::ProactorError;
 #[cfg(windows)]
 pub use iocp::IocpPort;

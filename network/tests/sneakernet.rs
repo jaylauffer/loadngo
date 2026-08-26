@@ -3,7 +3,7 @@ use data::{
     p2pmsg::{FileStart, Message},
 };
 #[cfg(target_os = "linux")]
-use loadngo_proactor::EpollPort;
+use loadngo_proactor::IoUringPort;
 #[cfg(any(
     target_os = "macos",
     target_os = "ios",
@@ -218,7 +218,7 @@ fn registered_proactor_pump_drives_sneakernet_dispatch_and_storage() {
     let receiver_addr = receiver.local_addr().unwrap();
 
     #[cfg(target_os = "linux")]
-    let proactor = Proactor::new(EpollPort::new().unwrap());
+    let proactor = Proactor::new(IoUringPort::new().unwrap());
     #[cfg(any(
         target_os = "macos",
         target_os = "ios",
@@ -304,7 +304,7 @@ fn registered_proactor_pump_handles_dual_stack_node_sockets() {
     ));
 
     #[cfg(target_os = "linux")]
-    let proactor = Proactor::new(EpollPort::new().unwrap());
+    let proactor = Proactor::new(IoUringPort::new().unwrap());
     #[cfg(any(
         target_os = "macos",
         target_os = "ios",
