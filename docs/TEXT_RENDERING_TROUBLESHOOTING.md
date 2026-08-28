@@ -137,3 +137,46 @@ Practical rules for renderer/runtime memory debugging:
 - reduced frame cadence helps
 - skipped identical submissions help
 - but neither substitutes for correct ownership
+
+## iOS Retina Text Was Rasterized at 1x
+
+In August 2026, HUD text in `sng-zhoenus` was reported as reading thin and
+grayish, and specifically worse on iOS than Android for the same build.
+Two things were ruled out before finding the real cause:
+- not a logical-vs-physical-pixel units bug (both platforms report
+  `Viewport` the same logical, density-independent surface size)
+- not fully explained by low contrast against a busy background (an
+  outline drawn behind the text helped, but iOS still lagged Android
+  with it)
+
+The actual bug: `gfx-metal::rasterize_text` shaped and rasterized every
+glyph via CoreText at the literal logical `font_size`, in points, with no
+Retina-scale multiplication anywhere in the pipeline. The resulting
+bitmap's raw pixel dimensions were then used directly as the on-screen
+quad's size. `MetalSurface::sync_drawable_size` *did* correctly scale the
+drawable itself by `backingScaleFactor`/`contentScaleFactor` — so the GPU
+had to upscale a 1x-resolution glyph bitmap to fill a 2x/3x-resolution
+quad on every Retina display. Android's renderer already multiplies
+`font_size` by display density before rasterizing (`scale_frame_command`
+in `host-desktop/src/android.rs`) and never showed the symptom — that
+asymmetry was the clue that pointed at rasterization resolution rather
+than layout or contrast.
+
+The fix: `rasterize_text`/`cached_text_raster`/`rasterize_text_request`
+take a `scale` parameter (`MetalSurface::content_scale`, the same
+`backingScaleFactor`/`contentScaleFactor` query the drawable sizing
+already used). CoreText shapes and rasterizes at `font_size * scale`, so
+the bitmap itself is genuinely higher-resolution; the draw call then
+displays that bitmap at its original logical-point footprint (divide the
+pixel dimensions back down by `scale`), so nothing about layout,
+wrapping, or positioning changes — only sharpness. At `scale = 1.0`
+(every pre-existing caller — `debug_text_placement`, every unit test in
+this crate) the change is a no-op by construction, which is why it didn't
+need new test coverage to be verified safe: the existing suite passing
+unchanged after the change *is* the regression check.
+
+Practical rule this adds to the list above: when a symptom is platform-
+asymmetric on otherwise-shared rendering code, look for where per-
+platform code diverges in exactly the dimension the symptom concerns
+(here: pixel density) before reaching for a cross-platform explanation
+like contrast or layout.
