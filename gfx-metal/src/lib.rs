@@ -250,7 +250,9 @@ pub fn debug_text_placement(
     request: &TextRequest,
     font_source: Option<&str>,
 ) -> Result<DebugTextPlacement, RendererError> {
-    let raster = rasterize_text_request(request, font_source)?;
+    // No live surface to query a Retina scale from here -- 1.0 keeps this
+    // debug helper's output in plain logical points, as before.
+    let raster = rasterize_text_request(request, font_source, 1.0)?;
     Ok(DebugTextPlacement {
         x: raster.x,
         y: raster.y,
@@ -417,6 +419,22 @@ impl MetalBackend {
             .map(|surface| surface.logical_size_points())
     }
 
+    /// Bound surface's points -> physical-pixel multiplier, or `1.0` with
+    /// no surface bound yet -- used to rasterize text at native pixel
+    /// density (see `MetalSurface::content_scale`, `rasterize_text`).
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    fn surface_content_scale(&self) -> f32 {
+        self.surface
+            .as_ref()
+            .map(|surface| surface.content_scale())
+            .unwrap_or(1.0)
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    fn surface_content_scale(&self) -> f32 {
+        1.0
+    }
+
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     pub fn has_bound_surface(&self) -> bool {
         false
@@ -567,11 +585,17 @@ impl MetalBackend {
                     if request.text.is_empty() {
                         continue;
                     }
-                    let raster = rasterize_text_request(request, self.text_font_source.as_deref())?;
-                    let image_width = raster.image.width as f32;
-                    let image_height = raster.image.height as f32;
+                    let scale = self.surface_content_scale();
+                    let raster = rasterize_text_request(request, self.text_font_source.as_deref(), scale)?;
+                    // `raster.image` is rasterized at `scale`x resolution
+                    // (see `rasterize_text`) for a crisp Retina/native
+                    // texture, but the on-screen quad must stay in logical
+                    // points -- dividing back down here is what turns a
+                    // would-be GPU upscale-blur into a downsample instead.
+                    let image_width = raster.image.width as f32 / scale;
+                    let image_height = raster.image.height as f32 / scale;
                     trace_widgets_log(format!(
-                        "text request='{}' h_align={:?} v_align={:?} mode={:?} overflow={:?} rect=({}, {}, {}, {}) logical=({}, {}) baseline={} image=({}, {}) content_top={} logical_top_display={} opaque_top_display={} opaque_height={} placement=({}, {})",
+                        "text request='{}' h_align={:?} v_align={:?} mode={:?} overflow={:?} rect=({}, {}, {}, {}) logical=({}, {}) baseline={} image=({}, {}) content_top={} logical_top_display={} opaque_top_display={} opaque_height={} placement=({}, {}) scale={}",
                         request.text,
                         request.style.horizontal_align,
                         request.style.vertical_align,
@@ -592,6 +616,7 @@ impl MetalBackend {
                         raster.opaque_height,
                         raster.x,
                         raster.y,
+                        scale,
                     ));
                     images.push(GeneratedFrameImage {
                         image: raster.image,
@@ -742,11 +767,16 @@ impl MetalBackend {
                     if request.text.is_empty() {
                         continue;
                     }
-                    let raster = rasterize_text_request(request, self.text_font_source.as_deref())?;
-                    let image_width = raster.image.width as f32;
-                    let image_height = raster.image.height as f32;
+                    let scale = self.surface_content_scale();
+                    let raster = rasterize_text_request(request, self.text_font_source.as_deref(), scale)?;
+                    // See the matching comment in `frame_generated_images`:
+                    // `raster.image` is rasterized at `scale`x for a crisp
+                    // Retina texture, dividing back down here keeps the
+                    // on-screen quad the same logical-point size as before.
+                    let image_width = raster.image.width as f32 / scale;
+                    let image_height = raster.image.height as f32 / scale;
                     trace_widgets_log(format!(
-                        "text request='{}' h_align={:?} v_align={:?} mode={:?} overflow={:?} rect=({}, {}, {}, {}) logical=({}, {}) baseline={} image=({}, {}) content_top={} logical_top_display={} opaque_top_display={} opaque_height={} placement=({}, {})",
+                        "text request='{}' h_align={:?} v_align={:?} mode={:?} overflow={:?} rect=({}, {}, {}, {}) logical=({}, {}) baseline={} image=({}, {}) content_top={} logical_top_display={} opaque_top_display={} opaque_height={} placement=({}, {}) scale={}",
                         request.text,
                         request.style.horizontal_align,
                         request.style.vertical_align,
@@ -767,6 +797,7 @@ impl MetalBackend {
                         raster.opaque_height,
                         raster.x,
                         raster.y,
+                        scale,
                     ));
                     visuals.push(FrameVisual::GeneratedImage(GeneratedFrameImage {
                         image: raster.image,
@@ -1091,13 +1122,14 @@ const TEXT_RASTER_ALPHA_TOP_MARGIN: u32 = 2;
 const TEXT_RASTER_ALPHA_BOTTOM_MARGIN: u32 = 2;
 const TEXT_RASTER_CACHE_LIMIT: usize = 512;
 
-fn text_raster_cache_key(request: &TextRequest, font_source: Option<&str>) -> String {
+fn text_raster_cache_key(request: &TextRequest, font_source: Option<&str>, scale: f32) -> String {
     let mut hasher = DefaultHasher::new();
     font_source.unwrap_or_default().hash(&mut hasher);
     request.text.hash(&mut hasher);
     request.rect.width.to_bits().hash(&mut hasher);
     request.rect.height.to_bits().hash(&mut hasher);
     request.style.font_size.hash(&mut hasher);
+    scale.to_bits().hash(&mut hasher);
     request.style.color.r.hash(&mut hasher);
     request.style.color.g.hash(&mut hasher);
     request.style.color.b.hash(&mut hasher);
@@ -1120,8 +1152,9 @@ fn text_raster_cache_key(request: &TextRequest, font_source: Option<&str>) -> St
 fn cached_text_raster(
     request: &TextRequest,
     font_source: Option<&str>,
+    scale: f32,
 ) -> Result<Arc<CachedTextRaster>, RendererError> {
-    let cache_key = text_raster_cache_key(request, font_source);
+    let cache_key = text_raster_cache_key(request, font_source, scale);
     if let Some(cached) = TEXT_RASTER_CACHE.with(|cache| cache.borrow().get(&cache_key).cloned()) {
         TEXT_RASTER_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
         return Ok(cached);
@@ -1134,6 +1167,9 @@ fn cached_text_raster(
         loadngo_host_core::RenderTextLayoutMode::SingleLine
     ) && request.rect.width > 0.0
     {
+        // Deliberately measured/truncated in logical points, not `scale`d --
+        // this decides how many characters fit `request.rect.width`, which
+        // is itself a logical-point rect, independent of raster resolution.
         request.text = apply_single_line_overflow(
             &request.text,
             request.rect.width as f32,
@@ -1143,7 +1179,7 @@ fn cached_text_raster(
         )?;
     }
 
-    let mut raster = macos::rasterize_text(&request, font_source)?;
+    let mut raster = macos::rasterize_text(&request, font_source, scale)?;
     let logical_top = raster.content_top_in_image.floor().max(0.0) as u32;
     let logical_bottom = (raster.content_top_in_image + raster.metrics.height)
         .ceil()
@@ -1211,29 +1247,49 @@ fn cached_text_raster(
     Ok(cached)
 }
 
+/// `scale` is the destination surface's points -> physical-pixel
+/// multiplier (see `MetalSurface::content_scale`); pass `1.0` when there's
+/// no live surface to query (measurement-only callers, tests). `raster`'s
+/// fields all come back in *raster pixels* (see `macos::rasterize_text`'s
+/// doc comment) -- everything below divides by `scale` before combining
+/// them with `request.rect`, which is always logical points, so the
+/// `RasterizedText` this returns is entirely in logical points except for
+/// `image` itself (the actual, possibly higher-resolution texture data).
+/// At `scale = 1.0` dividing is a no-op, so this is behaviorally identical
+/// to before `scale` existed.
 fn rasterize_text_request(
     request: &TextRequest,
     font_source: Option<&str>,
+    scale: f32,
 ) -> Result<RasterizedText, RendererError> {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
-        let raster = cached_text_raster(request, font_source)?;
+        let scale = scale.max(0.01);
+        let raster = cached_text_raster(request, font_source, scale)?;
+        let metrics = RasterMetrics {
+            width: raster.metrics.width / scale,
+            height: raster.metrics.height / scale,
+            baseline_from_top: raster.metrics.baseline_from_top / scale,
+        };
+        let opaque_height = raster.opaque_height / scale;
+        let logical_top_in_display = raster.logical_top_in_display / scale;
+        let opaque_top_in_display = raster.opaque_top_in_display / scale;
+        let content_top_in_image = raster.content_top_in_image / scale;
         let text_x = match request.style.horizontal_align {
             loadngo_host_core::RenderTextHorizontalAlign::Left => request.rect.x as f32,
             loadngo_host_core::RenderTextHorizontalAlign::Center => {
-                request.rect.x as f32
-                    + (request.rect.width as f32 - raster.metrics.width).max(0.0) * 0.5
+                request.rect.x as f32 + (request.rect.width as f32 - metrics.width).max(0.0) * 0.5
             }
             loadngo_host_core::RenderTextHorizontalAlign::Right => {
-                request.rect.x as f32 + (request.rect.width as f32 - raster.metrics.width).max(0.0)
+                request.rect.x as f32 + (request.rect.width as f32 - metrics.width).max(0.0)
             }
         };
         let (metric_height, top_in_display) = match request.style.vertical_metric_mode {
             loadngo_host_core::RenderTextVerticalMetricMode::VisibleInk => {
-                (raster.opaque_height, raster.opaque_top_in_display)
+                (opaque_height, opaque_top_in_display)
             }
             loadngo_host_core::RenderTextVerticalMetricMode::LogicalLineBox => {
-                (raster.metrics.height, raster.logical_top_in_display)
+                (metrics.height, logical_top_in_display)
             }
         };
         let target_top = match request.style.vertical_align {
@@ -1249,17 +1305,17 @@ fn rasterize_text_request(
             image: raster.image.clone(),
             x: text_x,
             y: target_top - top_in_display,
-            metrics: raster.metrics,
-            content_top_in_image: raster.content_top_in_image,
-            logical_top_in_display: raster.logical_top_in_display,
-            opaque_top_in_display: raster.opaque_top_in_display,
-            opaque_height: raster.opaque_height,
+            metrics,
+            content_top_in_image,
+            logical_top_in_display,
+            opaque_top_in_display,
+            opaque_height,
         })
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     {
-        let _ = (request, font_source);
+        let _ = (request, font_source, scale);
         Err(RendererError::Text(
             "native text rasterization is unavailable on this platform".to_string(),
         ))
@@ -1828,6 +1884,27 @@ mod macos {
             (bounds.size.width as f32, bounds.size.height as f32)
         }
 
+        /// Points -> physical-pixel multiplier for this surface (Retina
+        /// `backingScaleFactor` on macOS, `contentScaleFactor` on iOS).
+        /// Used to rasterize text at native pixel density instead of
+        /// rasterizing at 1x and letting the GPU upsample a blurry bitmap
+        /// onto the (correctly Retina-sized) drawable -- see
+        /// `rasterize_text_request`'s `scale` parameter.
+        pub fn content_scale(&self) -> f32 {
+            #[cfg(target_os = "macos")]
+            let scale: f64 = {
+                let window: *mut AnyObject = unsafe { msg_send![&*self.view, window] };
+                if window.is_null() {
+                    1.0
+                } else {
+                    unsafe { msg_send![window, backingScaleFactor] }
+                }
+            };
+            #[cfg(target_os = "ios")]
+            let scale: f64 = unsafe { msg_send![&*self.view, contentScaleFactor] };
+            (scale as f32).max(1.0)
+        }
+
         pub fn sync_drawable_size(&self) -> Result<(), RendererError> {
             let bounds: CGRect = unsafe { msg_send![&*self.view, bounds] };
             #[cfg(target_os = "macos")]
@@ -2136,11 +2213,25 @@ mod macos {
         Ok(metrics)
     }
 
+    /// `scale` is the surface's points -> physical-pixel multiplier (see
+    /// `MetalSurface::content_scale`), applied to the font size actually
+    /// handed to CoreText so glyphs are shaped/hinted/rasterized at native
+    /// pixel density instead of being rasterized at 1x and blurrily
+    /// upscaled onto a Retina drawable. Every quantity computed in this
+    /// function (`width`/`height`, `RasterMetrics`, padding, the bitmap
+    /// itself) is therefore in *raster pixels* (`scale`x logical points),
+    /// self-consistently -- callers that need logical points back (i.e.
+    /// everyone outside this raster step) divide by `scale` themselves;
+    /// see `rasterize_text_request`. At `scale = 1.0` this function is
+    /// byte-for-byte identical to before this parameter existed.
     pub fn rasterize_text(
         request: &TextRequest,
         font_source: Option<&str>,
+        scale: f32,
     ) -> Result<RasterizedText, RendererError> {
+        let scale = scale.max(0.01);
         let color = request.style.color;
+        let raster_font_size = (request.style.font_size.max(1) as f32) * scale;
         let lines: Vec<String> = match request.style.layout_mode {
             loadngo_host_core::RenderTextLayoutMode::SingleLine => vec![request.text.clone()],
             loadngo_host_core::RenderTextLayoutMode::MultiLine => {
@@ -2153,17 +2244,13 @@ mod macos {
         };
         let mut layouts = Vec::with_capacity(lines.len().max(1));
         for line in &lines {
-            layouts.push(layout_text(
-                line,
-                font_source,
-                request.style.font_size.max(1) as f32,
-            )?);
+            layouts.push(layout_text(line, font_source, raster_font_size)?);
         }
         let logical_width = layouts
             .iter()
             .map(|layout| layout.metrics.width)
             .fold(1.0f32, f32::max);
-        let line_metrics = font_line_metrics(layouts[0].font, request.style.font_size as f32);
+        let line_metrics = font_line_metrics(layouts[0].font, raster_font_size);
         let line_box_height = line_metrics.line_box_height;
         let line_step = line_metrics.line_step;
         let logical_height = match request.style.layout_mode {
@@ -3525,7 +3612,7 @@ mod tests {
                 language: None,
             };
             let raster =
-                rasterize_text_request(&request, None).expect("text raster should succeed");
+                rasterize_text_request(&request, None, 1.0).expect("text raster should succeed");
             let top_rows = row_alpha_counts(&raster.image, 8);
             let mut all_rows = row_alpha_counts(&raster.image, raster.image.height as usize);
             all_rows.reverse();
@@ -3619,6 +3706,7 @@ mod tests {
                     language: None,
                 },
                 None,
+                1.0,
             )
             .expect("text raster should succeed");
             assert!(raster.image.width > 0);
@@ -3702,7 +3790,7 @@ mod tests {
             script: loadngo_renderer::TextScript::Auto,
             language: None,
         };
-        let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
+        let raster = rasterize_text_request(&request, None, 1.0).expect("text raster should succeed");
         let displayed_logical_top = raster.y + raster.logical_top_in_display;
         assert!(
             displayed_logical_top.abs() < 1.1,
@@ -3736,7 +3824,7 @@ mod tests {
             script: loadngo_renderer::TextScript::Auto,
             language: None,
         };
-        let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
+        let raster = rasterize_text_request(&request, None, 1.0).expect("text raster should succeed");
         let expected_x =
             request.rect.x + (request.rect.width - raster.metrics.width).max(0.0) * 0.5;
         let displayed_logical_top = raster.y + raster.logical_top_in_display;
@@ -3772,7 +3860,7 @@ mod tests {
             script: loadngo_renderer::TextScript::Auto,
             language: None,
         };
-        let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
+        let raster = rasterize_text_request(&request, None, 1.0).expect("text raster should succeed");
         let displayed_logical_bottom =
             raster.y + raster.logical_top_in_display + raster.metrics.height;
         assert!((displayed_logical_bottom - request.rect.height).abs() < 0.5);
@@ -3806,7 +3894,7 @@ mod tests {
             language: None,
         };
 
-        let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
+        let raster = rasterize_text_request(&request, None, 1.0).expect("text raster should succeed");
 
         assert_eq!(
             raster.metrics.height,
@@ -3842,7 +3930,7 @@ mod tests {
             language: None,
         };
 
-        let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
+        let raster = rasterize_text_request(&request, None, 1.0).expect("text raster should succeed");
 
         assert!(raster.image.height as f32 <= raster.metrics.height + 8.0);
         assert!(
@@ -3882,9 +3970,9 @@ mod tests {
             language: None,
         };
 
-        let word = rasterize_text_request(&make_request("Menu"), None)
+        let word = rasterize_text_request(&make_request("Menu"), None, 1.0)
             .expect("word text raster should succeed");
-        let punctuation = rasterize_text_request(&make_request("....."), None)
+        let punctuation = rasterize_text_request(&make_request("....."), None, 1.0)
             .expect("punctuation text raster should succeed");
 
         let displayed_word_top = word.y + word.logical_top_in_display;
@@ -3925,6 +4013,7 @@ mod tests {
                         language: None,
                     },
                     None,
+                    1.0,
                 )
                 .expect("text raster should succeed")
             })
@@ -3973,6 +4062,7 @@ mod tests {
                     language: None,
                 },
                 None,
+                1.0,
             )
             .expect("text raster should succeed");
             displayed_tops.push(raster.y + raster.logical_top_in_display);
@@ -4015,7 +4105,7 @@ mod tests {
             language: None,
         };
 
-        let raster = rasterize_text_request(&request, None).expect("text raster should succeed");
+        let raster = rasterize_text_request(&request, None, 1.0).expect("text raster should succeed");
 
         assert!(raster.image.height as f32 >= raster.metrics.height);
         assert!(raster.logical_top_in_display >= 0.0);
@@ -4100,9 +4190,9 @@ mod tests {
         };
 
         let single_raster =
-            rasterize_text_request(&single, None).expect("single line should rasterize");
+            rasterize_text_request(&single, None, 1.0).expect("single line should rasterize");
         let multi_raster =
-            rasterize_text_request(&multi, None).expect("multi line should rasterize");
+            rasterize_text_request(&multi, None, 1.0).expect("multi line should rasterize");
         assert!(multi_raster.metrics.height > single_raster.metrics.height);
     }
 
@@ -4130,7 +4220,7 @@ mod tests {
             language: None,
         };
 
-        let raster = rasterize_text_request(&request, None).expect("multiline should rasterize");
+        let raster = rasterize_text_request(&request, None, 1.0).expect("multiline should rasterize");
         let band_widths = displayed_opaque_band_widths(&raster.image);
 
         assert_eq!(band_widths.len(), 3, "expected three displayed text bands");
