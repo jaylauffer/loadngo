@@ -119,6 +119,14 @@ struct HostSharedState {
     simulate_mouse_with_touch: bool,
     pending_redraw: bool,
     queued_commands: Vec<FrameCommand>,
+    /// `frame_epoch` as of the last time `queued_commands` was cleared --
+    /// lets `render_commands` distinguish "first call since this tick
+    /// started" (clear stale data from an already-superseded tick) from
+    /// "another call within the *same* tick" (accumulate instead of
+    /// wiping out a sibling call's commands). See `render_commands`'s doc
+    /// comment for why both cases are real and why conflating them broke
+    /// callers that issue a scene across several calls per tick.
+    queued_commands_epoch: Option<u64>,
     queued_font_source: Option<String>,
     last_submitted_commands: Vec<FrameCommand>,
     last_submitted_font_source: Option<String>,
@@ -275,6 +283,7 @@ impl Default for HostSharedState {
             simulate_mouse_with_touch: true,
             pending_redraw: true,
             queued_commands: Vec::new(),
+            queued_commands_epoch: None,
             queued_font_source: None,
             last_submitted_commands: Vec::new(),
             last_submitted_font_source: None,
@@ -1017,19 +1026,37 @@ fn render_commands(commands: &[FrameCommand], font: Option<&DesktopFont>) {
         return;
     }
     let mut state = lock_state();
-    // Each call carries a complete frame's worth of draw commands (see
-    // `render_ops`'s callers — `sng-roguelite`'s `run_game()` passes its
-    // *entire* current scene every tick, not a delta), so this must
-    // *replace* whatever's pending, not accumulate onto it. `extend_from_slice`
-    // here previously appended instead: if the game ticked more than once
+    // A tick's *first* `render_commands` call must replace whatever's
+    // pending, not accumulate onto it: if the game ticked more than once
     // before `flush_selected_backend` actually flushed and cleared the
     // queue (RedrawRequested delivery through UIKit isn't guaranteed 1:1
     // with tick production, especially under the touch-driven load a drag
-    // gesture creates), multiple ticks' commands piled up and were drawn
-    // together in one render pass — the touch-driven stick at its old
-    // position *and* its new one, both visible at once. That's what
-    // "flashing" thumbsticks during motion turned out to be.
-    state.queued_commands.clear();
+    // gesture creates), a stale prior tick's commands would otherwise
+    // still be sitting in the queue and get drawn together with the new
+    // tick's — the touch-driven stick at its old position *and* its new
+    // one, both visible at once. That's what "flashing" thumbsticks during
+    // motion turned out to be, and why this used to unconditionally
+    // `.clear()` before every call.
+    //
+    // But unconditionally clearing on *every* call broke a different,
+    // equally real pattern: some games (sng-rusty, notably, versus
+    // sng-roguelite/sng-zhoenus's one-call-per-tick style) issue a single
+    // tick's scene across *several* `render_commands` calls -- background,
+    // then portraits, then UI overlays -- expecting them to accumulate
+    // into one frame. Unconditional clearing wiped out every earlier call
+    // in that sequence, silently leaving only whatever was drawn last.
+    //
+    // `frame_epoch` only advances between ticks (see `next_frame`'s timer),
+    // never mid-tick (a tick's `render_commands` calls all happen
+    // synchronously within one `pool.run_until_stalled()` pass, before the
+    // game ever awaits `next_frame` again) -- so it's the right signal to
+    // tell these two cases apart: clear once per *new* epoch, accumulate
+    // for any further call still inside that same epoch.
+    let current_epoch = state.frame_epoch;
+    if state.queued_commands_epoch != Some(current_epoch) {
+        state.queued_commands.clear();
+        state.queued_commands_epoch = Some(current_epoch);
+    }
     state.queued_commands.extend_from_slice(commands);
     if let Some(source) = font.and_then(DesktopFont::source_path) {
         state.queued_font_source = Some(source.to_string());
