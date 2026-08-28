@@ -435,11 +435,46 @@ define_class!(
     }
 );
 
+/// iOS views default to single-touch (`isMultipleTouchEnabled == false`);
+/// twin-stick controls need two independent fingers tracked
+/// simultaneously, which silently degrades to one finger at a time without
+/// this — the second touch is never delivered at all, not just
+/// misattributed. Must be set on every view in the responder chain that
+/// could otherwise claim exclusive touch ownership, mirroring
+/// `IosTouchBridge::install`'s view/superview/window walk.
+fn enable_multitouch(view: &UIView) {
+    view.setUserInteractionEnabled(true);
+    view.setMultipleTouchEnabled(true);
+    trace_input_log(format!(
+        "multitouch enabled on content view userInteractionEnabled={} multipleTouchEnabled={}",
+        view.isUserInteractionEnabled(),
+        view.isMultipleTouchEnabled()
+    ));
+
+    if let Some(superview) = view.superview() {
+        superview.setUserInteractionEnabled(true);
+        superview.setMultipleTouchEnabled(true);
+    }
+
+    if let Some(window) = view.window() {
+        window.setUserInteractionEnabled(true);
+        window.setMultipleTouchEnabled(true);
+    } else {
+        trace_input_log("multitouch setup could not resolve UIWindow from content view");
+    }
+}
+
+/// Single-touch fallback, superseded by `enable_multitouch` — see the
+/// comment at its one-time call site in `IosApp::resumed` for why it's no
+/// longer installed. Kept (not deleted) in case a genuine single-touch-only
+/// need resurfaces a reason for it.
+#[allow(dead_code, reason = "superseded by enable_multitouch, kept as a documented fallback")]
 struct IosTouchBridge {
     _target: Retained<LoadngoTouchBridgeTarget>,
     _recognizers: Vec<Retained<UILongPressGestureRecognizer>>,
 }
 
+#[allow(dead_code, reason = "superseded by enable_multitouch, kept as a documented fallback")]
 impl IosTouchBridge {
     fn install(view: &UIView) -> Self {
         let mtm = MainThreadMarker::new().expect("iOS touch bridge requires main thread");
@@ -609,9 +644,24 @@ pub fn launch(
 
 pub fn capture_frame() -> HostFrame {
     let mut state = lock_state();
-    let frame = state.latest_frame.clone();
+    // Snapshot `pending_input` *before* decaying it — the previous version
+    // decayed first (`clear_transient` turns `Ended`/`Cancelled` touches
+    // into `None`) and only snapshotted afterward, so a touch that reached
+    // `Ended` was wiped to `None` before any caller ever observed the
+    // `Ended` phase. `TouchControls::update` only releases a stick on an
+    // explicit `Ended`/`Cancelled` phase — a touch silently disappearing to
+    // `None` triggers nothing — so the stick never released: confirmed
+    // on-device as a thumbstick stuck at its last dragged position, still
+    // firing, after lifting the finger. Mirrors the desktop/Android
+    // `capture_frame` pattern, which was already snapshot-then-decay.
+    let frame = HostFrame {
+        timing: state.latest_frame.timing,
+        surface: state.latest_frame.surface,
+        input: state.pending_input.snapshot(),
+        foreground: state.latest_frame.foreground,
+        insets: state.latest_frame.insets,
+    };
     state.pending_input.clear_transient();
-    state.latest_frame.input = state.pending_input.snapshot();
     frame
 }
 
@@ -967,6 +1017,19 @@ fn render_commands(commands: &[FrameCommand], font: Option<&DesktopFont>) {
         return;
     }
     let mut state = lock_state();
+    // Each call carries a complete frame's worth of draw commands (see
+    // `render_ops`'s callers — `sng-roguelite`'s `run_game()` passes its
+    // *entire* current scene every tick, not a delta), so this must
+    // *replace* whatever's pending, not accumulate onto it. `extend_from_slice`
+    // here previously appended instead: if the game ticked more than once
+    // before `flush_selected_backend` actually flushed and cleared the
+    // queue (RedrawRequested delivery through UIKit isn't guaranteed 1:1
+    // with tick production, especially under the touch-driven load a drag
+    // gesture creates), multiple ticks' commands piled up and were drawn
+    // together in one render pass — the touch-driven stick at its old
+    // position *and* its new one, both visible at once. That's what
+    // "flashing" thumbsticks during motion turned out to be.
+    state.queued_commands.clear();
     state.queued_commands.extend_from_slice(commands);
     if let Some(source) = font.and_then(DesktopFont::source_path) {
         state.queued_font_source = Some(source.to_string());
@@ -1143,7 +1206,17 @@ impl ApplicationHandler<IosUserEvent> for IosApp {
             other => panic!("unexpected iOS window handle: {other:?}"),
         };
         let view_ref = unsafe { &*view.cast::<UIView>() };
-        self.touch_bridge = Some(IosTouchBridge::install(view_ref));
+        // `IosTouchBridge` (below) is a single-touch `UILongPressGestureRecognizer`
+        // fallback that predates this fix — every touch it reports shares one
+        // hardcoded id (`IOS_TOUCH_BRIDGE_ID`) regardless of which finger, so
+        // installing it unconditionally (as before) silently collapsed any
+        // two-finger interaction (twin-stick controls, in particular) onto a
+        // single tracked point, and also unconditionally disabled winit's own
+        // already-correct per-finger `WindowEvent::Touch` delivery (see the
+        // `self.touch_bridge.is_none()` guard below). Left installed as `None`
+        // rather than deleted, in case a future single-touch-only need
+        // resurfaces a reason for it; `enable_multitouch` is the real fix.
+        enable_multitouch(view_ref);
 
         let mut metal_backend =
             MetalBackend::try_bind_system_default().expect("failed to create Metal device");
@@ -1242,7 +1315,25 @@ impl ApplicationHandler<IosUserEvent> for IosApp {
                 if self.touch_bridge.is_none() {
                     apply_touch_event(touch, scale_factor);
                 }
-                should_publish_frame = true;
+                // Deliberately does *not* set `should_publish_frame`. iOS can
+                // deliver touch-move events considerably faster than the
+                // display refreshes (coalesced/predicted touch batching,
+                // ProMotion), and `should_publish_frame` triggers an
+                // immediate, synchronous `publish_frame()` — a full
+                // simulation tick and render — for every event that sets it.
+                // Doing that per touch event floods the loop with renders at
+                // the touch-delivery rate rather than the display's own
+                // cadence, each carrying whatever touch snapshot happens to
+                // be current at that instant — this is what "flashing"
+                // thumbsticks during a drag turned out to be, confirmed
+                // on-device via `LOADNGO_TRACE_INPUT=1` (the touch data
+                // itself was always clean; it was the render cadence that
+                // wasn't). `apply_touch_event` above already updated the
+                // pending input state unconditionally; the existing steady
+                // ~16ms timer-driven cadence (`next_frame(FrameDemand::After(..))`,
+                // the same mechanism Android uses) picks up the latest touch
+                // state on its own next scheduled tick, matching how mouse
+                // and keyboard input already work on every other platform.
             }
             WindowEvent::Ime(Ime::Commit(text)) => {
                 let mut state = lock_state();
