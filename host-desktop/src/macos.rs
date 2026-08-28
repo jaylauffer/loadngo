@@ -585,6 +585,7 @@ pub fn capture_frame() -> HostFrame {
             surface: state.surface,
             input: state.input.snapshot.clone(),
             foreground: true,
+            insets: loadngo_host_core::SafeAreaInsets::default(),
         };
         state.input.clear_transients();
         frame

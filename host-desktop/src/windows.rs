@@ -256,6 +256,7 @@ impl Default for HostSharedState {
                 },
                 input: PendingInput::default().snapshot(),
                 foreground: true,
+                insets: loadngo_host_core::SafeAreaInsets::default(),
             },
             pending_input: PendingInput::default(),
             frame_epoch: 0,
@@ -1194,6 +1195,7 @@ fn advance_frame_clock(state: &mut HostSharedState) {
         surface: state.latest_frame.surface,
         input: state.pending_input.snapshot(),
         foreground: true,
+        insets: loadngo_host_core::SafeAreaInsets::default(),
     };
     state.frame_epoch = state.frame_epoch.saturating_add(1);
     state.pending_redraw = true;

@@ -92,11 +92,8 @@ fn oldest_evictable_voice(
 mod imp {
     use super::{SfxPlayRequest, SfxSettings, SfxVoiceId};
     use crate::android;
-    use jni::{
-        objects::{GlobalRef, JObject, JValue},
-        JNIEnv, JavaVM,
-    };
-    use ndk_context::android_context;
+    use crate::android_jni::{call_bool, call_int, call_void, with_env};
+    use jni::objects::{GlobalRef, JObject, JValue};
     use std::{
         collections::{HashMap, VecDeque},
         time::{Duration, Instant},
@@ -106,125 +103,6 @@ mod imp {
     pub enum MusicCueMode {
         OneShot,
         Loop,
-    }
-
-    fn with_env<T>(f: impl FnOnce(&mut JNIEnv) -> Result<T, String>) -> Result<T, String> {
-        let ctx = android_context();
-        let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }
-            .map_err(|err| format!("Android JavaVM unavailable: {err}"))?;
-        let mut env = vm
-            .attach_current_thread()
-            .map_err(|err| format!("Failed to attach Android audio thread: {err}"))?;
-        f(&mut env)
-    }
-
-    fn take_java_exception(env: &mut JNIEnv) -> Option<String> {
-        match env.exception_check() {
-            Ok(true) => {
-                let _ = env.exception_describe();
-                let message = match env.exception_occurred() {
-                    Ok(exception) => {
-                        let _ = env.exception_clear();
-                        match env.call_method(&exception, "toString", "()Ljava/lang/String;", &[]) {
-                            Ok(value) => match value.l() {
-                                Ok(obj) => {
-                                    let string = jni::objects::JString::from(obj);
-                                    env.get_string(&string)
-                                        .map(|value| value.to_string_lossy().into_owned())
-                                        .unwrap_or_else(|_| {
-                                            "Java exception (failed to decode message)".to_string()
-                                        })
-                                }
-                                Err(_) => {
-                                    "Java exception (failed to read message object)".to_string()
-                                }
-                            },
-                            Err(_) => "Java exception (failed to stringify throwable)".to_string(),
-                        }
-                    }
-                    Err(_) => {
-                        let _ = env.exception_clear();
-                        "Java exception (failed to fetch throwable)".to_string()
-                    }
-                };
-                Some(message)
-            }
-            Ok(false) => None,
-            Err(err) => Some(format!("Failed to inspect Java exception state: {err}")),
-        }
-    }
-
-    fn call_void(
-        env: &mut JNIEnv,
-        obj: &GlobalRef,
-        name: &str,
-        sig: &str,
-        args: &[JValue],
-    ) -> Result<(), String> {
-        if let Err(err) = env.call_method(obj.as_obj(), name, sig, args) {
-            let detail = take_java_exception(env)
-                .map(|detail| format!(" ({detail})"))
-                .unwrap_or_default();
-            return Err(format!("Android MediaPlayer::{name} failed: {err}{detail}"));
-        }
-        if let Some(detail) = take_java_exception(env) {
-            return Err(format!(
-                "Android MediaPlayer::{name} raised Java exception: {detail}"
-            ));
-        }
-        Ok(())
-    }
-
-    fn call_bool(
-        env: &mut JNIEnv,
-        obj: &GlobalRef,
-        name: &str,
-        sig: &str,
-        args: &[JValue],
-    ) -> Result<bool, String> {
-        let value = match env.call_method(obj.as_obj(), name, sig, args) {
-            Ok(value) => value,
-            Err(err) => {
-                let detail = take_java_exception(env)
-                    .map(|detail| format!(" ({detail})"))
-                    .unwrap_or_default();
-                return Err(format!("Android MediaPlayer::{name} failed: {err}{detail}"));
-            }
-        };
-        if let Some(detail) = take_java_exception(env) {
-            return Err(format!(
-                "Android MediaPlayer::{name} raised Java exception: {detail}"
-            ));
-        }
-        value
-            .z()
-            .map_err(|err| format!("Android MediaPlayer::{name} return decode failed: {err}"))
-    }
-
-    fn call_int(
-        env: &mut JNIEnv,
-        obj: &GlobalRef,
-        name: &str,
-        sig: &str,
-        args: &[JValue],
-    ) -> Result<i32, String> {
-        let value = match env.call_method(obj.as_obj(), name, sig, args) {
-            Ok(value) => value,
-            Err(err) => {
-                let detail = take_java_exception(env)
-                    .map(|detail| format!(" ({detail})"))
-                    .unwrap_or_default();
-                return Err(format!("Android MediaPlayer::{name} failed: {err}{detail}"));
-            }
-        };
-        if let Some(detail) = take_java_exception(env) {
-            return Err(format!(
-                "Android MediaPlayer::{name} raised Java exception: {detail}"
-            ));
-        }
-        value
-            .i()
-            .map_err(|err| format!("Android MediaPlayer::{name} return decode failed: {err}"))
     }
 
     fn bass_boost_strength(bass_boost: f32) -> u16 {
@@ -250,26 +128,26 @@ mod imp {
                 let path_obj = JObject::from(path_string);
                 call_void(
                     env,
-                    &global,
+                    global.as_obj(),
                     "setAudioStreamType",
                     "(I)V",
                     &[JValue::Int(3)],
                 )?;
                 call_void(
                     env,
-                    &global,
+                    global.as_obj(),
                     "setDataSource",
                     "(Ljava/lang/String;)V",
                     &[JValue::Object(&path_obj)],
                 )?;
                 call_void(
                     env,
-                    &global,
+                    global.as_obj(),
                     "setLooping",
                     "(Z)V",
                     &[JValue::Bool(u8::from(looped))],
                 )?;
-                call_void(env, &global, "prepare", "()V", &[])?;
+                call_void(env, global.as_obj(), "prepare", "()V", &[])?;
                 Ok(Self { player: global })
             })
         }
@@ -285,7 +163,7 @@ mod imp {
             with_env(|env| {
                 call_void(
                     env,
-                    &self.player,
+                    self.player.as_obj(),
                     "setVolume",
                     "(FF)V",
                     &[JValue::Float(left), JValue::Float(right)],
@@ -294,27 +172,27 @@ mod imp {
         }
 
         fn play(&mut self) -> Result<(), String> {
-            with_env(|env| call_void(env, &self.player, "start", "()V", &[]))
+            with_env(|env| call_void(env, self.player.as_obj(), "start", "()V", &[]))
         }
 
         fn pause(&mut self) -> Result<(), String> {
-            with_env(|env| call_void(env, &self.player, "pause", "()V", &[]))
+            with_env(|env| call_void(env, self.player.as_obj(), "pause", "()V", &[]))
         }
 
         fn stop(&mut self) -> Result<(), String> {
-            with_env(|env| call_void(env, &self.player, "stop", "()V", &[]))
+            with_env(|env| call_void(env, self.player.as_obj(), "stop", "()V", &[]))
         }
 
         fn is_playing(&self) -> bool {
-            with_env(|env| call_bool(env, &self.player, "isPlaying", "()Z", &[])).unwrap_or(false)
+            with_env(|env| call_bool(env, self.player.as_obj(), "isPlaying", "()Z", &[])).unwrap_or(false)
         }
 
         fn release(&mut self) -> Result<(), String> {
-            with_env(|env| call_void(env, &self.player, "release", "()V", &[]))
+            with_env(|env| call_void(env, self.player.as_obj(), "release", "()V", &[]))
         }
 
         fn audio_session_id(&self) -> Result<i32, String> {
-            with_env(|env| call_int(env, &self.player, "getAudioSessionId", "()I", &[]))
+            with_env(|env| call_int(env, self.player.as_obj(), "getAudioSessionId", "()I", &[]))
         }
     }
 
@@ -352,14 +230,14 @@ mod imp {
             with_env(|env| {
                 call_void(
                     env,
-                    &self.effect,
+                    self.effect.as_obj(),
                     "setStrength",
                     "(S)V",
                     &[JValue::Short(strength as i16)],
                 )?;
                 let status = call_int(
                     env,
-                    &self.effect,
+                    self.effect.as_obj(),
                     "setEnabled",
                     "(Z)I",
                     &[JValue::Bool(u8::from(enabled))],
@@ -374,7 +252,7 @@ mod imp {
         }
 
         fn release(&mut self) -> Result<(), String> {
-            with_env(|env| call_void(env, &self.effect, "release", "()V", &[]))
+            with_env(|env| call_void(env, self.effect.as_obj(), "release", "()V", &[]))
         }
     }
 

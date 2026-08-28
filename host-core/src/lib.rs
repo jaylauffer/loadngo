@@ -164,6 +164,36 @@ pub struct SurfaceInfo {
     pub height: f32,
 }
 
+/// Device-pixel screen space reserved by the platform's own system bars
+/// (status bar, navigation bar) along each edge. Deliberately excludes the
+/// display cutout: a cutout notch sits at one point along an edge, not the
+/// whole edge, so folding its safe-inset scalar in here would conservatively
+/// push content anchored anywhere else on that edge — confirmed on-device
+/// to visibly misplace a corner-anchored control nowhere near the actual
+/// cutout. Zero on any platform that hasn't wired up a real query yet (see
+/// `HostFrame::insets`'s doc comment) — zero means "no better information
+/// available," not "this device reserves nothing."
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct SafeAreaInsets {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+/// A device-pixel screen-space rectangle, in the same coordinate space as
+/// `HostFrame.surface`, that the platform should prioritize for the app's
+/// own touch handling over a competing system gesture (e.g. Android's
+/// edge-swipe back gesture) — see
+/// `loadngo_host_desktop::set_gesture_exclusion_rects`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExclusionRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct PointF {
     pub x: f32,
@@ -223,6 +253,14 @@ pub struct HostFrame {
     /// while this is `false`, matching platform-expected app-lifecycle
     /// behavior instead of continuing to run (and make noise) off-screen.
     pub foreground: bool,
+    /// Device-pixel screen space reserved by the platform's own system bars
+    /// (status bar, navigation bar) — see `SafeAreaInsets`'s own doc comment
+    /// for why the display cutout is deliberately not included. On Android
+    /// this reflects a real `WindowInsets` query; platforms with no such
+    /// query wired up always report all-zero. Games that place interactive
+    /// UI near a screen edge should keep it clear of these insets rather
+    /// than assuming the full surface is safe to draw controls on.
+    pub insets: SafeAreaInsets,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

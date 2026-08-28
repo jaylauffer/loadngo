@@ -14,10 +14,13 @@ use std::time::{Duration, Instant};
 
 use loadngo_gfx_gles::{GlesBackend, GlesBackendState};
 use loadngo_host_core::{
-    DecodedImage, FrameDemand, FrameTiming, HostFrame, InputSnapshot, RenderOp, SurfaceInfo,
-    TextMetrics, TouchPhase, TouchPoint, WindowDescriptor, WindowIconSet,
+    DecodedImage, ExclusionRect, FrameDemand, FrameTiming, HostFrame, InputSnapshot, RenderOp,
+    SafeAreaInsets, SurfaceInfo, TextMetrics, TouchPhase, TouchPoint, WindowDescriptor,
+    WindowIconSet,
 };
+use crate::android_jni;
 use loadngo_renderer::{FrameCommand, ImageRequest, Renderer, RendererConfig};
+use jni::objects::{JObject, JValue};
 use ndk::asset::AssetManager;
 use ndk::hardware_buffer_format::HardwareBufferFormat;
 use ndk::native_window::NativeWindow;
@@ -156,6 +159,15 @@ struct AndroidAppState {
     /// covering the activity, ...) and back to `true` by `onResume`. Starts
     /// `true` since the activity is always foregrounded at process launch.
     foreground: bool,
+    /// Real device-reserved screen space, refreshed on `onResume` and
+    /// `onWindowFocusChanged(true)` (see `query_safe_area_insets`) and read
+    /// cheaply here every frame, the same caching shape as `surface`.
+    insets: SafeAreaInsets,
+    /// Whether the game has asked for sticky-immersive presentation via
+    /// `set_immersive_mode(true)`. Remembered so the flags can be silently
+    /// reapplied whenever Android clears them (window focus regained,
+    /// resume from lock) without the caller having to notice and re-request.
+    immersive_requested: bool,
     surface: SurfaceInfo,
     input: InputSnapshot,
     timing: FrameTiming,
@@ -199,6 +211,8 @@ impl Default for AndroidAppState {
             internal_data_path: None,
             display_scale: 1.0,
             foreground: true,
+            insets: SafeAreaInsets::default(),
+            immersive_requested: false,
             surface: SurfaceInfo {
                 width: 0.0,
                 height: 0.0,
@@ -1408,6 +1422,7 @@ pub unsafe fn android_native_activity_on_create(
         callbacks.onInputQueueDestroyed = Some(on_input_queue_destroyed);
         callbacks.onPause = Some(on_pause);
         callbacks.onResume = Some(on_resume);
+        callbacks.onWindowFocusChanged = Some(on_window_focus_changed);
         callbacks.onDestroy = Some(on_destroy);
     }
 
@@ -1540,6 +1555,329 @@ unsafe extern "C" fn on_resume(_activity: *mut ndk_sys::ANativeActivity) {
     state.foreground = true;
     drop(state);
     android_log_info("Android activity resumed (foregrounded)");
+    refresh_system_ui();
+}
+
+/// Android clears sticky-immersive `setSystemUiVisibility` flags whenever
+/// the window regains focus (returning from recents, unlocking, a dialog
+/// closing), so they need reapplying here in addition to `on_resume` — the
+/// two fire at different, only-partially-overlapping moments. Real
+/// safe-area insets are refreshed at both points too, since a focus-regain
+/// is exactly when the previous query (taken while immersive flags may have
+/// been transiently cleared) could be stale.
+unsafe extern "C" fn on_window_focus_changed(
+    _activity: *mut ndk_sys::ANativeActivity,
+    has_focus: std::os::raw::c_int,
+) {
+    if has_focus != 0 {
+        refresh_system_ui();
+    }
+}
+
+/// Reapplies immersive mode if the game has requested it, then re-queries
+/// real safe-area insets — in that order, since hiding the system bars
+/// changes what `getSystemWindowInset*` reports (a hidden bar claims no
+/// space), and the insets the game actually cares about are whatever is
+/// true once immersive presentation has taken effect.
+fn refresh_system_ui() {
+    let immersive_requested = app_state()
+        .lock()
+        .expect("android app state poisoned")
+        .immersive_requested;
+    if immersive_requested {
+        apply_immersive_mode();
+    }
+    let insets = query_safe_area_insets();
+    app_state().lock().expect("android app state poisoned").insets = insets;
+}
+
+// `View.SYSTEM_UI_FLAG_*` bit values, stable public API since API 19.
+// Named and OR'd explicitly (rather than hand-computed into one hex
+// literal, and rather than looked up via JNI static fields to avoid six
+// extra round-trips for values that don't change) specifically so this
+// can't silently drift into an invalid combination again — a prior version
+// of this constant included both `IMMERSIVE` and `IMMERSIVE_STICKY`
+// simultaneously (they're mutually exclusive per Android's own docs),
+// which left the navigation bar visible on-device despite the status bar
+// correctly hiding.
+const SYSTEM_UI_FLAG_HIDE_NAVIGATION: i32 = 0x0000_0002;
+const SYSTEM_UI_FLAG_FULLSCREEN: i32 = 0x0000_0004;
+const SYSTEM_UI_FLAG_LAYOUT_STABLE: i32 = 0x0000_0100;
+const SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION: i32 = 0x0000_0200;
+const SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN: i32 = 0x0000_0400;
+const SYSTEM_UI_FLAG_IMMERSIVE_STICKY: i32 = 0x0000_1000;
+
+/// "Sticky immersive" presentation: hidden status and navigation bars,
+/// swipe-to-reveal, flags reapplied automatically rather than a one-shot
+/// reveal.
+const IMMERSIVE_STICKY_FLAGS: i32 = SYSTEM_UI_FLAG_LAYOUT_STABLE
+    | SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+    | SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+    | SYSTEM_UI_FLAG_HIDE_NAVIGATION
+    | SYSTEM_UI_FLAG_FULLSCREEN
+    | SYSTEM_UI_FLAG_IMMERSIVE_STICKY;
+
+/// `Activity.getWindow().getDecorView()`, the shared first step for
+/// immersive mode, insets, and gesture-exclusion rects. `None` if the
+/// window isn't attached yet (both steps are nullable in principle).
+fn decor_view<'e>(env: &mut jni::JNIEnv<'e>) -> Result<Option<JObject<'e>>, String> {
+    let ctx = ndk_context::android_context();
+    let activity = unsafe { JObject::from_raw(ctx.context().cast()) };
+    let Some(window) =
+        android_jni::call_object(env, &activity, "getWindow", "()Landroid/view/Window;", &[])?
+    else {
+        return Ok(None);
+    };
+    android_jni::call_object(env, &window, "getDecorView", "()Landroid/view/View;", &[])
+}
+
+/// API 30+ where it's available: apps targeting `targetSdkVersion` 30+ get
+/// the legacy `setSystemUiVisibility` navigation-bar-hide flag silently
+/// ignored by the framework on real Android 11+ devices — confirmed
+/// on-device (Android 14 / API 34): the status bar hid correctly but the
+/// navigation bar stayed visible with `setSystemUiVisibility` alone.
+/// `WindowInsetsController` is the framework's own replacement and is the
+/// only reliable way to hide both bars at this crate's `targetSdkVersion`.
+const WINDOW_INSETS_CONTROLLER_MIN_SDK: i32 = 30;
+
+fn apply_immersive_mode() {
+    let result = android_jni::with_env(|env| {
+        let Some(decor_view) = decor_view(env)? else {
+            return Err("Window.getDecorView() unavailable".to_string());
+        };
+        let sdk_int =
+            android_jni::get_static_int_field(env, "android/os/Build$VERSION", "SDK_INT")?;
+        if sdk_int >= WINDOW_INSETS_CONTROLLER_MIN_SDK {
+            apply_immersive_mode_via_insets_controller(env, &decor_view)
+        } else {
+            android_jni::call_void(
+                env,
+                &decor_view,
+                "setSystemUiVisibility",
+                "(I)V",
+                &[JValue::Int(IMMERSIVE_STICKY_FLAGS)],
+            )
+        }
+    });
+    if let Err(err) = result {
+        android_log_error(&format!("Android immersive mode request failed: {err}"));
+    }
+}
+
+fn apply_immersive_mode_via_insets_controller(
+    env: &mut jni::JNIEnv,
+    decor_view: &JObject,
+) -> Result<(), String> {
+    let Some(controller) = android_jni::call_object(
+        env,
+        decor_view,
+        "getWindowInsetsController",
+        "()Landroid/view/WindowInsetsController;",
+        &[],
+    )?
+    else {
+        return Err("View.getWindowInsetsController() returned null".to_string());
+    };
+    let system_bars_type = android_jni::call_static_int(
+        env,
+        "android/view/WindowInsets$Type",
+        "systemBars",
+        "()I",
+        &[],
+    )?;
+    android_jni::call_void(
+        env,
+        &controller,
+        "hide",
+        "(I)V",
+        &[JValue::Int(system_bars_type)],
+    )?;
+    let behavior_swipe = android_jni::get_static_int_field(
+        env,
+        "android/view/WindowInsetsController",
+        "BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE",
+    )?;
+    android_jni::call_void(
+        env,
+        &controller,
+        "setSystemBarsBehavior",
+        "(I)V",
+        &[JValue::Int(behavior_swipe)],
+    )
+}
+
+/// Requests (or releases) sticky-immersive presentation: hidden status and
+/// navigation bars, swipe-to-reveal. This is a level, not a one-shot event —
+/// `loadngo` remembers the request and reapplies it itself on `on_resume`
+/// and `on_window_focus_changed`, since Android clears the flags on its own
+/// whenever the window regains focus. Call once; do not call every frame.
+pub fn set_immersive_mode(enabled: bool) {
+    let mut state = app_state().lock().expect("android app state poisoned");
+    state.immersive_requested = enabled;
+    drop(state);
+    if enabled {
+        apply_immersive_mode();
+    }
+}
+
+fn system_bar_insets_via_type(
+    env: &mut jni::JNIEnv,
+    root_insets: &JObject,
+) -> Result<SafeAreaInsets, String> {
+    let system_bars_type = android_jni::call_static_int(
+        env,
+        "android/view/WindowInsets$Type",
+        "systemBars",
+        "()I",
+        &[],
+    )?;
+    let Some(insets_obj) = android_jni::call_object(
+        env,
+        root_insets,
+        "getInsets",
+        "(I)Landroid/graphics/Insets;",
+        &[JValue::Int(system_bars_type)],
+    )?
+    else {
+        return Ok(SafeAreaInsets::default());
+    };
+    Ok(SafeAreaInsets {
+        left: android_jni::get_int_field(env, &insets_obj, "left")? as f32,
+        top: android_jni::get_int_field(env, &insets_obj, "top")? as f32,
+        right: android_jni::get_int_field(env, &insets_obj, "right")? as f32,
+        bottom: android_jni::get_int_field(env, &insets_obj, "bottom")? as f32,
+    })
+}
+
+fn system_bar_insets_via_legacy_methods(
+    env: &mut jni::JNIEnv,
+    root_insets: &JObject,
+) -> Result<SafeAreaInsets, String> {
+    Ok(SafeAreaInsets {
+        left: android_jni::call_int(env, root_insets, "getSystemWindowInsetLeft", "()I", &[])?
+            as f32,
+        top: android_jni::call_int(env, root_insets, "getSystemWindowInsetTop", "()I", &[])?
+            as f32,
+        right: android_jni::call_int(env, root_insets, "getSystemWindowInsetRight", "()I", &[])?
+            as f32,
+        bottom: android_jni::call_int(env, root_insets, "getSystemWindowInsetBottom", "()I", &[])?
+            as f32,
+    })
+}
+
+/// Real device-reserved screen space: system-bar insets only. Deliberately
+/// excludes the display cutout: a cutout notch sits at a specific point
+/// along an edge (usually near a device's short-edge center, wherever the
+/// front camera is), but a blanket cutout-avoidance margin is correct only
+/// for content placed right where the cutout is, and wildly
+/// over-conservative for content anchored somewhere else on that same
+/// edge. System bars don't have this problem — they genuinely span the
+/// whole edge — so only they're reflected here. A future top-anchored
+/// element that actually needs cutout-awareness should query
+/// `DisplayCutout`'s own bounding rects directly rather than this blanket
+/// scalar.
+///
+/// On `SDK_INT >= 30`, `WindowInsets.getInsets(WindowInsets.Type.systemBars())`
+/// is used — the modern, precisely-scoped API that reports only system-bar
+/// space. Below that, this falls back to the legacy
+/// `getSystemWindowInset{Left,Top,Right,Bottom}()` methods, which on-device
+/// verification showed do *not* cleanly separate system bars from the
+/// cutout on at least one real API 34 device (`getSystemWindowInsetLeft()`
+/// returned the same value as the cutout's own `getSafeInsetLeft()`, not a
+/// bars-only figure) — so the legacy path still carries some of the
+/// original over-conservative-corner problem below API 30. Revisit if that
+/// turns out to matter in practice on an API 26-29 device.
+/// Returns all-zero (not an error) if the window isn't attached yet or any
+/// step fails — callers already treat zero as "no better data available."
+fn query_safe_area_insets() -> SafeAreaInsets {
+    let result = android_jni::with_env(|env| {
+        let Some(decor_view) = decor_view(env)? else {
+            return Ok(SafeAreaInsets::default());
+        };
+        let Some(root_insets) = android_jni::call_object(
+            env,
+            &decor_view,
+            "getRootWindowInsets",
+            "()Landroid/view/WindowInsets;",
+            &[],
+        )?
+        else {
+            return Ok(SafeAreaInsets::default());
+        };
+        let sdk_int =
+            android_jni::get_static_int_field(env, "android/os/Build$VERSION", "SDK_INT")?;
+        if sdk_int >= WINDOW_INSETS_CONTROLLER_MIN_SDK {
+            system_bar_insets_via_type(env, &root_insets)
+        } else {
+            system_bar_insets_via_legacy_methods(env, &root_insets)
+        }
+    });
+    match result {
+        Ok(insets) => {
+            android_log_info(&format!(
+                "Android safe-area insets queried: left={} top={} right={} bottom={}",
+                insets.left, insets.top, insets.right, insets.bottom
+            ));
+            insets
+        }
+        Err(err) => {
+            android_log_error(&format!("Android safe-area insets query failed: {err}"));
+            SafeAreaInsets::default()
+        }
+    }
+}
+
+/// Tells the platform to prioritize the app's own touch handling over a
+/// competing system gesture (Android's edge-swipe back gesture, in
+/// practice) within the given screen-space rects — the natural fit for
+/// persistent on-screen controls that sit in the back-swipe zone. No-op
+/// below `SDK_INT` 29, where the underlying method doesn't exist.
+pub fn set_gesture_exclusion_rects(rects: &[ExclusionRect]) {
+    let result = android_jni::with_env(|env| {
+        let sdk_int = android_jni::get_static_int_field(env, "android/os/Build$VERSION", "SDK_INT")?;
+        if sdk_int < 29 {
+            return Ok(());
+        }
+        let Some(decor_view) = decor_view(env)? else {
+            return Err("Window.getDecorView() unavailable".to_string());
+        };
+        let list = env
+            .new_object("java/util/ArrayList", "()V", &[])
+            .map_err(|err| format!("Failed to allocate ArrayList: {err}"))?;
+        for rect in rects {
+            let android_rect = env
+                .new_object(
+                    "android/graphics/Rect",
+                    "(IIII)V",
+                    &[
+                        JValue::Int(rect.x.round() as i32),
+                        JValue::Int(rect.y.round() as i32),
+                        JValue::Int((rect.x + rect.width).round() as i32),
+                        JValue::Int((rect.y + rect.height).round() as i32),
+                    ],
+                )
+                .map_err(|err| format!("Failed to allocate Rect: {err}"))?;
+            android_jni::call_bool(
+                env,
+                &list,
+                "add",
+                "(Ljava/lang/Object;)Z",
+                &[JValue::Object(&android_rect)],
+            )?;
+        }
+        android_jni::call_void(
+            env,
+            &decor_view,
+            "setSystemGestureExclusionRects",
+            "(Ljava/util/List;)V",
+            &[JValue::Object(&list)],
+        )
+    });
+    if let Err(err) = result {
+        android_log_error(&format!(
+            "Android gesture-exclusion rects request failed: {err}"
+        ));
+    }
 }
 
 unsafe extern "C" fn on_destroy(_activity: *mut ndk_sys::ANativeActivity) {
@@ -2602,6 +2940,7 @@ pub fn capture_frame() -> HostFrame {
         surface: state.surface,
         input: state.input.clone(),
         foreground: state.foreground,
+        insets: state.insets,
     };
     for touch in &mut state.input.touches {
         match touch {

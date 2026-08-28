@@ -126,6 +126,7 @@ impl DesktopPlatformBackend for LoadngoPlaceholderPlatformHost {
                 typed_text: String::new(),
             },
             foreground: true,
+            insets: loadngo_host_core::SafeAreaInsets::default(),
         }
     }
 
