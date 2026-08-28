@@ -170,6 +170,19 @@ struct AndroidAppState {
     immersive_requested: bool,
     surface: SurfaceInfo,
     input: InputSnapshot,
+    /// Touch ids whose `ACTION_UP`/`ACTION_POINTER_UP` arrived before
+    /// `capture_frame` ever observed their `TouchPhase::Started` — a fast
+    /// tap can have both its down and up events processed by the input
+    /// thread within a single frame interval. Rather than overwrite
+    /// `Started` straight to `Ended` (which `capture_frame`'s decay loop
+    /// would then release without any caller ever having seen `Started`,
+    /// silently dropping the tap — this is exactly what "opening a chest
+    /// needs multiple presses" looks like from the game side), the phase
+    /// is left as `Started` for one more frame and the id is recorded
+    /// here; `capture_frame` releases it immediately after that Started
+    /// observation decays to `Stationary`, so every caller still sees
+    /// exactly one clean `Started` frame no matter how fast the tap was.
+    pending_touch_release: Vec<u64>,
     timing: FrameTiming,
     last_tick: Instant,
     frame_counter: u64,
@@ -218,6 +231,7 @@ impl Default for AndroidAppState {
                 height: 0.0,
             },
             input: blank_snapshot(),
+            pending_touch_release: Vec::new(),
             timing: FrameTiming {
                 delta_seconds: 1.0 / 60.0,
             },
@@ -2765,6 +2779,20 @@ unsafe fn handle_key_event(event: *const ndk_sys::AInputEvent) -> bool {
     handled
 }
 
+/// Applies a phase transition to a tracked touch, deferring straight to a
+/// terminal phase (`Ended`/`Cancelled`) if the touch is still `Started` and
+/// so hasn't been observed by `capture_frame` yet — see
+/// `AndroidAppState::pending_touch_release`'s doc comment for why a fast
+/// tap needs this to register at all.
+fn apply_touch_phase(point: &mut TouchPoint, new_phase: TouchPhase, pending_release: &mut Vec<u64>) {
+    let is_terminal = matches!(new_phase, TouchPhase::Ended | TouchPhase::Cancelled);
+    if is_terminal && point.phase == TouchPhase::Started {
+        pending_release.push(point.id);
+    } else {
+        point.phase = new_phase;
+    }
+}
+
 unsafe fn handle_motion_event(event: *const ndk_sys::AInputEvent) {
     let action = unsafe { ndk_sys::AMotionEvent_getAction(event) };
     let action_masked = action & AMOTION_EVENT_ACTION_MASK;
@@ -2781,7 +2809,12 @@ unsafe fn handle_motion_event(event: *const ndk_sys::AInputEvent) {
     {
         let mut state = app_state().lock().expect("android app state poisoned");
         let display_scale = state.display_scale;
+        // `MutexGuard`'s `DerefMut` hides disjoint-field-borrow splitting
+        // from the borrow checker, so reborrow through a plain `&mut`
+        // first — `input`/`pending_release` below then split cleanly.
+        let state = &mut *state;
         let input = &mut state.input;
+        let pending_release = &mut state.pending_touch_release;
         // `input.touches` is persistent multi-touch state, not a per-event
         // snapshot: it must NOT be wiped and rebuilt from this event's own
         // pointer list. Android only lists currently-active pointers in each
@@ -2838,7 +2871,7 @@ unsafe fn handle_motion_event(event: *const ndk_sys::AInputEvent) {
             if let Some(existing) = input.touches.iter_mut().flatten().find(|p| p.id == id) {
                 existing.x = x;
                 existing.y = y;
-                existing.phase = phase;
+                apply_touch_phase(existing, phase, pending_release);
             } else if let Some(free_slot) = input.touches.iter_mut().find(|slot| slot.is_none()) {
                 *free_slot = Some(TouchPoint { id, x, y, phase });
             }
@@ -2854,7 +2887,7 @@ unsafe fn handle_motion_event(event: *const ndk_sys::AInputEvent) {
             // still be released, or it would be the exact same kind of
             // permanently stuck touch this whole rewrite exists to prevent.
             for slot in input.touches.iter_mut().flatten() {
-                slot.phase = TouchPhase::Cancelled;
+                apply_touch_phase(slot, TouchPhase::Cancelled, pending_release);
             }
         }
 
@@ -2875,7 +2908,7 @@ unsafe fn handle_motion_event(event: *const ndk_sys::AInputEvent) {
         );
         input.mouse_down = pointer_active;
         state.event_epoch = state.event_epoch.saturating_add(1);
-        wake_next_frame_waiters(&mut state);
+        wake_next_frame_waiters(state);
     }
     request_frame_callback();
 }
@@ -2942,11 +2975,23 @@ pub fn capture_frame() -> HostFrame {
         foreground: state.foreground,
         insets: state.insets,
     };
-    for touch in &mut state.input.touches {
+    let state_mut = &mut *state;
+    let input = &mut state_mut.input;
+    let pending_release = &mut state_mut.pending_touch_release;
+    for touch in &mut input.touches {
         match touch {
             Some(point) => match point.phase {
                 TouchPhase::Started | TouchPhase::Moved => {
                     point.phase = TouchPhase::Stationary;
+                    // This touch's `Started` (or `Moved`) has now been
+                    // observed in the `frame` snapshot above — if a
+                    // deferred fast-tap release was waiting on exactly
+                    // that observation (see `pending_touch_release`'s doc
+                    // comment), it can be applied immediately.
+                    if let Some(index) = pending_release.iter().position(|&id| id == point.id) {
+                        pending_release.swap_remove(index);
+                        *touch = None;
+                    }
                 }
                 TouchPhase::Ended | TouchPhase::Cancelled => {
                     *touch = None;
