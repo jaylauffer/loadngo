@@ -543,6 +543,22 @@ pub fn simulate_mouse_with_touch(enabled: bool) {
     state.simulate_mouse_with_touch = enabled;
 }
 
+/// A writable, per-app directory for small local persistence (achievement
+/// records, local profile state, ...) — created if it doesn't exist yet.
+/// Uses `%APPDATA%\<app_id>` (Roaming). `app_id` should be a stable,
+/// filesystem-safe identifier so multiple games on the same machine don't
+/// collide.
+pub fn app_data_dir(app_id: &str) -> Result<String, String> {
+    let appdata =
+        std::env::var("APPDATA").map_err(|err| format!("APPDATA is not set: {err}"))?;
+    let dir = Path::new(&appdata).join(app_id);
+    std::fs::create_dir_all(&dir)
+        .map_err(|err| format!("failed to create {}: {err}", dir.display()))?;
+    dir.into_os_string()
+        .into_string()
+        .map_err(|value| format!("app data path is not valid UTF-8: {value:?}"))
+}
+
 pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|err| format!("failed to read {path}: {err}"))
 }

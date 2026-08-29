@@ -643,6 +643,23 @@ pub fn write_clipboard_text(text: &str) -> Result<(), String> {
     }
 }
 
+/// A writable, per-app directory for small local persistence (achievement
+/// records, local profile state, ...) — created if it doesn't exist yet.
+/// `app_id` should be a stable, filesystem-safe identifier (e.g. the app's
+/// bundle id) so multiple games on the same machine don't collide.
+pub fn app_data_dir(app_id: &str) -> Result<String, String> {
+    let home = env::var("HOME").map_err(|err| format!("HOME is not set: {err}"))?;
+    let dir = Path::new(&home)
+        .join("Library")
+        .join("Application Support")
+        .join(app_id);
+    std::fs::create_dir_all(&dir)
+        .map_err(|err| format!("failed to create {}: {err}", dir.display()))?;
+    dir.into_os_string()
+        .into_string()
+        .map_err(|value| format!("app data path is not valid UTF-8: {value:?}"))
+}
+
 pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|err| format!("failed to read {path}: {err}"))
 }

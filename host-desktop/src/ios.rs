@@ -146,6 +146,11 @@ struct PendingInput {
     mouse_down: bool,
     mouse_released: bool,
     touches: [Option<TouchPoint>; 8],
+    /// Touch ids whose `Ended`/`Cancelled` transition arrived before
+    /// `capture_frame` ever observed their `Started` phase — see
+    /// `apply_touch_phase`'s doc comment for why this exists and why a fast
+    /// tap needs it to register at all.
+    pending_touch_release: Vec<u64>,
     escape_pressed: bool,
     space_pressed: bool,
     space_down: bool,
@@ -170,6 +175,7 @@ impl Default for PendingInput {
             mouse_down: false,
             mouse_released: false,
             touches: [None; 8],
+            pending_touch_release: Vec::new(),
             escape_pressed: false,
             space_pressed: false,
             space_down: false,
@@ -214,7 +220,23 @@ impl PendingInput {
         for touch in &mut self.touches {
             match touch {
                 Some(point) => match point.phase {
-                    TouchPhase::Started | TouchPhase::Moved => point.phase = TouchPhase::Stationary,
+                    TouchPhase::Started | TouchPhase::Moved => {
+                        point.phase = TouchPhase::Stationary;
+                        // This touch's `Started`/`Moved` has now been
+                        // observed in the frame snapshot `capture_frame`
+                        // took before calling this — if a deferred fast-tap
+                        // release was waiting on exactly that observation
+                        // (see `apply_touch_phase`'s doc comment), it can be
+                        // applied immediately.
+                        if let Some(index) = self
+                            .pending_touch_release
+                            .iter()
+                            .position(|&id| id == point.id)
+                        {
+                            self.pending_touch_release.swap_remove(index);
+                            *touch = None;
+                        }
+                    }
                     TouchPhase::Ended | TouchPhase::Cancelled => *touch = None,
                     TouchPhase::Stationary => {}
                 },
@@ -571,7 +593,12 @@ fn apply_touch_point(point: TouchPoint) {
         "host touch id={} phase={:?} logical=({}, {})",
         point.id, point.phase, point.x, point.y
     ));
-    set_touch_point(&mut state.pending_input.touches, point);
+    let pending_input = &mut state.pending_input;
+    set_touch_point(
+        &mut pending_input.touches,
+        point,
+        &mut pending_input.pending_touch_release,
+    );
     if state.simulate_mouse_with_touch {
         state.pending_input.mouse_x = point.x;
         state.pending_input.mouse_y = point.y;
@@ -750,6 +777,28 @@ pub async fn next_frame(demand: FrameDemand) {
 pub fn simulate_mouse_with_touch(enabled: bool) {
     let mut state = lock_state();
     state.simulate_mouse_with_touch = enabled;
+}
+
+/// A writable, per-app directory for small local persistence (achievement
+/// records, local profile state, ...) — created if it doesn't exist yet.
+/// Uses `$HOME/Library/Application Support/<app_id>`, the same convention
+/// `initialize_runtime_environment` above already uses for its own
+/// `writable_root` (that one stays as-is, hardcoded to a different app's
+/// name — deliberately not touched here to avoid any risk of changing
+/// behavior another game already depends on; this is a separate, properly
+/// parameterized path for whichever app actually calls it). `HOME` is set
+/// inside the iOS sandbox to the app's container, the same as on macOS.
+pub fn app_data_dir(app_id: &str) -> Result<String, String> {
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| "HOME is unavailable in the iOS sandbox".to_string())?;
+    let dir = home.join("Library").join("Application Support").join(app_id);
+    std::fs::create_dir_all(&dir)
+        .map_err(|err| format!("failed to create {}: {err}", dir.display()))?;
+    dir.into_os_string()
+        .into_string()
+        .map_err(|value| format!("app data path is not valid UTF-8: {value:?}"))
 }
 
 pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
@@ -1505,12 +1554,63 @@ fn map_touch_phase(phase: WinitTouchPhase) -> TouchPhase {
     }
 }
 
-fn set_touch_point(touches: &mut [Option<TouchPoint>; 8], point: TouchPoint) {
+/// Applies an incoming phase to an already-tracked touch point, preserving
+/// an unobserved `Started` against *any* later phase — not just a same-tick
+/// `Ended`/`Cancelled`, but a same-tick `Moved` too. `winit` can deliver a
+/// fast, genuine touch's down, move, and up events within the same ~16ms
+/// window `capture_frame` polls at (see the `WindowEvent::Touch` handler's
+/// comment on why touch events don't force an immediate frame; iOS's
+/// higher-frequency/predicted touch delivery, e.g. ProMotion, makes a
+/// same-window `Moved` particularly likely right after `Started`, more so
+/// than the fast-tap-only case this originally guarded against). Without
+/// guarding `Moved` too, `set_touch_point` would still stamp `Started` and
+/// then immediately overwrite it with `Moved` on the same pass — a real
+/// finger's tap is rarely perfectly stationary — so `capture_frame` would
+/// only ever see `Moved`, never `Started`. Every consumer that keys off
+/// exactly that edge is affected: the one-shot tap detectors
+/// (`reward_cache_touch_tapped`, `reward_draft_touch_decision`,
+/// `any_fresh_touch`) would silently drop the tap, and `TouchControls`
+/// would never call `VirtualJoystick::begin()` for the touch at all (its
+/// `Moved`/`Stationary` handling only calls `update()`, a no-op for an id
+/// that was never `begin()`-run) — a thumb that presses and immediately
+/// drags a stick would silently fail to register at all until lifted and
+/// pressed again. Once `Started` has been observed (this point's phase is
+/// no longer `Started` here), every later phase applies immediately as
+/// normal. A terminal phase arriving while still deferred is remembered in
+/// `pending_release` (de-duplicated: a touch can rack up multiple deferred
+/// terminal events before its `Started` is finally observed) so
+/// `clear_transient` can release it the instant `Started` is read — see
+/// Android's already-fixed, less complete version of this same race
+/// (`AndroidAppState::pending_touch_release`), which this supersedes here.
+fn apply_touch_phase(
+    point: &mut TouchPoint,
+    new_phase: TouchPhase,
+    pending_release: &mut Vec<u64>,
+) {
+    if point.phase == TouchPhase::Started {
+        if matches!(new_phase, TouchPhase::Ended | TouchPhase::Cancelled)
+            && !pending_release.contains(&point.id)
+        {
+            pending_release.push(point.id);
+        }
+        return;
+    }
+    point.phase = new_phase;
+}
+
+fn set_touch_point(
+    touches: &mut [Option<TouchPoint>; 8],
+    point: TouchPoint,
+    pending_release: &mut Vec<u64>,
+) {
     if let Some(existing) = touches
         .iter_mut()
         .find(|slot| slot.as_ref().is_some_and(|touch| touch.id == point.id))
+        .and_then(|slot| slot.as_mut())
     {
-        *existing = Some(point);
+        existing.x = point.x;
+        existing.y = point.y;
+        apply_touch_phase(existing, point.phase, pending_release);
         return;
     }
     if let Some(empty) = touches.iter_mut().find(|slot| slot.is_none()) {

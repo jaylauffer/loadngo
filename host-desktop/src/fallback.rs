@@ -306,6 +306,23 @@ pub fn asset_exists(path: &str) -> bool {
     Path::new(path).exists()
 }
 
+/// A writable, per-app directory for small local persistence (achievement
+/// records, local profile state, ...) — created if it doesn't exist yet.
+/// This fallback host has no real per-platform data directory convention,
+/// so it uses `$HOME/.local/share/<app_id>` (the same base the Linux
+/// backend falls back to) as a reasonable default. `app_id` should be a
+/// stable, filesystem-safe identifier so multiple games on the same
+/// machine don't collide.
+pub fn app_data_dir(app_id: &str) -> Result<String, String> {
+    let home = env::var("HOME").map_err(|err| format!("HOME is not set: {err}"))?;
+    let dir = Path::new(&home).join(".local").join("share").join(app_id);
+    std::fs::create_dir_all(&dir)
+        .map_err(|err| format!("failed to create {}: {err}", dir.display()))?;
+    dir.into_os_string()
+        .into_string()
+        .map_err(|value| format!("app data path is not valid UTF-8: {value:?}"))
+}
+
 pub fn set_text_cursor_active(_active: bool) {}
 
 pub fn read_clipboard_text() -> Result<Option<String>, String> {

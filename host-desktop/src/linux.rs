@@ -538,6 +538,27 @@ pub fn simulate_mouse_with_touch(enabled: bool) {
     state.simulate_mouse_with_touch = enabled;
 }
 
+/// A writable, per-app directory for small local persistence (achievement
+/// records, local profile state, ...) — created if it doesn't exist yet.
+/// Follows the XDG Base Directory spec: `$XDG_DATA_HOME/<app_id>`, falling
+/// back to `$HOME/.local/share/<app_id>`. `app_id` should be a stable,
+/// filesystem-safe identifier so multiple games on the same machine don't
+/// collide.
+pub fn app_data_dir(app_id: &str) -> Result<String, String> {
+    let base = if let Ok(xdg_data_home) = std::env::var("XDG_DATA_HOME") {
+        Path::new(&xdg_data_home).to_path_buf()
+    } else {
+        let home = std::env::var("HOME").map_err(|err| format!("HOME is not set: {err}"))?;
+        Path::new(&home).join(".local").join("share")
+    };
+    let dir = base.join(app_id);
+    std::fs::create_dir_all(&dir)
+        .map_err(|err| format!("failed to create {}: {err}", dir.display()))?;
+    dir.into_os_string()
+        .into_string()
+        .map_err(|value| format!("app data path is not valid UTF-8: {value:?}"))
+}
+
 pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|err| format!("failed to read {path}: {err}"))
 }

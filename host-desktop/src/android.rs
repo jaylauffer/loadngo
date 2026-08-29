@@ -2779,18 +2779,33 @@ unsafe fn handle_key_event(event: *const ndk_sys::AInputEvent) -> bool {
     handled
 }
 
-/// Applies a phase transition to a tracked touch, deferring straight to a
-/// terminal phase (`Ended`/`Cancelled`) if the touch is still `Started` and
-/// so hasn't been observed by `capture_frame` yet — see
-/// `AndroidAppState::pending_touch_release`'s doc comment for why a fast
-/// tap needs this to register at all.
-fn apply_touch_phase(point: &mut TouchPoint, new_phase: TouchPhase, pending_release: &mut Vec<u64>) {
-    let is_terminal = matches!(new_phase, TouchPhase::Ended | TouchPhase::Cancelled);
-    if is_terminal && point.phase == TouchPhase::Started {
-        pending_release.push(point.id);
-    } else {
-        point.phase = new_phase;
+/// Applies a phase transition to a tracked touch, preserving an unobserved
+/// `Started` against *any* later phase — not just a same-window terminal
+/// phase, but a same-window `Moved` too, since a real finger's tap or
+/// press-and-drag is rarely perfectly stationary. Once `Started` has
+/// actually been observed by `capture_frame` (this point's phase is no
+/// longer `Started` here), every later phase applies immediately as normal.
+/// See `AndroidAppState::pending_touch_release`'s doc comment for why a
+/// fast tap needs this to register at all, and
+/// `loadngo/host-desktop/src/ios.rs`'s copy of this same function for the
+/// fuller writeup of why guarding `Moved` too (not just terminal phases)
+/// turned out to matter — found there first, ported back here for the same
+/// underlying race, even though iOS's touch delivery makes it easier to
+/// trigger in practice.
+fn apply_touch_phase(
+    point: &mut TouchPoint,
+    new_phase: TouchPhase,
+    pending_release: &mut Vec<u64>,
+) {
+    if point.phase == TouchPhase::Started {
+        if matches!(new_phase, TouchPhase::Ended | TouchPhase::Cancelled)
+            && !pending_release.contains(&point.id)
+        {
+            pending_release.push(point.id);
+        }
+        return;
     }
+    point.phase = new_phase;
 }
 
 unsafe fn handle_motion_event(event: *const ndk_sys::AInputEvent) {
@@ -3010,6 +3025,33 @@ pub fn capture_frame() -> HostFrame {
     state.input.up_pressed = false;
     state.input.down_pressed = false;
     frame
+}
+
+/// A writable, per-app directory for small local persistence (achievement
+/// records, local profile state, ...) — created if it doesn't exist yet.
+/// `Context.getFilesDir()` already returns an app-private, sandboxed
+/// directory (`/data/data/<package>/files`), so `app_id` isn't needed to
+/// avoid collisions the way the desktop backends need it — it's still
+/// accepted for signature parity across platforms.
+pub fn app_data_dir(_app_id: &str) -> Result<String, String> {
+    android_jni::with_env(|env| {
+        let ctx = ndk_context::android_context();
+        let activity = unsafe { JObject::from_raw(ctx.context().cast()) };
+        let files_dir = android_jni::call_object(env, &activity, "getFilesDir", "()Ljava/io/File;", &[])?
+            .ok_or_else(|| "Context.getFilesDir() returned null".to_string())?;
+        let path_obj = android_jni::call_object(
+            env,
+            &files_dir,
+            "getAbsolutePath",
+            "()Ljava/lang/String;",
+            &[],
+        )?
+        .ok_or_else(|| "File.getAbsolutePath() returned null".to_string())?;
+        let path_string = jni::objects::JString::from(path_obj);
+        env.get_string(&path_string)
+            .map(|value| value.to_string_lossy().into_owned())
+            .map_err(|err| format!("failed to decode files dir path: {err}"))
+    })
 }
 
 pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {

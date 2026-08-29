@@ -99,6 +99,52 @@ That is acceptable for now, but it should be treated as an intermediate state ra
 
 `Arc` is now a native `FrameCommand`.
 
+## Known gap: no clip/scissor primitive in `RenderOp`
+
+`loadngo_host_core::RenderOp` (the lighter, direct-execution contract games
+consume when they render `Vec<RenderOp>` themselves instead of going
+through the `ui-core`/`renderer` `PaintOp`→`FrameCommand` pipeline — see
+`host-desktop` in "Current gap summary" in
+[RENDERER_ROADMAP.md](RENDERER_ROADMAP.md)) has no clip/scissor variant at
+all: `Clear`/`FillRect`/`StrokeRect`/`Line`/`Circle`/`Text`/`BlitImage`,
+none of which carry or consult a clip region. Only `RenderOp::Text.style`'s
+`RenderTextOverflow` (`Clip`/`EllipsisEnd`/`EllipsisMiddle`) clips *that one
+text op* to its own declared rect — it cannot clip other ops, or clip
+content to some other rect (a scrollable panel's viewport, say).
+
+This is a real, confirmed gap, not a theoretical one: `sng-roguelite`
+needed a scrollable achievements list inside a fixed panel
+(`crates/game-app/src/lib.rs` in that repo, `push_achievement_rows`) and
+had no way to clip overflow content to the panel's viewport. The workaround
+was to only ever emit a row `RenderOp::Text` when the *entire* row rect
+fits inside the viewport, skipping any row that would be even partially
+cut off — correct (nothing ever overflows), but it means a row pops into
+view once fully revealed rather than sliding in continuously the way a
+real clipped scroll view would. See that repo's
+`docs/decisions/0005-eab-achievement-persistence-and-viewing.md` and
+`docs/ACHIEVEMENTS.md`'s "Viewing achievements" section for the full story.
+
+Note that `ui_core::PaintOp` already has a `clip_rect: Option<Rect>` field
+on `PaintOp::Text` (`ui-core/src/paint.rs`), and `ui_core::ScrollRegionModel`
+(`ui-core/src/scroll.rs`) already provides the scroll-offset/indicator math
+generally — so the *model* half of "scrollable panel" already exists and is
+reusable today. What's missing is purely the render-primitive half for
+games on the `RenderOp` path: a way to clip arbitrary drawn content
+(rects, other text, everything — not just one text op to its own bounds)
+to a rect, without requiring a game to adopt the full `PaintOp`/`gui`
+widget stack just to get a clipped scroll view.
+
+**For a future agent to pursue:** add a clip/scissor primitive to
+`RenderOp` — most likely a paired `PushClip { rect: Rect }` /`PopClip`
+(or a scoped `ClipRect { rect: Rect, ops: Vec<RenderOp> }` wrapper) that
+every `host-desktop` backend (macOS, iOS, Android, Linux, Windows,
+fallback) honors for all op kinds, not just `Text`. Follow the "Primitive
+migration checklist" above: define the contract first, find every backend
+site, patch the whole slice in one pass, validate per-backend. This is
+scoped to the `host-core`/`host-desktop` `RenderOp` contract specifically —
+it does not require or block on the separate `PaintOp`/`renderer`
+primitive rollout tracked elsewhere in this document.
+
 ## Precision rule
 
 The draw layer should not switch wholesale to `f64`.

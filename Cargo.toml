@@ -15,6 +15,7 @@ members = [
     "host-core",
     "renderer",
     "ui-core",
+    "persistence",
 ]
 default-members = [
     "task",
@@ -28,6 +29,7 @@ default-members = [
     "host-core",
     "renderer",
     "ui-core",
+    "persistence",
 ]
 resolver = "2"
 
