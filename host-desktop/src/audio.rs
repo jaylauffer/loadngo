@@ -726,7 +726,11 @@ mod imp {
         /// `android::ensure_materialized_asset_path`). Exists only so
         /// desktop callers can call `preload_embedded` unconditionally
         /// without `cfg`-gating every call site.
-        pub fn preload_embedded(&mut self, _key: &str, _ogg_bytes: &'static [u8]) -> Result<(), String> {
+        pub fn preload_embedded(
+            &mut self,
+            _key: &str,
+            _ogg_bytes: &'static [u8],
+        ) -> Result<(), String> {
             Ok(())
         }
 
@@ -1007,7 +1011,11 @@ mod imp {
 
         /// No-op: this platform has no audio device at all. Exists only for
         /// API parity with the desktop `imp` module.
-        pub fn preload_embedded(&mut self, _key: &str, _ogg_bytes: &'static [u8]) -> Result<(), String> {
+        pub fn preload_embedded(
+            &mut self,
+            _key: &str,
+            _ogg_bytes: &'static [u8],
+        ) -> Result<(), String> {
             Ok(())
         }
 
@@ -1392,14 +1400,13 @@ mod imp {
             };
 
             if !self.tracks.contains_key(&selected_path) {
-                let state =
-                    TrackState::new(
-                        stream_handle,
-                        &selected_path,
-                        looped,
-                        self.bass_boost,
-                        self.embedded_tracks.get(&selected_path).copied(),
-                    )?;
+                let state = TrackState::new(
+                    stream_handle,
+                    &selected_path,
+                    looped,
+                    self.bass_boost,
+                    self.embedded_tracks.get(&selected_path).copied(),
+                )?;
                 self.tracks.insert(selected_path.clone(), state);
             } else if self
                 .tracks
