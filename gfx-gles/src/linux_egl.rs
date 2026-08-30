@@ -1,5 +1,7 @@
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::OnceLock;
+use std::time::Instant;
 
 use loadngo_renderer::{FrameCommand, ImageRequest, RendererError};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
@@ -339,6 +341,23 @@ pub fn destroy(binding: LinuxEglBinding) {
     }
 }
 
+/// Diagnostic-only, zero-cost when disabled — mirrors `host-desktop`'s
+/// `LOADNGO_LINUX_TRACE` convention (see `docs/LINUX_X11_PRESENT_LATENCY.md`)
+/// but implemented locally rather than plumbed through `host-desktop`,
+/// since `present_scene`'s signature is shared with the Android backend
+/// (`gfx-gles/src/lib.rs`) and shouldn't grow a timing-callback parameter
+/// just for one platform's investigation.
+fn egl_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| match std::env::var("LOADNGO_LINUX_TRACE") {
+        Ok(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            !matches!(normalized.as_str(), "" | "0" | "false" | "no" | "off")
+        }
+        Err(_) => false,
+    })
+}
+
 #[allow(clippy::too_many_arguments)] // low-level GL/EGL FFI dispatch entry point; each param is real, distinct GPU state
 pub fn present_scene(
     binding: &LinuxEglBinding,
@@ -352,6 +371,7 @@ pub fn present_scene(
     height: i32,
     commands: &[FrameCommand],
 ) -> Result<(), RendererError> {
+    let draw_started = Instant::now();
     unsafe {
         if eglMakeCurrent(
             binding.display,
@@ -494,7 +514,16 @@ pub fn present_scene(
             }
         }
 
-        if eglSwapBuffers(binding.display, binding.surface) == EGL_FALSE {
+        let draw_ms = draw_started.elapsed().as_secs_f64() * 1000.0;
+        let swap_started = Instant::now();
+        let swap_ok = eglSwapBuffers(binding.display, binding.surface) != EGL_FALSE;
+        let swap_ms = swap_started.elapsed().as_secs_f64() * 1000.0;
+        if egl_trace_enabled() {
+            eprintln!(
+                "[loadngo/linux/trace] present_scene split make_current_and_draw_ms={draw_ms:.3} swap_ms={swap_ms:.3}"
+            );
+        }
+        if !swap_ok {
             return Err(last_egl_error("eglSwapBuffers"));
         }
         Ok(())

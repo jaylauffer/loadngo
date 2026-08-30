@@ -11,8 +11,20 @@ A follow-up investigation the same day (2026-08-30, see "What was ruled
 out") directly disproved the original leading hypothesis (see below) —
 the growth is **not** specific to the software/SHM present path after
 all, and is **not** CPU frequency scaling or thermal throttling either.
-Root cause is still unknown; the search space is narrower than before but
-the fix is not yet in sight.
+`io_uring`/`loadngo-proactor` are also fully negated as a cause — neither
+is linked into, called by, or even compiled into this code path (`linux.rs`
+never references `loadngo_proactor`; `loadngo-proactor` is the only crate
+in the whole workspace that depends on `io-uring` at all; the current
+Linux frame loop runs on a plain `futures::executor::LocalPool`, matching
+`PROACTOR_ARCHITECTURE.md`'s own admission that host frame loops don't run
+on the proactor yet). Finer-grained timing localized the growth inside
+the actual GPU draw/submit/swap call, with the specific blocking point
+*migrating* between draw-call submission and `eglSwapBuffers` over the
+course of a run rather than one fixed call slowing down — a strong signal
+for GPU command-queue/fence-wait backpressure. Root cause is still
+unknown; the search space is much narrower than before but the fix is
+not yet in sight, and the next step needs GPU/kernel-level tracing tools
+rather than more userspace wall-clock timing splits.
 
 ## Summary
 
@@ -162,6 +174,24 @@ cycle, the `v3d` kernel driver, or DRM/KMS scheduling) rather than
 anything in this repo's own code, but is still not confirmed — no
 specific mechanism has been identified yet, only ruled out.
 
+**Update, 2026-08-30 (see step 6 below for the full data):** localizing
+further inside the GLES present path refines this rather than changing
+it. The growth lives inside `Renderer::render(...)`'s actual GPU draw/
+submit/swap call, not in any of our own per-frame CPU-side bookkeeping.
+Splitting that call itself one level further (`eglMakeCurrent`+draw-call
+submission vs. `eglSwapBuffers` alone) shows the slow point *migrating*
+between the two across a single run rather than one specific EGL call
+linearly slowing down — early in a run `eglSwapBuffers` is what's
+elevated, later in the same run it's the draw-call submission itself,
+with swap back to normal. A single fixed call getting steadily slower
+would point at one specific mechanism (e.g. one growing wait); a
+migrating bottleneck between draw-submission and swap is the textbook
+signature of GPU command-queue/fence-wait backpressure — the *next*
+blocking point in the sequence depends on how much work is already
+queued and not yet consumed by the display at that moment, not a fixed
+call. This still fits "something in the GPU/compositor buffer-scheduling
+layer," but rules out pinning blame on any one specific EGL call.
+
 ## Suggested next steps
 
 1. ~~Reproduce with `LOADNGO_LINUX_TRACE=1` while sampling `Xwayland` and
@@ -182,23 +212,51 @@ specific mechanism has been identified yet, only ruled out.
 5. If reproducible upstream, this may be a `labwc`/`wlroots`/Mesa `v3d`
    driver issue rather than anything fixable in this repo. **More likely
    now than when originally written**, given (2) and (4) above.
-6. **New, 2026-08-30**: localize *where inside* `present()`'s GLES branch
-   the growth actually lives, with finer-grained internal timing around
-   `backend.sync_image_resources(...)` (CPU-side texture upload prep)
-   versus `Renderer::new(...).render(backend, &gles_commands)` (the
-   actual GPU draw/submit/swap call) — `host-desktop/src/linux.rs:1336-1378`.
-   If the growth is entirely inside the `render()`/swap call and
-   `sync_image_resources` stays flat, that further supports a
-   GPU/compositor buffer-scheduling cause over anything in our own
-   per-frame CPU-side bookkeeping (which the flat `ops_len`/`build_ms`
-   numbers already argue against, but this would confirm it directly
-   inside the GLES path specifically, which those numbers don't cover).
-   Not attempted this session — the next concrete step.
-7. **New, 2026-08-30**: check whether `EGL_KHR_swap_buffers_with_damage`
-   or a presentation-time extension (`wp_presentation` under Wayland) is
-   available and would expose actual compositor-side frame-scheduling
-   latency directly, rather than inferring it indirectly from wall-clock
-   `present()` duration.
+6. ~~Localize *where inside* `present()`'s GLES branch the growth actually
+   lives~~ **Done 2026-08-30, in two passes.** First split
+   (`host-desktop/src/linux.rs`'s GLES branch, `prepare_ms`/`sync_ms`/
+   `render_ms`, durable behind `LOADNGO_LINUX_TRACE`): `sync_ms`
+   (CPU-side texture upload prep) stayed flat at ~0.02-0.08ms the entire
+   run; `prepare_ms` (CPU-side command build) grew only modestly, 0ms to
+   ~2.9ms; `render_ms` (`Renderer::render(...)`, the actual GPU draw/
+   submit/swap call) carried essentially all of the growth, a few ms up
+   to ~80-82ms. This cleanly rules out our own per-frame CPU-side
+   bookkeeping as the cause and localizes it inside the GPU draw/submit
+   path specifically.
+
+   Second split, one level deeper, inside `Renderer::render`'s Linux
+   path itself (`gfx-gles/src/linux_egl.rs`'s `present_scene`, a local
+   `egl_trace_enabled()` gated on the same `LOADNGO_LINUX_TRACE`, since
+   this function's signature is shared with the Android backend and
+   shouldn't grow a timing-callback parameter for one platform's
+   diagnostics): split `make_current_and_draw_ms` (`eglMakeCurrent` plus
+   the GL draw-call loop) from `swap_ms` (`eglSwapBuffers` alone). The
+   result was **not** "one call gets progressively slower" — the
+   bottleneck *migrates* between the two over the course of a single
+   run. Early on, `swap_ms` was the elevated one (~7-15ms) while
+   `make_current_and_draw_ms` stayed under ~1ms; by the end of the same
+   12s run this had flipped — `swap_ms` back down to ~1ms,
+   `make_current_and_draw_ms` up to ~83-86ms. This shifting-bottleneck
+   pattern (rather than one fixed call linearly slowing down) is a
+   textbook signature of GPU command-queue/fence-wait backpressure —
+   depending on how much work is already queued and not yet consumed by
+   the display at any given moment, the *next* blocking point in the
+   EGL/GL call sequence can differ — not a linear "X is slow" finding
+   that points at one specific EGL call to blame.
+7. Check whether `EGL_KHR_swap_buffers_with_damage` or a Wayland
+   presentation-time extension (`wp_presentation`) is available and would
+   expose actual compositor-side frame-scheduling latency directly,
+   rather than inferring it indirectly from wall-clock timing. **Still
+   open** — not attempted.
+8. **New, 2026-08-30**: the swap/draw-call migration finding above is
+   about as far as userspace `Instant::now()` timing splits can usefully
+   go — the next step needs actual GPU/kernel-level tracing (DRM/KMS
+   tracepoints, `perfetto`, or `v3d` driver debug/verbose logging if the
+   Broadcom driver stack exposes any) to see what the GPU command queue
+   and buffer-release cycle are actually doing during the slow calls,
+   rather than continuing to subdivide wall-clock time on the userspace
+   side. Not attempted — likely the most informative remaining step, but
+   a meaningfully bigger lift than anything tried so far this session.
 
 ## How to reproduce / instrumentation available
 
@@ -209,6 +267,16 @@ disabled, following the existing `LOADNGO_LINUX_TRACE` convention):
   - every `advance_frame_clock` call with its trigger source (`resumed`,
     `timer`, `wake_host`, or historically `window_event`), epoch, and dt
   - every `present()` call's wall-clock duration
+  - (2026-08-30, GLES backend only) `present gles_split
+    prepare_ms=... sync_ms=... render_ms=...` — splits `present()`'s GLES
+    branch into CPU-side command build, CPU-side texture upload prep, and
+    the actual GPU draw/submit/swap call (`host-desktop/src/linux.rs`)
+  - (2026-08-30, GLES backend, Linux only) `present_scene split
+    make_current_and_draw_ms=... swap_ms=...` — one level deeper still,
+    splitting `eglMakeCurrent`+the GL draw-call loop from `eglSwapBuffers`
+    alone (`gfx-gles/src/linux_egl.rs`, gated on its own local
+    `egl_trace_enabled()` checking the same env var, since this function's
+    signature is shared with the Android backend)
 - `SNG_TICK_TRACE=1` on `sng-roguelite-game` logs per-tick simulation step
   count, event count, and phase timing (`advance_ms`, `build_ms`,
   `render_ops_ms`, `next_frame_wait_ms`).

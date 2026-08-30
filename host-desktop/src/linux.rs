@@ -1334,8 +1334,10 @@ fn present(
     };
 
     if let Some(backend) = gles_backend.as_mut() {
+        let prepare_started = Instant::now();
         let (gles_commands, gles_textures, next_generated_cache) =
             prepare_gles_frame(&commands, &textures, generated_cache);
+        let prepare_ms = prepare_started.elapsed().as_secs_f64() * 1000.0;
         let mut next_gles_upload_cache = gles_upload_cache;
         let mut active_gles_uploads = HashSet::with_capacity(gles_textures.len());
         {
@@ -1343,6 +1345,7 @@ fn present(
             state.generated_texture_cache = next_generated_cache;
         }
         backend.update_surface_size(width as i32, height as i32);
+        let sync_started = Instant::now();
         backend.sync_image_resources(gles_textures.iter().map(|(key, image)| {
             let identity = Arc::as_ptr(image) as usize;
             active_gles_uploads.insert(identity);
@@ -1360,13 +1363,21 @@ fn present(
                 },
             )
         }));
+        let sync_ms = sync_started.elapsed().as_secs_f64() * 1000.0;
         next_gles_upload_cache.retain(|identity, _| active_gles_uploads.contains(identity));
         {
             let mut state = lock_state();
             state.gles_upload_cache = next_gles_upload_cache;
         }
         if backend.supports_commands(&gles_commands) {
-            match Renderer::new(RendererConfig::default()).render(backend, &gles_commands) {
+            let render_started = Instant::now();
+            let render_result =
+                Renderer::new(RendererConfig::default()).render(backend, &gles_commands);
+            let render_ms = render_started.elapsed().as_secs_f64() * 1000.0;
+            trace_linux(format!(
+                "present gles_split prepare_ms={prepare_ms:.3} sync_ms={sync_ms:.3} render_ms={render_ms:.3}"
+            ));
+            match render_result {
                 Ok(()) => {
                     let mut state = lock_state();
                     state.last_backend_used = DesktopRenderBackendKind::Gles;
