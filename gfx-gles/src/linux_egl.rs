@@ -339,6 +339,7 @@ pub fn destroy(binding: LinuxEglBinding) {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // low-level GL/EGL FFI dispatch entry point; each param is real, distinct GPU state
 pub fn present_scene(
     binding: &LinuxEglBinding,
     solid_program: &mut u32,
@@ -655,7 +656,7 @@ fn draw_solid_rects(
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 2, GL_FLOAT, 0, 0, ptr::null());
 
-        let color_location = glGetUniformLocation(program, b"u_color\0".as_ptr().cast());
+        let color_location = glGetUniformLocation(program, c"u_color".as_ptr().cast());
         if color_location < 0 {
             return Err(RendererError::Backend(
                 "u_color uniform not found in Linux GLES solid program".to_string(),
@@ -689,6 +690,7 @@ fn draw_solid_rects(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // private single-call-site GL draw helper; params are the real independent inputs
 fn draw_polyline(
     program: u32,
     vbo: u32,
@@ -710,7 +712,7 @@ fn draw_polyline(
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 2, GL_FLOAT, 0, 0, ptr::null());
 
-        let color_location = glGetUniformLocation(program, b"u_color\0".as_ptr().cast());
+        let color_location = glGetUniformLocation(program, c"u_color".as_ptr().cast());
         if color_location < 0 {
             return Err(RendererError::Backend(
                 "u_color uniform not found in Linux GLES solid polyline program".to_string(),
@@ -739,6 +741,7 @@ fn draw_polyline(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // private single-call-site GL draw helper; params are the real independent inputs
 fn draw_line(
     program: u32,
     vbo: u32,
@@ -766,6 +769,7 @@ fn draw_circle(
     draw_solid_vertices(program, vbo, &vertices, color, "Linux GLES solid circle")
 }
 
+#[allow(clippy::too_many_arguments)] // private single-call-site GL draw helper; params are the real independent inputs
 fn draw_arc(
     program: u32,
     vbo: u32,
@@ -800,7 +804,7 @@ fn draw_solid_vertices(
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 2, GL_FLOAT, 0, 0, ptr::null());
 
-        let color_location = glGetUniformLocation(program, b"u_color\0".as_ptr().cast());
+        let color_location = glGetUniformLocation(program, c"u_color".as_ptr().cast());
         if color_location < 0 {
             return Err(RendererError::Backend(format!(
                 "u_color uniform not found in {label} program"
@@ -809,7 +813,7 @@ fn draw_solid_vertices(
 
         glBufferData(
             GL_ARRAY_BUFFER,
-            (vertices.len() * std::mem::size_of::<f32>()) as isize,
+            std::mem::size_of_val(vertices) as isize,
             vertices.as_ptr().cast(),
             GL_STREAM_DRAW,
         );
@@ -860,8 +864,8 @@ fn draw_images(
             (2 * std::mem::size_of::<f32>()) as *const c_void,
         );
 
-        let u_tint = glGetUniformLocation(program, b"u_tint\0".as_ptr().cast());
-        let u_tex = glGetUniformLocation(program, b"u_tex\0".as_ptr().cast());
+        let u_tint = glGetUniformLocation(program, c"u_tint".as_ptr().cast());
+        let u_tex = glGetUniformLocation(program, c"u_tex".as_ptr().cast());
         if u_tint < 0 || u_tex < 0 {
             return Err(RendererError::Backend(
                 "Linux GLES textured shader uniforms are unavailable".to_string(),
