@@ -16,22 +16,30 @@ is actually `sng-roguelite`-specific.
 
 ## Finding 1: Linux X11 present-latency growth (blocks a Linux release)
 
-Already fully documented, unresolved, with next steps already scoped:
+Fully documented, still unresolved, substantially re-scoped by a
+same-day follow-up investigation:
 [LINUX_X11_PRESENT_LATENCY.md](LINUX_X11_PRESENT_LATENCY.md). Restated
-here only for roadmap visibility: `present()`'s software/X11 path grows
-from ~13ms to ~150-195ms over a run's first 6 seconds, independent of
-input, on `dolores`'s `labwc`/XWayland/v3d stack. Leading hypothesis is
-something in the Xwayland/compositor/GPU-driver chain outside our own
-code, not confirmed.
+here only for roadmap visibility: `present()` grows from ~13ms to
+~150-195ms over a run's first 6 seconds, independent of input, on
+`dolores`'s `labwc`/XWayland/v3d stack, **regardless of render backend**
+(2026-08-30: confirmed reproducing identically under both GLES and
+software, and directly disproved both the original leading hypothesis —
+a software-path-specific `softbuffer` X11 round trip — and CPU
+frequency/thermal throttling, via a controlled test pinning the CPU
+governor to `performance`). `Xwayland`'s and `labwc`'s own CPU/memory
+also stayed completely flat throughout, ruling out userspace bookkeeping
+growth in either process. The search space has narrowed toward the
+GPU/compositor buffer-scheduling layer itself, not anything in this
+repo's code — but the root cause is still not identified, only ruled out
+in several directions. See that doc's "Suggested next steps" for what's
+still open (a plain-X11-without-XWayland/labwc session, and localizing
+where inside `present()`'s GLES branch the time actually goes).
 
 **This blocks putting a Linux build on itch.io** — confirmed directly by
-playtesting on `dolores` today; not a theoretical concern. A Linux
-release should not happen until this is at least characterized well
-enough to know whether it's fixable, worked around, or specific to this
-one Pi/compositor combination (see that doc's "Suggested next steps" for
-what a follow-up investigation session should try first — GLES backend
-instead of the software path, and testing without XWayland/labwc in the
-loop, would meaningfully narrow this).
+playtesting on `dolores`; not a theoretical concern. A Linux release
+should not happen until this is at least characterized well enough to
+know whether it's fixable, worked around, or specific to this one
+Pi/compositor combination.
 
 ## Finding 2: desktop mouse clicks don't reach several `sng-roguelite` screens
 

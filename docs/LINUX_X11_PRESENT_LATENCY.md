@@ -2,18 +2,25 @@
 
 ## Status
 
-Unresolved. Documented 2026-08-26 during an input-lag investigation on
-`sng-roguelite` so the finding survives across sessions. Needs a follow-up
-investigation session; see "Suggested next steps" below. Confirmed again
-2026-08-30 during a real keyboard+mouse playtest on `dolores` — this is
-now the tracked blocker for a Linux itch.io release; see
-[DESKTOP_PLATFORM_ROADMAP.md](DESKTOP_PLATFORM_ROADMAP.md).
+Unresolved, but substantially re-scoped. Documented 2026-08-26 during an
+input-lag investigation on `sng-roguelite` so the finding survives across
+sessions. Confirmed again 2026-08-30 during a real keyboard+mouse
+playtest on `dolores` — this is now the tracked blocker for a Linux
+itch.io release; see [DESKTOP_PLATFORM_ROADMAP.md](DESKTOP_PLATFORM_ROADMAP.md).
+A follow-up investigation the same day (2026-08-30, see "What was ruled
+out") directly disproved the original leading hypothesis (see below) —
+the growth is **not** specific to the software/SHM present path after
+all, and is **not** CPU frequency scaling or thermal throttling either.
+Root cause is still unknown; the search space is narrower than before but
+the fix is not yet in sight.
 
 ## Summary
 
-On the Linux desktop backend (`host-desktop/src/linux.rs`, software/X11
-present path), the wall-clock cost of `present()` grows steadily over a
-run's lifetime, independent of user input:
+On the Linux desktop backend (`host-desktop/src/linux.rs`), the
+wall-clock cost of `present()` grows steadily over a run's lifetime,
+independent of user input, **regardless of which render backend is
+active** (see 2026-08-30 update below — this was originally thought to be
+software-path-specific and is not):
 
 | elapsed run time | approx. tick | `present()` duration |
 |---|---|---|
@@ -27,7 +34,7 @@ process, zero keyboard/mouse events, on a Raspberry Pi running a `labwc`
 Wayland session with the game forced onto the X11/XWayland backend
 (`WINIT_UNIX_BACKEND=x11`). Simulation (`session.advance`) and render-op
 building/queuing stayed flat at well under a millisecond the entire time;
-all of the growth is inside `present()`'s software rasterization path.
+all of the growth is inside `present()`.
 
 This is a separate finding from (and was discovered while investigating)
 the input-driven frame-pacing bug described below, which **is** fixed.
@@ -80,51 +87,118 @@ Checked directly, with evidence, before writing this up:
   `softbuffer-0.4.8/src/backends/x11.rs`: `resize()` no-ops when the size is
   unchanged (`if self.size != Some((width, height))`), and our code calls it
   every `present()` with an unchanged size. Not the source.
+- **(2026-08-30) Growth being specific to the software/SHM present path.**
+  Reproduced the identical growth curve (0.25ms → ~92-98ms over ~12s)
+  while `present()` was confirmed running the **GLES** branch the entire
+  time, not software: `requested_render_backend()` defaults to
+  `DesktopRenderBackendKind::Gles` when `LOADNGO_DESKTOP_BACKEND` is
+  unset, and the trace log showed exactly one "Linux GLES backend bound
+  to the native window" / "Linux GLES backend rendered the queued frame"
+  pair near startup and no later "falling back to software" message
+  (`update_backend_detail` only logs on a change, so a single
+  "rendered the queued frame" line across 261 presents means GLES stayed
+  active — see `present()`'s early `return` on `Ok(())` at
+  `host-desktop/src/linux.rs:1368-1378`). GLES never touches
+  `softbuffer`/`shm::PutImage`/`finish_wait` at all, so the original
+  suspected mechanism (below) cannot be what's actually growing — the two
+  backends share nothing in that part of the call path, yet show the same
+  curve.
+- **(2026-08-30) `Xwayland`'s and `labwc`'s own CPU/memory usage growing.**
+  Sampled both with `ps -o %cpu=,rss=` once per second across a 12s
+  reproduction: both processes stayed completely flat the entire time
+  (`Xwayland` ~0.0-0.1% CPU / 3136KB RSS constant; `labwc` 0.0% CPU /
+  33776KB RSS constant) while `present()` duration grew from 0.25ms to
+  92.5ms in the same window. Whatever is growing is not showing up as
+  either process's own CPU time or resident memory.
+- **(2026-08-30) CPU frequency scaling / thermal throttling.** `dolores`
+  (Raspberry Pi 5) runs the `ondemand` CPU governor by default; sampled
+  `vcgencmd measure_clock arm`/`v3d`, `vcgencmd measure_temp`, and
+  `vcgencmd get_throttled` during a reproduction — `get_throttled` stayed
+  `0x0` throughout (no under-voltage/throttle event flagged, ever) and
+  temperature stayed a safe 48-50°C, but ARM core frequency dropped from
+  2.4GHz to ~1.7GHz partway through the run (GPU/v3d frequency stayed
+  flat at 960MHz throughout — only the CPU cores, not the GPU). This
+  looked like a plausible independent cause (`ondemand` scaling down when
+  it perceives less active CPU work, which growing wait-bound `present()`
+  calls could produce, in turn making any CPU-bound portion of `present()`
+  take proportionally longer — a feedback loop). Pinned all four cores to
+  the `performance` governor (confirmed via
+  `scaling_governor` reading `performance` on all cores, and `vcgencmd
+  measure_clock arm` staying pinned at a constant 2.4GHz for the entire
+  run this time) and reproduced again: **the identical growth curve
+  reproduced anyway** (0.25ms → 98.6ms). CPU frequency scaling is a real,
+  observable phenomenon on this box, but it is not the cause of the
+  present-latency growth — most likely a downstream symptom of whatever
+  the real cause is (the governor reacting to `present()` spending more
+  time blocked/waiting rather than actively computing), not the cause
+  itself.
 
-## What's suspected (not yet confirmed)
+## What's suspected (revised 2026-08-30, still not confirmed)
 
-`present()`'s software path (`host-desktop/src/linux.rs`, the non-GLES
-branch) blocks on `softbuffer`'s `finish_wait`, which sends an X11
-`GetInputFocus` request purely as an ordering barrier and blocks on its
-reply (`softbuffer-0.4.8/src/backends/x11.rs:686-694`) to know the previous
-`shm::PutImage` has been consumed before reusing the shared-memory segment.
-That round trip is the one thing in the call path that depends on a process
-other than our own.
+The original hypothesis — `present()`'s software path blocking on
+`softbuffer`'s `finish_wait` X11 `GetInputFocus` round trip
+(`softbuffer-0.4.8/src/backends/x11.rs:686-694`) — is very likely **not**
+the mechanism, since the 2026-08-30 GLES-backend reproduction shows the
+identical growth curve while never executing that code path at all. The
+original chain-of-suspicion (Xwayland buffer/import bookkeeping, `labwc`
+composition/damage-tracking overhead, or GPU driver state getting slower
+over the run) is still plausible in shape, but the evidence now points
+away from *userspace CPU-side bookkeeping* in either `Xwayland` or
+`labwc` specifically (both measured flat) and toward something that:
 
-On this machine the chain is:
+- affects both the software/SHM and GLES present paths equally (so
+  something downstream of both — the actual buffer hand-off to the
+  compositor/DRM/GPU, not anything backend-specific on our side), and
+- doesn't show up as growing CPU time or RSS on any userspace process
+  sampled so far (so likely a genuinely blocking wait — e.g. a growing
+  buffer-release/fence wait, VBlank/frame-scheduling backlog, or GPU
+  command-queue depth — rather than accumulating computational work), and
+- is not CPU frequency/thermal related (directly disproven by the pinned-
+  governor test).
 
-```
-sng-roguelite-game --(X11 protocol, XWayland)--> Xwayland --(wl_shm import + wl_surface commit)--> labwc (wlroots Wayland compositor) --(DRM/KMS)--> GPU (v3d)
-```
-
-(`ps aux` showed `labwc -m`, `Xwayland -rootless ... :0`, and active
-`kworker/u16:*-v3d_{bin,render,tfu}` kernel threads for the Broadcom
-VideoCore GPU during the run.) The working hypothesis is that something in
-that chain — Xwayland's buffer/import bookkeeping, or `labwc`'s own
-composition/damage-tracking overhead, or GPU driver state — is what's
-actually getting slower over the run, and our `finish_wait` round trip is
-just where that latency becomes visible to us. This has **not** been
-confirmed; it is the leading hypothesis given everything client-side is
-ruled out above, not a diagnosed root cause.
+This narrows toward the GPU/DRM/compositor buffer-scheduling layer itself
+(something inside `labwc`/wlroots' Wayland buffer commit-and-release
+cycle, the `v3d` kernel driver, or DRM/KMS scheduling) rather than
+anything in this repo's own code, but is still not confirmed — no
+specific mechanism has been identified yet, only ruled out.
 
 ## Suggested next steps
 
-1. Reproduce with `LOADNGO_LINUX_TRACE=1` (present-duration + source
-   tracing already instrumented in `linux.rs`, see below) while sampling
-   `Xwayland` and `labwc` CPU/memory with `top -H -p <pid>` for both
-   processes across the run, not just our own.
-2. Try the GLES backend (`requested_render_backend() ==
-   DesktopRenderBackendKind::Gles`) instead of the software/SHM path, to see
-   if the growth is specific to the `shm::PutImage` + `GetInputFocus`
-   barrier round trip or reproduces there too.
+1. ~~Reproduce with `LOADNGO_LINUX_TRACE=1` while sampling `Xwayland` and
+   `labwc` CPU/memory across the run.~~ **Done 2026-08-30** — both flat;
+   see "What was ruled out" above.
+2. ~~Try the GLES backend instead of the software/SHM path, to see if the
+   growth is specific to that barrier round trip or reproduces there
+   too.~~ **Done 2026-08-30** — reproduces identically under GLES; the
+   original suspected mechanism is very likely wrong. See above.
 3. Try a plain X11 session (no XWayland/labwc in the loop) or a different
    compositor, to isolate whether this is a `labwc`/wlroots-specific
-   behavior or general to this Pi's GPU driver stack.
-4. Check `Xwayland`'s and `labwc`'s own resource usage (`xrestop` if
-   available, or `/proc/<pid>/status` for both) over a run for anything
-   growing there.
+   behavior or general to this Pi's GPU driver stack. **Still open** —
+   not attempted this session; would need a different display session set
+   up on `dolores`, which wasn't done given the risk of disrupting the
+   box's normal desktop session.
+4. ~~Check `Xwayland`'s and `labwc`'s own resource usage over a run for
+   anything growing there.~~ **Done 2026-08-30** — both flat; see above.
 5. If reproducible upstream, this may be a `labwc`/`wlroots`/Mesa `v3d`
-   driver issue rather than anything fixable in this repo.
+   driver issue rather than anything fixable in this repo. **More likely
+   now than when originally written**, given (2) and (4) above.
+6. **New, 2026-08-30**: localize *where inside* `present()`'s GLES branch
+   the growth actually lives, with finer-grained internal timing around
+   `backend.sync_image_resources(...)` (CPU-side texture upload prep)
+   versus `Renderer::new(...).render(backend, &gles_commands)` (the
+   actual GPU draw/submit/swap call) — `host-desktop/src/linux.rs:1336-1378`.
+   If the growth is entirely inside the `render()`/swap call and
+   `sync_image_resources` stays flat, that further supports a
+   GPU/compositor buffer-scheduling cause over anything in our own
+   per-frame CPU-side bookkeeping (which the flat `ops_len`/`build_ms`
+   numbers already argue against, but this would confirm it directly
+   inside the GLES path specifically, which those numbers don't cover).
+   Not attempted this session — the next concrete step.
+7. **New, 2026-08-30**: check whether `EGL_KHR_swap_buffers_with_damage`
+   or a presentation-time extension (`wp_presentation` under Wayland) is
+   available and would expose actual compositor-side frame-scheduling
+   latency directly, rather than inferring it indirectly from wall-clock
+   `present()` duration.
 
 ## How to reproduce / instrumentation available
 
@@ -138,6 +212,13 @@ disabled, following the existing `LOADNGO_LINUX_TRACE` convention):
 - `SNG_TICK_TRACE=1` on `sng-roguelite-game` logs per-tick simulation step
   count, event count, and phase timing (`advance_ms`, `build_ms`,
   `render_ops_ms`, `next_frame_wait_ms`).
+- `LOADNGO_DESKTOP_BACKEND` selects the render backend explicitly:
+  `gles` (the default when unset — **not** `software`, despite this
+  document's original title/framing) or `software`. Set it explicitly to
+  `software` to reproduce the originally-suspected path, or leave it
+  unset/`gles` to reproduce what actually ships by default. As of
+  2026-08-30 both reproduce the same growth curve; see "What was ruled
+  out" above.
 
 Example repro (adjust window title / binary path as needed):
 
@@ -152,4 +233,16 @@ DISPLAY=:0 xdotool windowfocus --sync "$WIN"
 sleep 12
 kill -9 "$GAME_PID"   # kill by captured PID, not by name -- see footgun above
 grep "present duration_ms" /tmp/trace.log
+```
+
+To check for CPU-frequency-scaling confounds, cross-reference against
+`vcgencmd measure_clock arm`, `vcgencmd measure_clock v3d`, `vcgencmd
+measure_temp`, and `vcgencmd get_throttled` sampled once per second
+across the same window (Raspberry Pi-specific; `vcgencmd` ships with
+Raspberry Pi OS). To rule out the `ondemand` governor entirely, pin all
+cores to `performance` first (needs an interactive `sudo`, `vcgencmd`
+itself does not):
+
+```bash
+ssh -t jay@192.168.1.140 'echo performance | sudo tee /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor'
 ```
