@@ -1323,6 +1323,17 @@ fn present(
     };
     let commands = scale_frame_commands(commands, dpi_scale);
 
+    // Same guard and same reason as `linux.rs`'s `present()`: a
+    // `RedrawRequested` can legitimately fire before anything new has been
+    // queued since the last present, and presenting an empty `commands`
+    // list would draw a default black-clear frame instead of leaving the
+    // already-displayed frame alone — a real, user-visible flicker.
+    // `macos.rs`, `android.rs`, and `ios.rs` already guard this; matches
+    // them now.
+    if commands.is_empty() {
+        return;
+    }
+
     if let Some(backend) = dx12_backend.as_mut() {
         backend.update_surface_size(width as i32, height as i32);
     }

@@ -87,6 +87,38 @@ pattern is duplicated in `gfx-gles/src/lib.rs`'s Android module
 dominant issue on Linux either; a minor, low-priority cleanup if picked
 up later, not urgent.
 
+## Follow-up: flicker exposed by the `mem::take` fix (also resolved, same day)
+
+Playtesting the fixed build surfaced a new, real, user-reported symptom:
+occasional visible flicker — flagged directly as a possible photosensitive
+concern, not just a cosmetic one, and treated with that seriousness.
+
+Root cause: `WindowEvent::RedrawRequested` can legitimately fire before
+anything new has been queued into `state.commands` since the last present
+(compositor-driven expose/damage events, resizes, etc. — not tied to the
+game producing a new frame). Before the `mem::take` fix above, this was
+invisible: the never-cleared `state.commands` always had *something* in
+it (everything ever queued), so an "empty" redraw just re-presented
+whatever was already accumulated. After the fix correctly drains the
+queue, a redraw with nothing newly queued reads back a **genuinely
+empty** command list — and `present_scene`'s existing "no explicit
+`Clear` command present" fallback (see `linux_egl.rs`) defaults to
+clearing to black, so every one of these produced a real, visible black
+frame flash. Confirmed directly via the existing `gles_commands_len`
+trace field: 7 zero-length presents out of 1248 over a 12s run (~0.56%,
+not just a one-time startup artifact — occurrences were spread
+throughout the run, roughly every 15-20 seconds).
+
+This is a third instance of the same class of bug as the root cause
+above: `macos.rs`'s `flush_selected_backend`, `android.rs`'s
+`flush_queued_frame`, and `ios.rs` already guard against exactly this
+case (`if commands.is_empty() { return; }`, skipping the present
+entirely so the already-displayed frame just stays on screen untouched);
+`linux.rs`/`windows.rs` were missing that same guard. Added it to both,
+matching the reference platforms. Verified over a 30-second run: **zero**
+zero-length presents out of 1846 (previously 7/1248), all other behavior
+(latency, correctness, tests) unchanged.
+
 ## Investigation history (superseded by "Root cause and fix" above)
 
 The sections below are kept for the record — they document the

@@ -1347,6 +1347,22 @@ fn present(
         )
     };
 
+    // A `RedrawRequested` can legitimately fire (compositor-driven expose/
+    // damage, a resize, ...) before anything new has been queued since the
+    // last present — `commands` is then genuinely empty, not "an
+    // intentionally blank frame" (that case still has at least one
+    // `FrameCommand::Clear`). Presenting anyway used to draw a default
+    // black-clear frame here (see `present_scene`'s own "no Clear command
+    // present" fallback), producing a real, user-visible flicker once the
+    // `state.commands` drain fix above stopped masking it with stale
+    // leftover content. Skipping the swap entirely when there's truly
+    // nothing new leaves the already-displayed frame on screen untouched,
+    // matching the guard `macos.rs`'s `flush_selected_backend`,
+    // `android.rs`'s `flush_queued_frame`, and `ios.rs` already have.
+    if commands.is_empty() {
+        return;
+    }
+
     if let Some(backend) = gles_backend.as_mut() {
         let prepare_started = Instant::now();
         let (gles_commands, gles_textures, next_generated_cache) =
