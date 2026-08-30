@@ -12,11 +12,39 @@ const WAKE_TOKEN: u64 = 2;
 const MAX_EVENTS: usize = 256;
 const READINESS_POLL_MASK: u32 = (POLLIN | POLLERR | POLLHUP | POLLRDHUP) as u32;
 
+/// A ring-mutating operation requested by `register_readable`/`deregister`,
+/// deferred until the next time `poll()` actually holds the `ring` lock
+/// (see the module-level note on `pending_ops` for why this can't just
+/// lock `ring` directly).
+enum PendingRingOp {
+    Register { fd: RawFd, token: u64 },
+    Deregister { token: u64 },
+}
+
 pub struct IoUringPort {
     ring: Mutex<IoUring>,
     queue: Mutex<VecDeque<CompletionEnvelope>>,
     wake_fd: RawFd, // eventfd for waking
     registered: Mutex<HashMap<RawFd, u64>>,
+    // `poll()` holds `ring`'s lock for the *entire* duration of its
+    // blocking `submit_and_wait`/`submit_with_args` call below, which can
+    // legitimately take an unbounded amount of time (that's the whole
+    // point of a blocking wait). `register_readable`/`deregister` used to
+    // lock `ring` directly to submit their own SQE — which deadlocks
+    // outright if called from another thread while `poll()` is mid-wait,
+    // since that lock is held for exactly the duration nothing else can
+    // ever acquire it. Confirmed as a real (not just theoretical) hang via
+    // `network::registered_proactor_pump_handles_dual_stack_node_sockets`.
+    // Fix: queue the request here instead of touching `ring`, then
+    // interrupt any in-progress wait via `wake()` — which only writes to
+    // `wake_fd` via a raw syscall and never touches `ring` at all, so it
+    // can never deadlock against a blocked `poll()` the way locking `ring`
+    // directly could. `poll()` drains and submits this queue itself, at
+    // the top of its own iteration, where it already safely holds the
+    // lock (not blocked in the kernel). This mirrors the exact same
+    // queue-then-wake shape `post()`/`drain_completion()` already use for
+    // completions — just extended to cover readiness registration too.
+    pending_ops: Mutex<VecDeque<PendingRingOp>>,
 }
 
 impl IoUringPort {
@@ -33,7 +61,42 @@ impl IoUringPort {
             queue: Mutex::new(VecDeque::new()),
             wake_fd,
             registered: Mutex::new(HashMap::new()),
+            pending_ops: Mutex::new(VecDeque::new()),
         })
+    }
+
+    /// Submits every queued `register_readable`/`deregister` request onto
+    /// `ring`. Only ever called from `poll()`, which already holds
+    /// `ring`'s lock at the time — never call this while also holding a
+    /// separate lock on `ring`, and never call it instead of holding one.
+    /// A push failure here (submission queue full) is dropped rather than
+    /// surfaced: at `MAX_EVENTS` = 256 deep it should be exceedingly rare,
+    /// and silently dropping one readiness registration is far better than
+    /// the deadlock this queue exists to avoid.
+    fn apply_pending_ops(&self, ring: &mut IoUring) {
+        let ops: Vec<PendingRingOp> = self
+            .pending_ops
+            .lock()
+            .expect("io_uring pending-ops queue poisoned")
+            .drain(..)
+            .collect();
+
+        for op in ops {
+            let sqe = match op {
+                PendingRingOp::Register { fd, token } => {
+                    opcode::PollAdd::new(types::Fd(fd), READINESS_POLL_MASK)
+                        .multi(true)
+                        .build()
+                        .user_data(token)
+                }
+                PendingRingOp::Deregister { token } => {
+                    opcode::PollRemove::new(token).build().user_data(WAKE_TOKEN)
+                }
+            };
+            unsafe {
+                let _ = ring.submission().push(&sqe);
+            }
+        }
     }
 
     fn drain_completion(&self) -> Option<CompletionEnvelope> {
@@ -131,6 +194,11 @@ impl CompletionPort for IoUringPort {
             .lock()
             .map_err(|e| io::Error::other(format!("lock poisoned: {}", e)))?;
 
+        // Submit anything register_readable/deregister queued while we
+        // might have been blocked (or simply not running) — safe here,
+        // we hold the lock and aren't inside the blocking wait below yet.
+        self.apply_pending_ops(&mut ring);
+
         // Register eventfd for poll if not already registered
         // We need to submit a POLL_ADD for wake_fd
         let poll_op = opcode::PollAdd::new(types::Fd(self.wake_fd), libc::POLLIN as u32)
@@ -227,31 +295,50 @@ impl ReadinessPort for IoUringPort {
             .build()
             .user_data(token);
 
-        let mut ring = self
-            .ring
-            .lock()
-            .map_err(|e| io::Error::other(format!("lock poisoned: {}", e)))?;
+        // `try_lock` rather than `lock`: when it succeeds, nothing else
+        // holds `ring` right now, so it's safe (and matches the original,
+        // fully synchronous behavior every existing caller already relies
+        // on) to submit directly. When it fails, `ring` is held by a
+        // concurrent `poll()` call — almost certainly blocked inside its
+        // wait, since that's the only place this lock is held for any
+        // real length of time — and locking here would deadlock exactly
+        // as it used to (see `pending_ops`'s doc comment). Queue for that
+        // `poll()` to pick up instead, and `wake()` it so it doesn't sit
+        // on its current wait indefinitely.
+        match self.ring.try_lock() {
+            Ok(mut ring) => {
+                let submit_result: io::Result<()> = (|| {
+                    unsafe {
+                        ring.submission()
+                            .push(&poll_op)
+                            .map_err(|_| io::Error::other("submission queue full"))?;
+                    }
+                    ring.submit().map_err(|e| io::Error::other(e.to_string()))?;
+                    Ok(())
+                })();
+                drop(ring);
 
-        let submit_result: io::Result<()> = (|| {
-            unsafe {
-                ring.submission()
-                    .push(&poll_op)
-                    .map_err(|_| io::Error::other("submission queue full"))?;
+                if let Err(err) = submit_result {
+                    self.registered
+                        .lock()
+                        .expect("io_uring readiness registry poisoned")
+                        .remove(&fd);
+                    return Err(err);
+                }
+
+                Ok(())
             }
-            ring.submit().map_err(|e| io::Error::other(e.to_string()))?;
-            Ok(())
-        })();
-        drop(ring);
-
-        if let Err(err) = submit_result {
-            self.registered
-                .lock()
-                .expect("io_uring readiness registry poisoned")
-                .remove(&fd);
-            return Err(err);
+            Err(std::sync::TryLockError::WouldBlock) => {
+                self.pending_ops
+                    .lock()
+                    .expect("io_uring pending-ops queue poisoned")
+                    .push_back(PendingRingOp::Register { fd, token });
+                self.wake()
+            }
+            Err(std::sync::TryLockError::Poisoned(err)) => {
+                Err(io::Error::other(format!("lock poisoned: {err}")))
+            }
         }
-
-        Ok(())
     }
 
     fn deregister(&self, fd: RawFd) -> io::Result<()> {
@@ -267,19 +354,27 @@ impl ReadinessPort for IoUringPort {
 
         let remove_op = opcode::PollRemove::new(token).build().user_data(WAKE_TOKEN);
 
-        let mut ring = self
-            .ring
-            .lock()
-            .map_err(|e| io::Error::other(format!("lock poisoned: {}", e)))?;
-
-        unsafe {
-            ring.submission()
-                .push(&remove_op)
-                .map_err(|_| io::Error::other("submission queue full"))?;
+        // Same try_lock/queue split as register_readable above.
+        match self.ring.try_lock() {
+            Ok(mut ring) => {
+                unsafe {
+                    ring.submission()
+                        .push(&remove_op)
+                        .map_err(|_| io::Error::other("submission queue full"))?;
+                }
+                ring.submit().map_err(|e| io::Error::other(e.to_string()))?;
+                Ok(())
+            }
+            Err(std::sync::TryLockError::WouldBlock) => {
+                self.pending_ops
+                    .lock()
+                    .expect("io_uring pending-ops queue poisoned")
+                    .push_back(PendingRingOp::Deregister { token });
+                self.wake()
+            }
+            Err(std::sync::TryLockError::Poisoned(err)) => {
+                Err(io::Error::other(format!("lock poisoned: {err}")))
+            }
         }
-
-        ring.submit().map_err(|e| io::Error::other(e.to_string()))?;
-
-        Ok(())
     }
 }
