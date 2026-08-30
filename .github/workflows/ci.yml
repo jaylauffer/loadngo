@@ -1,0 +1,67 @@
+name: CI
+
+# Runs on the self-hosted "dolores-loadngo" runner (Raspberry Pi 5, aarch64
+# Linux). Not actions/checkout: Cargo.toml has a path dependency on a
+# sibling repo (../qcoin) that lives next to this repo under ~/pudding/ on
+# the runner. actions/checkout only ever checks out this one repo into an
+# isolated ephemeral workspace, so that sibling would never be present
+# there. Instead, sync the persistent clone that's already correctly
+# positioned next to it to the exact commit that triggered this run. This
+# also keeps target/ warm between runs for faster incremental builds.
+#
+# --exclude loadngo-gfx-metal/--exclude loadngo-gfx-dx12/--exclude
+# gui-win32: these are genuinely platform-specific backends (Metal is
+# macOS/iOS-only, DX12 and the win32 GUI layer are Windows-only) that
+# Cargo has no clean way to conditionally drop from `--workspace` itself —
+# `[target.cfg(...).dependencies]` only controls dependency resolution for
+# a *consumer* crate, not workspace membership, so `--workspace` still
+# tries to compile every member on every host regardless of target. This
+# is the pragmatic CI-side fix (explicit excludes); the more thorough fix
+# would be removing these from [workspace] members entirely so they're
+# only ever pulled in as target-conditional path deps by whatever actually
+# uses them — a real change to loadngo's own Cargo.toml, out of scope here.
+#
+# fmt and clippy currently fail on the portable set too (real pre-existing
+# debt, no [workspace.lints] policy yet) — expect this to start red until
+# that's addressed separately. Not something this workflow silently works
+# around.
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PLATFORM_EXCLUDES: --exclude loadngo-gfx-metal --exclude loadngo-gfx-dx12 --exclude gui-win32
+
+jobs:
+  check:
+    runs-on: [self-hosted, dolores-loadngo]
+    timeout-minutes: 30
+    env:
+      REPO_DIR: /home/jay/pudding/loadngo
+    steps:
+      - name: Sync checkout to the triggering commit
+        run: |
+          cd "$REPO_DIR"
+          git fetch github "$GITHUB_SHA"
+          git reset --hard "$GITHUB_SHA"
+          git clean -fd
+
+      - name: Add cargo to PATH
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: cargo fmt --check
+        working-directory: ${{ env.REPO_DIR }}
+        run: cargo fmt --check
+
+      - name: cargo clippy (portable crates only)
+        working-directory: ${{ env.REPO_DIR }}
+        run: cargo clippy --workspace --all-targets --all-features ${{ env.PLATFORM_EXCLUDES }} -- -D warnings
+
+      - name: cargo test (portable crates only)
+        working-directory: ${{ env.REPO_DIR }}
+        run: cargo test --workspace ${{ env.PLATFORM_EXCLUDES }}
