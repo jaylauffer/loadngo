@@ -35,7 +35,8 @@ loop, would meaningfully narrow this).
 
 ## Finding 2: desktop mouse clicks don't reach several `sng-roguelite` screens
 
-This is a `sng-roguelite`-specific adoption gap, not a missing `loadngo`
+**Fixed** (2026-08-30, `sng-roguelite` commit `3bc47b4`). Was a
+`sng-roguelite`-specific adoption gap, not a missing `loadngo`
 capability — confirmed by reading both sides directly:
 
 - `loadngo/ui-core/src/button.rs`'s `ButtonModel` already fully supports
@@ -57,12 +58,28 @@ capability — confirmed by reading both sides directly:
   scrolling is handled through a different, non-touch-only path — this is
   why the user saw scrolling work but clicking fail in the same session.
 
-**This is a fix-in-place task, not new infrastructure**: migrate these
-specific screens' interactive elements onto `loadngo_ui_core::Button`
-(or extend the existing touch-hit-test functions to also accept a mouse
-click at the same screen position), rather than building anything new.
-Worth checking whether `sng-rusty` has the same touch-only pattern
-anywhere before treating this as `sng-roguelite`-only — not yet checked.
+**Resolved as a fix-in-place, not new infrastructure**: migrated all four
+affected buttons (achievements close, achievements entry, restart, next
+floor) onto `loadngo_ui_core::ButtonModel` for hit-testing/activation
+only, following the exact pattern `sng-rusty` already proved in
+production (touch-phase-to-`UiEvent` translation) and the split already
+established in `sng-roguelite` for `ScrollRegionModel`: adopt the
+widget's event-handling logic, keep the game's own `RenderOp`-based
+painting unchanged. Visual appearance is identical to before —
+`ButtonModel::paint()` is never called. One real, intentional behavior
+change: activation now happens on release-while-still-over the target
+(the standard tap gesture) rather than instantly on touch-down, matching
+`ButtonModel`'s existing mouse behavior and `sng-rusty`'s shipped touch
+handling — not a regression, but a real difference from before. Verified
+with new unit tests exercising the actual mouse-click path
+(`clicking_the_restart_button_with_a_mouse_selects_restart`,
+`clicking_the_achievements_close_button_with_a_mouse_closes_it`); real
+interactive on-device verification (an actual mouse click in a live
+window) is still the user's to confirm, not something this session could
+do directly.
+
+Whether `sng-rusty` has the same touch-only pattern anywhere else was
+raised but not checked — still open if it comes up again.
 
 ## Finding 3: no physical gamepad/controller abstraction exists in `loadngo`
 
@@ -98,16 +115,15 @@ resolved here:
 
 ## Proposed priority ordering (open for discussion, not decided)
 
-1. **Finding 1 (Linux latency)** first, and only if a Linux release stays
+1. **Finding 2 (button adoption) — done.** Was small, low-risk, and
+   independently valuable regardless of the other two; no reason to have
+   waited, and didn't.
+2. **Finding 1 (Linux latency)** next, and only if a Linux release stays
    a real near-term goal — it's a hard blocker for that specific goal,
    but affects nothing else (Android/iOS/macOS desktop are unaffected).
-2. **Finding 2 (button adoption)** is small, low-risk, and independently
-   valuable for anyone playing on a desktop with a mouse regardless of
-   platform or the Linux question — no reason to wait on anything else.
 3. **Finding 3 (gamepad abstraction)** is the largest undertaking of the
-   three and stands alone; sequencing it relative to the other two is a
-   capacity/priority call, not a technical dependency — nothing here
-   blocks or is blocked by Findings 1 or 2.
+   three and stands alone; sequencing it relative to Finding 1 is a
+   capacity/priority call, not a technical dependency.
 
 ## Explicitly not decided yet
 
