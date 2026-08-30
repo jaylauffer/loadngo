@@ -12,15 +12,15 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use std::time::{Duration, Instant};
 
+use crate::android_jni;
+use jni::objects::{JObject, JValue};
 use loadngo_gfx_gles::{GlesBackend, GlesBackendState};
 use loadngo_host_core::{
     DecodedImage, ExclusionRect, FrameDemand, FrameTiming, HostFrame, InputSnapshot, RenderOp,
     SafeAreaInsets, SurfaceInfo, TextMetrics, TouchPhase, TouchPoint, WindowDescriptor,
     WindowIconSet,
 };
-use crate::android_jni;
 use loadngo_renderer::{FrameCommand, ImageRequest, Renderer, RendererConfig};
-use jni::objects::{JObject, JValue};
 use ndk::asset::AssetManager;
 use ndk::hardware_buffer_format::HardwareBufferFormat;
 use ndk::native_window::NativeWindow;
@@ -1602,7 +1602,10 @@ fn refresh_system_ui() {
         apply_immersive_mode();
     }
     let insets = query_safe_area_insets();
-    app_state().lock().expect("android app state poisoned").insets = insets;
+    app_state()
+        .lock()
+        .expect("android app state poisoned")
+        .insets = insets;
 }
 
 // `View.SYSTEM_UI_FLAG_*` bit values, stable public API since API 19.
@@ -1770,8 +1773,7 @@ fn system_bar_insets_via_legacy_methods(
     Ok(SafeAreaInsets {
         left: android_jni::call_int(env, root_insets, "getSystemWindowInsetLeft", "()I", &[])?
             as f32,
-        top: android_jni::call_int(env, root_insets, "getSystemWindowInsetTop", "()I", &[])?
-            as f32,
+        top: android_jni::call_int(env, root_insets, "getSystemWindowInsetTop", "()I", &[])? as f32,
         right: android_jni::call_int(env, root_insets, "getSystemWindowInsetRight", "()I", &[])?
             as f32,
         bottom: android_jni::call_int(env, root_insets, "getSystemWindowInsetBottom", "()I", &[])?
@@ -1848,7 +1850,8 @@ fn query_safe_area_insets() -> SafeAreaInsets {
 /// below `SDK_INT` 29, where the underlying method doesn't exist.
 pub fn set_gesture_exclusion_rects(rects: &[ExclusionRect]) {
     let result = android_jni::with_env(|env| {
-        let sdk_int = android_jni::get_static_int_field(env, "android/os/Build$VERSION", "SDK_INT")?;
+        let sdk_int =
+            android_jni::get_static_int_field(env, "android/os/Build$VERSION", "SDK_INT")?;
         if sdk_int < 29 {
             return Ok(());
         }
@@ -3037,8 +3040,9 @@ pub fn app_data_dir(_app_id: &str) -> Result<String, String> {
     android_jni::with_env(|env| {
         let ctx = ndk_context::android_context();
         let activity = unsafe { JObject::from_raw(ctx.context().cast()) };
-        let files_dir = android_jni::call_object(env, &activity, "getFilesDir", "()Ljava/io/File;", &[])?
-            .ok_or_else(|| "Context.getFilesDir() returned null".to_string())?;
+        let files_dir =
+            android_jni::call_object(env, &activity, "getFilesDir", "()Ljava/io/File;", &[])?
+                .ok_or_else(|| "Context.getFilesDir() returned null".to_string())?;
         let path_obj = android_jni::call_object(
             env,
             &files_dir,

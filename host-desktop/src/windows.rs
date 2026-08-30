@@ -549,8 +549,7 @@ pub fn simulate_mouse_with_touch(enabled: bool) {
 /// filesystem-safe identifier so multiple games on the same machine don't
 /// collide.
 pub fn app_data_dir(app_id: &str) -> Result<String, String> {
-    let appdata =
-        std::env::var("APPDATA").map_err(|err| format!("APPDATA is not set: {err}"))?;
+    let appdata = std::env::var("APPDATA").map_err(|err| format!("APPDATA is not set: {err}"))?;
     let dir = Path::new(&appdata).join(app_id);
     std::fs::create_dir_all(&dir)
         .map_err(|err| format!("failed to create {}: {err}", dir.display()))?;

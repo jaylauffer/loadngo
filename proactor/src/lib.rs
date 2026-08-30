@@ -1,7 +1,5 @@
 mod channel;
 mod deferred;
-#[cfg(target_os = "linux")]
-mod uring;
 mod error;
 #[cfg(windows)]
 mod iocp;
@@ -14,6 +12,8 @@ mod iocp;
     target_os = "dragonfly"
 ))]
 mod kqueue;
+#[cfg(target_os = "linux")]
+mod uring;
 
 use deferred::DeferredQueue;
 use std::io;
@@ -26,8 +26,6 @@ use std::time::{Duration, Instant};
 use std::{collections::HashMap, os::fd::RawFd};
 
 pub use channel::ChannelPort;
-#[cfg(target_os = "linux")]
-pub use uring::IoUringPort;
 pub use error::ProactorError;
 #[cfg(windows)]
 pub use iocp::IocpPort;
@@ -40,6 +38,8 @@ pub use iocp::IocpPort;
     target_os = "dragonfly"
 ))]
 pub use kqueue::KqueuePort;
+#[cfg(target_os = "linux")]
+pub use uring::IoUringPort;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompletionKind {

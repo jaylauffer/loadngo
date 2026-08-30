@@ -499,13 +499,19 @@ fn enable_multitouch(view: &UIView) {
 /// comment at its one-time call site in `IosApp::resumed` for why it's no
 /// longer installed. Kept (not deleted) in case a genuine single-touch-only
 /// need resurfaces a reason for it.
-#[allow(dead_code, reason = "superseded by enable_multitouch, kept as a documented fallback")]
+#[allow(
+    dead_code,
+    reason = "superseded by enable_multitouch, kept as a documented fallback"
+)]
 struct IosTouchBridge {
     _target: Retained<LoadngoTouchBridgeTarget>,
     _recognizers: Vec<Retained<UILongPressGestureRecognizer>>,
 }
 
-#[allow(dead_code, reason = "superseded by enable_multitouch, kept as a documented fallback")]
+#[allow(
+    dead_code,
+    reason = "superseded by enable_multitouch, kept as a documented fallback"
+)]
 impl IosTouchBridge {
     fn install(view: &UIView) -> Self {
         let mtm = MainThreadMarker::new().expect("iOS touch bridge requires main thread");
@@ -793,7 +799,10 @@ pub fn app_data_dir(app_id: &str) -> Result<String, String> {
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
         .ok_or_else(|| "HOME is unavailable in the iOS sandbox".to_string())?;
-    let dir = home.join("Library").join("Application Support").join(app_id);
+    let dir = home
+        .join("Library")
+        .join("Application Support")
+        .join(app_id);
     std::fs::create_dir_all(&dir)
         .map_err(|err| format!("failed to create {}: {err}", dir.display()))?;
     dir.into_os_string()

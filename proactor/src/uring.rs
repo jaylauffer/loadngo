@@ -15,7 +15,7 @@ const READINESS_POLL_MASK: u32 = (POLLIN | POLLERR | POLLHUP | POLLRDHUP) as u32
 pub struct IoUringPort {
     ring: Mutex<IoUring>,
     queue: Mutex<VecDeque<CompletionEnvelope>>,
-    wake_fd: RawFd,  // eventfd for waking
+    wake_fd: RawFd, // eventfd for waking
     registered: Mutex<HashMap<RawFd, u64>>,
 }
 
@@ -52,13 +52,12 @@ impl IoUringPort {
     }
 
     fn signal_wake(&self, token: u64) -> io::Result<()> {
-        let mut ring = self.ring.lock().map_err(|e| 
-            io::Error::new(io::ErrorKind::Other, format!("lock poisoned: {}", e))
-        )?;
+        let mut ring = self
+            .ring
+            .lock()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("lock poisoned: {}", e)))?;
 
-        let noop = opcode::Nop::new()
-            .build()
-            .user_data(token);
+        let noop = opcode::Nop::new().build().user_data(token);
 
         unsafe {
             ring.submission()
@@ -72,10 +71,14 @@ impl IoUringPort {
         Ok(())
     }
 
-        fn signal_eventfd(fd: RawFd) -> io::Result<()> {
+    fn signal_eventfd(fd: RawFd) -> io::Result<()> {
         let value: u64 = 1;
         let rc = unsafe {
-            libc::write(fd, &value as *const u64 as *const libc::c_void, std::mem::size_of::<u64>())
+            libc::write(
+                fd,
+                &value as *const u64 as *const libc::c_void,
+                std::mem::size_of::<u64>(),
+            )
         };
         if rc == -1 {
             Err(io::Error::last_os_error())
@@ -88,7 +91,11 @@ impl IoUringPort {
         loop {
             let mut value = 0u64;
             let rc = unsafe {
-                libc::read(fd, &mut value as *mut u64 as *mut libc::c_void, std::mem::size_of::<u64>())
+                libc::read(
+                    fd,
+                    &mut value as *mut u64 as *mut libc::c_void,
+                    std::mem::size_of::<u64>(),
+                )
             };
             if rc == -1 {
                 let err = io::Error::last_os_error();
@@ -111,7 +118,7 @@ impl CompletionPort for IoUringPort {
             .lock()
             .expect("io_uring completion queue poisoned")
             .push_back(envelope);
-        
+
         // Signal via IORING_OP_NOP with QUEUE_TOKEN
         self.signal_wake(QUEUE_TOKEN)
     }
@@ -121,9 +128,10 @@ impl CompletionPort for IoUringPort {
             return Ok(PollEvent::Completion(envelope));
         }
 
-        let mut ring = self.ring.lock().map_err(|e|
-            io::Error::new(io::ErrorKind::Other, format!("lock poisoned: {}", e))
-        )?;
+        let mut ring = self
+            .ring
+            .lock()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("lock poisoned: {}", e)))?;
 
         // Register eventfd for poll if not already registered
         // We need to submit a POLL_ADD for wake_fd
@@ -153,7 +161,7 @@ impl CompletionPort for IoUringPort {
         };
 
         match result {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) if e.kind() == io::ErrorKind::TimedOut => {
                 return Ok(PollEvent::Timeout);
             }
@@ -222,9 +230,10 @@ impl ReadinessPort for IoUringPort {
             .build()
             .user_data(token);
 
-        let mut ring = self.ring.lock().map_err(|e| {
-            io::Error::new(io::ErrorKind::Other, format!("lock poisoned: {}", e))
-        })?;
+        let mut ring = self
+            .ring
+            .lock()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("lock poisoned: {}", e)))?;
 
         let submit_result: io::Result<()> = (|| {
             unsafe {
@@ -262,9 +271,10 @@ impl ReadinessPort for IoUringPort {
 
         let remove_op = opcode::PollRemove::new(token).build().user_data(WAKE_TOKEN);
 
-        let mut ring = self.ring.lock().map_err(|e| {
-            io::Error::new(io::ErrorKind::Other, format!("lock poisoned: {}", e))
-        })?;
+        let mut ring = self
+            .ring
+            .lock()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("lock poisoned: {}", e)))?;
 
         unsafe {
             ring.submission()

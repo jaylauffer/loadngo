@@ -96,7 +96,9 @@ pub(crate) fn call_bool(
     if let Some(detail) = take_java_exception(env) {
         return Err(format!("Android {name} raised Java exception: {detail}"));
     }
-    value.z().map_err(|err| format!("Android {name} return decode failed: {err}"))
+    value
+        .z()
+        .map_err(|err| format!("Android {name} return decode failed: {err}"))
 }
 
 pub(crate) fn call_int(
@@ -118,7 +120,9 @@ pub(crate) fn call_int(
     if let Some(detail) = take_java_exception(env) {
         return Err(format!("Android {name} raised Java exception: {detail}"));
     }
-    value.i().map_err(|err| format!("Android {name} return decode failed: {err}"))
+    value
+        .i()
+        .map_err(|err| format!("Android {name} return decode failed: {err}"))
 }
 
 /// Calls a method that returns a Java object reference. A `null` return is
@@ -143,7 +147,9 @@ pub(crate) fn call_object<'e>(
     if let Some(detail) = take_java_exception(env) {
         return Err(format!("Android {name} raised Java exception: {detail}"));
     }
-    let obj = value.l().map_err(|err| format!("Android {name} return decode failed: {err}"))?;
+    let obj = value
+        .l()
+        .map_err(|err| format!("Android {name} return decode failed: {err}"))?;
     Ok((!obj.is_null()).then_some(obj))
 }
 
@@ -161,7 +167,9 @@ pub(crate) fn call_static_int(
             let detail = take_java_exception(env)
                 .map(|detail| format!(" ({detail})"))
                 .unwrap_or_default();
-            return Err(format!("Android static {class}.{name} failed: {err}{detail}"));
+            return Err(format!(
+                "Android static {class}.{name} failed: {err}{detail}"
+            ));
         }
     };
     if let Some(detail) = take_java_exception(env) {

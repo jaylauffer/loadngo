@@ -184,7 +184,8 @@ mod imp {
         }
 
         fn is_playing(&self) -> bool {
-            with_env(|env| call_bool(env, self.player.as_obj(), "isPlaying", "()Z", &[])).unwrap_or(false)
+            with_env(|env| call_bool(env, self.player.as_obj(), "isPlaying", "()Z", &[]))
+                .unwrap_or(false)
         }
 
         fn release(&mut self) -> Result<(), String> {

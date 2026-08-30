@@ -586,7 +586,8 @@ impl MetalBackend {
                         continue;
                     }
                     let scale = self.surface_content_scale();
-                    let raster = rasterize_text_request(request, self.text_font_source.as_deref(), scale)?;
+                    let raster =
+                        rasterize_text_request(request, self.text_font_source.as_deref(), scale)?;
                     // `raster.image` is rasterized at `scale`x resolution
                     // (see `rasterize_text`) for a crisp Retina/native
                     // texture, but the on-screen quad must stay in logical
@@ -768,7 +769,8 @@ impl MetalBackend {
                         continue;
                     }
                     let scale = self.surface_content_scale();
-                    let raster = rasterize_text_request(request, self.text_font_source.as_deref(), scale)?;
+                    let raster =
+                        rasterize_text_request(request, self.text_font_source.as_deref(), scale)?;
                     // See the matching comment in `frame_generated_images`:
                     // `raster.image` is rasterized at `scale`x for a crisp
                     // Retina texture, dividing back down here keeps the
@@ -3790,7 +3792,8 @@ mod tests {
             script: loadngo_renderer::TextScript::Auto,
             language: None,
         };
-        let raster = rasterize_text_request(&request, None, 1.0).expect("text raster should succeed");
+        let raster =
+            rasterize_text_request(&request, None, 1.0).expect("text raster should succeed");
         let displayed_logical_top = raster.y + raster.logical_top_in_display;
         assert!(
             displayed_logical_top.abs() < 1.1,
@@ -3824,7 +3827,8 @@ mod tests {
             script: loadngo_renderer::TextScript::Auto,
             language: None,
         };
-        let raster = rasterize_text_request(&request, None, 1.0).expect("text raster should succeed");
+        let raster =
+            rasterize_text_request(&request, None, 1.0).expect("text raster should succeed");
         let expected_x =
             request.rect.x + (request.rect.width - raster.metrics.width).max(0.0) * 0.5;
         let displayed_logical_top = raster.y + raster.logical_top_in_display;
@@ -3860,7 +3864,8 @@ mod tests {
             script: loadngo_renderer::TextScript::Auto,
             language: None,
         };
-        let raster = rasterize_text_request(&request, None, 1.0).expect("text raster should succeed");
+        let raster =
+            rasterize_text_request(&request, None, 1.0).expect("text raster should succeed");
         let displayed_logical_bottom =
             raster.y + raster.logical_top_in_display + raster.metrics.height;
         assert!((displayed_logical_bottom - request.rect.height).abs() < 0.5);
@@ -3894,7 +3899,8 @@ mod tests {
             language: None,
         };
 
-        let raster = rasterize_text_request(&request, None, 1.0).expect("text raster should succeed");
+        let raster =
+            rasterize_text_request(&request, None, 1.0).expect("text raster should succeed");
 
         assert_eq!(
             raster.metrics.height,
@@ -3930,7 +3936,8 @@ mod tests {
             language: None,
         };
 
-        let raster = rasterize_text_request(&request, None, 1.0).expect("text raster should succeed");
+        let raster =
+            rasterize_text_request(&request, None, 1.0).expect("text raster should succeed");
 
         assert!(raster.image.height as f32 <= raster.metrics.height + 8.0);
         assert!(
@@ -4105,7 +4112,8 @@ mod tests {
             language: None,
         };
 
-        let raster = rasterize_text_request(&request, None, 1.0).expect("text raster should succeed");
+        let raster =
+            rasterize_text_request(&request, None, 1.0).expect("text raster should succeed");
 
         assert!(raster.image.height as f32 >= raster.metrics.height);
         assert!(raster.logical_top_in_display >= 0.0);
@@ -4220,7 +4228,8 @@ mod tests {
             language: None,
         };
 
-        let raster = rasterize_text_request(&request, None, 1.0).expect("multiline should rasterize");
+        let raster =
+            rasterize_text_request(&request, None, 1.0).expect("multiline should rasterize");
         let band_widths = displayed_opaque_band_widths(&raster.image);
 
         assert_eq!(band_widths.len(), 3, "expected three displayed text bands");
