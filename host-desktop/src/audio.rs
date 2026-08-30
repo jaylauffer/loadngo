@@ -488,6 +488,14 @@ mod imp {
             result
         }
 
+        /// No-op here: Android already has a real packaging story (assets
+        /// bundled into the APK, extracted to a real on-device path that
+        /// `fade_to_path`/`play_track_path` already use — see
+        /// `android.rs`'s `configure_runtime_env`). Exists only so desktop
+        /// callers can call `preload_embedded` unconditionally without
+        /// `cfg`-gating every call site.
+        pub fn preload_embedded(&mut self, _key: &str, _ogg_bytes: &'static [u8]) {}
+
         pub fn update(&mut self, _dt: f32) {
             if self.paused {
                 return;
@@ -713,6 +721,15 @@ mod imp {
             }
         }
 
+        /// No-op here: Android already has a real packaging story (assets
+        /// bundled into the APK, materialized on demand by
+        /// `android::ensure_materialized_asset_path`). Exists only so
+        /// desktop callers can call `preload_embedded` unconditionally
+        /// without `cfg`-gating every call site.
+        pub fn preload_embedded(&mut self, _key: &str, _ogg_bytes: &'static [u8]) -> Result<(), String> {
+            Ok(())
+        }
+
         pub fn play(&mut self, request: SfxPlayRequest<'_>) -> Result<Option<SfxVoiceId>, String> {
             let request = request.normalized();
             if request.path.is_empty() {
@@ -912,6 +929,10 @@ mod imp {
             self.play_track_path(path, fade, looped)
         }
 
+        /// No-op: this platform has no audio device at all. Exists only for
+        /// API parity with the desktop `imp` module.
+        pub fn preload_embedded(&mut self, _key: &str, _ogg_bytes: &'static [u8]) {}
+
         pub fn update(&mut self, _dt: f32) {}
 
         pub fn pause(&mut self) {}
@@ -984,6 +1005,12 @@ mod imp {
             }
         }
 
+        /// No-op: this platform has no audio device at all. Exists only for
+        /// API parity with the desktop `imp` module.
+        pub fn preload_embedded(&mut self, _key: &str, _ogg_bytes: &'static [u8]) -> Result<(), String> {
+            Ok(())
+        }
+
         pub fn play(&mut self, request: SfxPlayRequest<'_>) -> Result<Option<SfxVoiceId>, String> {
             if request.normalized().path.is_empty() {
                 return Err("SFX path must not be empty".to_string());
@@ -1028,7 +1055,7 @@ mod imp {
     use super::{SfxPlayRequest, SfxSettings, SfxVoiceId};
     use std::collections::{HashMap, VecDeque};
     use std::fs::File;
-    use std::io::BufReader;
+    use std::io::{BufReader, Cursor, Read, Seek};
     use std::sync::OnceLock;
     use std::time::{Duration, Instant};
 
@@ -1049,9 +1076,31 @@ mod imp {
         Loop,
     }
 
+    /// A decode-able seekable byte source — either a real file on disk (the
+    /// Android/iOS "assets extracted to a real path" case) or a `'static`
+    /// byte slice baked into the binary via `include_bytes!` (the desktop
+    /// "single self-contained binary" case, see `MusicController::
+    /// preload_embedded`). `Box<dyn TrackReader>` implements `Read + Seek`
+    /// itself via std's blanket `Box<T: Read/Seek + ?Sized>` impls, so it
+    /// can be handed straight to `Decoder::new`.
+    trait TrackReader: Read + Seek + Send + Sync {}
+    impl<T: Read + Seek + Send + Sync> TrackReader for T {}
+
+    fn open_track_reader(
+        path: &str,
+        embedded: Option<&'static [u8]>,
+    ) -> Result<Box<dyn TrackReader>, String> {
+        if let Some(bytes) = embedded {
+            return Ok(Box::new(Cursor::new(bytes)));
+        }
+        let file = File::open(path).map_err(|err| format!("Missing audio {path}: {err}"))?;
+        Ok(Box::new(BufReader::new(file)))
+    }
+
     struct TrackState {
         sink: Sink,
         path: String,
+        embedded: Option<&'static [u8]>,
         looped: bool,
         current_volume: f32,
         target_volume: f32,
@@ -1060,14 +1109,40 @@ mod imp {
 
     fn append_music_source(
         sink: &Sink,
-        file: File,
+        reader: Box<dyn TrackReader>,
         looped: bool,
         bass_boost: f32,
     ) -> Result<(), String> {
-        let source = Decoder::new(BufReader::new(file))
+        // `.buffered()` is still needed even in the `bass_boost == 0.0` case
+        // below: `repeat_infinite()` requires `Self: Clone`, and a plain
+        // streaming `Decoder` isn't (it owns a live file/decode cursor) —
+        // `Buffered` is what makes looping possible at all.
+        let source = Decoder::new(reader)
             .map_err(|err| format!("Failed to decode music track: {err}"))?
             .convert_samples::<f32>()
             .buffered();
+
+        // The bass-boost mix (a second clone of `source`, low-pass filtered
+        // and re-mixed in on every sample) is dead weight whenever
+        // `bass_boost` is zero — every current call site passes 0.0, so this
+        // was, in practice, *always* running: two clones of the same
+        // `Buffered` source (which share a single `Mutex`-guarded decode
+        // cache) being polled in lockstep by `mix()`, plus a per-sample
+        // biquad filter, for a branch whose contribution is `amplify(0.0)`
+        // and therefore silent regardless. That's real per-sample lock
+        // contention and CPU work on the realtime audio thread for zero
+        // audible benefit — a plausible source of the periodic
+        // static/glitching heard during bgm playback. Skip it entirely when
+        // there's nothing to mix in.
+        if bass_boost <= 0.0 {
+            let plain = source.amplify(MUSIC_BASS_POST_GAIN);
+            if looped {
+                sink.append(plain.repeat_infinite());
+            } else {
+                sink.append(plain);
+            }
+            return Ok(());
+        }
 
         let enhanced = source
             .clone()
@@ -1124,11 +1199,12 @@ mod imp {
             path: &str,
             looped: bool,
             bass_boost: f32,
+            embedded: Option<&'static [u8]>,
         ) -> Result<Self, String> {
-            let file = File::open(path).map_err(|err| format!("Missing audio {path}: {err}"))?;
+            let reader = open_track_reader(path, embedded)?;
             let sink = Sink::try_new(handle)
                 .map_err(|err| format!("Failed to create audio sink: {err}"))?;
-            append_music_source(&sink, file, looped, bass_boost)
+            append_music_source(&sink, reader, looped, bass_boost)
                 .map_err(|err| format!("Failed to prepare {path}: {err}"))?;
             sink.set_volume(0.0);
             sink.pause();
@@ -1136,6 +1212,7 @@ mod imp {
             Ok(Self {
                 sink,
                 path: path.to_string(),
+                embedded,
                 looped,
                 current_volume: 0.0,
                 target_volume: 0.0,
@@ -1155,12 +1232,11 @@ mod imp {
         }
 
         fn restart(&mut self, handle: &OutputStreamHandle, bass_boost: f32) -> Result<(), String> {
-            let file = File::open(&self.path)
-                .map_err(|err| format!("Missing audio {}: {err}", self.path))?;
+            let reader = open_track_reader(&self.path, self.embedded)?;
             self.sink.stop();
             let sink = Sink::try_new(handle)
                 .map_err(|err| format!("Failed to create audio sink: {err}"))?;
-            append_music_source(&sink, file, self.looped, bass_boost)
+            append_music_source(&sink, reader, self.looped, bass_boost)
                 .map_err(|err| format!("Failed to prepare {}: {err}", self.path))?;
             sink.set_volume(0.0);
             self.sink = sink;
@@ -1173,6 +1249,7 @@ mod imp {
 
     pub struct MusicController {
         tracks: HashMap<String, TrackState>,
+        embedded_tracks: HashMap<String, &'static [u8]>,
         fade_duration: f32,
         mix_volume: f32,
         bass_boost: f32,
@@ -1200,6 +1277,7 @@ mod imp {
             match open_output_stream() {
                 Ok((stream, stream_handle)) => Self {
                     tracks: HashMap::new(),
+                    embedded_tracks: HashMap::new(),
                     fade_duration: 1.0,
                     mix_volume: 1.0,
                     bass_boost: bass_boost.clamp(0.0, 1.0),
@@ -1220,6 +1298,7 @@ mod imp {
                     eprintln!("Audio backend unavailable ({err}), running without music.");
                     Self {
                         tracks: HashMap::new(),
+                        embedded_tracks: HashMap::new(),
                         fade_duration: 1.0,
                         mix_volume: 1.0,
                         bass_boost: bass_boost.clamp(0.0, 1.0),
@@ -1238,6 +1317,18 @@ mod imp {
                     }
                 }
             }
+        }
+
+        /// Registers `ogg_bytes` (typically an `include_bytes!`-embedded
+        /// asset baked into the binary at compile time) so that any later
+        /// `play_track_path`/`fade_to_path` call using exactly `key` as the
+        /// path decodes from memory instead of opening a file — no temp
+        /// file, no filesystem I/O at all. Call this *before* the matching
+        /// `play_track_path`/`fade_to_path`. Safe to call for a key that's
+        /// never actually played (e.g. because the real Android/iOS
+        /// extracted-asset path is used instead) — it just sits unused.
+        pub fn preload_embedded(&mut self, key: &str, ogg_bytes: &'static [u8]) {
+            self.embedded_tracks.insert(key.to_string(), ogg_bytes);
         }
 
         /// Pauses every currently-playing track's sink in place (resumable
@@ -1302,7 +1393,13 @@ mod imp {
 
             if !self.tracks.contains_key(&selected_path) {
                 let state =
-                    TrackState::new(stream_handle, &selected_path, looped, self.bass_boost)?;
+                    TrackState::new(
+                        stream_handle,
+                        &selected_path,
+                        looped,
+                        self.bass_boost,
+                        self.embedded_tracks.get(&selected_path).copied(),
+                    )?;
                 self.tracks.insert(selected_path.clone(), state);
             } else if self
                 .tracks
@@ -1651,6 +1748,38 @@ mod imp {
                     }
                 }
             }
+        }
+
+        /// Decodes `ogg_bytes` (typically `include_bytes!`-embedded) and
+        /// caches it under `key`, exactly as `load_clip` would cache a
+        /// file it opened — so a later `play(SfxPlayRequest { path: key,
+        /// .. })` hits the cache directly and never touches the
+        /// filesystem. Call this once per clip, e.g. at startup.
+        pub fn preload_embedded(
+            &mut self,
+            key: &str,
+            ogg_bytes: &'static [u8],
+        ) -> Result<(), String> {
+            if self.clips.contains_key(key) {
+                return Ok(());
+            }
+            let decoder = Decoder::new(Cursor::new(ogg_bytes))
+                .map_err(|err| format!("Failed to decode embedded SFX {key}: {err}"))?;
+            let channels = decoder.channels();
+            let sample_rate = decoder.sample_rate();
+            let samples = decoder.convert_samples::<f32>().collect::<Vec<_>>();
+            if samples.is_empty() {
+                return Err(format!("Embedded SFX {key} contains no audio samples"));
+            }
+            self.clips.insert(
+                key.to_string(),
+                CachedSfxClip {
+                    channels,
+                    sample_rate,
+                    samples,
+                },
+            );
+            Ok(())
         }
 
         pub fn play(&mut self, request: SfxPlayRequest<'_>) -> Result<Option<SfxVoiceId>, String> {
