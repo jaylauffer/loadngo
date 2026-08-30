@@ -1,3 +1,4 @@
+#[cfg(target_os = "netbsd")]
 use std::{env, time::Duration};
 
 #[cfg(target_os = "netbsd")]
@@ -76,6 +77,7 @@ fn main() {
     std::process::exit(1);
 }
 
+#[cfg(target_os = "netbsd")]
 fn print_help() {
     println!("Usage: netbsd_wsdisplay_probe [--device /dev/ttyE0] [--probe-only] [--seconds 4]");
 }

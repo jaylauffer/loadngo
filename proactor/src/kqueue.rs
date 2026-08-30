@@ -146,13 +146,13 @@ impl CompletionPort for KqueuePort {
         }
 
         if event.filter == EVFILT_USER {
-            if event.ident as usize == QUEUE_IDENT {
+            if event.ident == QUEUE_IDENT {
                 if let Some(envelope) = self.drain_completion() {
                     return Ok(PollEvent::Completion(envelope));
                 }
                 return Ok(PollEvent::Wake);
             }
-            if event.ident as usize == WAKE_IDENT {
+            if event.ident == WAKE_IDENT {
                 return Ok(PollEvent::Wake);
             }
         }

@@ -261,6 +261,12 @@ pub struct RootManifest {
 }
 
 impl RootManifest {
+    // Each field is a distinct, independently-meaningful part of the
+    // manifest identity (id, timestamp, ancestry, content digest, kind,
+    // config path, children, notes) - a builder or params struct would
+    // just move the same arity elsewhere without reducing real complexity,
+    // and this is public API with no known reason to prefer churn here.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         repository_id: impl Into<String>,
         created_at_unix_secs: u64,

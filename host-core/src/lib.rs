@@ -611,7 +611,7 @@ mod tests {
         let (width, height, rgba8) = rgba_test_pixels();
         let mut bytes = Vec::new();
         PngEncoder::new(&mut bytes)
-            .write_image(&rgba8, width, height, ColorType::Rgba8.into())
+            .write_image(&rgba8, width, height, ColorType::Rgba8)
             .expect("png fixture encoding should succeed");
         bytes
     }
@@ -623,7 +623,7 @@ mod tests {
         ];
         let mut bytes = Vec::new();
         JpegEncoder::new(&mut bytes)
-            .encode(&rgb8, 2, 1, ColorType::Rgb8.into())
+            .encode(&rgb8, 2, 1, ColorType::Rgb8)
             .expect("jpeg fixture encoding should succeed");
         bytes
     }
@@ -633,7 +633,8 @@ mod tests {
         let src = vec![10, 20, 30, 40];
         let resized = resize_rgba(&src, 1, 1, 2);
         assert_eq!(resized.len(), 16);
-        for chunk in resized.chunks_exact(4) {
+        let (chunks, _remainder) = resized.as_chunks::<4>();
+        for chunk in chunks {
             assert_eq!(chunk, &[10, 20, 30, 40]);
         }
     }

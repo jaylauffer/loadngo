@@ -112,10 +112,10 @@ impl TabbedContainer {
                     return WidgetResponse::redraw();
                 }
             }
-            UiEvent::KeyPressed { key: Key::Left, .. } => {
-                if self.select(self.selected.saturating_sub(1)) {
-                    return WidgetResponse::redraw();
-                }
+            UiEvent::KeyPressed { key: Key::Left, .. }
+                if self.select(self.selected.saturating_sub(1)) =>
+            {
+                return WidgetResponse::redraw();
             }
             _ => {}
         }

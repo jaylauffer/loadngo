@@ -66,19 +66,6 @@ impl TextDocument {
         self.revision
     }
 
-    pub fn to_string(&self) -> String {
-        let mut text = String::with_capacity(
-            self.pieces
-                .iter()
-                .map(|piece| self.piece_text(piece).len())
-                .sum(),
-        );
-        for piece in &self.pieces {
-            text.push_str(self.piece_text(piece));
-        }
-        text
-    }
-
     pub fn slice_chars(&self, start: usize, end: usize) -> String {
         let start = start.min(self.len_chars);
         let end = end.min(self.len_chars);
@@ -249,6 +236,15 @@ impl TextDocument {
             PieceSource::Original => &self.original[piece.start_byte..piece.end_byte],
             PieceSource::Add => &self.add_buffer[piece.start_byte..piece.end_byte],
         }
+    }
+}
+
+impl std::fmt::Display for TextDocument {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for piece in &self.pieces {
+            f.write_str(self.piece_text(piece))?;
+        }
+        Ok(())
     }
 }
 

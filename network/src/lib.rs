@@ -156,6 +156,12 @@ pub struct Network {
     config: Config,
 }
 
+impl Default for Network {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Network {
     pub fn new() -> Self {
         Self {

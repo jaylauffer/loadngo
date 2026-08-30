@@ -309,8 +309,8 @@ impl SneakerNet {
         let handled = self
             .protocol
             .handle_message(&mut self.core, source, message, storage)?;
-        for outbound in handled.outbound.iter().cloned() {
-            network.send_p2p_message(source, outbound.clone(), response_flag(&outbound))?;
+        for outbound in handled.outbound.iter() {
+            network.send_p2p_message(source, outbound.clone(), response_flag(outbound))?;
         }
         Ok(DispatchResult {
             source,

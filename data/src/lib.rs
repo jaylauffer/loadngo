@@ -55,17 +55,13 @@ pub mod value {
     /// Rough equivalent of `value_t` (string/boolean/u64).
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     #[serde(tag = "type", content = "value")]
+    #[derive(Default)]
     pub enum Value {
         Bool(bool),
         U64(u64),
         Str(String),
+        #[default]
         Null,
-    }
-
-    impl Default for Value {
-        fn default() -> Self {
-            Value::Null
-        }
     }
 
     impl From<bool> for Value {
@@ -996,7 +992,7 @@ pub mod netmsg {
                     }
                     let sync_id = Id::from_le_bytes(body[0..8].try_into().ok()?);
                     let rest = &body[8..];
-                    if rest.len() % 40 != 0 {
+                    if !rest.len().is_multiple_of(40) {
                         return None;
                     }
                     let mut discrepancies = Vec::new();
@@ -1146,7 +1142,7 @@ pub mod netmsg {
     }
 
     fn parse_bulk_ids(body: &[u8]) -> Option<Vec<Id>> {
-        if body.len() % 8 != 0 {
+        if !body.len().is_multiple_of(8) {
             return None;
         }
         let mut ids = Vec::with_capacity(body.len() / 8);
@@ -1188,21 +1184,16 @@ pub mod task_compare {
     use super::task::Task;
     use std::cmp::Ordering;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
     pub enum SortField {
         TaskId,
+        #[default]
         DueDate,
         Priority,
         CreateDate,
         EstimatedDuration,
         StartDate,
         TaskTitle,
-    }
-
-    impl Default for SortField {
-        fn default() -> Self {
-            SortField::DueDate
-        }
     }
 
     #[derive(Debug, Clone)]

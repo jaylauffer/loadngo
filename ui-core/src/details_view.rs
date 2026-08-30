@@ -196,7 +196,7 @@ impl DetailsViewModel {
     {
         let rects = self.layout_section_rects(section_heights);
         let max_width = self.text_column_rect().width.max(8.0);
-        for (section, rect) in sections.iter().zip(rects.into_iter()) {
+        for (section, rect) in sections.iter().zip(rects) {
             if !self.visible(rect.y, rect.height) {
                 continue;
             }

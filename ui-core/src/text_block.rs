@@ -14,10 +14,12 @@ pub struct TextBlockModel {
 
 impl TextBlockModel {
     pub fn new(text: impl Into<String>, bounds: Rect) -> Self {
-        let mut style = TextStyle::default();
-        style.layout_mode = TextLayoutMode::MultiLine;
-        style.vertical_align = VerticalAlign::Top;
-        style.overflow = TextOverflow::Clip;
+        let style = TextStyle {
+            layout_mode: TextLayoutMode::MultiLine,
+            vertical_align: VerticalAlign::Top,
+            overflow: TextOverflow::Clip,
+            ..Default::default()
+        };
         Self {
             bounds,
             text: text.into(),

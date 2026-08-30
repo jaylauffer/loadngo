@@ -517,7 +517,7 @@ impl Message {
                         data: body[CasHash::LEN..].to_vec(),
                     })
                 } else {
-                    if body_len % CasHash::LEN != 0 {
+                    if !body_len.is_multiple_of(CasHash::LEN) {
                         return None;
                     }
                     let mut hashes = Vec::with_capacity(body_len / CasHash::LEN);

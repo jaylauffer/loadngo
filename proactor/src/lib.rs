@@ -159,11 +159,14 @@ impl RunReport {
     }
 }
 
+#[cfg(unix)]
+type ReadinessHandlers = HashMap<u64, Arc<Mutex<Box<dyn ReadinessHandler>>>>;
+
 struct Shared<P> {
     port: P,
     deferred: Mutex<DeferredQueue>,
     #[cfg(unix)]
-    readiness: Mutex<HashMap<u64, Arc<Mutex<Box<dyn ReadinessHandler>>>>>,
+    readiness: Mutex<ReadinessHandlers>,
     next_sequence: AtomicU64,
     running: AtomicBool,
 }

@@ -3,6 +3,7 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::time::{Duration, Instant};
 
+#[derive(Default)]
 pub struct DeferredQueue {
     heap: BinaryHeap<DeferredEntry>,
 }
@@ -38,14 +39,6 @@ impl DeferredQueue {
 
     pub fn next_deadline(&self) -> Option<Instant> {
         self.heap.peek().map(|entry| entry.when)
-    }
-}
-
-impl Default for DeferredQueue {
-    fn default() -> Self {
-        Self {
-            heap: BinaryHeap::new(),
-        }
     }
 }
 

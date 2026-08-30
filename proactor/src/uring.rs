@@ -1,6 +1,6 @@
 use crate::{CompletionEnvelope, CompletionPort, PollEvent, ReadinessEvent, ReadinessPort};
 use io_uring::{opcode, types, IoUring};
-use libc::{c_int, timespec, POLLERR, POLLHUP, POLLIN, POLLRDHUP};
+use libc::{timespec, POLLERR, POLLHUP, POLLIN, POLLRDHUP};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::os::fd::RawFd;
@@ -21,8 +21,7 @@ pub struct IoUringPort {
 
 impl IoUringPort {
     pub fn new() -> io::Result<Self> {
-        let ring = IoUring::new(MAX_EVENTS as u32)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        let ring = IoUring::new(MAX_EVENTS as u32).map_err(|e| io::Error::other(e.to_string()))?;
 
         let wake_fd = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
         if wake_fd == -1 {
@@ -55,18 +54,17 @@ impl IoUringPort {
         let mut ring = self
             .ring
             .lock()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("lock poisoned: {}", e)))?;
+            .map_err(|e| io::Error::other(format!("lock poisoned: {}", e)))?;
 
         let noop = opcode::Nop::new().build().user_data(token);
 
         unsafe {
             ring.submission()
                 .push(&noop)
-                .map_err(|_| io::Error::new(io::ErrorKind::Other, "submission queue full"))?;
+                .map_err(|_| io::Error::other("submission queue full"))?;
         }
 
-        ring.submit()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        ring.submit().map_err(|e| io::Error::other(e.to_string()))?;
 
         Ok(())
     }
@@ -131,7 +129,7 @@ impl CompletionPort for IoUringPort {
         let mut ring = self
             .ring
             .lock()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("lock poisoned: {}", e)))?;
+            .map_err(|e| io::Error::other(format!("lock poisoned: {}", e)))?;
 
         // Register eventfd for poll if not already registered
         // We need to submit a POLL_ADD for wake_fd
@@ -142,11 +140,10 @@ impl CompletionPort for IoUringPort {
         unsafe {
             ring.submission()
                 .push(&poll_op)
-                .map_err(|_| io::Error::new(io::ErrorKind::Other, "submission queue full"))?;
+                .map_err(|_| io::Error::other("submission queue full"))?;
         }
 
-        ring.submit()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        ring.submit().map_err(|e| io::Error::other(e.to_string()))?;
 
         // Wait for events
         let result = if let Some(duration) = timeout {
@@ -233,16 +230,15 @@ impl ReadinessPort for IoUringPort {
         let mut ring = self
             .ring
             .lock()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("lock poisoned: {}", e)))?;
+            .map_err(|e| io::Error::other(format!("lock poisoned: {}", e)))?;
 
         let submit_result: io::Result<()> = (|| {
             unsafe {
                 ring.submission()
                     .push(&poll_op)
-                    .map_err(|_| io::Error::new(io::ErrorKind::Other, "submission queue full"))?;
+                    .map_err(|_| io::Error::other("submission queue full"))?;
             }
-            ring.submit()
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            ring.submit().map_err(|e| io::Error::other(e.to_string()))?;
             Ok(())
         })();
         drop(ring);
@@ -274,16 +270,15 @@ impl ReadinessPort for IoUringPort {
         let mut ring = self
             .ring
             .lock()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("lock poisoned: {}", e)))?;
+            .map_err(|e| io::Error::other(format!("lock poisoned: {}", e)))?;
 
         unsafe {
             ring.submission()
                 .push(&remove_op)
-                .map_err(|_| io::Error::new(io::ErrorKind::Other, "submission queue full"))?;
+                .map_err(|_| io::Error::other("submission queue full"))?;
         }
 
-        ring.submit()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        ring.submit().map_err(|e| io::Error::other(e.to_string()))?;
 
         Ok(())
     }

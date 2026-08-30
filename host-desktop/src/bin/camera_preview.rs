@@ -1147,19 +1147,14 @@ mod linux_harness {
             SaveFormat::Png => {
                 let encoder = PngEncoder::new(&mut bytes);
                 encoder
-                    .write_image(
-                        &image.rgba8,
-                        image.width,
-                        image.height,
-                        ColorType::Rgba8.into(),
-                    )
+                    .write_image(&image.rgba8, image.width, image.height, ColorType::Rgba8)
                     .map_err(|err| format!("png encoding failed: {err}"))?;
             }
             SaveFormat::Jpeg => {
                 let rgb = rgba_to_rgb(&image.rgba8);
                 let mut encoder = JpegEncoder::new_with_quality(&mut bytes, jpeg_quality.max(1));
                 encoder
-                    .encode(&rgb, image.width, image.height, ColorType::Rgb8.into())
+                    .encode(&rgb, image.width, image.height, ColorType::Rgb8)
                     .map_err(|err| format!("jpeg encoding failed: {err}"))?;
             }
         }
@@ -1171,7 +1166,8 @@ mod linux_harness {
 
     fn rgba_to_rgb(rgba: &[u8]) -> Vec<u8> {
         let mut rgb = Vec::with_capacity((rgba.len() / 4) * 3);
-        for chunk in rgba.chunks_exact(4) {
+        let (chunks, _remainder) = rgba.as_chunks::<4>();
+        for chunk in chunks {
             rgb.extend_from_slice(&chunk[..3]);
         }
         rgb
@@ -1262,6 +1258,41 @@ mod linux_harness {
             || normalized.contains("bcm2835"))
     }
 
+    pub(crate) fn run() -> Result<(), String> {
+        let options = parse_args()?;
+        if options.list_devices {
+            for (device, label) in available_camera_devices_with_labels() {
+                println!("{device}\t{label}");
+            }
+            return Ok(());
+        }
+
+        if options.once {
+            let image = capture_single_frame(&CaptureOptions {
+                device: options.device.clone(),
+                video_size: options.video_size.clone(),
+                frame_rate: options.frame_rate,
+            })?;
+            let output = if let Some(path) = options.once_output.clone() {
+                path
+            } else {
+                build_output_path(&options.output_dir, options.once_format)
+            };
+            let saved = save_image(&image, options.once_format, &output, options.jpeg_quality)?;
+            println!(
+                "Saved {} to {}",
+                options.once_format.label(),
+                saved.display()
+            );
+            return Ok(());
+        }
+
+        loadngo_host_desktop::launch(window_descriptor(), None, async move {
+            run_preview(options).await;
+        });
+        Ok(())
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -1300,41 +1331,6 @@ mod linux_harness {
             assert_eq!(frame.rgba8.len(), 16);
             assert_eq!(buffer, vec![7u8; 4]);
         }
-    }
-
-    pub(crate) fn run() -> Result<(), String> {
-        let options = parse_args()?;
-        if options.list_devices {
-            for (device, label) in available_camera_devices_with_labels() {
-                println!("{device}\t{label}");
-            }
-            return Ok(());
-        }
-
-        if options.once {
-            let image = capture_single_frame(&CaptureOptions {
-                device: options.device.clone(),
-                video_size: options.video_size.clone(),
-                frame_rate: options.frame_rate,
-            })?;
-            let output = if let Some(path) = options.once_output.clone() {
-                path
-            } else {
-                build_output_path(&options.output_dir, options.once_format)
-            };
-            let saved = save_image(&image, options.once_format, &output, options.jpeg_quality)?;
-            println!(
-                "Saved {} to {}",
-                options.once_format.label(),
-                saved.display()
-            );
-            return Ok(());
-        }
-
-        loadngo_host_desktop::launch(window_descriptor(), None, async move {
-            run_preview(options).await;
-        });
-        Ok(())
     }
 }
 

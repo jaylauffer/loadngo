@@ -1,3 +1,4 @@
+#[cfg(target_os = "netbsd")]
 use std::{env, time::Duration};
 
 #[cfg(target_os = "netbsd")]
@@ -69,6 +70,7 @@ fn main() {
     std::process::exit(1);
 }
 
+#[cfg(target_os = "netbsd")]
 fn print_help() {
     println!(
         "Usage: netbsd_wsdesktop [--device /dev/ttyE0] [--mouse /dev/wsmouse] [--keyboard /dev/wskbd] [--fps 2] [--cursor-hz 60] [--seconds 60] [--no-input] [--continuous]"

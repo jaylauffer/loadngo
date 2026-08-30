@@ -644,6 +644,7 @@ pub fn wrap_text_lines(
     lines
 }
 
+#[allow(clippy::too_many_arguments)] // public cross-platform API shared by all backend impls (macos/windows/ios/android/fallback mirror this exact signature) and consumed externally by sng-rusty - restructuring is a real breaking-API change, out of scope for a lint pass
 pub fn render_text_lines(
     lines: &[String],
     x: f32,
@@ -1533,7 +1534,8 @@ fn present(
         }
     }
 
-    for (dst, chunk) in buffer.iter_mut().zip(rgba.chunks_exact(4)) {
+    let (rgba_chunks, _remainder) = rgba.as_chunks::<4>();
+    for (dst, chunk) in buffer.iter_mut().zip(rgba_chunks) {
         *dst = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);
     }
     buffer.present().expect("failed to present Linux surface");
@@ -1545,15 +1547,13 @@ fn present(
     );
 }
 
+type TextureCache = HashMap<String, Arc<DecodedImage>>;
+
 fn prepare_gles_frame(
     commands: &[FrameCommand],
-    textures: &HashMap<String, Arc<DecodedImage>>,
-    mut generated_cache: HashMap<String, Arc<DecodedImage>>,
-) -> (
-    Vec<FrameCommand>,
-    HashMap<String, Arc<DecodedImage>>,
-    HashMap<String, Arc<DecodedImage>>,
-) {
+    textures: &TextureCache,
+    mut generated_cache: TextureCache,
+) -> (Vec<FrameCommand>, TextureCache, TextureCache) {
     let mut next_commands = Vec::with_capacity(commands.len());
     let mut next_textures = textures.clone();
     let mut generated_index = 0usize;
@@ -1701,6 +1701,7 @@ fn rasterize_text_command(request: &TextRequest) -> Option<(UiRect, DecodedImage
     ))
 }
 
+#[allow(dead_code)] // only caller (append_rasterized_polyline_images below) is itself not yet wired into the render dispatch - preserved, not removed, pending that wiring
 fn rasterize_line_command(
     from: Point,
     to: Point,
@@ -1781,6 +1782,7 @@ fn rasterize_circle_command(
     ))
 }
 
+#[allow(dead_code)] // implemented polyline-to-rasterized-image fallback (mirrors append_rasterized_particle_images below), not yet called from the render dispatch
 fn append_rasterized_polyline_images(
     commands: &mut Vec<FrameCommand>,
     textures: &mut HashMap<String, Arc<DecodedImage>>,
@@ -2185,6 +2187,7 @@ fn apply_overflow(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // private single-call-site text rasterization helper; params are the real independent inputs
 fn draw_text_line(
     buffer: &mut [u8],
     width: usize,
@@ -2391,13 +2394,17 @@ mod tests {
         draw_text_request(&mut rgba, width, height, &request);
 
         let left_alpha: usize = rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .enumerate()
             .filter(|(idx, _)| idx % width < 60)
             .map(|(_, px)| px[3] as usize)
             .sum();
         let clipped_alpha: usize = rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .enumerate()
             .filter(|(idx, _)| idx % width >= 60 && idx % width < 200)
             .map(|(_, px)| px[3] as usize)

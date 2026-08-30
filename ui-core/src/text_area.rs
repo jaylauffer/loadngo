@@ -108,13 +108,15 @@ impl TextAreaModel {
 
     pub fn new(text: impl Into<String>, bounds: Rect) -> Self {
         let text = text.into();
-        let mut style = TextStyle::default();
-        style.layout_mode = TextLayoutMode::MultiLine;
-        style.horizontal_align = HorizontalAlign::Left;
-        style.vertical_align = VerticalAlign::Top;
-        style.vertical_metric_mode = crate::TextVerticalMetricMode::LogicalLineBox;
-        style.overflow = TextOverflow::Clip;
-        style.color = Color::rgba(0xeb, 0xef, 0xf7, 0xff);
+        let style = TextStyle {
+            layout_mode: TextLayoutMode::MultiLine,
+            horizontal_align: HorizontalAlign::Left,
+            vertical_align: VerticalAlign::Top,
+            vertical_metric_mode: crate::TextVerticalMetricMode::LogicalLineBox,
+            overflow: TextOverflow::Clip,
+            color: Color::rgba(0xeb, 0xef, 0xf7, 0xff),
+            ..Default::default()
+        };
         let cache_font_size = style.font_size;
         Self {
             widget_id: WidgetId(0),

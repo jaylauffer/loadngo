@@ -351,8 +351,8 @@ fn main() -> Result<()> {
         accept.assignment_id, accept.request_id, accept.offer_id, accept.worker_node_id
     );
 
-    let result = wait_for_result(&network, &accept, &selected, &args)?;
-    let verify_output = run_verify_command(&args, &accept, &selected, &result)?;
+    let result = wait_for_result(&network, &accept, selected, &args)?;
+    let verify_output = run_verify_command(&args, &accept, selected, &result)?;
     let verification_ok = verify_output.status.success();
     println!(
         "task_submitter_verify assignment_id={} success={}",

@@ -72,15 +72,15 @@ impl ListCombo {
                     return WidgetResponse::redraw();
                 }
             }
-            UiEvent::PointerReleased { state, .. } => {
-                if self.bounds.contains(state.position) && !self.items.is_empty() {
-                    let next = self
-                        .selected_index
-                        .map(|idx| (idx + 1) % self.items.len())
-                        .unwrap_or(0);
-                    if self.select(next) {
-                        return WidgetResponse::redraw();
-                    }
+            UiEvent::PointerReleased { state, .. }
+                if self.bounds.contains(state.position) && !self.items.is_empty() =>
+            {
+                let next = self
+                    .selected_index
+                    .map(|idx| (idx + 1) % self.items.len())
+                    .unwrap_or(0);
+                if self.select(next) {
+                    return WidgetResponse::redraw();
                 }
             }
             _ => {}
