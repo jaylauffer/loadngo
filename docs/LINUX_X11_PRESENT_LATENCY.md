@@ -4,7 +4,10 @@
 
 Unresolved. Documented 2026-08-26 during an input-lag investigation on
 `sng-roguelite` so the finding survives across sessions. Needs a follow-up
-investigation session; see "Suggested next steps" below.
+investigation session; see "Suggested next steps" below. Confirmed again
+2026-08-30 during a real keyboard+mouse playtest on `dolores` — this is
+now the tracked blocker for a Linux itch.io release; see
+[DESKTOP_PLATFORM_ROADMAP.md](DESKTOP_PLATFORM_ROADMAP.md).
 
 ## Summary
 

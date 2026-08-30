@@ -14,6 +14,10 @@ This is the control-level counterpart to:
 - [WORKSPACE_LAYOUT.md](WORKSPACE_LAYOUT.md)
 - [TEXT_INPUT_MODEL.md](TEXT_INPUT_MODEL.md)
 
+For which controls *games* actually adopt (not just which controls exist
+in `ui-core`) plus two platform-level desktop gaps found while
+playtesting, see [DESKTOP_PLATFORM_ROADMAP.md](DESKTOP_PLATFORM_ROADMAP.md).
+
 ## Current `ui-core` Coverage
 
 Already present in `ui-core`:
