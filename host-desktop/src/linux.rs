@@ -1323,10 +1323,24 @@ fn present(
     let height = size.height.max(1);
 
     let (clear_color, commands, textures, generated_cache, gles_upload_cache) = {
-        let state = lock_state();
+        let mut state = lock_state();
         (
             state.clear_color,
-            state.commands.clone(),
+            // `render_ops`/`render_widget_paint_ops` always append to
+            // `state.commands` (each call queues that call's commands
+            // *in addition to* whatever's already pending — see their own
+            // `.extend()` calls), the same producer/consumer shape
+            // `macos.rs`'s `pending_commands` and `android.rs`'s
+            // `queued_commands` use. Those two platforms correctly drain
+            // their equivalent queue on flush via `std::mem::take`; this
+            // one used to `.clone()` instead, silently leaving every
+            // frame's commands piled on top of the last forever. Confirmed
+            // as the root cause of the present-latency growth documented
+            // in docs/LINUX_X11_PRESENT_LATENCY.md: `gles_commands_len`
+            // (this list, after `prepare_gles_frame`) grew from single
+            // digits to 680+ over a ~9s idle run while the game's own
+            // per-frame op count stayed flat at 45-62 the whole time.
+            std::mem::take(&mut state.commands),
             state.textures.clone(),
             state.generated_texture_cache.clone(),
             state.gles_upload_cache.clone(),
@@ -1338,6 +1352,7 @@ fn present(
         let (gles_commands, gles_textures, next_generated_cache) =
             prepare_gles_frame(&commands, &textures, generated_cache);
         let prepare_ms = prepare_started.elapsed().as_secs_f64() * 1000.0;
+        let generated_cache_len = next_generated_cache.len();
         let mut next_gles_upload_cache = gles_upload_cache;
         let mut active_gles_uploads = HashSet::with_capacity(gles_textures.len());
         {
@@ -1375,7 +1390,9 @@ fn present(
                 Renderer::new(RendererConfig::default()).render(backend, &gles_commands);
             let render_ms = render_started.elapsed().as_secs_f64() * 1000.0;
             trace_linux(format!(
-                "present gles_split prepare_ms={prepare_ms:.3} sync_ms={sync_ms:.3} render_ms={render_ms:.3}"
+                "present gles_split prepare_ms={prepare_ms:.3} sync_ms={sync_ms:.3} render_ms={render_ms:.3} gles_commands_len={} gles_textures_len={} generated_cache_len={generated_cache_len}",
+                gles_commands.len(),
+                gles_textures.len()
             ));
             match render_result {
                 Ok(()) => {

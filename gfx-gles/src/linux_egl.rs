@@ -394,7 +394,15 @@ pub fn present_scene(
             glClear(GL_COLOR_BUFFER_BIT);
         }
 
-        for command in commands {
+        // Diagnostic-only escape hatch for isolating the bo_stats growth
+        // documented in docs/LINUX_X11_PRESENT_LATENCY.md: skips all draw
+        // commands (still calls eglMakeCurrent/eglSwapBuffers every frame)
+        // so a still-growing bo_stats count with this set would mean the
+        // growth isn't coming from our own draw calls at all. Not a real
+        // rendering mode - the screen goes blank when set.
+        let skip_draw_commands =
+            std::env::var("LOADNGO_LINUX_SKIP_DRAW").is_ok_and(|value| value.trim() == "1");
+        for command in commands.iter().filter(|_| !skip_draw_commands) {
             match command {
                 FrameCommand::Clear { color } => {
                     glClearColor(
@@ -672,6 +680,19 @@ fn ensure_textured_pipeline(
     Ok(())
 }
 
+/// Uploads all rects' vertex data in one `glBufferData` call instead of
+/// one call per rect. Calling `glBufferData` repeatedly with
+/// `GL_STREAM_DRAW` on the same VBO is a real GL idiom (it tells the
+/// driver "orphan the old storage rather than stall on in-flight GPU
+/// reads of it") — but on this Pi's Mesa `v3d` driver, doing it once per
+/// rect (a `StrokeRect` alone expands to 4 via `stroke_rects`) produced
+/// unbounded growth in `/sys/kernel/debug/dri/0/bo_stats`' allocated
+/// buffer-object count over a run's lifetime (confirmed: 262 to 1320+
+/// BOs over 12s, tracking almost exactly with the present-latency growth
+/// documented in `docs/LINUX_X11_PRESENT_LATENCY.md`), evidently from
+/// orphaned buffers not being reclaimed as fast as new ones are
+/// requested. One upload per frame instead of one per rect removes that
+/// multiplication entirely — see that doc for the full investigation.
 fn draw_solid_rects(
     program: u32,
     vbo: u32,
@@ -692,17 +713,24 @@ fn draw_solid_rects(
             ));
         }
 
-        for (rect, color) in rects {
-            if rect.width <= 0.0 || rect.height <= 0.0 {
-                continue;
-            }
-            let vertices = rect_vertices(*rect, width, height);
+        let visible_rects: Vec<&(ui_core::geometry::Rect, Color)> = rects
+            .iter()
+            .filter(|(rect, _)| rect.width > 0.0 && rect.height > 0.0)
+            .collect();
+        let mut batched_vertices: Vec<f32> = Vec::with_capacity(visible_rects.len() * 12);
+        for (rect, _) in &visible_rects {
+            batched_vertices.extend_from_slice(&rect_vertices(*rect, width, height));
+        }
+        if !batched_vertices.is_empty() {
             glBufferData(
                 GL_ARRAY_BUFFER,
-                (vertices.len() * std::mem::size_of::<f32>()) as isize,
-                vertices.as_ptr().cast(),
+                (batched_vertices.len() * std::mem::size_of::<f32>()) as isize,
+                batched_vertices.as_ptr().cast(),
                 GL_STREAM_DRAW,
             );
+        }
+
+        for (index, (_, color)) in visible_rects.iter().enumerate() {
             glUniform4f(
                 color_location,
                 color.r as f32 / 255.0,
@@ -710,7 +738,7 @@ fn draw_solid_rects(
                 color.b as f32 / 255.0,
                 color.a as f32 / 255.0,
             );
-            glDrawArrays(GL_TRIANGLES, 0, 6);
+            glDrawArrays(GL_TRIANGLES, (index * 6) as i32, 6);
         }
 
         glDisableVertexAttribArray(0);

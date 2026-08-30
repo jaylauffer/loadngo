@@ -1303,10 +1303,20 @@ fn present(
     let height = size.height;
 
     let (clear_color, commands, textures, generated_cache) = {
-        let state = lock_state();
+        let mut state = lock_state();
         (
             state.clear_color,
-            state.commands.clone(),
+            // Same bug and same fix as `linux.rs`'s `present()` (see
+            // docs/LINUX_X11_PRESENT_LATENCY.md for the full
+            // investigation that found it): `render_ops`/
+            // `render_widget_paint_ops` always append to `state.commands`
+            // and only the separate `clear()` function resets it, but
+            // this used to `.clone()` here instead of draining — leaving
+            // every frame's commands piled on top of the last, forever.
+            // `macos.rs`'s `pending_commands` and `android.rs`'s
+            // `queued_commands` already drain correctly via
+            // `std::mem::take`; this now matches them.
+            std::mem::take(&mut state.commands),
             state.textures.clone(),
             state.generated_texture_cache.clone(),
         )

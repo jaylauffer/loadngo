@@ -14,32 +14,33 @@ three findings are platform/engine concerns that affect every game built
 on `loadngo`, not this one game. See each finding for the one item that
 is actually `sng-roguelite`-specific.
 
-## Finding 1: Linux X11 present-latency growth (blocks a Linux release)
+## Finding 1: Linux X11 present-latency growth — RESOLVED (2026-08-30)
 
-Fully documented, still unresolved, substantially re-scoped by a
-same-day follow-up investigation:
-[LINUX_X11_PRESENT_LATENCY.md](LINUX_X11_PRESENT_LATENCY.md). Restated
-here only for roadmap visibility: `present()` grows from ~13ms to
-~150-195ms over a run's first 6 seconds, independent of input, on
-`dolores`'s `labwc`/XWayland/v3d stack, **regardless of render backend**
-(2026-08-30: confirmed reproducing identically under both GLES and
-software, and directly disproved both the original leading hypothesis —
-a software-path-specific `softbuffer` X11 round trip — and CPU
-frequency/thermal throttling, via a controlled test pinning the CPU
-governor to `performance`). `Xwayland`'s and `labwc`'s own CPU/memory
-also stayed completely flat throughout, ruling out userspace bookkeeping
-growth in either process. The search space has narrowed toward the
-GPU/compositor buffer-scheduling layer itself, not anything in this
-repo's code — but the root cause is still not identified, only ruled out
-in several directions. See that doc's "Suggested next steps" for what's
-still open (a plain-X11-without-XWayland/labwc session, and localizing
-where inside `present()`'s GLES branch the time actually goes).
+Full investigation and fix: [LINUX_X11_PRESENT_LATENCY.md](LINUX_X11_PRESENT_LATENCY.md).
+Root cause was a real bug, not a GPU/compositor issue as the investigation's
+own leading hypothesis suspected for most of the session: `present()` in
+`host-desktop/src/linux.rs` cloned the pending render-command list instead
+of draining it, while `render_ops()` always appended to that same list —
+so every frame's commands piled on top of every previous frame's, forever,
+for the life of the process. Fixed with `std::mem::take` instead of
+`.clone()`, matching the pattern `macos.rs`/`android.rs`/`ios.rs` already
+used correctly. Verified over a 30-second run: `present()` duration stable
+at ~16.4-16.5ms throughout (previously grew from ~13ms to 150-195ms in
+just 6 seconds).
 
-**This blocks putting a Linux build on itch.io** — confirmed directly by
-playtesting on `dolores`; not a theoretical concern. A Linux release
-should not happen until this is at least characterized well enough to
-know whether it's fixable, worked around, or specific to this one
-Pi/compositor combination.
+**The identical bug was also found and fixed in `windows.rs`** — raised
+directly by the user from real experience ("I tried it on Windows... it
+was very buffer-bloated") before it was confirmed, and it was real: the
+same `state.commands.clone()`-instead-of-drained pattern, same fix. Not
+verified by compiling (cross-compiling to Windows from macOS hits an
+unrelated `blake3`/MSVC-assembler blocker) — based on careful manual
+review matching the now-verified Linux fix, not an actual build; real
+confirmation needs an actual Windows machine, which the project doesn't
+have yet.
+
+This no longer blocks a Linux itch.io release on its own — see
+`sng-roguelite/docs/BUILD_RELEASE_PIPELINE.md` for what else a real
+release still needs (packaging, target architecture decision).
 
 ## Finding 2: desktop mouse clicks don't reach several `sng-roguelite` screens
 
@@ -136,15 +137,15 @@ resolved here:
 
 ## Proposed priority ordering (open for discussion, not decided)
 
-1. **Finding 2 (button adoption) — done.** Was small, low-risk, and
-   independently valuable regardless of the other two; no reason to have
-   waited, and didn't.
-2. **Finding 1 (Linux latency)** next, and only if a Linux release stays
-   a real near-term goal — it's a hard blocker for that specific goal,
-   but affects nothing else (Android/iOS/macOS desktop are unaffected).
-3. **Finding 3 (gamepad abstraction)** is the largest undertaking of the
-   three and stands alone; sequencing it relative to Finding 1 is a
-   capacity/priority call, not a technical dependency.
+1. **Finding 2 (button adoption) — done.**
+2. **Finding 1 (Linux latency) — done.** Turned out to be a real,
+   fixable bug (a leaking command list), not a GPU/compositor issue —
+   resolved same-day, plus the identical bug found and fixed in the
+   Windows backend along the way.
+3. **Finding 3 (gamepad abstraction)** is the only one left, and the
+   largest undertaking of the three — still needs real design work
+   (crate placement, per-platform backend strategy, normalized input
+   shape) before any implementation.
 
 ## Explicitly not decided yet
 

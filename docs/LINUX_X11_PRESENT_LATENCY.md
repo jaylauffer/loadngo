@@ -1,28 +1,98 @@
-# Linux X11 Present Latency Growth (Open Issue)
+# Linux X11 Present Latency Growth (Resolved)
 
 ## Status
 
-Unresolved, but substantially re-scoped. Documented 2026-08-26 during an
-input-lag investigation on `sng-roguelite` so the finding survives across
-sessions. Confirmed again 2026-08-30 during a real keyboard+mouse
-playtest on `dolores` — this is now the tracked blocker for a Linux
-itch.io release; see [DESKTOP_PLATFORM_ROADMAP.md](DESKTOP_PLATFORM_ROADMAP.md).
-A follow-up investigation the same day (2026-08-30, see "What was ruled
-out") directly disproved the original leading hypothesis (see below) —
-the growth is **not** specific to the software/SHM present path after
-all, and is **not** CPU frequency scaling or thermal throttling either.
-`io_uring`/`loadngo-proactor` are also fully negated as a cause — neither
-is linked into, called by, or even compiled into this code path (`linux.rs`
-never references `loadngo_proactor`; `loadngo-proactor` is the only crate
-in the whole workspace that depends on `io-uring` at all; the current
-Linux frame loop runs on a plain `futures::executor::LocalPool`, matching
-`PROACTOR_ARCHITECTURE.md`'s own admission that host frame loops don't run
-on the proactor yet). Finer-grained timing localized the growth inside
-the actual GPU draw/submit/swap call, with the specific blocking point
-*migrating* between draw-call submission and `eglSwapBuffers` over the
-course of a run rather than one fixed call slowing down — a strong signal
-for GPU command-queue/fence-wait backpressure. Root cause is still
-unknown; the search space is much narrower than before but the fix is
+**Resolved 2026-08-30.** Documented 2026-08-26 during an input-lag
+investigation on `sng-roguelite` so the finding survives across sessions.
+Confirmed again 2026-08-30 during a real keyboard+mouse playtest on
+`dolores`, which made it the tracked blocker for a Linux itch.io release
+(see [DESKTOP_PLATFORM_ROADMAP.md](DESKTOP_PLATFORM_ROADMAP.md)) and
+triggered the investigation session that found and fixed the actual root
+cause the same day. See "Root cause and fix" below for the resolution;
+everything under "Investigation history" is kept for the record but is
+superseded by that section — several of those hypotheses were directly
+disproved along the way, which is itself useful context for future
+similar bugs.
+
+## Root cause and fix
+
+`host-desktop/src/linux.rs`'s `present()` read the pending per-frame
+render commands via `state.commands.clone()` — a clone, not a drain.
+`render_ops()`/`render_widget_paint_ops()` (the only ways anything gets
+into `state.commands`) always **append** via `.extend()`; only the
+separate `clear()` function resets the list, and `sng-roguelite` never
+calls it. The result: every frame's commands piled on top of every
+previous frame's, forever, for the lifetime of the process. Confirmed
+directly via new tracing (`gles_commands_len` in the `present gles_split`
+trace line): 3 commands on the first real frame, growing unboundedly to
+687 after 9 seconds, while the game's own per-frame op count
+(`build_render_ops`'s output) stayed flat at 45-62 the entire time — the
+accumulation was happening strictly inside `loadngo`, invisible from the
+game's side.
+
+This one bug explains every symptom found during the investigation:
+more accumulated commands each frame means more GPU buffer uploads
+(`bo_stats`' `allocated bos` count, confirmed growing ~88-90/sec, in
+lockstep with the command count) and more GPU work to submit and swap
+each frame (the `render_ms`/`make_current_and_draw_ms`/`swap_ms` growth
+localized earlier in this investigation) — not GPU driver/compositor
+backpressure as the leading hypothesis had it, just doing genuinely more
+and more work every single frame because nothing was ever thrown away.
+
+**Fix:** `std::mem::take(&mut state.commands)` instead of `.clone()` —
+matches the pattern `macos.rs`'s `pending_commands` and `android.rs`'s/
+`ios.rs`'s `queued_commands` already used correctly (both drain via
+`mem::take` on flush). Verified over a 30-second run: `present()` duration
+stable at ~16.4-16.5ms the entire time (previously grew from ~13ms to
+150-195ms over just 6 seconds), `bo_stats`' allocated BO count
+perfectly flat, zero GL/EGL errors in the trace log, `gles_commands_len`
+constant per frame instead of growing.
+
+**The same bug, independently, in `windows.rs`.** Raised by the user
+directly ("I'm wondering whether the Windows implementation has a similar
+problem... it was very buffer-bloated") before this was confirmed — and
+it's real: `windows.rs`'s `present()` had the identical
+`state.commands.clone()` (not drained) with the identical
+`render_ops`/`clear()` split. Fixed the same way
+(`std::mem::take(&mut state.commands)`). **Not verified by compiling** —
+cross-compiling `host-desktop` to `x86_64-pc-windows-msvc` from macOS
+fails on an unrelated blocker (`blake3`'s build script needs the MSVC
+assembler `ml64.exe`, which doesn't exist on macOS; the same category of
+limitation already hit trying to cross-compile for Linux earlier this
+session). The fix is based on careful manual review — identical pattern,
+identical field types, to the now-verified-working Linux fix — not an
+actual build. Real confirmation needs an actual Windows machine, which
+the project doesn't currently have (`DEVELOPMENT_PLAN.md`'s "Explicitly
+deferred" section already notes Windows playability work is on hold for
+exactly this reason).
+
+**`android.rs`, `ios.rs`, `macos.rs`, and `fallback.rs` do not have this
+bug** — confirmed by direct inspection: `android.rs`'s `flush_queued_frame`
+and `ios.rs` both already use `std::mem::take(&mut state.queued_commands)`;
+`macos.rs`'s `flush_selected_backend` already uses
+`std::mem::take(&mut runtime.pending_commands)`; `fallback.rs` doesn't use
+this accumulator pattern at all. Only Linux and Windows had it — both
+apparently derived from a shared template that had the bug, while the
+other three platforms were implemented (or fixed) correctly independently.
+
+A smaller, separate finding from earlier in the same investigation is
+still real but turned out **not** to be the cause: `draw_solid_rects` in
+`gfx-gles/src/linux_egl.rs` called `glBufferData(..., GL_STREAM_DRAW)`
+once per rect in a loop instead of batching all rects into one upload —
+a real inefficiency (fixed anyway, batches now), but empirically
+confirmed to have no measurable effect on the growth when tested in
+isolation before the actual bug was found. The identical per-rect-loop
+pattern is duplicated in `gfx-gles/src/lib.rs`'s Android module
+(`android::present_scene`) — not fixed there yet, since it wasn't the
+dominant issue on Linux either; a minor, low-priority cleanup if picked
+up later, not urgent.
+
+## Investigation history (superseded by "Root cause and fix" above)
+
+The sections below are kept for the record — they document the
+hypotheses tested and ruled out along the way to finding the actual bug,
+which is useful context for similar future investigations, but none of
+this reflects the current (fixed) state.
 not yet in sight, and the next step needs GPU/kernel-level tracing tools
 rather than more userspace wall-clock timing splits.
 
@@ -145,7 +215,7 @@ Checked directly, with evidence, before writing this up:
   time blocked/waiting rather than actively computing), not the cause
   itself.
 
-## What's suspected (revised 2026-08-30, still not confirmed)
+## What's suspected (historical — superseded, actual cause was a command-list leak, see "Root cause and fix" above)
 
 The original hypothesis — `present()`'s software path blocking on
 `softbuffer`'s `finish_wait` X11 `GetInputFocus` round trip
@@ -192,7 +262,7 @@ queued and not yet consumed by the display at that moment, not a fixed
 call. This still fits "something in the GPU/compositor buffer-scheduling
 layer," but rules out pinning blame on any one specific EGL call.
 
-## Suggested next steps
+## Suggested next steps (moot — root cause found and fixed, see above)
 
 1. ~~Reproduce with `LOADNGO_LINUX_TRACE=1` while sampling `Xwayland` and
    `labwc` CPU/memory across the run.~~ **Done 2026-08-30** — both flat;
