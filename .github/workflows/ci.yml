@@ -39,7 +39,14 @@ env:
 
 jobs:
   check:
-    runs-on: [self-hosted, dolores-loadngo]
+    # "dolores" is the runner's shared custom *label* (every runner on this
+    # box was registered with --labels dolores,rpi5,arm64), not its name
+    # (dolores-loadngo). GitHub Actions matches runs-on against labels only
+    # — the runner's own name is never implicitly one, a real mismatch this
+    # workflow hit once already. Safe to share this label across repos:
+    # each runner is still repo-scoped by registration, so a loadngo job
+    # can never reach the sng-roguelite or EAB runner regardless of label.
+    runs-on: [self-hosted, dolores]
     timeout-minutes: 30
     env:
       REPO_DIR: /home/jay/pudding/loadngo
