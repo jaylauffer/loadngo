@@ -81,6 +81,19 @@ do directly.
 Whether `sng-rusty` has the same touch-only pattern anywhere else was
 raised but not checked — still open if it comes up again.
 
+**Follow-up, not started**: `sng-roguelite` still only adopts
+`ButtonModel`'s event/activation logic, never its `paint()` output, so
+these buttons have no hover or press visual feedback at all — a plain,
+static rect regardless of pointer state. `sng-rusty` already calls
+`button.paint(&mut ops)` directly (`sng-rusty/src/runtime/mod.rs:2982`)
+and gets the real hover-pulse/particle-trace effects for free. Bringing
+`sng-roguelite`'s buttons up to the same visual standard would mean
+actually using `ButtonModel::paint()`'s `PaintOp` output for these
+specific buttons (or a converted equivalent) rather than continuing to
+route them through the game's own plain `RenderOp` painting — a real,
+deliberate visual change this time (unlike the click-handling fix above),
+not a like-for-like swap. Not scoped or started.
+
 ## Finding 3: no physical gamepad/controller abstraction exists in `loadngo`
 
 Confirmed via direct search — the only joystick-related code anywhere in
