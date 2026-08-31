@@ -213,16 +213,36 @@ impl CompletionPort for IoUringPort {
 
         ring.submit().map_err(|e| io::Error::other(e.to_string()))?;
 
-        // Wait for events
-        let result = if let Some(duration) = timeout {
-            let ts = Self::duration_to_timespec(duration);
-            let uring_ts = types::Timespec::new()
-                .sec(ts.tv_sec as _)
-                .nsec(ts.tv_nsec as _);
-            let args = types::SubmitArgs::new().timespec(&uring_ts);
-            ring.submitter().submit_with_args(1, &args)
-        } else {
-            ring.submit_and_wait(1)
+        // Wait for events. Retries on EINTR: a stray signal delivered to
+        // this thread during the blocking io_uring_enter (ptrace attach,
+        // SIGCHLD from an unrelated part of the process, etc.) must not be
+        // allowed to propagate as an error here -- found via
+        // proactor-harness's throughput bench, where an EINTR from an
+        // strace attach killed the whole pump thread (run_until_stopped
+        // propagates poll()'s Err via `?`), silently stopping all
+        // dispatch for the rest of the process's life. Any submitted SQEs
+        // (the wake_fd poll above) are already in the kernel by this
+        // point regardless of EINTR, so retrying just the wait -- not
+        // re-pushing anything -- is correct. This does mean an
+        // interrupted wait effectively restarts its timeout rather than
+        // using the remaining duration; acceptable since EINTR here is
+        // rare and the reactor's own deferred-queue deadline is
+        // recomputed fresh on the next full poll() call anyway.
+        let result = loop {
+            let attempt = if let Some(duration) = timeout {
+                let ts = Self::duration_to_timespec(duration);
+                let uring_ts = types::Timespec::new()
+                    .sec(ts.tv_sec as _)
+                    .nsec(ts.tv_nsec as _);
+                let args = types::SubmitArgs::new().timespec(&uring_ts);
+                ring.submitter().submit_with_args(1, &args)
+            } else {
+                ring.submit_and_wait(1)
+            };
+            match attempt {
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                other => break other,
+            }
         };
 
         match result {

@@ -134,10 +134,26 @@ impl CompletionPort for KqueuePort {
             .as_mut()
             .map_or(ptr::null(), |timespec| timespec as *mut _ as *const _);
 
-        let result = unsafe { kevent(self.kq, ptr::null(), 0, &mut event, 1, timeout_ptr) };
-        if result == -1 {
-            return Err(io::Error::last_os_error());
-        }
+        // Retries on EINTR: a stray signal delivered to this thread during
+        // the blocking kevent() call (ptrace attach, SIGCHLD from an
+        // unrelated part of the process, etc.) must not be allowed to
+        // propagate as an error here -- see uring.rs's poll() for the
+        // matching fix and how this was actually found (proactor-harness's
+        // throughput bench, via an strace attach). Retrying the wait
+        // itself is correct and doesn't need to resubmit anything: unlike
+        // io_uring, kqueue has no separate "submission" step for this
+        // call, so there's nothing that could have partially landed.
+        let result = loop {
+            let attempt = unsafe { kevent(self.kq, ptr::null(), 0, &mut event, 1, timeout_ptr) };
+            if attempt == -1 {
+                let err = io::Error::last_os_error();
+                if err.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(err);
+            }
+            break attempt;
+        };
         if result == 0 {
             return Ok(PollEvent::Timeout);
         }
