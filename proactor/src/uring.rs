@@ -471,7 +471,21 @@ impl CompletionPort for IoUringPort {
 
         match result {
             Ok(_) => {}
-            Err(e) if e.kind() == io::ErrorKind::TimedOut => {
+            // `submit_with_args`'s own wait-timeout (the `Some(duration)`
+            // branch above, via IORING_ENTER_EXT_ARG) signals via errno
+            // ETIME, not ETIMEDOUT -- a real, pre-existing gap, not
+            // something this change introduces: Rust's std only maps
+            // ETIMEDOUT to ErrorKind::TimedOut, so ETIME falls through to
+            // ErrorKind::Uncategorized and used to propagate as a raw
+            // error here. Never caught before because every prior
+            // run_ready()-based test happened to already have its
+            // completion sitting in the CQ on the very first zero-duration
+            // poll, never genuinely exercising this timeout path -- found
+            // via a new IoPort test whose real (if short) disk I/O latency
+            // finally forced a genuine wait.
+            Err(e)
+                if e.kind() == io::ErrorKind::TimedOut || e.raw_os_error() == Some(libc::ETIME) =>
+            {
                 return Ok(PollEvent::Timeout);
             }
             Err(e) => return Err(e),
@@ -480,12 +494,6 @@ impl CompletionPort for IoUringPort {
         // Process completion queue
         let mut cq = ring.completion();
         if let Some(cqe) = cq.next() {
-            eprintln!(
-                "DEBUG cqe user_data={:#x} result={} tagged={}",
-                cqe.user_data(),
-                cqe.result(),
-                cqe.user_data() & IO_OP_TAG != 0
-            );
             match cqe.user_data() {
                 QUEUE_TOKEN => {
                     if let Some(envelope) = self.drain_completion() {
