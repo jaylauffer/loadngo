@@ -26,6 +26,14 @@ socket2 = "0.5"
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
+# Deliberately NOT socket2 here, unlike the Unix targets above: socket2's
+# Windows backend is built on the `windows-sys` crate, not `windows` (used
+# everywhere else in this file for IOCP itself) -- same-named types
+# (SOCKADDR_STORAGE, etc.) from the two crates are structurally identical
+# but not the same Rust type, so they can't be passed to each other
+# without casting across crates. Simpler and less fragile to hand-roll
+# the small amount of sockaddr conversion needed, consistently against
+# the one crate already in use, than to mix the two.
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
