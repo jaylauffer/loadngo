@@ -56,9 +56,14 @@ fn defer_near_zero_delay(c: &mut Criterion) {
             let target = counter.load(Ordering::Acquire) + 1;
             let for_closure = Arc::clone(&counter);
             handle
-                .defer_for(Duration::from_millis(0), CompletionKind::Timer, 0, move |_| {
-                    for_closure.fetch_add(1, Ordering::AcqRel);
-                })
+                .defer_for(
+                    Duration::from_millis(0),
+                    CompletionKind::Timer,
+                    0,
+                    move |_| {
+                        for_closure.fetch_add(1, Ordering::AcqRel);
+                    },
+                )
                 .expect("defer_for failed");
             while counter.load(Ordering::Acquire) < target {
                 std::hint::spin_loop();

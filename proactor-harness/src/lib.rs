@@ -151,9 +151,14 @@ pub fn simulate_frame(
     for _ in 0..deferred_per_frame {
         let counter = Arc::clone(&counter);
         handle
-            .defer_for(Duration::from_millis(0), CompletionKind::Timer, 0, move |_| {
-                counter.fetch_add(1, Ordering::AcqRel);
-            })
+            .defer_for(
+                Duration::from_millis(0),
+                CompletionKind::Timer,
+                0,
+                move |_| {
+                    counter.fetch_add(1, Ordering::AcqRel);
+                },
+            )
             .expect("defer_for failed");
     }
     for _ in 0..jobs_per_frame {

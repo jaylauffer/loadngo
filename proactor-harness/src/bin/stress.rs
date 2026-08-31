@@ -26,16 +26,13 @@ use std::time::{Duration, Instant};
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let seconds: u64 = args
-        .next()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(10);
-    let n_threads: u64 = args
-        .next()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(8);
+    let seconds: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(10);
+    let n_threads: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(8);
 
-    println!("stress: {n_threads} threads for {seconds}s against {}", std::any::type_name::<proactor_harness::PlatformPort>());
+    println!(
+        "stress: {n_threads} threads for {seconds}s against {}",
+        std::any::type_name::<proactor_harness::PlatformPort>()
+    );
 
     let proactor = new_platform_proactor().expect("failed to construct platform proactor");
     let (handle, join) = spawn_pump(proactor);
@@ -84,9 +81,14 @@ fn main() {
                         1 => {
                             let dispatched = Arc::clone(&dispatched);
                             handle
-                                .defer_for(Duration::from_millis(0), CompletionKind::Timer, 0, move |_| {
-                                    dispatched.fetch_add(1, Ordering::Relaxed);
-                                })
+                                .defer_for(
+                                    Duration::from_millis(0),
+                                    CompletionKind::Timer,
+                                    0,
+                                    move |_| {
+                                        dispatched.fetch_add(1, Ordering::Relaxed);
+                                    },
+                                )
                                 .expect("defer_for failed");
                         }
                         #[cfg(unix)]

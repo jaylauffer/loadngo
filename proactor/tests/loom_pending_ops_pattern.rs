@@ -96,7 +96,6 @@ impl Model {
             }
         }
     }
-
 }
 
 /// The property that matters: every legal interleaving of a poller thread
