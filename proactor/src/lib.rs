@@ -1,6 +1,7 @@
 mod channel;
 mod deferred;
 mod error;
+mod io_port;
 #[cfg(windows)]
 mod iocp;
 #[cfg(any(
@@ -17,6 +18,7 @@ mod uring;
 
 use deferred::DeferredQueue;
 use std::io;
+use std::net::SocketAddr;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
@@ -27,6 +29,10 @@ use std::{collections::HashMap, os::fd::RawFd};
 
 pub use channel::ChannelPort;
 pub use error::ProactorError;
+pub use io_port::{
+    AcceptCompletionHandler, AcceptResult, AcceptTransfer, IoBuf, IoCompletionHandler, IoOpId,
+    IoPort, IoResult, IoTransfer, RawFdCompat, UnitCompletionHandler,
+};
 #[cfg(windows)]
 pub use iocp::IocpPort;
 #[cfg(any(
@@ -122,6 +128,12 @@ where
 
 pub enum PollEvent {
     Completion(CompletionEnvelope),
+    /// A completed `IoPort` operation, already fully resolved by the
+    /// backend into a ready-to-run thunk (it already looked up the
+    /// buffer/handler for whatever `IoOpId` the kernel's completion named
+    /// and built the real `IoResult`/`AcceptResult`/etc.) -- `Proactor`
+    /// just runs it, the same way it runs a `CompletionEnvelope`.
+    IoCompletion(Box<dyn FnOnce() + Send>),
     #[cfg(unix)]
     Readiness(ReadinessEvent),
     Wake,
@@ -132,6 +144,23 @@ pub trait CompletionPort: Send + Sync + 'static {
     fn post(&self, envelope: CompletionEnvelope) -> io::Result<()>;
     fn poll(&self, timeout: Option<Duration>) -> io::Result<PollEvent>;
     fn wake(&self) -> io::Result<()>;
+
+    /// Called once by `Proactor::run_until_stopped`/`run_ready`'s owning
+    /// loop after `running` becomes false, before the loop actually
+    /// exits. Default is a no-op; `IoPort` implementations override it to
+    /// request cancellation of every still-outstanding operation, since
+    /// their buffers can't be safely reclaimed until the kernel confirms
+    /// it's truly done with them. Not meant to be called directly.
+    fn begin_shutdown(&self) {}
+
+    /// Polled once per loop iteration during the drain phase that follows
+    /// `begin_shutdown`; the loop keeps calling `poll()` (so cancellation
+    /// completions can actually land and get dispatched) until this
+    /// returns `true`. Default is always `true` -- nothing to drain for a
+    /// backend with no in-flight buffer-owning operations.
+    fn shutdown_complete(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(unix)]
@@ -239,6 +268,10 @@ where
                 envelope.dispatch();
                 report.dispatched_completions += 1;
             }
+            PollEvent::IoCompletion(thunk) => {
+                thunk();
+                report.dispatched_completions += 1;
+            }
             #[cfg(unix)]
             PollEvent::Readiness(readiness) => {
                 self.dispatch_readiness(readiness);
@@ -255,12 +288,24 @@ where
         Ok(report)
     }
 
+    /// Runs until `stop()` is called, then -- before returning -- drains
+    /// any still-outstanding `IoPort` operations so it's always safe for
+    /// the caller to drop `self`/the backing port immediately afterward.
+    /// A backend with no such operations (or one that doesn't implement
+    /// `IoPort` at all) no-ops this via `CompletionPort`'s default
+    /// `begin_shutdown`/`shutdown_complete`, so this is a safe drop-in
+    /// replacement for what used to be the entire method body.
     pub fn run_until_stopped(&self) -> io::Result<()> {
         while self.shared.running.load(Ordering::Acquire) {
             let report = self.run_once()?;
             if report.stopped {
                 break;
             }
+        }
+
+        self.shared.port.begin_shutdown();
+        while !self.shared.port.shutdown_complete() {
+            self.run_once()?;
         }
         Ok(())
     }
@@ -277,6 +322,10 @@ where
         match self.shared.port.poll(Some(Duration::ZERO))? {
             PollEvent::Completion(envelope) => {
                 envelope.dispatch();
+                report.dispatched_completions += 1;
+            }
+            PollEvent::IoCompletion(thunk) => {
+                thunk();
                 report.dispatched_completions += 1;
             }
             #[cfg(unix)]
@@ -452,5 +501,88 @@ where
             .expect("readiness handler registry poisoned")
             .remove(&token);
         self.shared.port.deregister(fd)
+    }
+}
+
+impl<P> ProactorHandle<P>
+where
+    P: IoPort,
+{
+    pub fn read(
+        &self,
+        fd: RawFdCompat,
+        buf: IoBuf,
+        offset: u64,
+        handler: impl IoCompletionHandler,
+    ) -> io::Result<IoOpId> {
+        self.shared.port.read(fd, buf, offset, handler)
+    }
+
+    pub fn write(
+        &self,
+        fd: RawFdCompat,
+        buf: IoBuf,
+        offset: u64,
+        handler: impl IoCompletionHandler,
+    ) -> io::Result<IoOpId> {
+        self.shared.port.write(fd, buf, offset, handler)
+    }
+
+    pub fn recv(
+        &self,
+        fd: RawFdCompat,
+        buf: IoBuf,
+        handler: impl IoCompletionHandler,
+    ) -> io::Result<IoOpId> {
+        self.shared.port.recv(fd, buf, handler)
+    }
+
+    pub fn recv_from(
+        &self,
+        fd: RawFdCompat,
+        buf: IoBuf,
+        handler: impl IoCompletionHandler,
+    ) -> io::Result<IoOpId> {
+        self.shared.port.recv_from(fd, buf, handler)
+    }
+
+    pub fn send(
+        &self,
+        fd: RawFdCompat,
+        buf: IoBuf,
+        handler: impl IoCompletionHandler,
+    ) -> io::Result<IoOpId> {
+        self.shared.port.send(fd, buf, handler)
+    }
+
+    pub fn send_to(
+        &self,
+        fd: RawFdCompat,
+        buf: IoBuf,
+        target: SocketAddr,
+        handler: impl IoCompletionHandler,
+    ) -> io::Result<IoOpId> {
+        self.shared.port.send_to(fd, buf, target, handler)
+    }
+
+    pub fn accept(
+        &self,
+        fd: RawFdCompat,
+        handler: impl AcceptCompletionHandler,
+    ) -> io::Result<IoOpId> {
+        self.shared.port.accept(fd, handler)
+    }
+
+    pub fn connect(
+        &self,
+        fd: RawFdCompat,
+        target: SocketAddr,
+        handler: impl UnitCompletionHandler,
+    ) -> io::Result<IoOpId> {
+        self.shared.port.connect(fd, target, handler)
+    }
+
+    pub fn cancel_io(&self, op: IoOpId) -> io::Result<()> {
+        self.shared.port.cancel_io(op)
     }
 }

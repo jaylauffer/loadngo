@@ -19,6 +19,20 @@ pub struct IocpPort {
     queue: Mutex<VecDeque<CompletionEnvelope>>,
 }
 
+// SAFETY: `HANDLE` wraps a raw `*mut c_void`, which is `!Send`/`!Sync` by
+// default -- but a Windows I/O completion port handle is specifically
+// designed to be shared and called into (`GetQueuedCompletionStatus`,
+// `PostQueuedCompletionStatus`) from multiple threads concurrently; that
+// concurrent use is the documented, intended way to use one, not a
+// hazard this needs to guard against. Found (pre-existing, not introduced
+// by this change) via `cargo check --target x86_64-pc-windows-msvc`,
+// which is otherwise unavailable without a real Windows machine to build
+// on -- without these impls, `IocpPort` cannot satisfy `CompletionPort:
+// Send + Sync` at all, so this crate has likely never actually compiled
+// for Windows successfully.
+unsafe impl Send for IocpPort {}
+unsafe impl Sync for IocpPort {}
+
 impl IocpPort {
     pub fn new() -> io::Result<Self> {
         let handle = unsafe {

@@ -1468,6 +1468,7 @@ dependencies = [
  "io-uring",
  "libc",
  "loom",
+ "socket2",
  "thiserror 1.0.69",
  "windows 0.58.0",
 ]

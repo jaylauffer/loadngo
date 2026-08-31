@@ -1,9 +1,16 @@
-use crate::{CompletionEnvelope, CompletionPort, PollEvent, ReadinessEvent, ReadinessPort};
-use io_uring::{opcode, types, IoUring};
+use crate::{
+    AcceptCompletionHandler, AcceptResult, AcceptTransfer, CompletionEnvelope, CompletionPort,
+    IoBuf, IoCompletionHandler, IoOpId, IoPort, IoResult, IoTransfer, PollEvent, ReadinessEvent,
+    ReadinessPort, UnitCompletionHandler,
+};
+use io_uring::{opcode, squeue, types, IoUring};
 use libc::{timespec, POLLERR, POLLHUP, POLLIN, POLLRDHUP};
+use socket2::SockAddr;
 use std::collections::{HashMap, VecDeque};
 use std::io;
+use std::net::SocketAddr;
 use std::os::fd::RawFd;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -11,14 +18,76 @@ const QUEUE_TOKEN: u64 = 1;
 const WAKE_TOKEN: u64 = 2;
 const MAX_EVENTS: usize = 256;
 const READINESS_POLL_MASK: u32 = (POLLIN | POLLERR | POLLHUP | POLLRDHUP) as u32;
+/// Every `IoOpId` this backend allocates has this bit set, letting
+/// `poll()`'s CQE dispatch distinguish an `IoPort` operation's completion
+/// from `QUEUE_TOKEN`/`WAKE_TOKEN`/a `register_readable` token without a
+/// separate side table lookup just to find out which kind of `user_data`
+/// it's looking at. Requires readiness tokens passed to
+/// `register_readable` on the same port instance to stay below 2^63 --
+/// true of every real caller (small sequential indices).
+const IO_OP_TAG: u64 = 1 << 63;
 
-/// A ring-mutating operation requested by `register_readable`/`deregister`,
-/// deferred until the next time `poll()` actually holds the `ring` lock
-/// (see the module-level note on `pending_ops` for why this can't just
-/// lock `ring` directly).
+/// A ring-mutating operation requested by `register_readable`/`deregister`
+/// or an `IoPort` method, deferred until the next time `poll()` actually
+/// holds the `ring` lock (see the module-level note on `pending_ops` for
+/// why this can't just lock `ring` directly).
 enum PendingRingOp {
-    Register { fd: RawFd, token: u64 },
-    Deregister { token: u64 },
+    Register {
+        fd: RawFd,
+        token: u64,
+    },
+    Deregister {
+        token: u64,
+    },
+    /// A fully-built SQE from an `IoPort` method that lost the `try_lock`
+    /// race -- pushed as-is once `poll()` next holds the lock, same
+    /// deferral shape as `Register`/`Deregister`.
+    Submit(squeue::Entry),
+}
+
+/// What `read`/`write`/`recv`/`send`/`recv_from`/`send_to`/`accept`/
+/// `connect` need kept alive (the buffer, the handler, and -- for the
+/// address-carrying ops -- the kernel-facing sockaddr storage) from
+/// submission until the CQE naming this op's `IoOpId` arrives. Boxed as a
+/// whole so its heap address (and therefore every raw pointer an SQE
+/// holds into it) never moves even if the surrounding `HashMap` rehashes.
+enum InFlightOp {
+    Read {
+        buf: IoBuf,
+        handler: Box<dyn IoCompletionHandler>,
+    },
+    Write {
+        buf: IoBuf,
+        handler: Box<dyn IoCompletionHandler>,
+    },
+    Recv {
+        buf: IoBuf,
+        handler: Box<dyn IoCompletionHandler>,
+    },
+    Send {
+        buf: IoBuf,
+        handler: Box<dyn IoCompletionHandler>,
+    },
+    RecvFrom {
+        buf: IoBuf,
+        handler: Box<dyn IoCompletionHandler>,
+        state: Box<RecvFromState>,
+    },
+    SendTo {
+        buf: IoBuf,
+        handler: Box<dyn IoCompletionHandler>,
+        _state: Box<SendToState>,
+    },
+    Accept {
+        handler: Box<dyn AcceptCompletionHandler>,
+        addr: Box<RawSockAddr>,
+    },
+    Connect {
+        handler: Box<dyn UnitCompletionHandler>,
+        // Only needs to stay alive for the kernel to read from; never
+        // written back into, unlike Accept/RecvFrom's addr.
+        _addr: Box<SockAddr>,
+    },
 }
 
 pub struct IoUringPort {
@@ -45,6 +114,14 @@ pub struct IoUringPort {
     // queue-then-wake shape `post()`/`drain_completion()` already use for
     // completions — just extended to cover readiness registration too.
     pending_ops: Mutex<VecDeque<PendingRingOp>>,
+    /// Every `IoPort` operation still waiting on its completion CQE, keyed
+    /// by the `IoOpId` its SQE's `user_data` carries. An entry is only
+    /// ever removed by `poll()` when that CQE actually arrives (naturally
+    /// or via cancellation) -- never by `cancel_io`, which merely
+    /// requests cancellation and leaves the entry (and its buffer) in
+    /// place until the kernel actually confirms the op is done.
+    in_flight: Mutex<HashMap<IoOpId, InFlightOp>>,
+    next_io_op_id: AtomicU64,
 }
 
 impl IoUringPort {
@@ -62,7 +139,46 @@ impl IoUringPort {
             wake_fd,
             registered: Mutex::new(HashMap::new()),
             pending_ops: Mutex::new(VecDeque::new()),
+            in_flight: Mutex::new(HashMap::new()),
+            next_io_op_id: AtomicU64::new(0),
         })
+    }
+
+    fn allocate_io_op_id(&self) -> IoOpId {
+        IoOpId(self.next_io_op_id.fetch_add(1, Ordering::Relaxed) | IO_OP_TAG)
+    }
+
+    /// Submits `sqe` now if `ring` is uncontended, or defers it via
+    /// `pending_ops` (same try-lock-or-queue-and-wake shape
+    /// `register_readable` already uses, see that method and the
+    /// `pending_ops` field doc) if `poll()` currently holds the lock
+    /// mid-wait. Every `IoPort` method funnels through this rather than
+    /// locking `ring` directly, for exactly the reason documented there.
+    fn submit_or_defer(&self, sqe: squeue::Entry) -> io::Result<()> {
+        match self.ring.try_lock() {
+            Ok(mut ring) => {
+                let result: io::Result<()> = (|| {
+                    unsafe {
+                        ring.submission()
+                            .push(&sqe)
+                            .map_err(|_| io::Error::other("submission queue full"))?;
+                    }
+                    ring.submit().map_err(|e| io::Error::other(e.to_string()))?;
+                    Ok(())
+                })();
+                result
+            }
+            Err(std::sync::TryLockError::WouldBlock) => {
+                self.pending_ops
+                    .lock()
+                    .expect("io_uring pending-ops queue poisoned")
+                    .push_back(PendingRingOp::Submit(sqe));
+                self.wake()
+            }
+            Err(std::sync::TryLockError::Poisoned(err)) => {
+                Err(io::Error::other(format!("lock poisoned: {err}")))
+            }
+        }
     }
 
     /// Submits every queued `register_readable`/`deregister` request onto
@@ -92,6 +208,7 @@ impl IoUringPort {
                 PendingRingOp::Deregister { token } => {
                     opcode::PollRemove::new(token).build().user_data(WAKE_TOKEN)
                 }
+                PendingRingOp::Submit(sqe) => sqe,
             };
             unsafe {
                 let _ = ring.submission().push(&sqe);
@@ -104,6 +221,113 @@ impl IoUringPort {
             .lock()
             .expect("io_uring completion queue poisoned")
             .pop_front()
+    }
+
+    /// Looks up and removes `op_id`'s `InFlightOp` (its buffer/handler/
+    /// address storage can finally be dropped -- the kernel is done with
+    /// them, this CQE is the proof) and builds a ready-to-run thunk from
+    /// `result` (io_uring's CQE `res` field: negative `-errno` on
+    /// failure, otherwise bytes transferred or, for `Accept`, the new
+    /// fd). Returns a benign `PollEvent::Wake` for a `op_id` with no
+    /// matching entry -- shouldn't happen in practice, but a stray/
+    /// duplicate CQE is far better tolerated than panicking on it.
+    fn resolve_io_completion(&self, op_id: IoOpId, result: i32) -> PollEvent {
+        let entry = self
+            .in_flight
+            .lock()
+            .expect("io_uring in-flight op table poisoned")
+            .remove(&op_id);
+
+        let Some(entry) = entry else {
+            return PollEvent::Wake;
+        };
+
+        let ok = result >= 0;
+        let err = || io::Error::from_raw_os_error(-result);
+
+        let thunk: Box<dyn FnOnce() + Send> = match entry {
+            InFlightOp::Read { mut buf, handler } | InFlightOp::Recv { mut buf, handler } => {
+                let io_result: IoResult = if ok {
+                    unsafe { buf.set_filled_len(result as usize) };
+                    Ok(IoTransfer {
+                        buf,
+                        bytes_transferred: result as u32,
+                        peer: None,
+                    })
+                } else {
+                    Err(err())
+                };
+                Box::new(move || handler.run(io_result))
+            }
+            InFlightOp::Write { buf, handler } | InFlightOp::Send { buf, handler } => {
+                let io_result: IoResult = if ok {
+                    Ok(IoTransfer {
+                        buf,
+                        bytes_transferred: result as u32,
+                        peer: None,
+                    })
+                } else {
+                    Err(err())
+                };
+                Box::new(move || handler.run(io_result))
+            }
+            InFlightOp::RecvFrom {
+                mut buf,
+                handler,
+                state,
+            } => {
+                let io_result: IoResult = if ok {
+                    unsafe { buf.set_filled_len(result as usize) };
+                    Ok(IoTransfer {
+                        buf,
+                        bytes_transferred: result as u32,
+                        peer: state.addr.to_socket_addr(),
+                    })
+                } else {
+                    Err(err())
+                };
+                Box::new(move || handler.run(io_result))
+            }
+            InFlightOp::SendTo {
+                buf,
+                handler,
+                _state: _,
+            } => {
+                let io_result: IoResult = if ok {
+                    Ok(IoTransfer {
+                        buf,
+                        bytes_transferred: result as u32,
+                        peer: None,
+                    })
+                } else {
+                    Err(err())
+                };
+                Box::new(move || handler.run(io_result))
+            }
+            InFlightOp::Accept { handler, addr } => {
+                let accept_result: AcceptResult = if ok {
+                    match addr.to_socket_addr() {
+                        Some(peer) => Ok(AcceptTransfer {
+                            new_fd: result,
+                            peer,
+                        }),
+                        None => Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "accept completed but the peer address family was unrecognized",
+                        )),
+                    }
+                } else {
+                    Err(err())
+                };
+                Box::new(move || handler.run(accept_result))
+            }
+            InFlightOp::Connect { handler, .. } => {
+                let unit_result = if ok { Ok(()) } else { Err(err()) };
+                Box::new(move || handler.run(unit_result))
+            }
+        };
+
+        PollEvent::IoCompletion(thunk)
     }
 
     fn duration_to_timespec(duration: Duration) -> timespec {
@@ -268,6 +492,9 @@ impl CompletionPort for IoUringPort {
                     Self::clear_eventfd(self.wake_fd)?;
                     Ok(PollEvent::Wake)
                 }
+                token if token & IO_OP_TAG != 0 => {
+                    Ok(self.resolve_io_completion(IoOpId(token), cqe.result()))
+                }
                 token => {
                     let is_registered = self
                         .registered
@@ -291,6 +518,31 @@ impl CompletionPort for IoUringPort {
 
     fn wake(&self) -> io::Result<()> {
         Self::signal_eventfd(self.wake_fd)
+    }
+
+    fn begin_shutdown(&self) {
+        let op_ids: Vec<IoOpId> = self
+            .in_flight
+            .lock()
+            .expect("io_uring in-flight op table poisoned")
+            .keys()
+            .copied()
+            .collect();
+        for op_id in op_ids {
+            // Best-effort: a submission failure here just means this op's
+            // own natural completion (success, or whatever error it hits
+            // on its own) is what eventually clears it from `in_flight`
+            // instead of an early cancellation -- still correct, just not
+            // expedited.
+            let _ = self.cancel_io(op_id);
+        }
+    }
+
+    fn shutdown_complete(&self) -> bool {
+        self.in_flight
+            .lock()
+            .expect("io_uring in-flight op table poisoned")
+            .is_empty()
     }
 }
 
@@ -396,5 +648,308 @@ impl ReadinessPort for IoUringPort {
                 Err(io::Error::other(format!("lock poisoned: {err}")))
             }
         }
+    }
+}
+
+/// Raw kernel-facing address storage for the ops where the *kernel*
+/// fills it in asynchronously (`accept`, `recv_from`'s `msghdr`).
+/// `socket2::SockAddr` doesn't fit that case -- its own API
+/// (`try_init`/`from`) is built around a synchronous "call a syscall now,
+/// validate what it wrote" pattern, not "hand over raw storage, the
+/// kernel writes into it whenever the CQE eventually arrives". Converted
+/// to `socket2::SockAddr` (for its safe, well-tested parsing into
+/// `std::net::SocketAddr`) only once a completion actually reports it.
+struct RawSockAddr {
+    storage: libc::sockaddr_storage,
+    len: libc::socklen_t,
+}
+
+impl RawSockAddr {
+    fn empty() -> Self {
+        Self {
+            storage: unsafe { std::mem::zeroed() },
+            len: std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t,
+        }
+    }
+
+    fn as_mut_sockaddr_ptr(&mut self) -> *mut libc::sockaddr {
+        std::ptr::addr_of_mut!(self.storage).cast()
+    }
+
+    fn len_mut_ptr(&mut self) -> *mut libc::socklen_t {
+        std::ptr::addr_of_mut!(self.len)
+    }
+
+    fn to_socket_addr(&self) -> Option<SocketAddr> {
+        unsafe { SockAddr::new(self.storage, self.len) }.as_socket()
+    }
+}
+
+/// Everything `recv_from` needs kept alive at a stable address for the
+/// whole operation: the `msghdr` the SQE points to, the single `iovec`
+/// that `msghdr` itself points to (covering the whole buffer), and the
+/// raw address storage `msghdr` points to as `msg_name`. All three live
+/// in one struct (always behind a `Box`) so moving the `Box` handle
+/// itself -- e.g. a `HashMap` rehash -- never invalidates the pointers
+/// each field holds into the others.
+struct RecvFromState {
+    iov: libc::iovec,
+    msg: libc::msghdr,
+    addr: RawSockAddr,
+}
+
+// SAFETY: `iovec`/`msghdr`'s raw pointers here only ever point at other
+// fields of this same struct (self-referential, stable behind the `Box`
+// that always wraps it) or into an `IoBuf`'s own heap allocation that
+// this same `InFlightOp` co-owns for the operation's whole lifetime --
+// nothing thread-affine, no aliasing across threads without already
+// holding `IoUringPort::in_flight`'s lock. Needed because raw pointers
+// are `!Send` by default, and this type only ever lives inside a
+// `Mutex`-guarded table (which requires `T: Send`, not `Sync`).
+unsafe impl Send for RecvFromState {}
+
+/// The `send_to` analogue of `RecvFromState`: everything needed kept
+/// alive at a stable address for the whole operation. `addr` is already
+/// fully known up front here (the caller's `target`), unlike
+/// `RecvFromState`'s kernel-filled `RawSockAddr` -- `socket2::SockAddr`
+/// fits this direction fine.
+struct SendToState {
+    iov: libc::iovec,
+    msg: libc::msghdr,
+    addr: SockAddr,
+}
+
+// SAFETY: same reasoning as `RecvFromState` above.
+unsafe impl Send for SendToState {}
+
+impl IoPort for IoUringPort {
+    fn read(
+        &self,
+        fd: RawFd,
+        mut buf: IoBuf,
+        offset: u64,
+        handler: impl IoCompletionHandler,
+    ) -> io::Result<IoOpId> {
+        let op_id = self.allocate_io_op_id();
+        let sqe = opcode::Read::new(types::Fd(fd), buf.as_mut_ptr(), buf.capacity() as u32)
+            .offset(offset)
+            .build()
+            .user_data(op_id.0);
+        self.in_flight
+            .lock()
+            .expect("io_uring in-flight op table poisoned")
+            .insert(
+                op_id,
+                InFlightOp::Read {
+                    buf,
+                    handler: Box::new(handler),
+                },
+            );
+        self.submit_or_defer(sqe)?;
+        Ok(op_id)
+    }
+
+    fn write(
+        &self,
+        fd: RawFd,
+        buf: IoBuf,
+        offset: u64,
+        handler: impl IoCompletionHandler,
+    ) -> io::Result<IoOpId> {
+        let op_id = self.allocate_io_op_id();
+        let sqe = opcode::Write::new(types::Fd(fd), buf.as_ptr(), buf.len() as u32)
+            .offset(offset)
+            .build()
+            .user_data(op_id.0);
+        self.in_flight
+            .lock()
+            .expect("io_uring in-flight op table poisoned")
+            .insert(
+                op_id,
+                InFlightOp::Write {
+                    buf,
+                    handler: Box::new(handler),
+                },
+            );
+        self.submit_or_defer(sqe)?;
+        Ok(op_id)
+    }
+
+    fn recv(
+        &self,
+        fd: RawFd,
+        mut buf: IoBuf,
+        handler: impl IoCompletionHandler,
+    ) -> io::Result<IoOpId> {
+        let op_id = self.allocate_io_op_id();
+        let sqe = opcode::Recv::new(types::Fd(fd), buf.as_mut_ptr(), buf.capacity() as u32)
+            .build()
+            .user_data(op_id.0);
+        self.in_flight
+            .lock()
+            .expect("io_uring in-flight op table poisoned")
+            .insert(
+                op_id,
+                InFlightOp::Recv {
+                    buf,
+                    handler: Box::new(handler),
+                },
+            );
+        self.submit_or_defer(sqe)?;
+        Ok(op_id)
+    }
+
+    fn send(&self, fd: RawFd, buf: IoBuf, handler: impl IoCompletionHandler) -> io::Result<IoOpId> {
+        let op_id = self.allocate_io_op_id();
+        let sqe = opcode::Send::new(types::Fd(fd), buf.as_ptr(), buf.len() as u32)
+            .build()
+            .user_data(op_id.0);
+        self.in_flight
+            .lock()
+            .expect("io_uring in-flight op table poisoned")
+            .insert(
+                op_id,
+                InFlightOp::Send {
+                    buf,
+                    handler: Box::new(handler),
+                },
+            );
+        self.submit_or_defer(sqe)?;
+        Ok(op_id)
+    }
+
+    fn recv_from(
+        &self,
+        fd: RawFd,
+        mut buf: IoBuf,
+        handler: impl IoCompletionHandler,
+    ) -> io::Result<IoOpId> {
+        let op_id = self.allocate_io_op_id();
+
+        let mut state = Box::new(RecvFromState {
+            iov: libc::iovec {
+                iov_base: buf.as_mut_ptr().cast(),
+                iov_len: buf.capacity(),
+            },
+            msg: unsafe { std::mem::zeroed() },
+            addr: RawSockAddr::empty(),
+        });
+        state.msg.msg_name = state.addr.as_mut_sockaddr_ptr().cast();
+        state.msg.msg_namelen = state.addr.len;
+        state.msg.msg_iov = std::ptr::addr_of_mut!(state.iov);
+        state.msg.msg_iovlen = 1;
+
+        let sqe = opcode::RecvMsg::new(types::Fd(fd), std::ptr::addr_of_mut!(state.msg))
+            .build()
+            .user_data(op_id.0);
+
+        self.in_flight
+            .lock()
+            .expect("io_uring in-flight op table poisoned")
+            .insert(
+                op_id,
+                InFlightOp::RecvFrom {
+                    buf,
+                    handler: Box::new(handler),
+                    state,
+                },
+            );
+        self.submit_or_defer(sqe)?;
+        Ok(op_id)
+    }
+
+    fn send_to(
+        &self,
+        fd: RawFd,
+        buf: IoBuf,
+        target: SocketAddr,
+        handler: impl IoCompletionHandler,
+    ) -> io::Result<IoOpId> {
+        let op_id = self.allocate_io_op_id();
+
+        let mut state = Box::new(SendToState {
+            iov: libc::iovec {
+                iov_base: buf.as_ptr() as *mut u8 as *mut libc::c_void,
+                iov_len: buf.len(),
+            },
+            msg: unsafe { std::mem::zeroed() },
+            addr: SockAddr::from(target),
+        });
+        state.msg.msg_name = state.addr.as_ptr() as *mut libc::c_void;
+        state.msg.msg_namelen = state.addr.len();
+        state.msg.msg_iov = std::ptr::addr_of_mut!(state.iov);
+        state.msg.msg_iovlen = 1;
+
+        let sqe = opcode::SendMsg::new(types::Fd(fd), std::ptr::addr_of!(state.msg))
+            .build()
+            .user_data(op_id.0);
+
+        self.in_flight
+            .lock()
+            .expect("io_uring in-flight op table poisoned")
+            .insert(
+                op_id,
+                InFlightOp::SendTo {
+                    buf,
+                    handler: Box::new(handler),
+                    _state: state,
+                },
+            );
+        self.submit_or_defer(sqe)?;
+        Ok(op_id)
+    }
+
+    fn accept(&self, fd: RawFd, handler: impl AcceptCompletionHandler) -> io::Result<IoOpId> {
+        let op_id = self.allocate_io_op_id();
+        let mut addr = Box::new(RawSockAddr::empty());
+        let sqe = opcode::Accept::new(
+            types::Fd(fd),
+            addr.as_mut_sockaddr_ptr(),
+            addr.len_mut_ptr(),
+        )
+        .build()
+        .user_data(op_id.0);
+        self.in_flight
+            .lock()
+            .expect("io_uring in-flight op table poisoned")
+            .insert(
+                op_id,
+                InFlightOp::Accept {
+                    handler: Box::new(handler),
+                    addr,
+                },
+            );
+        self.submit_or_defer(sqe)?;
+        Ok(op_id)
+    }
+
+    fn connect(
+        &self,
+        fd: RawFd,
+        target: SocketAddr,
+        handler: impl UnitCompletionHandler,
+    ) -> io::Result<IoOpId> {
+        let op_id = self.allocate_io_op_id();
+        let addr = Box::new(SockAddr::from(target));
+        let sqe = opcode::Connect::new(types::Fd(fd), addr.as_ptr(), addr.len())
+            .build()
+            .user_data(op_id.0);
+        self.in_flight
+            .lock()
+            .expect("io_uring in-flight op table poisoned")
+            .insert(
+                op_id,
+                InFlightOp::Connect {
+                    handler: Box::new(handler),
+                    _addr: addr,
+                },
+            );
+        self.submit_or_defer(sqe)?;
+        Ok(op_id)
+    }
+
+    fn cancel_io(&self, op: IoOpId) -> io::Result<()> {
+        let sqe = opcode::AsyncCancel::new(op.0).build().user_data(WAKE_TOKEN);
+        self.submit_or_defer(sqe)
     }
 }
