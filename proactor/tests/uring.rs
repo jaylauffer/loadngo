@@ -166,7 +166,7 @@ fn uring_write_then_read_round_trip_a_real_file() {
     let mut dispatched = 0;
     let start = Instant::now();
     while dispatched < 1 {
-        dispatched += proactor.run_once().unwrap().dispatched_completions;
+        dispatched += proactor.run_ready().unwrap().dispatched_completions;
         assert!(
             start.elapsed() < Duration::from_secs(5),
             "write never completed"
@@ -191,7 +191,7 @@ fn uring_write_then_read_round_trip_a_real_file() {
     let mut dispatched = 0;
     let start = Instant::now();
     while dispatched < 1 {
-        dispatched += proactor.run_once().unwrap().dispatched_completions;
+        dispatched += proactor.run_ready().unwrap().dispatched_completions;
         assert!(
             start.elapsed() < Duration::from_secs(5),
             "read never completed"
