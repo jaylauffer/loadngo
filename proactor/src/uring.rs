@@ -480,6 +480,12 @@ impl CompletionPort for IoUringPort {
         // Process completion queue
         let mut cq = ring.completion();
         if let Some(cqe) = cq.next() {
+            eprintln!(
+                "DEBUG cqe user_data={:#x} result={} tagged={}",
+                cqe.user_data(),
+                cqe.result(),
+                cqe.user_data() & IO_OP_TAG != 0
+            );
             match cqe.user_data() {
                 QUEUE_TOKEN => {
                     if let Some(envelope) = self.drain_completion() {
