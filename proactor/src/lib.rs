@@ -245,24 +245,20 @@ where
         }
     }
 
-    pub fn run_once(&self) -> io::Result<RunReport> {
-        let mut report = RunReport::idle(!self.shared.running.load(Ordering::Acquire));
-        report.dispatched_deferred += self.dispatch_ready_deferred(Instant::now())?;
-
-        if !self.shared.running.load(Ordering::Acquire) {
-            report.stopped = true;
-            return Ok(report);
-        }
-
-        let timeout = {
-            let deferred = self
-                .shared
-                .deferred
-                .lock()
-                .expect("deferred queue poisoned");
-            deferred.time_until_next_deadline(Instant::now())
-        };
-
+    /// Polls once and dispatches whatever comes back, with no `running`
+    /// check at all. Factored out because `run_until_stopped`'s drain
+    /// phase (below) must keep actually polling even though `running` is
+    /// already `false` by the time it runs -- reusing `run_once` there
+    /// directly was a real bug: `run_once` early-returns the instant
+    /// `running` is `false`, without ever calling `poll()`, which turned
+    /// the drain loop into an unbounded, 100%-CPU busy-spin that never
+    /// gave `IoPort::begin_shutdown`'s cancellation a chance to actually
+    /// land or its completion to arrive. Confirmed as a real (not just
+    /// theoretical) hang: it ran for 35+ minutes on `dolores` before
+    /// being killed, and independently timed out a live CI job the same
+    /// way (`cargo test --workspace` there runs this same test suite).
+    fn poll_and_dispatch_once(&self, timeout: Option<Duration>) -> io::Result<RunReport> {
+        let mut report = RunReport::idle(false);
         match self.shared.port.poll(timeout)? {
             PollEvent::Completion(envelope) => {
                 envelope.dispatch();
@@ -282,6 +278,30 @@ where
             }
             PollEvent::Timeout => {}
         }
+        Ok(report)
+    }
+
+    pub fn run_once(&self) -> io::Result<RunReport> {
+        let mut report = RunReport::idle(!self.shared.running.load(Ordering::Acquire));
+        report.dispatched_deferred += self.dispatch_ready_deferred(Instant::now())?;
+
+        if !self.shared.running.load(Ordering::Acquire) {
+            report.stopped = true;
+            return Ok(report);
+        }
+
+        let timeout = {
+            let deferred = self
+                .shared
+                .deferred
+                .lock()
+                .expect("deferred queue poisoned");
+            deferred.time_until_next_deadline(Instant::now())
+        };
+
+        let poll_report = self.poll_and_dispatch_once(timeout)?;
+        report.dispatched_completions += poll_report.dispatched_completions;
+        report.woke = poll_report.woke;
 
         report.dispatched_deferred += self.dispatch_ready_deferred(Instant::now())?;
         report.stopped = !self.shared.running.load(Ordering::Acquire);
@@ -305,7 +325,12 @@ where
 
         self.shared.port.begin_shutdown();
         while !self.shared.port.shutdown_complete() {
-            self.run_once()?;
+            // A short, bounded timeout rather than blocking indefinitely:
+            // shutdown_complete() must be re-checked periodically even if
+            // a given backend's cancellation doesn't itself produce a
+            // wake-worthy event, so this can't just wait forever on poll()
+            // the way run_once()'s normal-operation path safely can.
+            self.poll_and_dispatch_once(Some(Duration::from_millis(50)))?;
         }
         Ok(())
     }
@@ -319,25 +344,9 @@ where
             return Ok(report);
         }
 
-        match self.shared.port.poll(Some(Duration::ZERO))? {
-            PollEvent::Completion(envelope) => {
-                envelope.dispatch();
-                report.dispatched_completions += 1;
-            }
-            PollEvent::IoCompletion(thunk) => {
-                thunk();
-                report.dispatched_completions += 1;
-            }
-            #[cfg(unix)]
-            PollEvent::Readiness(readiness) => {
-                self.dispatch_readiness(readiness);
-                report.woke = true;
-            }
-            PollEvent::Wake => {
-                report.woke = true;
-            }
-            PollEvent::Timeout => {}
-        }
+        let poll_report = self.poll_and_dispatch_once(Some(Duration::ZERO))?;
+        report.dispatched_completions += poll_report.dispatched_completions;
+        report.woke = poll_report.woke;
 
         report.dispatched_deferred += self.dispatch_ready_deferred(Instant::now())?;
         report.stopped = !self.shared.running.load(Ordering::Acquire);
