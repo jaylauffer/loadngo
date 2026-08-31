@@ -16,6 +16,7 @@ members = [
     "renderer",
     "ui-core",
     "persistence",
+    "proactor-harness",
 ]
 default-members = [
     "task",

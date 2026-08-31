@@ -35,7 +35,14 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PLATFORM_EXCLUDES: --exclude loadngo-gfx-metal --exclude loadngo-gfx-dx12 --exclude gui-win32
+  # proactor-harness isn't excluded for a platform-incompatibility reason
+  # like the other three -- it's dev-only criterion/loom tooling that would
+  # otherwise add build time to every push without adding routine
+  # lint/test coverage (its benches aren't run by `cargo test` anyway; its
+  # loom tests are separately gated behind `--cfg loom`, see
+  # proactor/tests/loom_pending_ops_pattern.rs). Run its benches/loom tests
+  # manually instead, see proactor-harness/README.md.
+  PLATFORM_EXCLUDES: --exclude loadngo-gfx-metal --exclude loadngo-gfx-dx12 --exclude gui-win32 --exclude proactor-harness
 
 jobs:
   check:

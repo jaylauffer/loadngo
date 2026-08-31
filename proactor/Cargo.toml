@@ -17,3 +17,15 @@ io-uring = "0.7"
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
+
+[dev-dependencies]
+# Only exercised by tests/loom_pending_ops_pattern.rs, and only under
+# `RUSTFLAGS="--cfg loom" cargo test --release --test
+# loom_pending_ops_pattern` -- with no `loom` cfg set (the normal `cargo
+# test`/CI path), that whole file compiles to nothing. See that file's
+# module doc for why this models the ring-lock/pending-ops/wake pattern
+# rather than driving IoUringPort's real io_uring syscalls directly.
+loom = "0.7"
