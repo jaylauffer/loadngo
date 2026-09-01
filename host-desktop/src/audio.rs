@@ -1274,7 +1274,11 @@ mod imp {
         playlist_tracks: Vec<String>,
         playlist_index: usize,
         boot_track_path: String,
-        stream: Option<OutputStream>,
+        /// Kept alive only for its `Drop` when this instance owns the
+        /// stream (`new`); `None` when constructed via `new_with_handle`,
+        /// where the caller's `AudioMixer` owns it instead -- never read
+        /// directly, see `play_track_path`'s doc comment.
+        _stream: Option<OutputStream>,
         stream_handle: Option<OutputStreamHandle>,
         music_paused: bool,
     }
@@ -1302,7 +1306,7 @@ mod imp {
                     playlist_tracks,
                     playlist_index: 0,
                     boot_track_path,
-                    stream: Some(stream),
+                    _stream: Some(stream),
                     stream_handle: Some(stream_handle),
                     music_paused: false,
                 },
@@ -1323,7 +1327,7 @@ mod imp {
                         playlist_tracks,
                         playlist_index: 0,
                         boot_track_path,
-                        stream: None,
+                        _stream: None,
                         stream_handle: None,
                         music_paused: false,
                     }
@@ -1336,7 +1340,7 @@ mod imp {
         /// `MusicController`/`SfxController`/`VoiceController` share one
         /// device instead of racing for it (see `AudioMixer::new`'s doc
         /// comment for the full story). Doesn't own an `OutputStream`
-        /// itself (`stream: None`) since the caller keeps the shared one
+        /// itself (`_stream: None`) since the caller keeps the shared one
         /// alive.
         pub(crate) fn new_with_handle(
             handle: &OutputStreamHandle,
@@ -1360,7 +1364,7 @@ mod imp {
                 playlist_tracks,
                 playlist_index: 0,
                 boot_track_path,
-                stream: None,
+                _stream: None,
                 stream_handle: Some(handle.clone()),
                 music_paused: false,
             }
@@ -1414,9 +1418,14 @@ mod imp {
             fade: f32,
             looped: bool,
         ) -> Result<(), String> {
-            if self.stream.is_none() {
-                return Err("Audio backend unavailable".to_string());
-            }
+            // `self.stream` is `None` both when the backend is genuinely
+            // unavailable *and* -- deliberately -- when this controller was
+            // built via `new_with_handle` (the shared `OutputStream` lives
+            // on the caller's `AudioMixer` instead). `stream_handle` is the
+            // one this method (and `TrackState::new`, below) actually
+            // needs, and is checked for real just past this point, so this
+            // early guard against `self.stream` alone would incorrectly
+            // reject every mixer-constructed instance.
 
             let selected_path = if path.trim().is_empty() {
                 self.boot_track_path.clone()
@@ -1521,7 +1530,9 @@ mod imp {
         }
 
         pub fn update(&mut self, dt: f32) {
-            if self.music_paused || self.tracks.is_empty() || self.stream.is_none() {
+            // See `play_track_path`'s doc comment on why this checks
+            // `stream_handle`, not `stream`.
+            if self.music_paused || self.tracks.is_empty() || self.stream_handle.is_none() {
                 return;
             }
             let fade = self.fade_duration.max(0.001);
@@ -1643,7 +1654,12 @@ mod imp {
     pub struct VoiceController {
         enabled: bool,
         volume: f32,
-        stream: Option<OutputStream>,
+        /// Kept alive only for its `Drop` when this instance owns the
+        /// stream (`set_enabled(true)`'s `open_output_stream` path);
+        /// `None` when constructed via `enable_with_handle`, where the
+        /// caller's `AudioMixer` owns it instead -- never read directly,
+        /// see `play_path`'s doc comment.
+        _stream: Option<OutputStream>,
         stream_handle: Option<OutputStreamHandle>,
         sink: Option<Sink>,
     }
@@ -1653,7 +1669,7 @@ mod imp {
             let mut controller = Self {
                 enabled: false,
                 volume,
-                stream: None,
+                _stream: None,
                 stream_handle: None,
                 sink: None,
             };
@@ -1662,7 +1678,10 @@ mod imp {
         }
 
         pub fn play_path(&mut self, path: &str) -> Result<(), String> {
-            if !self.enabled || self.stream.is_none() {
+            // See `MusicController::play_track_path`'s doc comment on why
+            // this checks `stream_handle`, not `stream` -- the same
+            // deliberate `None` from `enable_with_handle` applies here.
+            if !self.enabled || self.stream_handle.is_none() {
                 return Ok(());
             }
             if let Some(sink) = self.sink.take() {
@@ -1697,7 +1716,7 @@ mod imp {
                     sink.stop();
                 }
                 self.stream_handle = None;
-                self.stream = None;
+                self._stream = None;
                 self.enabled = false;
                 return self.enabled;
             }
@@ -1708,7 +1727,7 @@ mod imp {
 
             match open_output_stream() {
                 Ok((stream, stream_handle)) => {
-                    self.stream = Some(stream);
+                    self._stream = Some(stream);
                     self.stream_handle = Some(stream_handle);
                     self.enabled = true;
                     true
@@ -1716,7 +1735,7 @@ mod imp {
                 Err(err) => {
                     eprintln!("Voice backend unavailable ({err}), running without voiceover.");
                     self.enabled = false;
-                    self.stream = None;
+                    self._stream = None;
                     self.stream_handle = None;
                     false
                 }
@@ -1727,7 +1746,7 @@ mod imp {
         /// `OutputStreamHandle` instead of opening its own -- see
         /// `MusicController::new_with_handle`'s doc comment.
         pub(crate) fn enable_with_handle(&mut self, handle: &OutputStreamHandle) {
-            self.stream = None;
+            self._stream = None;
             self.stream_handle = Some(handle.clone());
             self.enabled = true;
         }
