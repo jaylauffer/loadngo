@@ -1,5 +1,7 @@
 mod audio;
 pub use audio::*;
+mod audio_mixer;
+pub use audio_mixer::*;
 
 #[cfg(target_os = "android")]
 mod android;

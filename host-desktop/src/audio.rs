@@ -70,7 +70,7 @@ impl SfxVoiceId {
     }
 }
 
-fn finite_clamped(value: f32, minimum: f32, maximum: f32, fallback: f32) -> f32 {
+pub(crate) fn finite_clamped(value: f32, minimum: f32, maximum: f32, fallback: f32) -> f32 {
     if value.is_finite() {
         value.clamp(minimum, maximum)
     } else {
@@ -1171,7 +1171,11 @@ mod imp {
         Ok(())
     }
 
-    fn open_output_stream() -> Result<(OutputStream, OutputStreamHandle), String> {
+    /// `pub(super)` (rather than private) so `AudioMixer::new`, in the
+    /// sibling `audio_mixer` module, can open one shared stream instead of
+    /// `MusicController`/`SfxController`/`VoiceController` each opening
+    /// their own -- see `crate::audio_mixer`'s module doc comment.
+    pub(crate) fn open_output_stream() -> Result<(OutputStream, OutputStreamHandle), String> {
         if let Some(err) = AUDIO_BACKEND_FAILURE.get() {
             return Err(err.clone());
         }
@@ -1324,6 +1328,41 @@ mod imp {
                         music_paused: false,
                     }
                 }
+            }
+        }
+
+        /// Like `new`, but shares an already-open `OutputStreamHandle`
+        /// instead of opening its own -- used by `AudioMixer` so
+        /// `MusicController`/`SfxController`/`VoiceController` share one
+        /// device instead of racing for it (see `AudioMixer::new`'s doc
+        /// comment for the full story). Doesn't own an `OutputStream`
+        /// itself (`stream: None`) since the caller keeps the shared one
+        /// alive.
+        pub(crate) fn new_with_handle(
+            handle: &OutputStreamHandle,
+            boot_track_path: String,
+            playlist_tracks: Vec<String>,
+            cue_mode: MusicCueMode,
+            bass_boost: f32,
+        ) -> Self {
+            Self {
+                tracks: HashMap::new(),
+                embedded_tracks: HashMap::new(),
+                fade_duration: 1.0,
+                mix_volume: 1.0,
+                bass_boost: bass_boost.clamp(0.0, 1.0),
+                active_track: None,
+                track_started_at: None,
+                playlist_mode_active: false,
+                resume_playlist_after_cue: false,
+                resume_playlist_from_next_track: false,
+                cue_mode,
+                playlist_tracks,
+                playlist_index: 0,
+                boot_track_path,
+                stream: None,
+                stream_handle: Some(handle.clone()),
+                music_paused: false,
             }
         }
 
@@ -1684,6 +1723,15 @@ mod imp {
             }
         }
 
+        /// Like `set_enabled(true)`, but shares an already-open
+        /// `OutputStreamHandle` instead of opening its own -- see
+        /// `MusicController::new_with_handle`'s doc comment.
+        pub(crate) fn enable_with_handle(&mut self, handle: &OutputStreamHandle) {
+            self.stream = None;
+            self.stream_handle = Some(handle.clone());
+            self.enabled = true;
+        }
+
         pub fn is_playing(&self) -> bool {
             self.enabled && self.sink.as_ref().is_some_and(|sink| !sink.empty())
         }
@@ -1754,6 +1802,21 @@ mod imp {
                         stream_handle: None,
                     }
                 }
+            }
+        }
+
+        /// Like `new`, but shares an already-open `OutputStreamHandle`
+        /// instead of opening its own -- see
+        /// `MusicController::new_with_handle`'s doc comment.
+        pub(crate) fn new_with_handle(handle: &OutputStreamHandle, settings: SfxSettings) -> Self {
+            Self {
+                settings: settings.normalized(),
+                clips: HashMap::new(),
+                voices: HashMap::new(),
+                order: VecDeque::new(),
+                next_voice_id: 1,
+                _stream: None,
+                stream_handle: Some(handle.clone()),
             }
         }
 
@@ -1953,6 +2016,13 @@ mod imp {
 }
 
 pub use imp::*;
+
+/// Crate-internal only (not part of the public API) -- lets
+/// `crate::audio_mixer::AudioMixer::new` open one shared output stream on
+/// the rodio backend instead of each controller opening its own. A no-op
+/// on Android/NetBSD, which have no such backend and don't export this.
+#[cfg(all(not(target_os = "android"), not(target_os = "netbsd")))]
+pub(crate) use imp::open_output_stream;
 
 #[cfg(test)]
 mod tests {

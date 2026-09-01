@@ -8,7 +8,10 @@ license.workspace = true
 [dependencies]
 image.workspace = true
 loadngo-host-core = { path = "../host-core" }
+loadngo-persistence = { path = "../persistence" }
 loadngo-renderer = { path = "../renderer" }
+ron.workspace = true
+serde.workspace = true
 ui-core = { path = "../ui-core" }
 
 [target.'cfg(any(target_os = "ios", target_os = "linux", target_os = "windows"))'.dependencies]
