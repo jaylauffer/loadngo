@@ -10,7 +10,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::net::SocketAddr;
 use std::os::fd::RawFd;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -122,6 +122,26 @@ pub struct IoUringPort {
     /// place until the kernel actually confirms the op is done.
     in_flight: Mutex<HashMap<IoOpId, InFlightOp>>,
     next_io_op_id: AtomicU64,
+    /// Whether a `PollAdd(wake_fd)` is currently outstanding in the ring.
+    /// `IORING_OP_POLL_ADD` is one-shot: once submitted it must be
+    /// resubmitted to watch again after it fires. `poll()` used to
+    /// resubmit one unconditionally on *every* call regardless of whether
+    /// an earlier one was still outstanding, so a single real `wake()`
+    /// (eventfd write) made every one of those accumulated watchers fire
+    /// at once -- each landing as its own separate WAKE_TOKEN CQE, and
+    /// `poll()` only ever pops one CQE per call, so draining them back
+    /// down took one `io_uring_enter` per accumulated watcher. Only
+    /// `host-desktop/src/linux.rs`'s new per-frame `HostProactor::
+    /// drain_ready` (a tight `Duration::ZERO`-timeout loop, one `defer_for`
+    /// call -- and therefore one real `wake()` -- per frame) called `poll()`
+    /// often and steadily enough for that backlog to actually build up and
+    /// show as a sustained ~30-45k `io_uring_enter`/sec busy loop instead of
+    /// a handful of harmless extra calls; confirmed live via `strace -c` on
+    /// a running `sng-roguelite-game` on `dolores`. Only ever read/written
+    /// while `poll()` already holds `ring`'s lock (its only writers), so a
+    /// plain bool guarded by that same lock would do -- `AtomicBool` here
+    /// just avoids adding a second lock for one flag.
+    wake_poll_armed: AtomicBool,
 }
 
 impl IoUringPort {
@@ -141,6 +161,7 @@ impl IoUringPort {
             pending_ops: Mutex::new(VecDeque::new()),
             in_flight: Mutex::new(HashMap::new()),
             next_io_op_id: AtomicU64::new(0),
+            wake_poll_armed: AtomicBool::new(false),
         })
     }
 
@@ -423,16 +444,20 @@ impl CompletionPort for IoUringPort {
         // we hold the lock and aren't inside the blocking wait below yet.
         self.apply_pending_ops(&mut ring);
 
-        // Register eventfd for poll if not already registered
-        // We need to submit a POLL_ADD for wake_fd
-        let poll_op = opcode::PollAdd::new(types::Fd(self.wake_fd), libc::POLLIN as u32)
-            .build()
-            .user_data(WAKE_TOKEN);
+        // Register eventfd for poll, but only if a previous PollAdd isn't
+        // still outstanding -- see `wake_poll_armed`'s doc comment for why
+        // an unconditional resubmit here is a real (if quiet) bug.
+        if !self.wake_poll_armed.load(Ordering::Relaxed) {
+            let poll_op = opcode::PollAdd::new(types::Fd(self.wake_fd), libc::POLLIN as u32)
+                .build()
+                .user_data(WAKE_TOKEN);
 
-        unsafe {
-            ring.submission()
-                .push(&poll_op)
-                .map_err(|_| io::Error::other("submission queue full"))?;
+            unsafe {
+                ring.submission()
+                    .push(&poll_op)
+                    .map_err(|_| io::Error::other("submission queue full"))?;
+            }
+            self.wake_poll_armed.store(true, Ordering::Relaxed);
         }
 
         ring.submit().map_err(|e| io::Error::other(e.to_string()))?;
@@ -503,6 +528,7 @@ impl CompletionPort for IoUringPort {
                     }
                 }
                 WAKE_TOKEN => {
+                    self.wake_poll_armed.store(false, Ordering::Relaxed);
                     Self::clear_eventfd(self.wake_fd)?;
                     Ok(PollEvent::Wake)
                 }
