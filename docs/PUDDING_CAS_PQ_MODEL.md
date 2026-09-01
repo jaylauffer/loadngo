@@ -523,3 +523,6 @@ The next implementation steps implied by this note are:
 
 - [ARCHITECTURE.md](ARCHITECTURE.md)
 - [loadngo-cas-cloud-howto.md](../../sng-rusty/docs/loadngo-cas-cloud-howto.md)
+- [RELEASE_VERSIONING_AND_INTEGRITY.md](RELEASE_VERSIONING_AND_INTEGRITY.md) —
+  open proposal to extend this signed-root-manifest pattern to player-facing
+  release artifacts (APKs, IPAs, itch.io Linux builds), not yet implemented.

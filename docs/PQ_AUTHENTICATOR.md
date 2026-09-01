@@ -117,6 +117,13 @@ This is intentionally parallel to, but distinct from, the CAS signing model.
 Both should eventually feed a common trust-root story, but they are not the
 same artifact.
 
+A third, not-yet-implemented thread is release-artifact authenticity for the
+consuming games (`sng-roguelite`, `sng-rusty`, `sng-zhoenus`) — signing
+player-facing release manifests the same way CAS signs root manifests. See
+[RELEASE_VERSIONING_AND_INTEGRITY.md](RELEASE_VERSIONING_AND_INTEGRITY.md)
+for the open design note; it proposes building on this crate's issue/verify
+shape rather than adding a fourth parallel signing mechanism.
+
 ## Quiet Operational Receipts
 
 For noisy bring-up work, prefer a small challenge payload plus quiet receipts
