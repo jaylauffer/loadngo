@@ -46,6 +46,7 @@ cargo run -p host-mac
 
 ## Architecture docs
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): layering and ownership boundaries.
+- [`docs/PROACTOR_ENGINE_ADOPTION.md`](docs/PROACTOR_ENGINE_ADOPTION.md): active proactor-first host-runtime adoption and evidence plan.
 - [`docs/RENDERER_ROADMAP.md`](docs/RENDERER_ROADMAP.md): macOS-first renderer ownership plan and multilingual requirements.
 - [`docs/AUDIO.md`](docs/AUDIO.md): music/voice separation and the reusable overlapping sound-effect controller contract.
 - [`docs/PQ_AUTHENTICATOR.md`](docs/PQ_AUTHENTICATOR.md): repo-owned post-quantum authenticator model for signed challenge tokens.

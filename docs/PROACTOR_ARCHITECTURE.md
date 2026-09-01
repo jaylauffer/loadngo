@@ -38,16 +38,29 @@ This keeps `IOCP`, `kqueue`, `epoll`, `ALooper`, or `eventfd` details out of the
 
 Backend status:
 
-- BSD/macOS: `kqueue` backend implemented in `loadngo-proactor`
-- Windows: `IOCP` backend implemented in `loadngo-proactor`
-- Linux: `epoll` + wake-fd backend implemented in `loadngo-proactor`
-- Android: `ALooper` integration still to port onto this core
+- BSD/macOS/iOS: `KqueuePort` implements completion delivery, readiness, and
+  real `IoPort` operations
+- Windows: `IocpPort` implements completion delivery and real `IoPort`
+  operations; host integration still needs real-machine validation
+- Linux: `IoUringPort` implements completion delivery, readiness, and real
+  `IoPort` operations
+- Android: `ALooper` integration still needs a completion port and host
+  integration
 
 The current in-memory `ChannelPort` exists only as a test/reference backend. It proves the core semantics without baking in any OS choice.
 
-## What this fixes
+## Host adoption status
 
-The current Rust hosts still poll continuously. That is not the intended `loadngo` architecture.
+The macOS `host-desktop` path already owns a `KqueuePort` proactor. Runtime
+wakers route through it and `FrameDemand::After` uses deferred proactor work.
+The remaining Linux, iOS, Android, and Windows host paths still need to adopt
+the same ownership model; several currently rely on platform-local timer and
+future machinery.
+
+The required contract, evidence gate, and rollout order are defined in
+[PROACTOR_ENGINE_ADOPTION.md](PROACTOR_ENGINE_ADOPTION.md).
+
+## What this enables
 
 The proactor core is the first step toward:
 
