@@ -47,7 +47,14 @@ impl<P: CompletionPort> HostProactor<P> {
     /// A `Waker` for this proactor: waking it just pokes the completion
     /// port (`ProactorHandle::wake`), which is enough to break a blocked
     /// native event pump or `poll()` out of its wait so the runtime future
-    /// gets re-polled.
+    /// gets re-polled. Used today by macOS's `poll_entry_future` (driving
+    /// the top-level entry future with a raw `Context::from_waker`); Linux
+    /// wakes its pending futures directly instead (see
+    /// `linux.rs::HostSharedState::next_frame_wakers`), so it doesn't call
+    /// this yet -- kept here rather than moved into `macos.rs` because iOS
+    /// (the next platform migration, also `KqueuePort`-backed) is expected
+    /// to need the same raw-executor pattern macOS uses.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub fn waker(&self) -> Waker {
         waker_for(self.handle.clone())
     }
@@ -60,6 +67,7 @@ fn report_has_activity(report: RunReport) -> bool {
         || report.stopped
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 struct ProactorWakeSignal<P: CompletionPort> {
     handle: ProactorHandle<P>,
 }
@@ -74,6 +82,7 @@ impl<P: CompletionPort> Wake for ProactorWakeSignal<P> {
     }
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn waker_for<P: CompletionPort>(handle: ProactorHandle<P>) -> Waker {
     Waker::from(Arc::new(ProactorWakeSignal { handle }))
 }
