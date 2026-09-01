@@ -5,8 +5,7 @@ use std::{
     future::Future,
     path::Path,
     pin::Pin,
-    sync::Arc,
-    task::{Context, Poll, Wake, Waker},
+    task::{Context, Poll, Waker},
     time::{Duration, Instant},
 };
 
@@ -20,7 +19,7 @@ use loadngo_host_core::{
     FrameTiming, HostFrame, HostKey, HostKeyEvent, InputSnapshot, RenderOp, RenderTextStyle,
     SurfaceInfo, TextMetrics, WindowDescriptor, WindowIconSet,
 };
-use loadngo_proactor::{CompletionKind, KqueuePort, Proactor, ProactorHandle, RunReport};
+use loadngo_proactor::{CompletionKind, KqueuePort};
 use loadngo_renderer::{FrameCommand, Renderer, RendererConfig};
 use objc2::{
     class,
@@ -33,6 +32,8 @@ use ui_core::{
     geometry::{Color as UiColor, Rect as UiRect},
     paint::PaintOp,
 };
+
+use crate::proactor_driver::HostProactor;
 
 #[derive(Clone)]
 pub struct DesktopFont {
@@ -266,7 +267,7 @@ struct AppState {
 thread_local! {
     static DESKTOP_BACKEND_RUNTIME: RefCell<Option<DesktopBackendRuntime>> = const { RefCell::new(None) };
     static APP_STATE: RefCell<Option<AppState>> = const { RefCell::new(None) };
-    static MAC_PROACTOR: RefCell<Option<MacProactor>> = const { RefCell::new(None) };
+    static MAC_PROACTOR: RefCell<Option<HostProactor<KqueuePort>>> = const { RefCell::new(None) };
     static TEXTURE_COUNTER: RefCell<u64> = const { RefCell::new(0) };
     static CURSOR_PREFERS_TEXT: RefCell<bool> = const { RefCell::new(false) };
 }
@@ -319,33 +320,8 @@ const NSEVENT_MODIFIER_FLAG_SHIFT: u64 = 1 << 17;
 const NSEVENT_MODIFIER_FLAG_CONTROL: u64 = 1 << 18;
 const NSEVENT_MODIFIER_FLAG_OPTION: u64 = 1 << 19;
 const NSEVENT_MODIFIER_FLAG_COMMAND: u64 = 1 << 20;
-struct MacProactor {
-    proactor: Proactor<KqueuePort>,
-    handle: ProactorHandle<KqueuePort>,
-}
-
-impl MacProactor {
-    fn new() -> Self {
-        let proactor =
-            Proactor::new(KqueuePort::new().expect("failed to create macOS kqueue port"));
-        let handle = proactor.handle();
-        Self { proactor, handle }
-    }
-}
-
-#[derive(Clone)]
-struct RuntimeWakeSignal {
-    handle: ProactorHandle<KqueuePort>,
-}
-
-impl Wake for RuntimeWakeSignal {
-    fn wake(self: Arc<Self>) {
-        let _ = self.handle.wake();
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        let _ = self.handle.wake();
-    }
+fn new_mac_proactor() -> HostProactor<KqueuePort> {
+    HostProactor::new(KqueuePort::new().expect("failed to create macOS kqueue port"))
 }
 
 impl DesktopPlatformBackend for LoadngoPlatformHost {
@@ -498,7 +474,7 @@ pub fn desktop_render_backend_status() -> DesktopRenderBackendStatus {
     with_desktop_backend_runtime(|runtime| runtime.status())
 }
 
-fn with_mac_proactor<R>(f: impl FnOnce(&MacProactor) -> R) -> R {
+fn with_mac_proactor<R>(f: impl FnOnce(&HostProactor<KqueuePort>) -> R) -> R {
     MAC_PROACTOR.with(|proactor| {
         let proactor = proactor.borrow();
         let proactor = proactor
@@ -509,11 +485,7 @@ fn with_mac_proactor<R>(f: impl FnOnce(&MacProactor) -> R) -> R {
 }
 
 fn runtime_waker() -> Waker {
-    with_mac_proactor(|proactor| {
-        Waker::from(Arc::new(RuntimeWakeSignal {
-            handle: proactor.handle.clone(),
-        }))
-    })
+    with_mac_proactor(HostProactor::waker)
 }
 
 pub fn launch(
@@ -522,7 +494,7 @@ pub fn launch(
     entry: impl Future<Output = ()> + 'static,
 ) {
     MAC_PROACTOR.with(|proactor| {
-        *proactor.borrow_mut() = Some(MacProactor::new());
+        *proactor.borrow_mut() = Some(new_mac_proactor());
     });
     let (window_obj, view_obj, surface) = create_window(&window, icon.as_ref());
     APP_STATE.with(|state| {
@@ -1221,15 +1193,7 @@ fn should_forward_event_to_app(event_type: u64) -> bool {
 }
 
 fn drain_proactor() {
-    with_mac_proactor(|proactor| loop {
-        let report = proactor
-            .proactor
-            .run_ready()
-            .expect("failed to drain macOS proactor");
-        if !proactor_report_has_activity(report) {
-            break;
-        }
-    });
+    with_mac_proactor(HostProactor::drain_ready);
 }
 
 fn handle_event(event: *mut AnyObject) {
@@ -1527,13 +1491,6 @@ fn is_printable_text_input_char(ch: char) -> bool {
             code,
             0xE000..=0xF8FF | 0xF0000..=0xFFFFD | 0x100000..=0x10FFFD
         )
-}
-
-fn proactor_report_has_activity(report: RunReport) -> bool {
-    report.dispatched_completions > 0
-        || report.dispatched_deferred > 0
-        || report.woke
-        || report.stopped
 }
 
 fn ns_date_for_timeout(timeout: Option<Duration>) -> Retained<AnyObject> {

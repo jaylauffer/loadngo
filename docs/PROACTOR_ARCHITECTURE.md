@@ -51,11 +51,36 @@ The current in-memory `ChannelPort` exists only as a test/reference backend. It 
 
 ## Host adoption status
 
-The macOS `host-desktop` path already owns a `KqueuePort` proactor. Runtime
-wakers route through it and `FrameDemand::After` uses deferred proactor work.
-The remaining Linux, iOS, Android, and Windows host paths still need to adopt
-the same ownership model; several currently rely on platform-local timer and
-future machinery.
+The macOS and Linux `host-desktop` paths each own a proactor for the
+application's lifetime -- `KqueuePort` on macOS, `IoUringPort` on Linux.
+Runtime wakers route through it, `FrameDemand::After` schedules its wait as
+deferred proactor work, and the native event pump (`NSApplication` on macOS,
+`winit`'s `ControlFlow::WaitUntil` on Linux) blocks on the proactor's next
+deadline instead of a fixed poll interval. Both hosts share one ownership
+pattern, `host-desktop/src/proactor_driver.rs::HostProactor`, rather than
+each hand-rolling it -- see "Portable host-driver seam" below.
+
+On Linux this replaced a per-call `thread::spawn` in `next_frame()`'s
+`FrameDemand::After` path (one new OS thread per pending frame timer,
+previously undetected because ephemeral threads don't show up as steady
+`/proc/<pid>/status` thread-count growth -- see
+`docs/LINUX_X11_PRESENT_LATENCY.md`'s "What was ruled out" for that exact
+measurement). The remaining iOS, Android, and Windows host paths still need
+to adopt the same ownership model; several currently rely on platform-local
+timer and future machinery.
+
+## Portable host-driver seam
+
+`HostProactor<P: CompletionPort>` (`host-desktop/src/proactor_driver.rs`)
+holds a host's `Proactor<P>`/`ProactorHandle<P>` pair and provides the three
+things every proactor-owning host needs: `drain_ready()` (dispatch
+everything currently ready, looping until a poll reports no activity --
+matches the drain pattern macOS/NetBSD each used to hand-roll) and
+`waker()`/`waker_for()` (a `Waker` that pokes the completion port so a
+blocked native event pump re-checks the runtime future). This is the "Phase
+1" portable seam called for in
+[PROACTOR_ENGINE_ADOPTION.md](PROACTOR_ENGINE_ADOPTION.md); macOS and Linux
+both build on it today.
 
 The required contract, evidence gate, and rollout order are defined in
 [PROACTOR_ENGINE_ADOPTION.md](PROACTOR_ENGINE_ADOPTION.md).

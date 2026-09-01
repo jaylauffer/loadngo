@@ -45,17 +45,32 @@ The core now supplies queued work, deadline ordering, wakeups, cancellation,
 shutdown draining, readiness registration, and real `IoPort` implementations
 for kqueue, io_uring, and IOCP.
 
-`host-desktop` already uses the kqueue proactor on macOS for runtime wakers and
-deferred frame scheduling. NetBSD desktop paths also use it. The Rust game
-executables therefore already exercise the intended model on macOS through the
-shared host, without each game taking a direct proactor dependency.
+`host-desktop` uses the kqueue proactor on macOS and the io_uring proactor on
+Linux for runtime wakers and deferred frame scheduling; both own their
+proactor through the shared `HostProactor` seam
+(`host-desktop/src/proactor_driver.rs`, see
+[PROACTOR_ARCHITECTURE.md](PROACTOR_ARCHITECTURE.md)). NetBSD desktop paths
+also use a kqueue proactor directly. The Rust game executables therefore
+already exercise the intended model on macOS and Linux through the shared
+host, without each game taking a direct proactor dependency.
+
+The Linux migration (2026-09-01) replaced `host-desktop/src/linux.rs`'s
+per-`next_frame()` `thread::spawn` (one OS thread spawned for every pending
+`FrameDemand::After` wait) with a deferred timer on the owned
+`Proactor<IoUringPort>`, driven by `winit`'s `ControlFlow::WaitUntil` instead
+of a background thread. This is a correctness-preserving mechanical swap
+(verified: `cargo build`/`cargo test -p loadngo-host-desktop` and a
+`sng-roguelite-game` smoke launch on macOS, which shares the same
+`proactor_driver` code path) -- it has **not** yet cleared this document's
+own evidence gate on real Linux hardware; that requires the `dolores` CI run
+and a manual playtest pass (see "Immediate Work" below).
 
 The remaining host gap is platform parity:
 
 | Platform | Core backend | Host status |
 | --- | --- | --- |
 | macOS | `KqueuePort` | reference integration exists |
-| Linux | `IoUringPort` | host scheduler migration required |
+| Linux | `IoUringPort` | host scheduler migrated 2026-09-01; pending real-hardware evidence-gate measurements (dolores) |
 | iOS | `KqueuePort` | host scheduler migration required |
 | Android | none | `ALooper` completion port and host integration required |
 | Windows | `IocpPort` | host scheduler migration and real-machine validation required |
@@ -124,17 +139,27 @@ battery behavior against the previous host loop.
 
 ### Phase 1: Establish the portable host-driver seam
 
-1. Extract the macOS ownership pattern into a small host scheduling contract.
+1. **Done (2026-09-01).** Extracted the macOS ownership pattern into
+   `host-desktop/src/proactor_driver.rs::HostProactor`, a small host
+   scheduling contract shared by macOS and Linux.
 2. Keep platform window/event pumping native; do not replace it with a generic
-   busy loop.
+   busy loop. (Preserved: macOS still drives `NSApplication`'s event pump,
+   Linux still drives `winit`'s event loop -- the proactor only supplies the
+   wait deadline and deferred dispatch, per `ControlFlow::WaitUntil`.)
 3. Make runtime wake, frame deadline, invalidation, and shutdown flow through
-   that contract.
+   that contract. (Done for macOS and Linux; iOS/Android/Windows still
+   outstanding.)
 4. Add deterministic host-level tests for idle wakeups and deferred frames.
+   **Not yet done** -- still relying on the proactor crate's own unit/loom
+   tests plus manual host smoke passes; no host-level automated regression
+   test exists yet for either platform's wake/deferred-frame behavior.
 
 ### Phase 2: Migrate the active non-Android game hosts
 
-1. Move Linux onto `IoUringPort` and measure the three games on the current
-   desktop path.
+1. **Code done, hardware evidence pending (2026-09-01).** Moved Linux onto
+   `IoUringPort` (`host-desktop/src/linux.rs`), replacing the
+   `thread::spawn`-per-frame-wait model. Not yet measured on the three games
+   per the evidence gate -- needs a `dolores` run (see "Immediate Work").
 2. Move iOS onto `KqueuePort` and repeat device tests, including the existing
    `sng-rusty` touch investigation.
 3. Compare each migration with its recorded baseline before treating it as an
@@ -169,7 +194,14 @@ their own event loop, timer thread, or scheduler.
 
 ## Immediate Work
 
-1. Design and add the host-level measurement surface.
-2. Capture the macOS three-game baseline and select explicit pass thresholds.
-3. Introduce the portable host-driver seam and migrate Linux first.
+1. Validate the 2026-09-01 Linux migration on `dolores`: `cargo test`/
+   `cargo clippy` via CI, then a manual playtest of `sng-roguelite`,
+   `sng-zhoenus`, and `sng-rusty` (window close, background/foreground,
+   held-key input) to confirm no correctness regression before this counts
+   as adopted.
+2. Design and add the host-level measurement surface (idle CPU/thread count,
+   wakeups/sec, frame interval jitter, input-to-present latency).
+3. Capture the macOS and Linux baselines (old thread-per-wait Linux host vs.
+   the new `IoUringPort` host makes a real before/after comparison possible
+   for the first time) and select explicit pass thresholds.
 4. Repeat the same proof on iOS, then build the Android and Windows paths.

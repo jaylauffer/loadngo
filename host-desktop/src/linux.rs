@@ -3,8 +3,8 @@ use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
-use std::thread;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::task::Waker;
 use std::time::Instant;
 
 use arboard::Clipboard;
@@ -18,6 +18,7 @@ use loadngo_host_core::{
     RenderTextStyle, RenderTextVerticalAlign, RenderTextVerticalMetricMode, SurfaceInfo,
     TextMetrics, WindowDescriptor, WindowIconSet,
 };
+use loadngo_proactor::{CompletionKind, IoUringPort};
 use loadngo_renderer::{FrameCommand, ImageRequest, Renderer, RendererConfig, TextRequest};
 use softbuffer::{Context, Surface};
 use ui_core::{
@@ -28,13 +29,15 @@ use ui_core::{
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, KeyCode, NamedKey, PhysicalKey};
 use winit::platform::x11::WindowAttributesExtX11;
 use winit::raw_window_handle::{
     HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
 use winit::window::{Icon, Window, WindowAttributes, WindowId};
+
+use crate::proactor_driver::HostProactor;
 
 #[derive(Clone)]
 pub struct DesktopFont {
@@ -104,7 +107,7 @@ pub struct DesktopRenderBackendStatus {
 
 #[derive(Clone)]
 struct LinuxHostShared {
-    state: Arc<(Mutex<HostSharedState>, Condvar)>,
+    state: Arc<Mutex<HostSharedState>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -130,6 +133,7 @@ struct HostSharedState {
     last_backend_used: DesktopRenderBackendKind,
     backend_detail: String,
     event_proxy: Option<EventLoopProxy<LinuxUserEvent>>,
+    next_frame_wakers: Vec<Waker>,
 }
 
 #[derive(Clone)]
@@ -275,6 +279,7 @@ impl Default for HostSharedState {
             last_backend_used: DesktopRenderBackendKind::Unavailable,
             backend_detail: "Linux host waiting for the first frame".to_string(),
             event_proxy: None,
+            next_frame_wakers: Vec::new(),
         }
     }
 }
@@ -283,27 +288,30 @@ static HOST_SHARED: OnceLock<LinuxHostShared> = OnceLock::new();
 static DEFAULT_FONT: OnceLock<DesktopFont> = OnceLock::new();
 static FONT_CACHE: OnceLock<Mutex<HashMap<String, DesktopFont>>> = OnceLock::new();
 static TRACE_ENABLED: OnceLock<bool> = OnceLock::new();
+static PROACTOR: OnceLock<HostProactor<IoUringPort>> = OnceLock::new();
 
 fn shared() -> &'static LinuxHostShared {
     HOST_SHARED.get().expect("linux host not initialized")
 }
 
 fn lock_state() -> std::sync::MutexGuard<'static, HostSharedState> {
-    shared().state.0.lock().expect("linux host state poisoned")
+    shared().state.lock().expect("linux host state poisoned")
+}
+
+fn proactor() -> &'static HostProactor<IoUringPort> {
+    PROACTOR.get().expect("linux proactor not initialized")
 }
 
 pub fn wake_host() {
     let Some(shared) = HOST_SHARED.get() else {
         return;
     };
-    let (lock, cvar) = &*shared.state;
-    let mut state = lock.lock().expect("linux host state poisoned");
+    let mut state = shared.state.lock().expect("linux host state poisoned");
     if !state.running {
         return;
     }
     advance_frame_clock(&mut state, "wake_host");
     let proxy = state.event_proxy.clone();
-    cvar.notify_all();
     drop(state);
     if let Some(proxy) = proxy {
         let _ = proxy.send_event(LinuxUserEvent::Wake);
@@ -424,9 +432,12 @@ pub fn launch(
     entry: impl Future<Output = ()> + 'static,
 ) {
     let shared = LinuxHostShared {
-        state: Arc::new((Mutex::new(HostSharedState::default()), Condvar::new())),
+        state: Arc::new(Mutex::new(HostSharedState::default())),
     };
     let _ = HOST_SHARED.set(shared.clone());
+    let _ = PROACTOR.set(HostProactor::new(
+        IoUringPort::new().expect("failed to create Linux io_uring proactor"),
+    ));
 
     let event_loop = EventLoop::<LinuxUserEvent>::with_user_event()
         .build()
@@ -461,10 +472,23 @@ pub fn capture_frame() -> HostFrame {
 }
 
 pub async fn next_frame(demand: FrameDemand) {
+    // Historically this registered its wake-up by spawning a fresh OS
+    // thread per `next_frame()` call -- one blocked on the shared Condvar,
+    // plus (for `FrameDemand::After`) a second doing `thread::sleep`. That
+    // ran once per frame (every ~16ms at 60 FPS), permanently churning
+    // threads never accounted for in the idle/active game loop cost. Both
+    // are now handled on the winit main thread instead: a due `Waker` is
+    // stored directly in `HostSharedState::next_frame_wakers` and woken in
+    // place wherever `advance_frame_clock` already runs (`resumed`, the
+    // timer below, `wake_host()`), and the delay itself is a deferred
+    // completion on the shared `loadngo_proactor::Proactor<IoUringPort>`
+    // (see `proactor()`/`schedule_frame_timer`), driven by
+    // `ControlFlow::WaitUntil` in `LinuxApp::about_to_wait` -- no thread at
+    // all.
     struct NextFrameFuture {
         demand: FrameDemand,
         observed_epoch: u64,
-        waiting_registered: bool,
+        waker_registered: bool,
         timer_registered: bool,
     }
 
@@ -475,48 +499,24 @@ pub async fn next_frame(demand: FrameDemand) {
             mut self: Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<Self::Output> {
-            let (lock, _cvar) = &*shared().state;
-            let state = lock.lock().expect("linux host state poisoned");
-            if !state.running {
-                return std::task::Poll::Pending;
-            }
-            if state.frame_epoch > self.observed_epoch {
-                self.observed_epoch = state.frame_epoch;
-                return std::task::Poll::Ready(());
-            }
-            drop(state);
-            if !self.waiting_registered {
-                self.waiting_registered = true;
-                let waker = cx.waker().clone();
-                let state_arc = shared().state.clone();
-                thread::spawn(move || {
-                    let (lock, cvar) = &*state_arc;
-                    let guard = lock.lock().expect("linux host state poisoned");
-                    let _guard = cvar.wait(guard).expect("linux host wait poisoned");
-                    waker.wake();
-                });
+            {
+                let mut state = lock_state();
+                if !state.running {
+                    return std::task::Poll::Pending;
+                }
+                if state.frame_epoch > self.observed_epoch {
+                    self.observed_epoch = state.frame_epoch;
+                    return std::task::Poll::Ready(());
+                }
+                if !self.waker_registered {
+                    self.waker_registered = true;
+                    state.next_frame_wakers.push(cx.waker().clone());
+                }
             }
             if !self.timer_registered {
                 if let FrameDemand::After(delay) = self.demand {
                     self.timer_registered = true;
-                    let waker = cx.waker().clone();
-                    let state_arc = shared().state.clone();
-                    thread::spawn(move || {
-                        thread::sleep(delay);
-                        let (lock, cvar) = &*state_arc;
-                        let mut state = lock.lock().expect("linux host state poisoned");
-                        if !state.running {
-                            return;
-                        }
-                        advance_frame_clock(&mut state, "timer");
-                        let proxy = state.event_proxy.clone();
-                        cvar.notify_all();
-                        drop(state);
-                        if let Some(proxy) = proxy {
-                            let _ = proxy.send_event(LinuxUserEvent::Wake);
-                        }
-                        waker.wake();
-                    });
+                    schedule_frame_timer(delay);
                 }
             }
             std::task::Poll::Pending
@@ -527,10 +527,28 @@ pub async fn next_frame(demand: FrameDemand) {
     NextFrameFuture {
         demand,
         observed_epoch,
-        waiting_registered: false,
+        waker_registered: false,
         timer_registered: false,
     }
     .await;
+}
+
+fn schedule_frame_timer(delay: std::time::Duration) {
+    proactor()
+        .handle
+        .defer_for(delay, CompletionKind::Timer, 0, move |_| {
+            let mut state = lock_state();
+            if !state.running {
+                return;
+            }
+            advance_frame_clock(&mut state, "timer");
+            let proxy = state.event_proxy.clone();
+            drop(state);
+            if let Some(proxy) = proxy {
+                let _ = proxy.send_event(LinuxUserEvent::Wake);
+            }
+        })
+        .expect("failed to schedule Linux frame timer");
 }
 
 pub fn simulate_mouse_with_touch(enabled: bool) {
@@ -909,10 +927,8 @@ impl LinuxApp {
     }
 
     fn publish_frame(&mut self, source: &str) {
-        let (lock, cvar) = &*self.shared.state;
-        let mut state = lock.lock().expect("linux host state poisoned");
+        let mut state = self.shared.state.lock().expect("linux host state poisoned");
         advance_frame_clock(&mut state, source);
-        cvar.notify_all();
     }
 
     fn shutdown_graphics(&mut self) {
@@ -1045,10 +1061,8 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
                 .spawner()
                 .spawn_local(async move {
                     entry.await;
-                    let (lock, cvar) = &*shared.state;
-                    let mut state = lock.lock().expect("linux host state poisoned");
+                    let mut state = shared.state.lock().expect("linux host state poisoned");
                     state.running = false;
-                    cvar.notify_all();
                 })
                 .expect("failed to spawn Linux runtime future");
         }
@@ -1077,10 +1091,8 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
         match event {
             WindowEvent::CloseRequested => {
                 trace_linux("window_event CloseRequested");
-                let (lock, cvar) = &*self.shared.state;
-                let mut state = lock.lock().expect("linux host state poisoned");
+                let mut state = self.shared.state.lock().expect("linux host state poisoned");
                 state.running = false;
-                cvar.notify_all();
                 drop(state);
                 self.shutdown_graphics();
                 event_loop.exit();
@@ -1187,6 +1199,11 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         ABOUT_TO_WAIT_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Dispatch any proactor deferred work that's now due (this is what
+        // actually fires a `FrameDemand::After` timer and wakes the future
+        // waiting on it) before giving the async runtime a chance to make
+        // progress from that wake-up.
+        proactor().drain_ready();
         self.pool.run_until_stalled();
         {
             let state = lock_state();
@@ -1198,6 +1215,14 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
             }
         }
         self.request_redraw_if_needed();
+        // Block until the next deferred deadline (a pending frame timer)
+        // instead of busy-polling; a real event, user event (e.g. an
+        // external `wake_host()`), or the timer itself elapsing all bring
+        // the loop back here.
+        event_loop.set_control_flow(match proactor().proactor.next_deadline() {
+            Some(deadline) => ControlFlow::WaitUntil(deadline),
+            None => ControlFlow::Wait,
+        });
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: LinuxUserEvent) {
@@ -1220,6 +1245,9 @@ fn advance_frame_clock(state: &mut HostSharedState, source: &str) {
     };
     state.frame_epoch = state.frame_epoch.saturating_add(1);
     state.pending_redraw = true;
+    for waker in state.next_frame_wakers.drain(..) {
+        waker.wake();
+    }
     if trace_enabled() {
         trace_linux(format!(
             "advance_frame_clock source={source} epoch={} dt_ms={:.3} key_events={} keys_down={}",
