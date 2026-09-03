@@ -124,6 +124,44 @@ Android/iOS parity for its own sake.
   dedicated release-signing key with its own rotation policy — flagged here,
   not resolved.
 
+## Future direction: an in-engine update-channel mechanism, backed by CAS
+
+Raised 2026-09-03, after `sng-roguelite` v0.5.2's Linux build was manually
+play-tested on `dolores` and pushed to itch.io by hand. Broader than
+Problem 1 above ("what version am I running, and is there a newer one") —
+this is the next step past just *checking*: `loadngo` itself having a
+release-channel concept a game can subscribe to, so a running game (or a
+launcher) can discover, fetch, and apply an update rather than a human
+rebuilding and manually re-uploading/reinstalling every time, the way
+every one of the three games' pipelines works today (see
+`sng-roguelite/docs/BUILD_RELEASE_PIPELINE.md`).
+
+**Why CAS specifically, not a bespoke download mechanism:** `loadngo`
+already has a working content-addressed, PQ-signed manifest precedent —
+`PUDDING_CAS_PQ_MODEL.md`'s `pudding_cas_ingest` tooling, which asserts
+"this content is authoritative" via a signed root manifest over
+`blake3`-hashed content. Problem 2 above already proposes reusing that
+same signed-manifest shape for release-artifact authenticity; an
+update-channel mechanism would go a step further and reuse CAS as the
+actual **transport/storage** for update content too — content-addressed
+storage gives delta-friendly, dedup-friendly, integrity-verified-by-
+construction distribution essentially for free, rather than inventing a
+second content-delivery scheme alongside the one CAS already provides for
+workspace lineage.
+
+**Status: an idea to preserve, not a design.** No shape has been proposed
+yet for what a "channel" is (stable/beta? per-platform? per-game?), how a
+running game would poll or be notified, how a partial/delta update would
+apply itself to an already-installed Android/iOS bundle (which have their
+own OS-enforced install mechanisms Problem 1 already has to route around
+on those platforms), or how this interacts with app-store-style platforms
+that forbid apps updating themselves outside the store's own mechanism
+(a real constraint once either mobile game ever ships to an actual store,
+not just device builds). Recording this now so the eventual design
+conversation for Problem 1/2 above also considers *delivery*, not only
+*checking* and *signing* — don't let this scope quietly get invented
+piecemeal inside whichever problem gets tackled first.
+
 ## Next step
 
 A dedicated design conversation, per the user's own framing when this was
