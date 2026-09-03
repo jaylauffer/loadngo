@@ -133,20 +133,53 @@ cross-compile gap (also pre-existing).
 - **Real translated (non-English) catalog content.** Phase 1 is the
   mechanism; no `de.ron`/`ja.ron`/etc. exists for any game yet.
 
+## Phase 2 — done (2026-09-03): `sng-zhoenus` and `sng-roguelite` adoption
+
+- **`sng-zhoenus`**: full migration. Its entire player-facing text surface
+  turned out to be four HUD strings (`src/render.rs`'s `push_hud`) — wave
+  label, countdown, all-waves-complete, score. `src/localization.rs`
+  wires `system_locale()` + `Localizer`, threaded as an explicit
+  parameter through `build_paint_ops`/`push_hud` (small enough call graph
+  that parameter-threading was simpler than a global). Verified: build/
+  clippy/fmt/test clean, and a live run of the release binary produced no
+  errors with no catalog file present (HUD renders via English defaults).
+- **`sng-roguelite`**: full migration, 73 `localization::t(...)` call
+  sites across `crates/game-app/src/lib.rs` (title screen, HUD,
+  run-summary, achievements, reward-draft, sound settings, item labels/
+  descriptions, room-role labels). Unlike `sng-zhoenus`, this game's
+  render call graph is deep enough (many layered functions) that
+  threading `&Localizer` as a parameter everywhere wasn't worth it —
+  `crates/game-app/src/localization.rs` instead holds it in a
+  process-wide `OnceLock` (the same shape `loadngo/host-desktop/src/
+  audio.rs`'s `AUDIO_BACKEND_FAILURE` already uses), with a free
+  function `localization::t(key, default)` callable from anywhere in the
+  crate with zero signature changes needed at any call site. Item labels/
+  descriptions are keyed by the item's own `id` (`item.<id>.label`/
+  `.description`), looked up at the display layer with the RON-authored
+  text as `default` — `items.ron` itself is completely untouched, stays
+  exactly as readable as it always was. Same treatment for the HUD's
+  room-role word ("Combat"/"Reward"/"Recovery"/"Elite"/"Guardian"): its
+  accessor lives in `game-core`, which is deliberately engine-agnostic
+  (no `loadngo` dependency), so the localization lookup happens in
+  `game-app` at the point of display, not in `game-core` itself.
+  Deliberately left un-migrated: the window title and title-screen logo
+  text (product identity, not translatable content — same judgment call
+  as `sng-zhoenus`'s window title), the achievements-close-button "X"
+  glyph (a universal symbol), internal widget-constructor label
+  arguments that are never actually painted (this game paints its own
+  text via separate `RenderOp::Text` calls), and `format_playtest_report`
+  (a terminal/developer diagnostic tool, not in-game text). Verified:
+  build/clippy/fmt clean, 108 tests passing, and a live run of the
+  release binary produced no errors with no catalog file present.
+
 ## Sequencing for later phases (not scheduled)
 
-1. `sng-zhoenus` adoption: full string migration (small — roughly a
-   few dozen real UI strings), wiring `system_locale()` + `Localizer`
-   into startup.
-2. `sng-roguelite` adoption: full string migration (~290 sites),
-   including catalog-content lookups for `items.ron` (and `rewards.ron`/
-   `encounters.ron` if they carry player-facing text too) using each
-   entry's own `id` as the key, not a content hash.
-3. Font glyph-coverage: source/bundle one broad-coverage fallback font,
+1. Font glyph-coverage: source/bundle one broad-coverage fallback font,
    wire `FontCatalogManifest.fallback_fonts` all the way through to
    actual glyph rasterization, verify a real non-Latin string renders
-   correctly on a real device.
-4. Real translated catalog content for at least one additional language,
+   correctly on a real device. Necessary before either game's adoption
+   is useful for any language `loadngo`'s current fonts don't cover.
+2. Real translated catalog content for at least one additional language,
    for at least one game, to prove the whole pipeline under real (not
    synthetic-test) conditions.
 
