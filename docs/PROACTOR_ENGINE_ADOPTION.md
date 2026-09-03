@@ -3,7 +3,9 @@
 Status: active workspace priority. macOS/Linux/Android host migrations
 done (macOS/Linux 2026-09-01, Linux pending hardware evidence-gate
 measurement; Android backend **and** host migration 2026-09-03,
-on-device-verified); iOS/Windows backends and host migrations still
+on-device-verified — including a real frame-pacing regression the user's
+own play-testing caught, root-caused, and fixed same day, see the
+Android section below); iOS/Windows backends and host migrations still
 open.
 
 ## Decision
@@ -173,37 +175,95 @@ threading-cost one: `FrameDemand::After(delay)` previously ignored
 `delay` entirely, resolving on whatever `AChoreographer` vsync callback
 happened to fire next (`target_frame = frame_counter + 1`, and *any*
 callback satisfied that) — a caller asking to wait 500ms got ~16ms every
-time. `NextFrameFuture` now checks a real `Instant`-based deadline; the
-proactor's `defer_for(delay, ...)` timer's only job is to call
-`request_frame_callback()` once that deadline has actually passed,
-re-arming the one site (`on_frame_callback`) that ever polls the app's
-future — the timer never touches app state or wakes anything itself, it
-just guarantees a real callback exists when it's actually due.
-`request_frame_callback` was already mutex-guarded and safe to call
-cross-thread (Android's `AChoreographer` supports posting to an instance
-from a different thread than the one it fires on, and this same file
-already calls `ALooper_wake` cross-thread from the input thread this
-exact way). `FrameDemand::Idle` is untouched — it was never tied to
+time. `request_frame_callback` was already mutex-guarded and safe to
+call cross-thread (Android's `AChoreographer` supports posting to an
+instance from a different thread than the one it fires on, and this same
+file already calls `ALooper_wake` cross-thread from the input thread
+this exact way). `FrameDemand::Idle` is untouched — it was never tied to
 `AChoreographer`, and is still woken directly wherever a real input/
 lifecycle event bumps `event_epoch`.
 
-`AndroidAppState::frame_counter`, now unused by anything (its only
-reader was the old `target_frame` check this replaced), was removed
-rather than left as write-only dead code.
+`AndroidAppState::frame_counter`, unused by anything after the first cut
+of this change (its only reader was the old `target_frame` check this
+replaced), was removed rather than left as write-only dead code.
 
-Verified for real, not just by compiling: cross-compiled and
-clippy-clean (`--no-deps`, `clippy::all` + `clippy::pedantic`, zero new
-warnings against the pre-migration baseline — confirmed by diffing
-against a `git stash` of this exact change) for `aarch64-linux-android`,
-then a full real build/install/launch of `sng-roguelite`'s actual Android
-app (which pulls this host in via its normal path dependency, not a
-synthetic test): logcat confirmed `"Android epoll proactor initialized"`
-with no panics/crashes, `/proc/<pid>/task` confirmed the dedicated
-`loadngo-android-proactor` thread alive alongside the existing input
-thread, and screenshots taken before and after tapping into a real
-combat room confirmed the simulation actually advances in real time
-(HP dropping, an enemy defeated, projectiles moving) — not frozen, not
-racing. `on_destroy` now calls `handle.stop()` on the proactor (no
+**A real regression, found by the user's own play-testing, not by any of
+this session's own measurements.** The first cut routed *every*
+`FrameDemand::After` request through the `EpollPort` proactor's
+`defer_for(delay, ...)`: a real `Instant` deadline, checked on every real
+`AChoreographer` callback, with the timer's only job being to call
+`request_frame_callback()` once that deadline had passed. This build's
+CPU/context-switch numbers (below) looked fine or better than the
+pre-migration baseline — but the user reported the game itself feeling
+"not as smooth," with the player character moving "in spurts." That
+report was right, and this session's own `/proc`-based CPU/wakeup
+measurements had completely missed it, because they measure load, not
+pacing.
+
+Diagnosed with real frame-interval data — `sng-roguelite`'s existing
+`SNG_TICK_TRACE` mechanism uses `eprintln!`, which doesn't reach `logcat`
+for a `NativeActivity` process (a real, separate gap, not fixed here);
+instead, `android.rs`'s existing per-frame `"Android frame flush ..."`
+`android_log_info` line (normally throttled to only slow frames) was
+temporarily made unconditional, giving real per-frame `logcat` timestamps
+to compute inter-frame deltas from. Root cause: `NextFrameFuture::new`
+captures its `Instant` deadline *after* the current frame's simulate/
+render/present work has already run (measured 2-5ms), so a 16ms request
+plus that overhead routinely exceeds one vsync period (~16.67ms at
+60Hz) — not by much, but by enough that the very next callback almost
+never satisfies the deadline, so every single frame fell through to the
+*second* callback instead. Confirmed with the display's actual active
+mode (`dumpsys display`: 60.000004Hz, i.e. ~16.67ms/vsync, not some
+other rate) and with the dedicated proactor thread's mere existence
+ruled out as a confound (disabling it entirely and re-measuring changed
+nothing).
+
+**Fixed by treating short and long `FrameDemand::After` requests
+differently** (`NEXT_FRAME_THRESHOLD = 20ms`, `host-desktop/src/
+android.rs`), rather than routing every request through the deadline
+uniformly:
+
+- **Short** (`sng-roguelite`'s own four call sites requesting a flat
+  16ms every tick — meant as "~1 frame at 60Hz," not a precise timer):
+  resolves on whatever real `AChoreographer` callback comes next, no
+  time arithmetic at all — exactly the pre-migration behavior's
+  zero-arithmetic guarantee (any callback since creation satisfies it),
+  just implemented via "was I polled before" instead of a frame counter.
+- **Long** (the one call site requesting 500ms while backgrounded, where
+  being off by up to one vsync interval is negligible relative to the
+  requested duration): keeps the `Instant`-deadline-gated path.
+
+This is the concrete lesson for `docs/PROACTOR_ENGINE_ADOPTION.md`'s own
+"Evidence Gate" going forward, on any platform: **load metrics
+(CPU%, context-switches/sec) do not substitute for pacing metrics
+(frame-to-frame interval). A migration can look neutral-to-better on the
+former while being a real, user-visible regression on the latter.**
+
+Measured all three variants on the real device, via logcat-timestamp
+deltas between consecutive presented-frame log lines (median / % of
+intervals over 25ms; healthy is ~17ms median matching the real vsync
+period):
+
+| Variant | Median interval | Intervals > 25ms |
+| --- | --- | --- |
+| Pre-migration baseline (`5ea651be`, no proactor at all) | 17ms | 12.8% |
+| First cut (proactor timer, every `After` request) | 33ms | 90.3% |
+| Dedicated thread disabled (isolating the thread as a confound) | 33ms | 71.7% |
+| **Fixed** (short/long split) | **17ms** | **2.4%** |
+
+Verified for real, not just by compiling, at every stage: cross-compiled
+and clippy-clean (`--no-deps`, `clippy::all` + `clippy::pedantic`, zero
+new warnings against the pre-migration baseline — confirmed by diffing
+against a `git stash` of this exact change) for `aarch64-linux-android`
+throughout; macOS `check`/`test`/`fmt` all still clean; a full real
+build/install/launch of `sng-roguelite`'s actual Android app at every
+step (not a synthetic test) — logcat confirmed `"Android epoll proactor
+initialized"` with zero panics/crashes across every build, `/proc/<pid>/
+task` confirmed the dedicated `loadngo-android-proactor` thread alive
+alongside the existing input thread, and screenshots taken before and
+after tapping into a real combat room confirmed the simulation actually
+advances in real time (HP dropping, an enemy defeated, projectiles
+moving). `on_destroy` still calls `handle.stop()` on the proactor (no
 join, same fire-and-forget assumption the input thread already makes
 about process teardown) so `EpollPort`'s own shutdown path can cancel
 any outstanding timer cleanly.
@@ -248,6 +308,16 @@ idle wake/CPU use is materially reduced where the prior host polled, and no
 correctness regression appears in the target game flows. Exact thresholds are
 set from the first measured baseline rather than invented before hardware data
 exists.
+
+**This list is not optional, including "active-frame interval and jitter"
+— confirmed the hard way on Android's own migration (2026-09-03, see that
+section above).** The first cut was measured only on CPU%/context-switch
+deltas, which looked fine or better than baseline; the user's own
+play-testing caught a real, severe frame-pacing regression (median
+interval ~2x the healthy value) those load metrics never would have
+shown. Load and pacing are different axes — a CPU/wakeup-only pass is not
+a substitute for the frame-interval measurement this list already
+required, even when the former looks clean.
 
 ## Current Baseline
 

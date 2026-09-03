@@ -21,7 +21,7 @@ use loadngo_host_core::{
     SafeAreaInsets, SurfaceInfo, TextMetrics, TouchPhase, TouchPoint, WindowDescriptor,
     WindowIconSet,
 };
-use loadngo_proactor::{CompletionKind, EpollPort};
+use loadngo_proactor::EpollPort;
 use loadngo_renderer::{FrameCommand, ImageRequest, Renderer, RendererConfig};
 use ndk::asset::AssetManager;
 use ndk::hardware_buffer_format::HardwareBufferFormat;
@@ -343,26 +343,6 @@ fn init_proactor() {
                 .expect("android proactor pump failed");
         })
         .expect("failed to spawn Android proactor thread");
-}
-
-/// Schedules a real, duration-respecting wakeup for `FrameDemand::After`
-/// through the proactor rather than riding the next `AChoreographer`
-/// vsync unconditionally regardless of how long `delay` actually is (the
-/// pre-migration behavior — see `NextFrameFuture`'s doc comment). The
-/// completion runs on the dedicated proactor thread (`init_proactor`),
-/// not the main/UI thread; `request_frame_callback` is already
-/// mutex-guarded and, per the NDK's own documented support for posting a
-/// callback to a `AChoreographer` instance from a different thread than
-/// the one it fires on, safe to call cross-thread here — the same way
-/// `wake_input_thread` already calls `ALooper_wake` cross-thread
-/// elsewhere in this file.
-fn schedule_frame_timer(delay: Duration) {
-    proactor()
-        .handle
-        .defer_for(delay, CompletionKind::Timer, 0, move |_| {
-            request_frame_callback();
-        })
-        .expect("failed to schedule Android frame timer");
 }
 
 fn text_metrics_cache() -> &'static Mutex<HashMap<u64, TextMetrics>> {
@@ -3012,12 +2992,77 @@ unsafe fn handle_motion_event(event: *const ndk_sys::AInputEvent) {
 /// `FrameDemand::Idle` is unaffected — it was never `AChoreographer`-tied
 /// to begin with, woken instead by `wake_next_frame_waiters` wherever a
 /// real input/lifecycle event bumps `event_epoch`.
+/// `FrameDemand::After(delay)` deliberately stays phase-locked to the real
+/// `AChoreographer` vsync clock rather than an independent software timer
+/// — a first attempt routed this through the `EpollPort` proactor's
+/// `defer_for(delay, ...)` instead (matching the adoption doc's "route
+/// FrameDemand::After through proactor deferred work" contract), and it
+/// was a real, measured regression: a software deadline computed fresh
+/// each frame (`Instant::now() + delay`) beats against the display's
+/// ~16.67ms vsync clock — their periods rarely line up exactly, and the
+/// proactor thread's own wake latency adds more drift on top — so the
+/// deadline commonly lands just *after* a vsync has already passed,
+/// forcing a wait for the next one instead. Measured on a real device via
+/// logcat-timestamp deltas between consecutive presented-frame log lines:
+/// median frame interval 33ms (~2x the expected ~16.7ms) with 90% of
+/// frames over 25ms, not just occasional jitter. Reverted to re-requesting
+/// a real `AChoreographer` callback on every still-pending poll instead
+/// (`request_frame_callback` is already idempotent — a no-op if one's
+/// already scheduled — so this costs nothing extra); readiness is still
+/// gated on the real `Instant` deadline, so the original correctness bug
+/// this was fixing (`delay` being ignored entirely, resolving at
+/// whichever vsync happened to fire next) stays fixed too. See
+/// `docs/PROACTOR_ENGINE_ADOPTION.md`'s Android section for the full
+/// writeup and both sets of numbers.
+/// Above this, `FrameDemand::After(delay)` is treated as a genuine
+/// duration to wait out (deadline-gated, see below); at or below it,
+/// treated as "just give me the next real frame" with no time arithmetic
+/// at all. `sng-roguelite`'s own call sites are the reason this exists as
+/// a real distinction, not a hypothetical one: four request a flat 16ms
+/// every tick (meant as "~1 frame at 60Hz", not a precise timer) and one
+/// requests 500ms while backgrounded (a real duration, where being off by
+/// up to one vsync is irrelevant). 20ms comfortably covers "one frame" at
+/// every refresh rate this device actually supports (60/90/120Hz — 8.3 to
+/// 16.7ms per vsync) while staying well under the 500ms case.
+const NEXT_FRAME_THRESHOLD: Duration = Duration::from_millis(20);
+
+/// See `NEXT_FRAME_THRESHOLD` for why short and long `FrameDemand::After`
+/// requests are handled differently on Android. The short path exists
+/// because the "obvious" fix — a real `Instant` deadline, checked on
+/// every real `AChoreographer` callback — measurably regressed frame
+/// pacing despite being more "correct" on paper: `NextFrameFuture::new`
+/// captures its deadline *after* the current frame's simulate/render/
+/// present work has already run, so `delay` (16ms) plus that render time
+/// (measured 2-5ms) routinely exceeds one vsync period (~16.67ms at
+/// 60Hz) — just not by enough to ever be satisfied by the very next
+/// callback, so every single frame fell through to the *second* one
+/// instead. Measured on a real device via logcat-timestamp deltas
+/// between consecutive presented-frame log lines: median frame interval
+/// 32-33ms (~2x the expected ~16.7ms) in every variant tried (with the
+/// proactor timer, with vsync-repoll-plus-deadline, and — ruling out the
+/// dedicated proactor thread itself as a confound — with that thread
+/// disabled entirely). The true pre-migration baseline, measured the
+/// same way: median 17ms, matching the display's actual vsync period.
+/// `Short` restores that exact zero-arithmetic behavior: resolve on
+/// whatever real callback comes next, full stop, the same guarantee the
+/// pre-migration code gave (any callback since creation satisfies it) —
+/// implemented here as "was I polled before", since being polled again
+/// only ever happens because a real callback fired in between. `Long`
+/// keeps the deadline-gated path, where being off by up to one vsync
+/// interval is negligible relative to the requested duration. See
+/// `docs/PROACTOR_ENGINE_ADOPTION.md`'s Android section for the full
+/// writeup and all three sets of numbers.
+enum FrameWait {
+    Short,
+    Long(Instant),
+}
+
 struct NextFrameFuture {
     demand: FrameDemand,
     observed_event_epoch: u64,
-    deadline: Option<Instant>,
+    wait: Option<FrameWait>,
     flushed: bool,
-    timer_scheduled: bool,
+    polled_before: bool,
 }
 
 impl NextFrameFuture {
@@ -3026,16 +3071,17 @@ impl NextFrameFuture {
             let state = app_state().lock().expect("android app state poisoned");
             state.event_epoch
         };
-        let deadline = match demand {
-            FrameDemand::After(delay) => Some(Instant::now() + delay),
+        let wait = match demand {
+            FrameDemand::After(delay) if delay <= NEXT_FRAME_THRESHOLD => Some(FrameWait::Short),
+            FrameDemand::After(delay) => Some(FrameWait::Long(Instant::now() + delay)),
             FrameDemand::Idle => None,
         };
         Self {
             demand,
             observed_event_epoch,
-            deadline,
+            wait,
             flushed: false,
-            timer_scheduled: false,
+            polled_before: false,
         }
     }
 }
@@ -3053,22 +3099,22 @@ impl Future for NextFrameFuture {
                 let state = app_state().lock().expect("android app state poisoned");
                 state.event_epoch > self.observed_event_epoch
             }
-            FrameDemand::After(_) => self
-                .deadline
-                .is_some_and(|deadline| Instant::now() >= deadline),
+            FrameDemand::After(_) => match self.wait {
+                Some(FrameWait::Short) => self.polled_before,
+                Some(FrameWait::Long(deadline)) => Instant::now() >= deadline,
+                None => true,
+            },
         };
         if ready {
             return Poll::Ready(());
         }
+        self.polled_before = true;
         {
             let mut state = app_state().lock().expect("android app state poisoned");
             state.next_frame_wakers.push(cx.waker().clone());
         }
-        if let FrameDemand::After(delay) = self.demand {
-            if !self.timer_scheduled {
-                self.timer_scheduled = true;
-                schedule_frame_timer(delay);
-            }
+        if matches!(self.demand, FrameDemand::After(_)) {
+            request_frame_callback();
         }
         Poll::Pending
     }
