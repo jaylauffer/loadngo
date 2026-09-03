@@ -1,0 +1,10 @@
+[package]
+name = "loadngo-localization"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+ron.workspace = true
+serde.workspace = true

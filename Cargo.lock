@@ -1444,6 +1444,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "loadngo-localization"
+version = "0.1.0"
+dependencies = [
+ "ron",
+ "serde",
+]
+
+[[package]]
 name = "loadngo-persistence"
 version = "0.1.0"
 dependencies = [

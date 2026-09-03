@@ -17,6 +17,7 @@ members = [
     "ui-core",
     "persistence",
     "proactor-harness",
+    "localization",
 ]
 default-members = [
     "task",
@@ -31,6 +32,7 @@ default-members = [
     "renderer",
     "ui-core",
     "persistence",
+    "localization",
 ]
 resolver = "2"
 
