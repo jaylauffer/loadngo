@@ -72,8 +72,51 @@ The remaining host gap is platform parity:
 | macOS | `KqueuePort` | reference integration exists |
 | Linux | `IoUringPort` | host scheduler migrated 2026-09-01; pending real-hardware evidence-gate measurements (dolores) |
 | iOS | `KqueuePort` | host scheduler migration required |
-| Android | none | `ALooper` completion port and host integration required |
+| Android | none | epoll-backed `IoPort` (via `ALooper_addFd`) and host integration required — **not io_uring**, see below |
 | Windows | `IocpPort` | host scheduler migration and real-machine validation required |
+
+## Android: `io_uring` is not available to app processes, confirmed on real hardware
+
+Raised 2026-09-03, before any Android backend work started: could
+`loadngo-proactor`'s Android backend be `io_uring`-based instead of the
+`ALooper`/epoll completion port this document otherwise plans, for parity
+with the `IoUringPort` Linux already has? **No — confirmed blocked on real
+hardware, not just suspected.**
+
+Tested directly against a real device (a 2024/2025-era Redmi phone,
+Android 14, kernel `5.4.289-qgki`, `CONFIG_IO_URING=y` compiled in): a
+throwaway diagnostic probe was built into `sng-roguelite-game`'s
+`run_game()` (temporary, reverted immediately after reading the result)
+that called the raw `io_uring_setup` syscall (arm64 syscall 425) from
+*inside the real, installed, Zygote-spawned app process* — not `adb
+shell`, which runs in a different, more privileged SELinux/seccomp domain
+and gives a misleadingly permissive answer (it succeeds there). The app
+crashed instantly:
+
+```
+signal 31 (SIGSYS), code 1 (SYS_SECCOMP)
+Cause: seccomp prevented call to disallowed arm64 system call 425
+```
+
+This is Android's own Zygote `SpecializeCommon` seccomp-bpf filter for the
+`untrusted_app` domain outright denying the syscall with a process kill,
+not a permission error a fallback could catch and recover from. It
+reflects a deliberate Google platform decision (`io_uring`'s large kernel
+attack surface was the vector for several real-world Android exploits;
+Google restricted it for app-level code as a result), not a MIUI/OEM
+quirk or something this repo's build configuration could work around.
+
+**Conclusion:** the Android backend must be epoll-based (via `ALooper`'s
+underlying `ALooper_addFd`, since `ALooper` *is* epoll under the hood on
+Android), matching the "none... `ALooper` completion port... required"
+row above — this is genuinely the same tier of real `IoPort`
+implementation work as `KqueuePort`/`IoUringPort`, not a lesser
+"wrap the OS toy" shortcut, it's simply backed by the mechanism actually
+available to an app on this platform. Do not revisit `io_uring` for
+Android without new evidence from a *different* real device — this
+result should be treated as representative of current mainline Android
+policy, not this one phone's idiosyncrasy, but it was only tested on one
+device family.
 
 ## Evidence Gate
 
@@ -167,8 +210,11 @@ battery behavior against the previous host loop.
 
 ### Phase 3: Close mobile and Windows parity
 
-1. Implement an `ALooper`-backed Android completion port and migrate the
-   Android host without reintroducing timer-per-frame threads.
+1. Implement an `ALooper`-backed (epoll, via `ALooper_addFd` — **not**
+   `io_uring`, confirmed seccomp-blocked for app processes on real
+   hardware, see "Android: `io_uring` is not available to app processes"
+   above) Android completion port and migrate the Android host without
+   reintroducing timer-per-frame threads.
 2. Move the Windows host to `IocpPort` and validate on a real Windows machine.
 3. Exercise lifecycle, cancellation, input, and presentation behavior on those
    real devices rather than relying on cross-compilation.
