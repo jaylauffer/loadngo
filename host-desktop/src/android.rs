@@ -13,6 +13,7 @@ use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use std::time::{Duration, Instant};
 
 use crate::android_jni;
+use crate::proactor_driver::HostProactor;
 use jni::objects::{JObject, JValue};
 use loadngo_gfx_gles::{GlesBackend, GlesBackendState};
 use loadngo_host_core::{
@@ -20,6 +21,7 @@ use loadngo_host_core::{
     SafeAreaInsets, SurfaceInfo, TextMetrics, TouchPhase, TouchPoint, WindowDescriptor,
     WindowIconSet,
 };
+use loadngo_proactor::{CompletionKind, EpollPort};
 use loadngo_renderer::{FrameCommand, ImageRequest, Renderer, RendererConfig};
 use ndk::asset::AssetManager;
 use ndk::hardware_buffer_format::HardwareBufferFormat;
@@ -185,7 +187,6 @@ struct AndroidAppState {
     pending_touch_release: Vec<u64>,
     timing: FrameTiming,
     last_tick: Instant,
-    frame_counter: u64,
     event_epoch: u64,
     next_frame_wakers: Vec<Waker>,
     runtime_started: bool,
@@ -236,7 +237,6 @@ impl Default for AndroidAppState {
                 delta_seconds: 1.0 / 60.0,
             },
             last_tick: Instant::now(),
-            frame_counter: 0,
             event_epoch: 0,
             next_frame_wakers: Vec::new(),
             runtime_started: false,
@@ -271,6 +271,7 @@ impl Default for AndroidAppState {
 
 static APP_STATE: OnceLock<Mutex<AndroidAppState>> = OnceLock::new();
 static TEXT_METRICS_CACHE: OnceLock<Mutex<HashMap<u64, TextMetrics>>> = OnceLock::new();
+static PROACTOR: OnceLock<HostProactor<EpollPort>> = OnceLock::new();
 thread_local! {
     static MAIN_THREAD_RUNTIME_FUTURE: RefCell<Option<Pin<Box<dyn Future<Output = ()> + 'static>>>> =
         const { RefCell::new(None) };
@@ -308,6 +309,60 @@ const INPUT_QUEUE_IDENT: i32 = 2;
 
 fn app_state() -> &'static Mutex<AndroidAppState> {
     APP_STATE.get_or_init(|| Mutex::new(AndroidAppState::default()))
+}
+
+fn proactor() -> &'static HostProactor<EpollPort> {
+    PROACTOR.get().expect("android proactor not initialized")
+}
+
+/// Creates the process-lifetime `EpollPort` proactor and starts a
+/// dedicated thread that does nothing but pump it
+/// (`Proactor::run_until_stopped`, blocking in `epoll_wait` between
+/// events) — same shape as the existing dedicated input thread just below
+/// this function, a third always-on thread alongside the JNI callback
+/// thread and the input thread, not a replacement for either.
+///
+/// Called exactly once, from `android_native_activity_on_create` (a true
+/// process-lifetime-once JNI entry point, so no re-entrancy guard is
+/// needed the way the input thread's lazy, callback-triggered spawn
+/// needs `input_thread_running`). Unlike `ALooper_prepare` (which must
+/// run on the thread that will poll it), `EpollPort::new`'s
+/// `epoll_create1` has no thread-affinity requirement, so the proactor
+/// itself is constructed here, synchronously, before the pump thread
+/// even starts.
+fn init_proactor() {
+    let _ = PROACTOR.set(HostProactor::new(
+        EpollPort::new().expect("failed to create Android epoll proactor"),
+    ));
+    std::thread::Builder::new()
+        .name("loadngo-android-proactor".to_string())
+        .spawn(|| {
+            proactor()
+                .proactor
+                .run_until_stopped()
+                .expect("android proactor pump failed");
+        })
+        .expect("failed to spawn Android proactor thread");
+}
+
+/// Schedules a real, duration-respecting wakeup for `FrameDemand::After`
+/// through the proactor rather than riding the next `AChoreographer`
+/// vsync unconditionally regardless of how long `delay` actually is (the
+/// pre-migration behavior — see `NextFrameFuture`'s doc comment). The
+/// completion runs on the dedicated proactor thread (`init_proactor`),
+/// not the main/UI thread; `request_frame_callback` is already
+/// mutex-guarded and, per the NDK's own documented support for posting a
+/// callback to a `AChoreographer` instance from a different thread than
+/// the one it fires on, safe to call cross-thread here — the same way
+/// `wake_input_thread` already calls `ALooper_wake` cross-thread
+/// elsewhere in this file.
+fn schedule_frame_timer(delay: Duration) {
+    proactor()
+        .handle
+        .defer_for(delay, CompletionKind::Timer, 0, move |_| {
+            request_frame_callback();
+        })
+        .expect("failed to schedule Android frame timer");
 }
 
 fn text_metrics_cache() -> &'static Mutex<HashMap<u64, TextMetrics>> {
@@ -1458,6 +1513,9 @@ pub unsafe fn android_native_activity_on_create(
     } else {
         android_log_info("Android assets extracted and environment configured");
     }
+
+    init_proactor();
+    android_log_info("Android epoll proactor initialized");
 }
 
 unsafe extern "C" fn on_native_window_created(
@@ -1906,6 +1964,15 @@ unsafe extern "C" fn on_destroy(_activity: *mut ndk_sys::ANativeActivity) {
     state.control_messages.push_back(ReactorMessage::Stop);
     drop(state);
     pump_main_thread_reactor(false);
+    // Fire-and-forget, no join: the OS reclaims this process's threads
+    // shortly after onDestroy regardless (same assumption the dedicated
+    // input thread already makes — it's never explicitly joined either).
+    // stop() still matters: it lets EpollPort's own shutdown path cancel
+    // any outstanding deferred timer cleanly rather than leaving one
+    // registered against a fd table nothing will ever poll again.
+    if let Some(proactor) = PROACTOR.get() {
+        let _ = proactor.handle.stop();
+    }
     android_log_info("Android native activity destroyed");
     unsafe {
         ndk_context::release_android_context();
@@ -2687,7 +2754,6 @@ fn advance_frame_clock() {
     if let Some(window) = state.window.as_ref() {
         state.surface = logical_surface_info(window, state.display_scale);
     }
-    state.frame_counter = state.frame_counter.saturating_add(1);
     wake_next_frame_waiters(&mut state);
 }
 
@@ -2931,26 +2997,45 @@ unsafe fn handle_motion_event(event: *const ndk_sys::AInputEvent) {
     request_frame_callback();
 }
 
+/// `FrameDemand::After(delay)` used to be satisfied by whatever
+/// `AChoreographer` callback happened to fire next, entirely ignoring
+/// `delay`'s actual value (`target_frame = frame_counter + 1`, and *any*
+/// callback bumps `frame_counter`) — a real correctness gap, not just a
+/// missed-optimization one: a caller asking to wait 500ms got exactly one
+/// vsync tick (~16ms) instead, every time. Now backed by the host's
+/// `EpollPort` proactor (`schedule_frame_timer`): the future's own
+/// `deadline` is checked directly, and the proactor's deferred timer's
+/// only job is to make sure a real `AChoreographer` callback exists to
+/// re-poll this future once that deadline has actually passed — the
+/// timer never touches app state or wakes anything itself, it just
+/// re-arms the one poll site (`on_frame_callback`) that already exists.
+/// `FrameDemand::Idle` is unaffected — it was never `AChoreographer`-tied
+/// to begin with, woken instead by `wake_next_frame_waiters` wherever a
+/// real input/lifecycle event bumps `event_epoch`.
 struct NextFrameFuture {
     demand: FrameDemand,
     observed_event_epoch: u64,
-    target_frame: u64,
+    deadline: Option<Instant>,
     flushed: bool,
-    scheduled: bool,
+    timer_scheduled: bool,
 }
 
 impl NextFrameFuture {
     fn new(demand: FrameDemand) -> Self {
-        let (observed_event_epoch, target_frame) = {
+        let observed_event_epoch = {
             let state = app_state().lock().expect("android app state poisoned");
-            (state.event_epoch, state.frame_counter.saturating_add(1))
+            state.event_epoch
+        };
+        let deadline = match demand {
+            FrameDemand::After(delay) => Some(Instant::now() + delay),
+            FrameDemand::Idle => None,
         };
         Self {
             demand,
             observed_event_epoch,
-            target_frame,
+            deadline,
             flushed: false,
-            scheduled: false,
+            timer_scheduled: false,
         }
     }
 }
@@ -2963,24 +3048,29 @@ impl Future for NextFrameFuture {
             flush_queued_frame();
             self.flushed = true;
         }
-        let mut state = app_state().lock().expect("android app state poisoned");
         let ready = match self.demand {
-            FrameDemand::Idle => state.event_epoch > self.observed_event_epoch,
-            FrameDemand::After(_) => state.frame_counter >= self.target_frame,
+            FrameDemand::Idle => {
+                let state = app_state().lock().expect("android app state poisoned");
+                state.event_epoch > self.observed_event_epoch
+            }
+            FrameDemand::After(_) => self
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline),
         };
         if ready {
-            Poll::Ready(())
-        } else {
-            state.next_frame_wakers.push(cx.waker().clone());
-            drop(state);
-            if !self.scheduled {
-                if let FrameDemand::After(_) = self.demand {
-                    request_frame_callback();
-                    self.scheduled = true;
-                }
-            }
-            Poll::Pending
+            return Poll::Ready(());
         }
+        {
+            let mut state = app_state().lock().expect("android app state poisoned");
+            state.next_frame_wakers.push(cx.waker().clone());
+        }
+        if let FrameDemand::After(delay) = self.demand {
+            if !self.timer_scheduled {
+                self.timer_scheduled = true;
+                schedule_frame_timer(delay);
+            }
+        }
+        Poll::Pending
     }
 }
 

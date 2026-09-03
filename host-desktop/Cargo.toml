@@ -31,6 +31,7 @@ jni = "0.21.1"
 libc = "0.2"
 lewton = "0.10"
 loadngo-gfx-gles = { path = "../gfx-gles" }
+loadngo-proactor = { path = "../proactor" }
 ndk = { version = "0.8", default-features = false }
 ndk-context = "0.1"
 ndk-sys = "0.5"

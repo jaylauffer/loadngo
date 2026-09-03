@@ -1,10 +1,10 @@
 # Proactor-First Engine Adoption
 
-Status: active workspace priority. macOS/Linux host migration done
-(2026-09-01, Linux pending hardware evidence-gate measurement); Android's
-`EpollPort` backend implemented and on-device-tested (2026-09-03, host
-migration itself still open); iOS/Windows backends and host migrations
-still open.
+Status: active workspace priority. macOS/Linux/Android host migrations
+done (macOS/Linux 2026-09-01, Linux pending hardware evidence-gate
+measurement; Android backend **and** host migration 2026-09-03,
+on-device-verified); iOS/Windows backends and host migrations still
+open.
 
 ## Decision
 
@@ -76,7 +76,7 @@ The remaining host gap is platform parity:
 | macOS | `KqueuePort` | reference integration exists |
 | Linux | `IoUringPort` | host scheduler migrated 2026-09-01; pending real-hardware evidence-gate measurements (dolores) |
 | iOS | `KqueuePort` | host scheduler migration required |
-| Android | `EpollPort` | backend implemented, cross-compiled, and on-device-tested 2026-09-03 (`proactor/src/epoll.rs`); host scheduler migration into `host-desktop/src/android.rs` still required — **not io_uring**, see below |
+| Android | `EpollPort` | backend **and** host migration done, on-device-tested 2026-09-03 (`proactor/src/epoll.rs`, `host-desktop/src/android.rs::init_proactor`) — **not io_uring**, see below |
 | Windows | `IocpPort` | host scheduler migration and real-machine validation required |
 
 ## Android: `io_uring` is not available to app processes, confirmed on real hardware
@@ -153,12 +153,67 @@ binary still aren't built for Android by anything in this workspace, so
 that parity is untested by a real bench run, just by the harness
 resolving and compiling correctly).
 
-**Not done:** the *host* migration — `host-desktop/src/android.rs`
-still schedules frames via its existing `AChoreographer`/`ALooper` reactor
-(unrelated to and untouched by this work), not through `EpollPort`. That
-remains real, separate future work — the same two-step shape Linux went
-through, where the backend (`IoUringPort`) landed before the host
-migration that actually put it to use.
+**Host migration landed same day, `host-desktop/src/android.rs`:**
+`android.rs`'s frame scheduling now runs through `EpollPort`, closing the
+gap the paragraph above originally flagged as separate future work.
+
+Android's architecture is fundamentally different from Linux/macOS's
+winit-owned event loop (no `about_to_wait`-style hook exists to attach
+`HostProactor::drain_ready`/`ControlFlow::WaitUntil` to — the main thread
+is entirely governed by JNI callbacks the OS invokes on its own schedule,
+via `ANativeActivity`'s own callback table, not a loop this codebase
+owns). So instead of Linux's shape, Android gets a **third dedicated
+thread** (`init_proactor`, called once from `android_native_activity_on_create`,
+alongside the pre-existing main JNI-callback thread and the dedicated
+input thread) that does nothing but block in `Proactor::run_until_stopped`
+— i.e. `EpollPort::poll`'s `epoll_wait` — for the process's lifetime.
+
+This closed a real, pre-existing **correctness** gap, not just a
+threading-cost one: `FrameDemand::After(delay)` previously ignored
+`delay` entirely, resolving on whatever `AChoreographer` vsync callback
+happened to fire next (`target_frame = frame_counter + 1`, and *any*
+callback satisfied that) — a caller asking to wait 500ms got ~16ms every
+time. `NextFrameFuture` now checks a real `Instant`-based deadline; the
+proactor's `defer_for(delay, ...)` timer's only job is to call
+`request_frame_callback()` once that deadline has actually passed,
+re-arming the one site (`on_frame_callback`) that ever polls the app's
+future — the timer never touches app state or wakes anything itself, it
+just guarantees a real callback exists when it's actually due.
+`request_frame_callback` was already mutex-guarded and safe to call
+cross-thread (Android's `AChoreographer` supports posting to an instance
+from a different thread than the one it fires on, and this same file
+already calls `ALooper_wake` cross-thread from the input thread this
+exact way). `FrameDemand::Idle` is untouched — it was never tied to
+`AChoreographer`, and is still woken directly wherever a real input/
+lifecycle event bumps `event_epoch`.
+
+`AndroidAppState::frame_counter`, now unused by anything (its only
+reader was the old `target_frame` check this replaced), was removed
+rather than left as write-only dead code.
+
+Verified for real, not just by compiling: cross-compiled and
+clippy-clean (`--no-deps`, `clippy::all` + `clippy::pedantic`, zero new
+warnings against the pre-migration baseline — confirmed by diffing
+against a `git stash` of this exact change) for `aarch64-linux-android`,
+then a full real build/install/launch of `sng-roguelite`'s actual Android
+app (which pulls this host in via its normal path dependency, not a
+synthetic test): logcat confirmed `"Android epoll proactor initialized"`
+with no panics/crashes, `/proc/<pid>/task` confirmed the dedicated
+`loadngo-android-proactor` thread alive alongside the existing input
+thread, and screenshots taken before and after tapping into a real
+combat room confirmed the simulation actually advances in real time
+(HP dropping, an enemy defeated, projectiles moving) — not frozen, not
+racing. `on_destroy` now calls `handle.stop()` on the proactor (no
+join, same fire-and-forget assumption the input thread already makes
+about process teardown) so `EpollPort`'s own shutdown path can cancel
+any outstanding timer cleanly.
+
+`proactor_driver.rs`'s `HostProactor::drain_ready`/`report_has_activity`
+(used by macOS/Linux's native-event-pump-hook pattern, which Android's
+dedicated-thread shape doesn't need) gained a broader
+`#[cfg_attr(not(any(macos, linux)), allow(dead_code))]` to cover Android
+too, alongside the existing `waker()` treatment — a real, new warning
+this extension surfaced and fixed, not something papered over.
 
 ## Evidence Gate
 
@@ -232,8 +287,9 @@ battery behavior against the previous host loop.
    Linux still drives `winit`'s event loop -- the proactor only supplies the
    wait deadline and deferred dispatch, per `ControlFlow::WaitUntil`.)
 3. Make runtime wake, frame deadline, invalidation, and shutdown flow through
-   that contract. (Done for macOS and Linux; iOS/Android/Windows still
-   outstanding.)
+   that contract. (Done for macOS, Linux, and Android — Android's own
+   shape is a dedicated pump thread rather than a native-event-pump hook,
+   see Phase 3 below; iOS/Windows still outstanding.)
 4. Add deterministic host-level tests for idle wakeups and deferred frames.
    **Not yet done** -- still relying on the proactor crate's own unit/loom
    tests plus manual host smoke passes; no host-level automated regression
@@ -252,16 +308,24 @@ battery behavior against the previous host loop.
 
 ### Phase 3: Close mobile and Windows parity
 
-1. **Backend done (2026-09-03).** `EpollPort` (`proactor/src/epoll.rs`,
-   own independent `epoll_create1` instance — **not** `io_uring`,
-   confirmed seccomp-blocked for app processes on real hardware, and
-   deliberately **not** built on `ALooper_addFd` either, see "Android:
-   `io_uring` is not available to app processes" above for both).
-   Cross-compiled, clippy-clean, and all 9 tests passing on a real
-   device. **Not done:** migrate the Android host
-   (`host-desktop/src/android.rs`) onto it — still on its existing
-   `AChoreographer`/`ALooper` reactor, untouched by this — without
-   reintroducing timer-per-frame threads.
+1. **Done (2026-09-03), backend and host migration both.** `EpollPort`
+   (`proactor/src/epoll.rs`, own independent `epoll_create1` instance —
+   **not** `io_uring`, confirmed seccomp-blocked for app processes on
+   real hardware, and deliberately **not** built on `ALooper_addFd`
+   either, see "Android: `io_uring` is not available to app processes"
+   above for both). `host-desktop/src/android.rs` now schedules
+   `FrameDemand::After` through it via a dedicated always-on pump thread
+   (`init_proactor`) rather than a native-event-pump hook — Android has
+   no such hook to attach to, unlike Linux/macOS's winit-owned loop — no
+   timer-per-frame threads reintroduced. This also fixed a real
+   correctness gap the migration surfaced: `FrameDemand::After(delay)`
+   previously ignored `delay` and always resolved at the next vsync
+   regardless. Verified: cross-compiled and clippy-clean (backend and
+   host both), all 9 backend tests passing on a real device, and a full
+   `sng-roguelite` on-device play session (logcat, thread list, and
+   before/after gameplay screenshots) confirming real, correctly-paced
+   simulation with no crashes. See "Android: `io_uring` is not available
+   to app processes" above for the full writeup.
 2. Move the Windows host to `IocpPort` and validate on a real Windows machine.
 3. Exercise lifecycle, cancellation, input, and presentation behavior on those
    real devices rather than relying on cross-compilation.
@@ -297,7 +361,7 @@ their own event loop, timer thread, or scheduler.
 3. Capture the macOS and Linux baselines (old thread-per-wait Linux host vs.
    the new `IoUringPort` host makes a real before/after comparison possible
    for the first time) and select explicit pass thresholds.
-4. Repeat the same proof on iOS. Android's backend (`EpollPort`) is
-   already built and on-device-tested (2026-09-03) — its own remaining
-   step is the host migration into `android.rs`, not the backend itself.
-   Windows (`IocpPort`) still needs both.
+4. Repeat the same proof on iOS. Android (`EpollPort`, backend and host
+   migration both) is done and on-device-verified (2026-09-03) — no
+   remaining step for Android specifically. Windows (`IocpPort`) still
+   needs both a backend migration and a real machine to validate on.

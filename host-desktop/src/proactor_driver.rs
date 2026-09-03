@@ -31,7 +31,13 @@ impl<P: CompletionPort> HostProactor<P> {
     /// Dispatches everything currently ready (completions, due deferred
     /// work) and keeps going until a poll comes back with no activity at
     /// all. Safe to call on every native-event-pump wakeup: a poll with
-    /// nothing to do returns immediately (`run_ready` never blocks).
+    /// nothing to do returns immediately (`run_ready` never blocks). Used
+    /// by macOS/Linux, which drive their proactor from a native
+    /// event-pump wakeup hook; Android instead runs
+    /// `run_until_stopped()` directly on its own dedicated pump thread
+    /// (see `android.rs::init_proactor`), which already loops the same
+    /// dispatch logic internally, so it never calls this.
+    #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
     pub fn drain_ready(&self) {
         loop {
             let report = self
@@ -60,6 +66,7 @@ impl<P: CompletionPort> HostProactor<P> {
     }
 }
 
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 fn report_has_activity(report: RunReport) -> bool {
     report.dispatched_completions > 0
         || report.dispatched_deferred > 0
