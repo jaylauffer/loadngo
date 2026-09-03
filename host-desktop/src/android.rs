@@ -3122,6 +3122,33 @@ pub async fn load_font(path: &str) -> Result<DesktopFont, String> {
     Ok(DesktopFont::new(Some(source_path), Some(software_font)))
 }
 
+/// See `base_language_tag`'s doc comment in `lib.rs` for the contract.
+/// `Locale.getLanguage()` already returns a bare ISO 639 language code
+/// with no region/script subtag (unlike `NSLocale`'s BCP-47 tags or a
+/// POSIX `LANG` string), so `base_language_tag` mostly just normalizes
+/// case and handles the null/error case identically to every other
+/// platform here.
+#[must_use]
+pub fn system_locale() -> String {
+    android_jni::with_env(|env| {
+        let locale = android_jni::call_static_object(
+            env,
+            "java/util/Locale",
+            "getDefault",
+            "()Ljava/util/Locale;",
+            &[],
+        )?
+        .ok_or_else(|| "Locale.getDefault() returned null".to_string())?;
+        let language =
+            android_jni::call_object(env, &locale, "getLanguage", "()Ljava/lang/String;", &[])?
+                .ok_or_else(|| "Locale.getLanguage() returned null".to_string())?;
+        android_jni::java_string_to_rust(env, language)
+    })
+    .ok()
+    .and_then(|raw| crate::base_language_tag(&raw))
+    .unwrap_or_else(|| "en".to_string())
+}
+
 pub fn measure_text_metrics(
     text: &str,
     font: Option<&DesktopFont>,

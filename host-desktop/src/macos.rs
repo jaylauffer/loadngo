@@ -649,6 +649,22 @@ pub async fn load_font(path: &str) -> Result<DesktopFont, String> {
     Ok(DesktopFont::new(Some(path.to_string())))
 }
 
+/// See `base_language_tag`'s doc comment in `lib.rs` for the contract.
+/// Queries `[NSLocale preferredLanguages]` — the user's actual System
+/// Settings > Language & Region preference order — rather than `LANG`/
+/// `LC_ALL`, which are frequently unset or stale in a GUI-launched
+/// macOS app's environment (unlike a process launched from a shell).
+#[must_use]
+pub fn system_locale() -> String {
+    unsafe {
+        let languages: *mut AnyObject = msg_send![class!(NSLocale), preferredLanguages];
+        let first: *mut AnyObject = msg_send![languages, firstObject];
+        ns_string_to_rust(first)
+            .and_then(|raw| crate::base_language_tag(&raw))
+            .unwrap_or_else(|| "en".to_string())
+    }
+}
+
 pub fn measure_text_metrics(
     text: &str,
     font: Option<&DesktopFont>,

@@ -615,6 +615,29 @@ pub async fn load_font(path: &str) -> Result<DesktopFont, String> {
     load_font_from_path(path)
 }
 
+/// See `base_language_tag`'s doc comment in `lib.rs` for the contract.
+/// `LANGUAGE` (a GNU gettext extension, colon-separated preference list)
+/// takes priority when set, matching standard gettext behavior; falls
+/// through to `LC_ALL` then `LANG`, and finally `"en"` if none of them
+/// parse to anything usable.
+#[must_use]
+pub fn system_locale() -> String {
+    std::env::var("LANGUAGE")
+        .ok()
+        .and_then(|value| value.split(':').find_map(crate::base_language_tag))
+        .or_else(|| {
+            std::env::var("LC_ALL")
+                .ok()
+                .and_then(|value| crate::base_language_tag(&value))
+        })
+        .or_else(|| {
+            std::env::var("LANG")
+                .ok()
+                .and_then(|value| crate::base_language_tag(&value))
+        })
+        .unwrap_or_else(|| "en".to_string())
+}
+
 pub fn measure_text_metrics(
     text: &str,
     font: Option<&DesktopFont>,

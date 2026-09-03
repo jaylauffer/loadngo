@@ -185,39 +185,82 @@ pub fn validate_locale_catalog(
 /// The single thing a game's UI code is expected to consult for any
 /// player-facing text — mirrors `sng-roguelite`'s `FormFactor` in that
 /// respect (one obvious fact to check, not something to re-derive ad
-/// hoc). Looks a key up in a primary catalog (the player's selected
-/// locale), falling back to a secondary catalog (typically the game's
-/// base/English catalog, so a partially-translated locale still shows
-/// *something* readable) and finally to a visibly-broken placeholder if
-/// the key exists in neither. [`Localizer::t`] never panics: a missing
-/// translation should be loud and obvious in testing, never a crash or a
-/// silently blank label in production.
+/// hoc).
+///
+/// There is deliberately no committed English catalog anywhere. English
+/// is always the caller-supplied `default` passed to [`Localizer::t`] —
+/// for hand-authored UI chrome, that's the literal string being migrated
+/// (`localizer.t("title.press_to_start", "Press Space to start")`); for
+/// catalog content (an item's description, say), that's the field
+/// already authored in that game's own RON content file
+/// (`localizer.t(&format!("item.{}.description", item.id),
+/// &item.description)`). This keeps every existing English source of
+/// truth exactly where it already lives and exactly as readable as it
+/// already is — a game's `items.ron` never has to grow translation keys
+/// of its own — and it means a locale catalog only ever needs to contain
+/// *actual translations*: an untranslated key simply falls through to
+/// the always-correct English default, so a partial translation is never
+/// broken, just incomplete. [`Localizer::t`] never panics.
 pub struct Localizer {
-    primary: ValidatedLocaleCatalog,
-    fallback: Option<ValidatedLocaleCatalog>,
+    locale: String,
+    catalog: Option<ValidatedLocaleCatalog>,
 }
 
 impl Localizer {
+    /// `locale` is the resolved display locale (see `loadngo-host-desktop`'s
+    /// `system_locale()`) even when `catalog` is `None` — e.g. the
+    /// detected locale is `"en"` itself (nothing to look up, defaults are
+    /// already English), or no catalog file exists yet for that locale.
     #[must_use]
-    pub fn new(primary: ValidatedLocaleCatalog, fallback: Option<ValidatedLocaleCatalog>) -> Self {
-        Self { primary, fallback }
+    pub fn new(locale: impl Into<String>, catalog: Option<ValidatedLocaleCatalog>) -> Self {
+        Self {
+            locale: locale.into(),
+            catalog,
+        }
     }
 
     #[must_use]
     pub fn locale(&self) -> &str {
-        self.primary.locale()
+        &self.locale
     }
 
+    /// Looks `key` up in the current locale's catalog (if one is loaded),
+    /// returning `default` on any miss — an untranslated key, or no
+    /// catalog loaded at all. Never panics.
     #[must_use]
-    pub fn t(&self, key: &str) -> String {
-        if let Some(value) = self.primary.get(key) {
-            return value.to_string();
-        }
-        if let Some(value) = self.fallback.as_ref().and_then(|catalog| catalog.get(key)) {
-            return value.to_string();
-        }
-        format!("[[{key}]]")
+    pub fn t<'a>(&'a self, key: &str, default: &'a str) -> &'a str {
+        self.catalog
+            .as_ref()
+            .and_then(|catalog| catalog.get(key))
+            .unwrap_or(default)
     }
+}
+
+/// Derives a stable lookup key from content that has no naturally stable
+/// identifier of its own (unlike an item or encounter, which already has
+/// an authored `id`). FNV-1a 64-bit, deliberately the same algorithm and
+/// output shape as `sng-rusty`'s `stable_line_id` (`src/bin/
+/// export_lines.rs`) — same reasoning applies here: deterministic across
+/// machines, and the key changes if `text` changes, so a stale
+/// translation (or a stale voiceover clip, in `sng-rusty`'s case) is
+/// detectable rather than silently left behind. `context` disambiguates
+/// otherwise-identical text (e.g. a speaker name, or a UI area) the same
+/// way `sng-rusty` mixes in the speaker before hashing.
+#[must_use]
+pub fn stable_key_from_text(context: &str, text: &str) -> String {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = OFFSET;
+    for byte in context
+        .as_bytes()
+        .iter()
+        .chain(b"|".iter())
+        .chain(text.as_bytes())
+    {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    format!("{hash:016x}")
 }
 
 #[cfg(test)]
@@ -321,79 +364,67 @@ mod tests {
     }
 
     #[test]
-    fn localizer_prefers_the_primary_catalog() {
-        let primary = parse_locale_catalog_ron(
+    fn localizer_prefers_a_real_translation_over_the_default() {
+        let catalog = parse_locale_catalog_ron(
             "de.ron",
             &sample_ron("de", 1, 1, &[("title.press_to_start", "Leertaste drücken")]),
         )
         .unwrap();
-        let fallback = parse_locale_catalog_ron(
-            "en.ron",
-            &sample_ron(
-                "en",
-                1,
-                1,
-                &[("title.press_to_start", "Press Space to start")],
-            ),
-        )
-        .unwrap();
 
-        let localizer = Localizer::new(primary, Some(fallback));
+        let localizer = Localizer::new("de", Some(catalog));
         assert_eq!(localizer.locale(), "de");
-        assert_eq!(localizer.t("title.press_to_start"), "Leertaste drücken");
-    }
-
-    #[test]
-    fn localizer_falls_back_to_the_secondary_catalog_on_a_miss() {
-        let primary = parse_locale_catalog_ron(
-            "de.ron",
-            &sample_ron("de", 1, 1, &[("title.tap_to_start", "Zum Starten tippen")]),
-        )
-        .unwrap();
-        let fallback = parse_locale_catalog_ron(
-            "en.ron",
-            &sample_ron(
-                "en",
-                1,
-                1,
-                &[("title.press_to_start", "Press Space to start")],
-            ),
-        )
-        .unwrap();
-
-        let localizer = Localizer::new(primary, Some(fallback));
-        assert_eq!(localizer.t("title.press_to_start"), "Press Space to start");
-    }
-
-    #[test]
-    fn localizer_falls_back_to_a_visible_placeholder_when_the_key_is_in_neither_catalog() {
-        let primary =
-            parse_locale_catalog_ron("de.ron", &sample_ron("de", 1, 1, &[("k", "v")])).unwrap();
-        let fallback =
-            parse_locale_catalog_ron("en.ron", &sample_ron("en", 1, 1, &[("k", "v")])).unwrap();
-
-        let localizer = Localizer::new(primary, Some(fallback));
         assert_eq!(
-            localizer.t("title.never_authored"),
-            "[[title.never_authored]]"
+            localizer.t("title.press_to_start", "Press Space to start"),
+            "Leertaste drücken"
         );
     }
 
     #[test]
-    fn localizer_works_with_no_fallback_catalog_at_all() {
-        let primary = parse_locale_catalog_ron(
-            "en.ron",
-            &sample_ron(
-                "en",
-                1,
-                1,
-                &[("title.press_to_start", "Press Space to start")],
-            ),
+    fn localizer_falls_back_to_the_default_when_the_key_is_untranslated() {
+        let catalog = parse_locale_catalog_ron(
+            "de.ron",
+            &sample_ron("de", 1, 1, &[("title.tap_to_start", "Zum Starten tippen")]),
         )
         .unwrap();
 
-        let localizer = Localizer::new(primary, None);
-        assert_eq!(localizer.t("title.press_to_start"), "Press Space to start");
-        assert_eq!(localizer.t("missing"), "[[missing]]");
+        // A partial translation is never broken, just incomplete: an
+        // untranslated key falls straight through to the caller's default.
+        let localizer = Localizer::new("de", Some(catalog));
+        assert_eq!(
+            localizer.t("title.press_to_start", "Press Space to start"),
+            "Press Space to start"
+        );
+    }
+
+    #[test]
+    fn localizer_falls_back_to_the_default_with_no_catalog_loaded_at_all() {
+        // The common case for the base/English locale: no catalog file
+        // needs to exist at all, since English is always the default.
+        let localizer = Localizer::new("en", None);
+        assert_eq!(localizer.locale(), "en");
+        assert_eq!(
+            localizer.t("title.press_to_start", "Press Space to start"),
+            "Press Space to start"
+        );
+    }
+
+    #[test]
+    fn stable_key_from_text_is_deterministic_and_context_sensitive() {
+        assert_eq!(
+            super::stable_key_from_text("item.forked_signal", "+1 shot and spread"),
+            super::stable_key_from_text("item.forked_signal", "+1 shot and spread"),
+        );
+        // Same text, different context -> different key, matching
+        // sng-rusty's speaker-disambiguation reasoning.
+        assert_ne!(
+            super::stable_key_from_text("item.forked_signal", "+1 shot and spread"),
+            super::stable_key_from_text("item.dense_pulse", "+1 shot and spread"),
+        );
+        // Any change to the text itself -> a different key, so a stale
+        // translation is detectable rather than silently left behind.
+        assert_ne!(
+            super::stable_key_from_text("item.forked_signal", "+1 shot and spread"),
+            super::stable_key_from_text("item.forked_signal", "+2 shot and spread"),
+        );
     }
 }

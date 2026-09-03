@@ -596,6 +596,25 @@ pub async fn load_font(path: &str) -> Result<DesktopFont, String> {
     load_font_from_path(path)
 }
 
+/// See `base_language_tag`'s doc comment in `lib.rs` for the contract.
+/// `GetUserDefaultLocaleName` is the current user's Windows Settings >
+/// Language preference (e.g. "en-US"), not an environment variable —
+/// Windows processes don't reliably have `LANG`-style variables set at
+/// all.
+#[must_use]
+pub fn system_locale() -> String {
+    use windows::Win32::Globalization::GetUserDefaultLocaleName;
+
+    let mut buffer = [0u16; 85]; // LOCALE_NAME_MAX_LENGTH
+    let written = unsafe { GetUserDefaultLocaleName(&mut buffer) };
+    if written <= 1 {
+        return "en".to_string();
+    }
+    // `written` counts the trailing NUL; trim it before decoding.
+    let raw = String::from_utf16_lossy(&buffer[..(written as usize - 1)]);
+    crate::base_language_tag(&raw).unwrap_or_else(|| "en".to_string())
+}
+
 pub fn measure_text_metrics(
     text: &str,
     font: Option<&DesktopFont>,

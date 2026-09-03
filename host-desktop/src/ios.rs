@@ -837,6 +837,36 @@ pub async fn load_font(path: &str) -> Result<DesktopFont, String> {
     Ok(DesktopFont::new(Some(path.to_string())))
 }
 
+fn ns_string_to_rust(ns_string: *mut AnyObject) -> Option<String> {
+    if ns_string.is_null() {
+        return None;
+    }
+    let ptr: *const std::ffi::c_char = unsafe { objc2::msg_send![ns_string, UTF8String] };
+    if ptr.is_null() {
+        return None;
+    }
+    Some(
+        unsafe { std::ffi::CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .into_owned(),
+    )
+}
+
+/// See `base_language_tag`'s doc comment in `lib.rs` for the contract.
+/// Same `[NSLocale preferredLanguages]` approach as `macos.rs` — both
+/// platforms share the same Foundation API for this.
+#[must_use]
+pub fn system_locale() -> String {
+    unsafe {
+        let languages: *mut AnyObject =
+            objc2::msg_send![objc2::class!(NSLocale), preferredLanguages];
+        let first: *mut AnyObject = objc2::msg_send![languages, firstObject];
+        ns_string_to_rust(first)
+            .and_then(|raw| crate::base_language_tag(&raw))
+            .unwrap_or_else(|| "en".to_string())
+    }
+}
+
 pub fn measure_text_metrics(
     text: &str,
     font: Option<&DesktopFont>,

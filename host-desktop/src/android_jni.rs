@@ -182,6 +182,46 @@ pub(crate) fn call_static_int(
         .map_err(|err| format!("Android static {class}.{name} return decode failed: {err}"))
 }
 
+/// Calls a static method that returns a Java object reference (e.g.
+/// `Locale.getDefault()`). A `null` return is reported as `Ok(None)`, same
+/// contract as `call_object`.
+pub(crate) fn call_static_object<'e>(
+    env: &mut JNIEnv<'e>,
+    class: &str,
+    name: &str,
+    sig: &str,
+    args: &[JValue],
+) -> Result<Option<JObject<'e>>, String> {
+    let value = match env.call_static_method(class, name, sig, args) {
+        Ok(value) => value,
+        Err(err) => {
+            let detail = take_java_exception(env)
+                .map(|detail| format!(" ({detail})"))
+                .unwrap_or_default();
+            return Err(format!(
+                "Android static {class}.{name} failed: {err}{detail}"
+            ));
+        }
+    };
+    if let Some(detail) = take_java_exception(env) {
+        return Err(format!(
+            "Android static {class}.{name} raised Java exception: {detail}"
+        ));
+    }
+    let obj = value
+        .l()
+        .map_err(|err| format!("Android static {class}.{name} return decode failed: {err}"))?;
+    Ok((!obj.is_null()).then_some(obj))
+}
+
+/// Decodes a `java.lang.String` object into a Rust `String`.
+pub(crate) fn java_string_to_rust(env: &mut JNIEnv, obj: JObject) -> Result<String, String> {
+    let string = jni::objects::JString::from(obj);
+    env.get_string(&string)
+        .map(|value| value.to_string_lossy().into_owned())
+        .map_err(|err| format!("Failed to decode Java string: {err}"))
+}
+
 pub(crate) fn get_static_int_field(
     env: &mut JNIEnv,
     class: &str,

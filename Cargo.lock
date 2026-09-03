@@ -1440,6 +1440,7 @@ dependencies = [
  "serde",
  "softbuffer",
  "ui-core",
+ "windows 0.58.0",
  "winit",
 ]
 

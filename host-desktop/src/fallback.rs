@@ -482,6 +482,28 @@ pub async fn next_frame(demand: FrameDemand) {
 
 pub fn simulate_mouse_with_touch(_enabled: bool) {}
 
+/// See `base_language_tag`'s doc comment in `lib.rs` for the contract.
+/// This platform group (netbsd and anything else without a dedicated
+/// backend) has no native locale API of its own to query, so this uses
+/// the same POSIX environment-variable convention `linux.rs` does.
+#[must_use]
+pub fn system_locale() -> String {
+    std::env::var("LANGUAGE")
+        .ok()
+        .and_then(|value| value.split(':').find_map(crate::base_language_tag))
+        .or_else(|| {
+            std::env::var("LC_ALL")
+                .ok()
+                .and_then(|value| crate::base_language_tag(&value))
+        })
+        .or_else(|| {
+            std::env::var("LANG")
+                .ok()
+                .and_then(|value| crate::base_language_tag(&value))
+        })
+        .unwrap_or_else(|| "en".to_string())
+}
+
 fn font_size_and_scale(size: f32) -> (u16, f32) {
     let clamped = size.max(1.0);
     let font_size = clamped.round().min(u16::MAX as f32) as u16;

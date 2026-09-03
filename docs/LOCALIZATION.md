@@ -45,7 +45,7 @@ Solved once in `loadngo` and adopted per-game, the same shape as the
 `AudioMixer` work (`[[loadngo_audiomixer_device_race]]`) — not
 reinvented three times.
 
-## Phase 1 — done (2026-09-03): catalog format and lookup API
+## Phase 1 — done, then revised same-day (2026-09-03): catalog format, lookup API, and OS locale detection
 
 New crate: `loadngo/localization` (package `loadngo-localization`),
 mirroring `sng-roguelite/crates/game-data`'s already-proven
@@ -55,65 +55,100 @@ validator that reports every problem found, not just the first) rather
 than inventing a new convention for content that happens to be strings.
 
 - `LocaleCatalogDefinition` — one file per locale (e.g.
-  `assets/localization/en.ron`), `{ schema_version, locale, revision,
+  `assets/localization/de.ron`), `{ schema_version, locale, revision,
   strings: HashMap<String, String> }`. Keys are opaque lookup strings
-  (`"title.press_to_start"`), not the English text itself, so every
-  locale's catalog — including the base/English one — has the same
-  shape.
+  (`"title.press_to_start"`, or `"item.<id>.description"` for catalog
+  content — see below), not the English text itself.
 - `parse_locale_catalog_ron` / `validate_locale_catalog` — same
   two-function shape as `game-data`'s item/reward/encounter catalogs.
-- `Localizer` — the single thing a game's UI code is expected to consult
-  for any player-facing text (mirrors `sng-roguelite`'s `FormFactor`:
-  one obvious fact to check, not something to re-derive ad hoc).
-  `Localizer::t(key) -> String` looks up the primary (player-selected)
-  catalog, falls back to a secondary catalog (typically the game's base/
-  English one, so a partially-translated locale still shows *something*
-  readable), and finally falls back to a visibly-broken `[[key]]`
-  placeholder if the key exists in neither — never panics, and a missing
-  translation is loud in testing rather than silently blank in
-  production.
+- **`Localizer::t(key, default) -> &str`** — revised from the original
+  `t(key) -> String` design after the user raised a real problem with
+  it: `sng-roguelite`'s `items.ron` contains item descriptions inline,
+  and forcing that content through an opaque-key-only catalog would mean
+  either duplicating it into a committed English locale file (a second,
+  redundant source of truth) or making `items.ron` itself keys-only and
+  much less readable for content design. Resolved by making English
+  *always* the caller-supplied `default` — for UI chrome, the literal
+  being migrated; for catalog content, the field already authored in
+  RON. **There is deliberately no committed English catalog anywhere,
+  for either game.** A locale catalog only ever needs to contain actual
+  translations; an untranslated key falls straight through to the
+  always-correct default, so a partial translation is never broken, just
+  incomplete. Revised before any real adoption existed (confirmed zero
+  callers at the time), so this was a clean swap, not a breaking migration.
+- `stable_key_from_text(context, text) -> String` — an FNV-1a 64-bit
+  content-hash key helper, deliberately the same algorithm as
+  `sng-rusty`'s `stable_line_id` (`src/bin/export_lines.rs`), lifted in
+  directly per the user's explicit direction to model `sng-rusty`'s good
+  design rather than rediscovering it later. For content with no natural
+  stable identifier of its own (unlike an item, which already has an
+  authored `id` and should just use a structured `item.<id>.*` key
+  instead — content-hashing an item description would spuriously
+  invalidate translations on a copyedit-only fix, which structured keys
+  avoid).
+- **`system_locale()`** — the platform-agnostic concept the user asked
+  for explicitly: one function per `loadngo-host-desktop` platform
+  backend (macOS/iOS via `NSLocale.preferredLanguages`, Android via
+  `Locale.getDefault()` through JNI, Linux/netbsd/other via
+  `LANGUAGE`/`LC_ALL`/`LANG`, Windows via `GetUserDefaultLocaleName`),
+  normalized down to a bare base-language tag via a shared
+  `base_language_tag` helper, always returning `"en"` as the ultimate
+  default when the OS gives nothing usable. Verified for real on macOS
+  (built and ran a throwaway binary calling it — returned `"en"`
+  correctly); iOS/macOS clippy clean; Android/Windows verified by careful
+  reading of this exact codebase's own established JNI/windows-rs
+  patterns and (for Windows specifically) the actual `windows-0.58.0`
+  crate source, since this session has no working cross-compile target
+  for either platform to build-check directly — real confirmation for
+  those two still needs an on-device run.
 - 11 unit tests: parse/validate success and every validation failure
-  mode, plus all three `Localizer::t` resolution paths (primary hit,
-  fallback hit, placeholder).
+  mode, `Localizer::t`'s three resolution paths (real translation, miss
+  falling through to default, no catalog loaded at all), and
+  `stable_key_from_text`'s determinism/context-sensitivity/
+  text-sensitivity.
 
 Verified: `cargo build` / `clippy --all-targets --all-features -D
-warnings` / `fmt --check` / `cargo test`, all clean.
+warnings` / `fmt --check` / `cargo test`, all clean for every target this
+session can actually build (macOS native, iOS cross-check). Android
+blocked on this session's missing NDK cross-compiler outside
+`android_device_build.sh`'s own env setup (pre-existing, unrelated to
+this change); Windows blocked on this session's known MSVC/`blake3`
+cross-compile gap (also pre-existing).
 
-## Explicitly not done in Phase 1
+## Explicitly not done yet
 
-- **Locale selection/auto-detection.** `Localizer::new` takes already-
-  loaded catalogs; nothing yet queries the OS for the player's locale
-  (`Locale.getDefault()` on Android, `NSLocale` on iOS, `LANG`/similar on
-  desktop). Each platform's `host-desktop` backend would need its own
-  detection, the same shape as `SNG_ASSETS_ROOT` resolution already is
-  per-platform.
-- **Font glyph-coverage wiring.** The existing `fallback_fonts` mechanism
-  is still unused by any game, and no broad-coverage font is bundled yet.
-  Without this, a real (non-English, non-Latin-only) locale catalog could
-  parse and look up fine while still rendering as tofu/missing glyphs on
-  screen. This is necessary before Phase 1's catalogs are useful for any
-  language `loadngo`'s current fonts don't cover.
-- **Migrating any game's existing hardcoded strings onto this.** Genuinely
-  large, mechanical, per-game work (again, ~290 sites in `sng-roguelite`
-  alone) — a deliberate follow-up once Phase 1 is proven, not bundled
-  into landing the engine piece itself.
-- **Real translated content.** No non-English locale catalogs exist yet
-  for any game — Phase 1 is the mechanism, not the content.
+- **Font glyph-coverage wiring.** The `fallback_fonts` mechanism in
+  `loadngo/renderer` is still unused by any game, and no broad-coverage
+  font is bundled yet. Without this, a real (non-English, non-Latin-only)
+  locale catalog could parse and look up fine while still rendering as
+  tofu/missing glyphs on screen. English-only adoption (the current plan
+  for `sng-roguelite` and `sng-zhoenus`) doesn't need this yet.
+- **`sng-rusty` stays untouched.** Explicit user direction (2026-09-03):
+  it's a visual novel engine, already text-heavy, with its own working
+  voiceover tooling built around `stable_line_id`-style content hashing.
+  `stable_key_from_text` above is `loadngo-localization`'s own copy of
+  that same algorithm, lifted in now per the user's request rather than
+  waiting for a future full lift of `sng-rusty`'s tooling into `loadngo`
+  — but `sng-rusty` itself keeps its own separate system for now.
+- **Real translated (non-English) catalog content.** Phase 1 is the
+  mechanism; no `de.ron`/`ja.ron`/etc. exists for any game yet.
 
 ## Sequencing for later phases (not scheduled)
 
-1. Pick one game (likely `sng-roguelite`, already mid-conversation about
-   its UI) and migrate a bounded slice of its hardcoded strings onto
-   `Localizer`, proving the adoption path end to end before doing the
-   rest.
-2. Font glyph-coverage: source/bundle one broad-coverage fallback font,
+1. `sng-zhoenus` adoption: full string migration (small — roughly a
+   few dozen real UI strings), wiring `system_locale()` + `Localizer`
+   into startup.
+2. `sng-roguelite` adoption: full string migration (~290 sites),
+   including catalog-content lookups for `items.ron` (and `rewards.ron`/
+   `encounters.ron` if they carry player-facing text too) using each
+   entry's own `id` as the key, not a content hash.
+3. Font glyph-coverage: source/bundle one broad-coverage fallback font,
    wire `FontCatalogManifest.fallback_fonts` all the way through to
    actual glyph rasterization, verify a real non-Latin string renders
    correctly on a real device.
-3. Locale auto-detection per platform.
-4. Full string migration per game, and real translated catalog content
-   for at least one additional language, to prove the whole pipeline
-   under real (not synthetic-test) conditions.
+4. Real translated catalog content for at least one additional language,
+   for at least one game, to prove the whole pipeline under real (not
+   synthetic-test) conditions.
 
 Also worth remembering while doing any of this: card/label layouts
 designed assuming fixed-length English strings (e.g. the reward-card
