@@ -26,9 +26,21 @@ name: CI
 # that's addressed separately. Not something this workflow silently works
 # around.
 
+# paths-ignore: skip entirely when every changed file is documentation --
+# a push/PR that touches at least one non-doc file still runs normally.
+# This job runs real build/test/clippy on the shared, single-machine
+# self-hosted "dolores" runner pool (also used by sng-roguelite and
+# sng-zhoenus), so a docs-only commit queuing a full compile is wasted
+# time on a resource other repos' pushes are also waiting on.
 on:
   push:
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
   pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
 
 concurrency:
   group: ci-${{ github.ref }}
