@@ -7,17 +7,19 @@
 //! current platform, so every bench/stress tool here automatically targets
 //! whichever `CompletionPort` impl is actually live on the machine it runs
 //! on -- `IoUringPort` on Linux (`dolores`), `KqueuePort` on macOS/iOS/BSD,
-//! `IocpPort` on Windows (this last one is unverified by compiling, same
-//! caveat as the rest of this workspace's Windows-only code -- no Windows
-//! dev machine currently available, see
+//! `EpollPort` on Android, `IocpPort` on Windows (this last one is
+//! unverified by compiling, same caveat as the rest of this workspace's
+//! Windows-only code -- no Windows dev machine currently available, see
 //! `sng-roguelite/docs/BUILD_RELEASE_PIPELINE.md`'s iOS/Windows notes for
 //! the analogous situation elsewhere in this codebase).
 //!
-//! Android has no backend at all yet (`target_os = "android"` isn't
-//! matched by either the Linux `io_uring` cfg gate or the kqueue cfg gate
-//! in `loadngo-proactor/src/lib.rs` -- Rust's `target_os` for Android is
-//! literally `"android"`, distinct from `"linux"`). There is nothing for
-//! this harness to build or benchmark there until that backend exists.
+//! Android's `EpollPort` is real, cross-compiled, and on-device-tested
+//! (see `docs/PROACTOR_ENGINE_ADOPTION.md`), but this harness's own
+//! benches (criterion) and the `stress` binary are dev-only tooling this
+//! workspace doesn't currently build for Android at all -- `PlatformPort`
+//! resolves for Android for API parity with every other platform, not
+//! because anything here has actually been run through a bench on-device
+//! yet.
 
 use loadngo_proactor::{CompletionKind, Proactor, ProactorHandle};
 use std::io;
@@ -36,12 +38,13 @@ pub type PlatformPort = loadngo_proactor::IoUringPort;
     target_os = "dragonfly"
 ))]
 pub type PlatformPort = loadngo_proactor::KqueuePort;
+#[cfg(target_os = "android")]
+pub type PlatformPort = loadngo_proactor::EpollPort;
 #[cfg(windows)]
 pub type PlatformPort = loadngo_proactor::IocpPort;
 
 /// Constructs the same backend `loadngo-proactor` would pick for this
-/// platform. See the module doc for what's covered and what isn't
-/// (Android: nothing yet).
+/// platform.
 pub fn new_platform_proactor() -> io::Result<Proactor<PlatformPort>> {
     #[cfg(target_os = "linux")]
     {
@@ -55,6 +58,10 @@ pub fn new_platform_proactor() -> io::Result<Proactor<PlatformPort>> {
         target_os = "netbsd",
         target_os = "dragonfly"
     ))]
+    {
+        Ok(Proactor::new(PlatformPort::new()?))
+    }
+    #[cfg(target_os = "android")]
     {
         Ok(Proactor::new(PlatformPort::new()?))
     }

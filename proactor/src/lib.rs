@@ -1,5 +1,7 @@
 mod channel;
 mod deferred;
+#[cfg(target_os = "android")]
+mod epoll;
 mod error;
 mod io_port;
 #[cfg(windows)]
@@ -28,6 +30,8 @@ use std::time::{Duration, Instant};
 use std::{collections::HashMap, os::fd::RawFd};
 
 pub use channel::ChannelPort;
+#[cfg(target_os = "android")]
+pub use epoll::EpollPort;
 pub use error::ProactorError;
 pub use io_port::{
     AcceptCompletionHandler, AcceptResult, AcceptTransfer, IoBuf, IoCompletionHandler, IoOpId,

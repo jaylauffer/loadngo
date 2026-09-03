@@ -24,6 +24,13 @@ io-uring = "0.7"
 # well-tested crate for exactly this.
 socket2 = "0.5"
 
+[target.'cfg(target_os = "android")'.dependencies]
+libc = "0.2"
+# See the linux/BSD blocks' identical comment on socket2 above -- same
+# reason, used by EpollPort's IoPort impl for the same sockaddr
+# conversions.
+socket2 = "0.5"
+
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
 # Deliberately NOT socket2 here, unlike the Unix targets above: socket2's

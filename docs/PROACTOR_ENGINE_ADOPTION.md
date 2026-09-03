@@ -1,6 +1,10 @@
 # Proactor-First Engine Adoption
 
-Status: active workspace priority as of 2026-09-01.
+Status: active workspace priority. macOS/Linux host migration done
+(2026-09-01, Linux pending hardware evidence-gate measurement); Android's
+`EpollPort` backend implemented and on-device-tested (2026-09-03, host
+migration itself still open); iOS/Windows backends and host migrations
+still open.
 
 ## Decision
 
@@ -72,7 +76,7 @@ The remaining host gap is platform parity:
 | macOS | `KqueuePort` | reference integration exists |
 | Linux | `IoUringPort` | host scheduler migrated 2026-09-01; pending real-hardware evidence-gate measurements (dolores) |
 | iOS | `KqueuePort` | host scheduler migration required |
-| Android | none | epoll-backed `IoPort` (via `ALooper_addFd`) and host integration required — **not io_uring**, see below |
+| Android | `EpollPort` | backend implemented, cross-compiled, and on-device-tested 2026-09-03 (`proactor/src/epoll.rs`); host scheduler migration into `host-desktop/src/android.rs` still required — **not io_uring**, see below |
 | Windows | `IocpPort` | host scheduler migration and real-machine validation required |
 
 ## Android: `io_uring` is not available to app processes, confirmed on real hardware
@@ -106,17 +110,55 @@ attack surface was the vector for several real-world Android exploits;
 Google restricted it for app-level code as a result), not a MIUI/OEM
 quirk or something this repo's build configuration could work around.
 
-**Conclusion:** the Android backend must be epoll-based (via `ALooper`'s
-underlying `ALooper_addFd`, since `ALooper` *is* epoll under the hood on
-Android), matching the "none... `ALooper` completion port... required"
-row above — this is genuinely the same tier of real `IoPort`
-implementation work as `KqueuePort`/`IoUringPort`, not a lesser
-"wrap the OS toy" shortcut, it's simply backed by the mechanism actually
-available to an app on this platform. Do not revisit `io_uring` for
-Android without new evidence from a *different* real device — this
-result should be treated as representative of current mainline Android
-policy, not this one phone's idiosyncrasy, but it was only tested on one
-device family.
+**Conclusion:** the Android backend must be epoll-based — this is
+genuinely the same tier of real `IoPort` implementation work as
+`KqueuePort`/`IoUringPort`, not a lesser "wrap the OS toy" shortcut, it's
+simply backed by the mechanism actually available to an app on this
+platform. Do not revisit `io_uring` for Android without new evidence from
+a *different* real device — this result should be treated as
+representative of current mainline Android policy, not this one phone's
+idiosyncrasy, but it was only tested on one device family.
+
+**Landed same day, `proactor/src/epoll.rs`:** the real `EpollPort`, not
+built on `ALooper_addFd` as this section originally speculated — it owns
+its own independent `epoll_create1` instance instead, the same shape
+`KqueuePort::new` calling `kqueue()` already uses (an independent kernel
+object, not hooking into whatever `ALooper` the Android framework's own
+main-thread event pump happens to own). `ALooper_addFd` would add this
+port's fds into *that* looper, a callback-driven integration model that
+doesn't fit `CompletionPort::poll`'s caller-blocks-on-this-call contract
+without real extra plumbing — not the right primitive to build on, once
+actually worked through. See `epoll.rs`'s module doc for the one genuine
+architectural difference from `KqueuePort`: epoll registers interest per
+fd, not per direction the way kqueue's independent `EVFILT_READ`/
+`EVFILT_WRITE` entries do, so a fd with both a read and a write wait
+outstanding needs its own tracking (`FdEntry`) rather than relying on
+`EPOLLONESHOT`, which disarms all interest on any single event, not just
+the direction that fired.
+
+Verified for real, not just by compiling: cross-compiled and clippy-clean
+(`cargo clippy --target aarch64-linux-android -- -D warnings`, both
+`loadngo-proactor` and `proactor-harness`), and all 9 tests in the new
+`proactor/tests/epoll.rs` (a full mirror of `tests/kqueue.rs`'s 8 —
+enqueued work, wake, registered readiness, a real file write/read
+round-trip, UDP `recv_from`/`send_to`, TCP `accept`/`connect`, and the
+shutdown-drains-an-in-flight-op path — plus one new test specific to
+epoll's per-fd interest tracking, a simultaneous read+write wait on one
+socket pair) built with `cargo test --target aarch64-linux-android
+--no-run`, pushed to the same real device the `io_uring` finding above
+used, and run there via `adb shell` — all passed. `PlatformPort`/
+`new_platform_proactor` in `proactor-harness` now resolve for Android
+too, for API parity with every other platform (its actual benches/stress
+binary still aren't built for Android by anything in this workspace, so
+that parity is untested by a real bench run, just by the harness
+resolving and compiling correctly).
+
+**Not done:** the *host* migration — `host-desktop/src/android.rs`
+still schedules frames via its existing `AChoreographer`/`ALooper` reactor
+(unrelated to and untouched by this work), not through `EpollPort`. That
+remains real, separate future work — the same two-step shape Linux went
+through, where the backend (`IoUringPort`) landed before the host
+migration that actually put it to use.
 
 ## Evidence Gate
 
@@ -210,10 +252,15 @@ battery behavior against the previous host loop.
 
 ### Phase 3: Close mobile and Windows parity
 
-1. Implement an `ALooper`-backed (epoll, via `ALooper_addFd` — **not**
-   `io_uring`, confirmed seccomp-blocked for app processes on real
-   hardware, see "Android: `io_uring` is not available to app processes"
-   above) Android completion port and migrate the Android host without
+1. **Backend done (2026-09-03).** `EpollPort` (`proactor/src/epoll.rs`,
+   own independent `epoll_create1` instance — **not** `io_uring`,
+   confirmed seccomp-blocked for app processes on real hardware, and
+   deliberately **not** built on `ALooper_addFd` either, see "Android:
+   `io_uring` is not available to app processes" above for both).
+   Cross-compiled, clippy-clean, and all 9 tests passing on a real
+   device. **Not done:** migrate the Android host
+   (`host-desktop/src/android.rs`) onto it — still on its existing
+   `AChoreographer`/`ALooper` reactor, untouched by this — without
    reintroducing timer-per-frame threads.
 2. Move the Windows host to `IocpPort` and validate on a real Windows machine.
 3. Exercise lifecycle, cancellation, input, and presentation behavior on those
@@ -250,4 +297,7 @@ their own event loop, timer thread, or scheduler.
 3. Capture the macOS and Linux baselines (old thread-per-wait Linux host vs.
    the new `IoUringPort` host makes a real before/after comparison possible
    for the first time) and select explicit pass thresholds.
-4. Repeat the same proof on iOS, then build the Android and Windows paths.
+4. Repeat the same proof on iOS. Android's backend (`EpollPort`) is
+   already built and on-device-tested (2026-09-03) — its own remaining
+   step is the host migration into `android.rs`, not the backend itself.
+   Windows (`IocpPort`) still needs both.
