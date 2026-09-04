@@ -1,5 +1,7 @@
+mod form_factor;
 mod joystick;
 
+pub use form_factor::FormFactor;
 pub use joystick::VirtualJoystick;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

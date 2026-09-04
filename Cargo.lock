@@ -1497,6 +1497,9 @@ dependencies = [
 [[package]]
 name = "loadngo-touch"
 version = "0.1.0"
+dependencies = [
+ "loadngo-host-core",
+]
 
 [[package]]
 name = "lock_api"
