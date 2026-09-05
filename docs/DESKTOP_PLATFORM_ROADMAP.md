@@ -135,6 +135,17 @@ resolved here:
   latter, given every other `loadngo` input surface (`UiEvent`, touch)
   already normalizes across raw platform input, but not decided.
 
+**Superseded 2026-09-05 by [GAMEPAD_INPUT.md](GAMEPAD_INPUT.md)**, which
+resolves crate placement, hand-roll-vs-crate, normalized shape, and
+platform priority/phasing, and also identifies a real gap this finding
+didn't raise: how input-source transitions (a controller going offline
+mid-hold, a player switching between gamepad and mouse/keyboard) should
+work. No code exists for this subsystem — an initial type scaffold was
+committed and reverted the same day after review found it had no backend
+or caller to justify it; see that doc's design instead. The
+open-questions bullets above are left as-written, as a record of what
+this finding actually looked like on 2026-08-30.
+
 ## Proposed priority ordering (open for discussion, not decided)
 
 1. **Finding 2 (button adoption) — done.**
@@ -169,3 +180,5 @@ resolved here:
   platform-level gaps.
 - `sng-roguelite/docs/BUILD_RELEASE_PIPELINE.md` — itch.io release
   process; a Linux release target isn't in it yet, pending Finding 1.
+- [GAMEPAD_INPUT.md](GAMEPAD_INPUT.md) — supersedes Finding 3 above as the
+  living design doc for gamepad/controller input.

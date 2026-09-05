@@ -15,6 +15,8 @@ That philosophy should shape architectural choices:
 - avoid exposing more identity or history than necessary
 - treat storage and lineage as ways of protecting lived effort, not merely moving bytes
 
+The same philosophy extends to the input/engagement side of the engine, not just storage — see [INPUT_PHILOSOPHY.md](INPUT_PHILOSOPHY.md).
+
 Related design notes:
 - [WIDGET_FRAMEWORK.md](WIDGET_FRAMEWORK.md)
 - [WORKSPACE_LAYOUT.md](WORKSPACE_LAYOUT.md)
@@ -26,6 +28,8 @@ Related design notes:
 - [DRAW_PRIMITIVE_MATRIX.md](DRAW_PRIMITIVE_MATRIX.md)
 - [PUDDING_CAS_PQ_MODEL.md](PUDDING_CAS_PQ_MODEL.md)
 - [DETAILS_VIEW_MODEL.md](DETAILS_VIEW_MODEL.md)
+- [GAMEPAD_INPUT.md](GAMEPAD_INPUT.md)
+- [INPUT_PHILOSOPHY.md](INPUT_PHILOSOPHY.md)
 - [RON_FIRST_EDITOR.md](../../sng-rusty/docs/RON_FIRST_EDITOR.md)
 - [ENGINE_CAPABILITY_MATRIX.md](../../sng-rusty/docs/ENGINE_CAPABILITY_MATRIX.md)
 - [SCENE_BLOCKS_AND_VALVES.md](../../sng-rusty/docs/SCENE_BLOCKS_AND_VALVES.md)
@@ -101,6 +105,7 @@ See [DETAILS_VIEW_MODEL.md](DETAILS_VIEW_MODEL.md).
   - key events with modifiers
 - Pointer helpers in `host-core` (`pointer_in_rect`, `pointer_pressed_in_rect`, `pointer_released`) provide shared hit-testing semantics across platforms.
 - Backends map native input to `InputSnapshot`; app/UI code consumes the normalized form.
+- Physical gamepad/controller input has no code yet — see [GAMEPAD_INPUT.md](GAMEPAD_INPUT.md) for the design, which proposes a `gamepads` field on `InputSnapshot` itself (alongside `touches`) rather than a separate structure, so it stays part of the one normalized per-frame input surface.
 
 ## Render model
 - UI/app code emits geometry/text/image operations.
