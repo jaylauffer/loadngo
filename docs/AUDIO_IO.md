@@ -51,25 +51,39 @@ racing for one input device), so `LiveMonitor` is built the same way
 
 ## Known limitations (v0.1)
 
-- **AirPlay output devices do not appear in `list_output_devices`, and
-  `LiveMonitor` cannot target one.** Confirmed 2026-09-06 while adding a
-  device picker to `sng-bass-blaster`: a macOS AirPlay speaker (a
+- **AirPlay output devices only appear in `list_output_devices` once
+  actively selected as the OS's current output -- not before, and not by
+  their real name.** First observed 2026-09-06 while adding a device
+  picker to `sng-bass-blaster`: an idle macOS AirPlay speaker (a
   HomePod-style speaker, visible in System Settings -> Sound -> Output
   with Type "AirPlay") is invisible not just to `cpal` but to
-  `system_profiler SPAudioDataType`'s own "Devices" list -- i.e. this is a
-  macOS/CoreAudio-level omission, not a gap in `cpal`'s enumeration or
-  anything this crate could fix by querying differently. A **Bluetooth**
-  device using the classic A2DP profile (headphones, most Bluetooth
-  speakers) enumerates as an ordinary CoreAudio device and works
-  out-of-the-box; only the newer AirPlay-routed devices (HomePod, and
-  anything using "AirPlay 2" instead of A2DP) hit this gap. It was not
-  confirmed whether the device becomes a real, enumerable CoreAudio object
-  once actively selected as the system's current output in System
-  Settings (an experiment to test this, live, was inconclusive -- see
-  `sng-bass-blaster/docs/UI_INPUT_FINDINGS.md` for the full investigation
-  and exactly what was and wasn't verified). Any caller hitting this
-  should route the user to System Settings' own output picker for AirPlay
-  targets rather than expecting this crate's device list to include them.
+  `system_profiler SPAudioDataType`'s own "Devices" list -- a macOS/
+  CoreAudio-level omission, not a gap in `cpal`'s enumeration. **Resolved
+  the same day:** selecting that AirPlay target via the menu-bar Sound
+  control (Control Center's Sound module -- the redesigned System
+  Settings -> Sound *pane* did not reliably respond to the same kind of
+  scripted selection attempt) causes macOS to create a real CoreAudio
+  device, confirmed both in `system_profiler` and via `cpal`/
+  `list_output_devices`. That device is always named plainly **`AirPlay`**
+  (generic, not the speaker's own name), and `LiveMonitor` opened a real
+  stream against it successfully. Practical upshot: once a user has
+  picked their AirPlay target through the OS's own picker, it just shows
+  up in this crate's existing device list under the name `AirPlay` --
+  no code change needed for that part. What this crate still cannot do:
+  discover named AirPlay targets independently, or select one
+  programmatically without going through the OS's own UI -- Apple gates
+  that behind the user-facing route picker by design (apps aren't meant
+  to silently redirect system audio output). A **Bluetooth** device using
+  the classic A2DP profile (headphones, most Bluetooth speakers)
+  enumerates as an ordinary CoreAudio device immediately, with no such
+  selection step, and works out-of-the-box. Full writeup, including the
+  UI-automation approach that worked (and the one that didn't), in
+  `sng-bass-blaster/docs/UI_INPUT_FINDINGS.md`. Any caller wanting a
+  specific *named* AirPlay target selected from inside the app itself
+  (not just picking up whatever's already active) still needs to send the
+  user to the OS's own Sound picker for the selection step, or implement
+  real device discovery/selection independently of CoreAudio (mDNS/RAOP)
+  -- see that doc's "Where this could go next" section.
 - **No sample-rate conversion.** The output stream is built at the
   input device's sample rate; if the chosen output device can't run at
   that rate, `LiveMonitor::start` returns a `Stream` error rather than
