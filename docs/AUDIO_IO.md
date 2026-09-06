@@ -51,6 +51,25 @@ racing for one input device), so `LiveMonitor` is built the same way
 
 ## Known limitations (v0.1)
 
+- **AirPlay output devices do not appear in `list_output_devices`, and
+  `LiveMonitor` cannot target one.** Confirmed 2026-09-06 while adding a
+  device picker to `sng-bass-blaster`: a macOS AirPlay speaker (a
+  HomePod-style speaker, visible in System Settings -> Sound -> Output
+  with Type "AirPlay") is invisible not just to `cpal` but to
+  `system_profiler SPAudioDataType`'s own "Devices" list -- i.e. this is a
+  macOS/CoreAudio-level omission, not a gap in `cpal`'s enumeration or
+  anything this crate could fix by querying differently. A **Bluetooth**
+  device using the classic A2DP profile (headphones, most Bluetooth
+  speakers) enumerates as an ordinary CoreAudio device and works
+  out-of-the-box; only the newer AirPlay-routed devices (HomePod, and
+  anything using "AirPlay 2" instead of A2DP) hit this gap. It was not
+  confirmed whether the device becomes a real, enumerable CoreAudio object
+  once actively selected as the system's current output in System
+  Settings (an experiment to test this, live, was inconclusive -- see
+  `sng-bass-blaster/docs/UI_INPUT_FINDINGS.md` for the full investigation
+  and exactly what was and wasn't verified). Any caller hitting this
+  should route the user to System Settings' own output picker for AirPlay
+  targets rather than expecting this crate's device list to include them.
 - **No sample-rate conversion.** The output stream is built at the
   input device's sample rate; if the chosen output device can't run at
   that rate, `LiveMonitor::start` returns a `Stream` error rather than

@@ -302,6 +302,32 @@ The minimum useful test coverage is:
 The goal is to prove widget behavior at the `loadngo` boundary so runtime bugs do
 not have to be debugged indirectly through end-to-end UI behavior.
 
+## Known Gaps
+
+- **`sng-roguelite`'s mouse adapter never sends `UiEvent::PointerMoved` for
+  the mouse.** Found 2026-09-06 while building a hover-respecting dropdown
+  for `sng-bass-blaster`. `crates/game-app/src/lib.rs`'s
+  `button_activated_this_frame` (the established pattern other games have
+  copied) feeds `PointerPressed`/`PointerReleased` from
+  `InputSnapshot::mouse_pressed`/`mouse_released`, and full
+  press/move/release/cancel for touch via `active_touches()` -- but never
+  feeds a mouse `PointerMoved`. Its sibling `slider_changed_this_frame`
+  does send one, specifically because `SliderModel` needs continuous drag
+  tracking, with an explicit comment marking that as an extension beyond
+  the button helper. Net effect: `ButtonModel`'s hover state (this doc's
+  own "Desktop typically wants: ... pointer hover") is live code for touch
+  but effectively dead for desktop mouse users on every button built the
+  `button_activated_this_frame` way -- `hover` only ever flips via
+  `PointerLeft`, which nothing sends either without a matching
+  `PointerMoved` history. Any composition host that wants real mouse hover
+  needs its own adapter that also sends `PointerMoved` every frame (see
+  `sng-bass-blaster/src/dropdown.rs`'s `Dropdown::update` for one), not the
+  bare `button_activated_this_frame` pattern as-is. Not yet fixed at the
+  source (`sng-roguelite` wasn't in scope for that session); a real fix
+  would either add the missing feed to `button_activated_this_frame`
+  itself or promote a corrected version of it into a shared `loadngo`
+  composition helper so every caller gets it for free.
+
 ## Current Direction
 
 The current migration path is:
