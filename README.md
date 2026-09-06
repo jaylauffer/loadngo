@@ -20,6 +20,10 @@ Rust workspace for the `loadngo` GUI/runtime stack plus data/network/task crates
 - `task`: app surface for Task planning features.
 - `proactor` (`loadngo-proactor`): async I/O and event processing primitives.
 - `touch` (`loadngo-touch`): touch input handling components.
+- `audio-io` (`loadngo-audio-io`): pitch detection plus (desktop) live
+  audio-input device enumeration and low-latency input-to-output
+  monitoring, e.g. for an instrument tuner or a live monitoring/amplifier
+  feature.
 
 ## Shared assets
 - Shared renderer font assets belong under `loadngo/assets/fonts/`.
@@ -36,6 +40,7 @@ cargo test -q -p network
 cargo test -q -p loadngo-pq-auth
 cargo test -q -p proactor
 cargo test -q -p touch
+cargo test -q -p loadngo-audio-io
 ```
 
 Run macOS host sample (on macOS):
@@ -51,6 +56,7 @@ cargo run -p host-mac
 - [`docs/PROACTOR_ENGINE_ADOPTION.md`](docs/PROACTOR_ENGINE_ADOPTION.md): active proactor-first host-runtime adoption and evidence plan.
 - [`docs/RENDERER_ROADMAP.md`](docs/RENDERER_ROADMAP.md): macOS-first renderer ownership plan and multilingual requirements.
 - [`docs/AUDIO.md`](docs/AUDIO.md): music/voice separation and the reusable overlapping sound-effect controller contract.
+- [`docs/AUDIO_IO.md`](docs/AUDIO_IO.md): live audio-input tooling -- pitch detection and desktop input-to-output monitoring, for tuners and live-amplifier-style features.
 - [`docs/PQ_AUTHENTICATOR.md`](docs/PQ_AUTHENTICATOR.md): repo-owned post-quantum authenticator model for signed challenge tokens.
 - [`docs/PUDDING_CAS_PQ_MODEL.md`](docs/PUDDING_CAS_PQ_MODEL.md): native pudding CAS repository model design.
 - [`docs/FIELD_NETWORK_BACKLOG.md`](docs/FIELD_NETWORK_BACKLOG.md): network and replication considerations.

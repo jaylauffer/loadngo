@@ -18,6 +18,7 @@ members = [
     "persistence",
     "proactor-harness",
     "localization",
+    "audio-io",
 ]
 default-members = [
     "task",
@@ -33,6 +34,7 @@ default-members = [
     "ui-core",
     "persistence",
     "localization",
+    "audio-io",
 ]
 resolver = "2"
 
@@ -86,5 +88,7 @@ chrono = "0.4"
 image = { version = "0.24.9", default-features = false, features = ["png", "jpeg"] }
 hex = "0.4"
 getrandom = "0.2"
+cpal = "0.15"
+rtrb = "0.3"
 qcoin-crypto = { path = "../qcoin/qcoin-crypto" }
 qcoin-types = { path = "../qcoin/qcoin-types" }

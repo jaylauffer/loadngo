@@ -1,0 +1,23 @@
+[package]
+name = "loadngo-audio-io"
+description = "Foundational live audio-input tooling: pitch detection plus (desktop) device enumeration and low-latency input-to-output monitoring"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+# Live device enumeration and full-duplex monitoring need real hardware I/O
+# (cpal). Gated the same way `loadngo-host-desktop` gates `rodio`: desktop
+# targets only. Android/iOS live-input capture is a materially different
+# problem (audio session categories, `MediaRecorder`/`AVAudioEngine`) that
+# no caller has asked for yet -- see `docs/AUDIO_IO.md` for why it's left
+# out rather than stubbed.
+[target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))'.dependencies]
+cpal.workspace = true
+rtrb.workspace = true
+loadngo-proactor = { path = "../proactor" }
+
+[dev-dependencies]

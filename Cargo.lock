@@ -1372,6 +1372,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df1d3c3b53da64cf5760482273a98e575c651a67eec7f77df96b5b642de8f039"
 
 [[package]]
+name = "loadngo-audio-io"
+version = "0.1.0"
+dependencies = [
+ "cpal",
+ "loadngo-proactor",
+ "rtrb",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "loadngo-gfx-dx12"
 version = "0.1.0"
 dependencies = [
@@ -2507,6 +2517,12 @@ dependencies = [
  "serde",
  "serde_derive",
 ]
+
+[[package]]
+name = "rtrb"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fae8ee26b0371a29a77d2b2d6b3ae13aa81def6f9bf1b1b92a32d279a5e709b7"
 
 [[package]]
 name = "rustc-hash"
