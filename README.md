@@ -49,6 +49,27 @@ Run macOS host sample (on macOS):
 cargo run -p host-mac
 ```
 
+### Linux must always build
+
+Large parts of `host-desktop` and `gfx-gles` sit behind
+`#[cfg(target_os = ...)]`, so **a clean `cargo check` on macOS proves
+nothing about Linux or Android** — it silently skips every cfg'd-out
+block, exhaustive `match` arms included. Adding a `FrameCommand` variant
+once broke five such matches while macOS stayed green the whole time.
+
+Before pushing a change to a shared enum, trait, or widely-matched type:
+
+```bash
+# --all-features matters: gfx-gles/src/linux_egl.rs compiles only under it
+cargo check --workspace --all-features
+cargo check -p loadngo-gfx-gles --target aarch64-linux-android
+```
+
+`dolores` is the real Linux box and the self-hosted CI runner, so a green
+build there is a green CI. CI itself runs `cargo fmt --check` and
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+both stricter than `cargo check`.
+
 ## Architecture docs
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): layering and ownership boundaries.
 - [`docs/GAMEPAD_INPUT.md`](docs/GAMEPAD_INPUT.md): platform-agnostic gamepad/controller input design and platform rollout plan.

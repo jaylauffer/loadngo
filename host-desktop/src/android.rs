@@ -2577,18 +2577,23 @@ impl OwnedSoftwareSurface {
                         if coverage == 0 {
                             continue;
                         }
+                        let px = (glyph_x + col as f32).round() as i32;
+                        let py = (glyph_y + row as f32).round() as i32;
+                        // Honor the request's clip rect per pixel, the same
+                        // way the Linux software rasterizer does. Without
+                        // this, text drawn inside a scroll viewport spills
+                        // past it -- which is exactly what a real Android
+                        // device showed once clipping landed.
+                        if !point_inside_clip(request.clip_rect, px, py) {
+                            continue;
+                        }
                         let color = UiColor::rgba(
                             request.style.color.r,
                             request.style.color.g,
                             request.style.color.b,
                             coverage,
                         );
-                        self.write_pixel(
-                            (glyph_x + col as f32).round() as i32,
-                            (glyph_y + row as f32).round() as i32,
-                            color,
-                            1.0,
-                        );
+                        self.write_pixel(px, py, color, 1.0);
                     }
                 }
                 cursor_x += metrics.advance_width;
@@ -2699,6 +2704,17 @@ impl OwnedSoftwareSurface {
             (color.b as f32 * alpha + self.bytes[index + 2] as f32 * inv).round() as u8;
         self.bytes[index + 3] = 255;
     }
+}
+
+/// Whether a device pixel falls inside an optional clip rect. `None` means
+/// unclipped. Mirrors the Linux software rasterizer's per-pixel test.
+fn point_inside_clip(clip: Option<UiRect>, x: i32, y: i32) -> bool {
+    clip.is_none_or(|clip| {
+        (x as f32) >= clip.x
+            && (x as f32) < clip.x + clip.width
+            && (y as f32) >= clip.y
+            && (y as f32) < clip.y + clip.height
+    })
 }
 
 fn clip_rect_to_surface(rect: UiRect, width: usize, height: usize) -> Option<(i32, i32, i32, i32)> {
@@ -3684,18 +3700,23 @@ impl<'a> SoftwareFramebuffer<'a> {
                         if coverage == 0 {
                             continue;
                         }
+                        let px = (glyph_x + col as f32).round() as i32;
+                        let py = (glyph_y + row as f32).round() as i32;
+                        // Honor the request's clip rect per pixel, the same
+                        // way the Linux software rasterizer does. Without
+                        // this, text drawn inside a scroll viewport spills
+                        // past it -- which is exactly what a real Android
+                        // device showed once clipping landed.
+                        if !point_inside_clip(request.clip_rect, px, py) {
+                            continue;
+                        }
                         let color = UiColor::rgba(
                             request.style.color.r,
                             request.style.color.g,
                             request.style.color.b,
                             coverage,
                         );
-                        self.write_pixel(
-                            (glyph_x + col as f32).round() as i32,
-                            (glyph_y + row as f32).round() as i32,
-                            color,
-                            1.0,
-                        );
+                        self.write_pixel(px, py, color, 1.0);
                     }
                 }
                 cursor_x += metrics.advance_width;

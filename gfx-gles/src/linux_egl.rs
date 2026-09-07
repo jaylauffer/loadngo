@@ -404,6 +404,9 @@ pub fn present_scene(
             std::env::var("LOADNGO_LINUX_SKIP_DRAW").is_ok_and(|value| value.trim() == "1");
         for command in commands.iter().filter(|_| !skip_draw_commands) {
             match command {
+                // Clipping is resolved by the renderer before commands
+                // reach a backend (see `docs/CLIP_AND_SCISSOR.md`).
+                FrameCommand::PushClip { .. } | FrameCommand::PopClip => {}
                 FrameCommand::Clear { color } => {
                     glClearColor(
                         color.r as f32 / 255.0,
