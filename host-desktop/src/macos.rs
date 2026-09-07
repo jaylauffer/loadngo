@@ -169,6 +169,7 @@ impl Default for InputState {
                 mouse_y: 0.0,
                 mouse_wheel_x: 0.0,
                 mouse_wheel_y: 0.0,
+                mouse_wheel_precise: false,
                 mouse_pressed: false,
                 mouse_down: false,
                 mouse_released: false,
@@ -198,6 +199,7 @@ impl InputState {
     fn clear_transients(&mut self) {
         self.snapshot.mouse_wheel_x = 0.0;
         self.snapshot.mouse_wheel_y = 0.0;
+        self.snapshot.mouse_wheel_precise = false;
         self.snapshot.mouse_pressed = false;
         self.snapshot.mouse_released = false;
         self.snapshot.escape_pressed = false;
@@ -1461,9 +1463,16 @@ fn handle_event(event: *mut AnyObject) {
                 if inside {
                     let delta_x: f64 = unsafe { msg_send![event, scrollingDeltaX] };
                     let delta_y: f64 = unsafe { msg_send![event, scrollingDeltaY] };
+                    // A trackpad or Magic Mouse reports a precise, continuous
+                    // delta in points; a detented wheel reports whole
+                    // notches. Callers need to know which, or they'll scale
+                    // a pixel delta as though it were a notch -- see
+                    // `InputSnapshot::mouse_wheel_precise`.
+                    let precise: bool = unsafe { msg_send![event, hasPreciseScrollingDeltas] };
                     state.input.snapshot.modifiers = modifiers;
                     state.input.snapshot.mouse_wheel_x += delta_x as f32;
                     state.input.snapshot.mouse_wheel_y += delta_y as f32;
+                    state.input.snapshot.mouse_wheel_precise = precise;
                 }
             }
             NSEVENT_TYPE_KEY_DOWN => {

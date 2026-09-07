@@ -109,6 +109,7 @@ impl DesktopPlatformBackend for LoadngoPlaceholderPlatformHost {
                 mouse_y: 0.0,
                 mouse_wheel_x: 0.0,
                 mouse_wheel_y: 0.0,
+                mouse_wheel_precise: false,
                 mouse_pressed: false,
                 mouse_down: false,
                 mouse_released: false,

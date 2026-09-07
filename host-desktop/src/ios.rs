@@ -198,6 +198,7 @@ impl PendingInput {
             mouse_y: self.mouse_y,
             mouse_wheel_x: self.mouse_wheel_x,
             mouse_wheel_y: self.mouse_wheel_y,
+            mouse_wheel_precise: false,
             mouse_pressed: self.mouse_pressed,
             mouse_down: self.mouse_down,
             mouse_released: self.mouse_released,

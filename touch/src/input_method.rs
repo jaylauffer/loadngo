@@ -79,28 +79,7 @@ mod tests {
     use loadngo_host_core::{GamepadButton, GamepadSnapshot, GamepadStick, InputSnapshot, PointF};
 
     fn blank_input() -> InputSnapshot {
-        InputSnapshot {
-            mouse_x: 0.0,
-            mouse_y: 0.0,
-            mouse_wheel_x: 0.0,
-            mouse_wheel_y: 0.0,
-            mouse_pressed: false,
-            mouse_down: false,
-            mouse_released: false,
-            touches: [None; 8],
-            escape_pressed: false,
-            space_pressed: false,
-            space_down: false,
-            f3_pressed: false,
-            r_pressed: false,
-            up_pressed: false,
-            down_pressed: false,
-            modifiers: ui_core::Modifiers::default(),
-            key_events: Vec::new(),
-            keys_down: Vec::new(),
-            typed_text: String::new(),
-            gamepads: Vec::new(),
-        }
+        InputSnapshot::default()
     }
 
     fn connected_gamepad_pressing_south() -> GamepadSnapshot {

@@ -455,6 +455,20 @@ pub struct InputSnapshot {
     pub mouse_y: f32,
     pub mouse_wheel_x: f32,
     pub mouse_wheel_y: f32,
+    /// Whether the wheel deltas above are in **device pixels** (a trackpad
+    /// or Magic Mouse reporting a precise, continuous gesture) rather than
+    /// notches/lines (a classic detented wheel, one tick per click).
+    ///
+    /// The unit matters: a caller that multiplies a delta by a row height
+    /// to convert "ticks" into pixels will amplify a precise pixel delta by
+    /// that row height, which snaps scrolling to exact row boundaries and
+    /// looks stepped no matter how smooth the underlying scroll model is.
+    /// With precise deltas, scroll by the delta directly.
+    ///
+    /// Only macOS reports this today; every other backend leaves it false,
+    /// which preserves the tick semantics they already had.
+    #[serde(default)]
+    pub mouse_wheel_precise: bool,
     pub mouse_pressed: bool,
     pub mouse_down: bool,
     pub mouse_released: bool,
@@ -808,28 +822,7 @@ mod tests {
     }
 
     fn blank_snapshot() -> InputSnapshot {
-        InputSnapshot {
-            mouse_x: 0.0,
-            mouse_y: 0.0,
-            mouse_wheel_x: 0.0,
-            mouse_wheel_y: 0.0,
-            mouse_pressed: false,
-            mouse_down: false,
-            mouse_released: false,
-            touches: [None; 8],
-            escape_pressed: false,
-            space_pressed: false,
-            space_down: false,
-            f3_pressed: false,
-            r_pressed: false,
-            up_pressed: false,
-            down_pressed: false,
-            modifiers: Modifiers::default(),
-            key_events: Vec::new(),
-            keys_down: Vec::new(),
-            typed_text: String::new(),
-            gamepads: Vec::new(),
-        }
+        InputSnapshot::default()
     }
 
     fn encode_png_fixture() -> Vec<u8> {
