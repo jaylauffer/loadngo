@@ -80,6 +80,17 @@ macOS at all**, with or without `--all-features` — `gfx-metal` and
 checkout. So there is no local whole-workspace gate on macOS: lint the
 crates you touched (`-p …`), and treat dolores as the only real gate.
 
+**Windows can be type-checked too**, from macOS or Linux, with
+`./scripts/check-windows.sh` — `cargo check` never links, so the MSVC
+target works without a Windows machine (the script handles blake3's MASM
+build script, which is the one thing that gets in the way). Run it after
+touching `host-desktop/src/windows.rs` or `gfx-dx12`. It is a type check
+only: it cannot tell you whether D3D12 *behaves*, and the DX12 backend can
+still only be exercised on real hardware. Where a Windows-only decision is
+pure policy, put it outside the `#[cfg(windows)]` module so it can be
+unit-tested everywhere — `DescriptorAllocator` in `gfx-dx12` is the
+worked example.
+
 Compiling is necessary but not sufficient. Clipping shipped compiling
 everywhere and still regressed Android twice, because the bug was in
 per-backend interpretation of a shared field. When a change adds something
