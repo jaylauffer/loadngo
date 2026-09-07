@@ -58,10 +58,17 @@ run the proactor, connect twice:
 
 ### Why it went unnoticed
 
-`camera_preview` — the only in-tree `register_readable` caller — uses
-`CAMERA_STREAM_TOKEN = 0x4341_4d45_5241` (`"CAMERA"`), which is far above
-the reserved values. The convention that avoids the bug was already in
-use, just never written down or enforced.
+Both existing `register_readable` callers independently picked large,
+ASCII-derived tokens far above the reserved values:
+
+- `camera_preview`: `CAMERA_STREAM_TOKEN = 0x4341_4d45_5241` (`"CAMERA"`)
+- `network/src/p2p.rs`: `SNEAKERNET_READINESS_TOKEN = 0x4c4e_475f_4e45_5431`
+  (`"LNG_NET1"`), plus a small per-fd index
+
+So **no current caller is exposed** — checked 2026-09-08. The convention
+that avoids the bug was already in use, just never written down or
+enforced, and the first caller to reach for an obvious small token hit it
+immediately.
 
 ### Suggested fix
 
@@ -153,19 +160,70 @@ Two parts, and the second is an API decision:
    backends. This is a strict bug fix with no API change and should
    happen regardless of the below.
 2. **Decide whether `AcceptTransfer` should represent non-IP peers.**
-   Options, roughly in increasing order of disruption:
-   - keep `peer: SocketAddr` and return the fd anyway with a sentinel —
-     poor, loses information;
-   - change to `peer: Option<SocketAddr>`, mirroring
-     `IoTransfer::peer`, which is already `Option<SocketAddr>` for
-     exactly this kind of "may not be known" case. Breaking, but small,
-     and consistent with a type already in the same module;
-   - add a separate address enum covering `AF_UNIX`. Most correct, most
-     work.
 
-`IoTransfer::peer` being `Option<SocketAddr>` already while
-`AcceptTransfer::peer` is a bare `SocketAddr` is itself the asymmetry
-that produced this bug.
+### Blast radius: three lines
+
+Measured 2026-09-08, not estimated. `IoPort::accept` has **no consumers
+outside this crate's own tests**. It is called in exactly three places —
+`proactor/tests/{uring,kqueue,epoll}.rs` — and all three are the same TCP
+test doing `accept_tx.send(transfer.peer)`.
+
+Of the four crates depending on `loadngo-proactor`, none import
+`AcceptTransfer`, `AcceptResult`, or `AcceptCompletionHandler`:
+
+| crate | uses |
+| --- | --- |
+| `host-desktop` | `Proactor`, `ProactorHandle`, `CompletionKind`, `CompletionPort`, `RunReport`, `ReadinessEvent`, port types |
+| `network` | `ChannelPort`, `Proactor`, `ProactorHandle`, `ReadinessPort`, `ReadinessEvent`, `CompletionKind` |
+| `proactor-harness` | `CompletionKind`, `Proactor`, port types |
+| `audio-io` | `ChannelPort`, `Proactor`, `ProactorHandle` |
+
+So compatibility should not drive this decision. Changing the type costs
+three test lines plus a channel type parameter today, and grows with every
+future consumer. This is the cheapest it will ever be.
+
+### Why `Option<SocketAddr>` is the weakest of the three
+
+It looks attractive because `IoTransfer::peer` is already
+`Option<SocketAddr>`, and that asymmetry is arguably what produced this
+bug. But as the accept peer specifically, it carries three problems:
+
+- **It creates a fail-open hazard that does not exist today.** The
+  idiomatic consumption is `if let Some(peer) = transfer.peer { ...check
+  peer... }`, which *skips the check entirely* when the peer is `None`.
+  The compiler forces the caller to acknowledge the `None`, not to handle
+  it safely, and the natural shape of the code fails open. A bare
+  `SocketAddr` makes that mistake impossible.
+- **`None` conflates two opposite situations**: "an `AF_UNIX` peer, which
+  is normal" and "a sockaddr we could not parse, which is a fault". They
+  warrant different responses, and collapsing them is exactly the
+  ambiguity that hid this defect.
+- **It is the wrong shape for a Unix peer.** Unnamed and abstract sockets
+  have no path at all; the meaningful identity is `SO_PEERCRED`
+  (uid/gid/pid). `None` encodes *absence* where the truth is *a different
+  kind of identity*.
+
+### Preferred: a small enum
+
+```rust
+pub enum PeerAddr {
+    Ip(SocketAddr),
+    Unix { path: Option<PathBuf> },   // None = unnamed or abstract
+    Unknown { family: libc::sa_family_t },
+}
+```
+
+Callers must `match`, so silently skipping a check is unnatural;
+`Unknown` is visibly not an endorsement; and `SO_PEERCRED` can be added
+later without a second breaking change.
+
+### Cheaper middle ground
+
+If the enum is more than wanted: keep *unparseable* as an error and make
+only *known non-IP families* a `None`, by checking `ss_family` explicitly
+rather than inferring from `as_socket()` returning `None`. `AF_UNIX` is a
+legitimate peer; an `AF_INET` that failed to parse is a genuine fault.
+That way `None` never means "something went wrong".
 
 ---
 
