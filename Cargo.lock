@@ -1510,6 +1510,7 @@ name = "loadngo-touch"
 version = "0.1.0"
 dependencies = [
  "loadngo-host-core",
+ "ui-core",
 ]
 
 [[package]]
