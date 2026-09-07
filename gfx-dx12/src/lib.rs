@@ -74,6 +74,9 @@ mod windows_backend {
         width: u32,
         height: u32,
         content_hash: [u8; 32],
+        /// Frame counter value when this texture was last drawn. Drives the
+        /// eviction order once the descriptor heap fills.
+        last_used_frame: u64,
     }
 
     pub struct Dx12Backend {
@@ -103,7 +106,12 @@ mod windows_backend {
         vertex_buffer: Option<ID3D12Resource>,
         vertex_buffer_capacity: usize,
         textures: HashMap<String, Dx12Texture>,
-        next_descriptor_index: u32,
+        /// Slot allocation policy (freed slots, then fresh, then LRU
+        /// eviction). Lives outside this Windows-only module so it can be
+        /// unit-tested on any host -- see `DescriptorAllocator`.
+        descriptors: crate::DescriptorAllocator,
+        /// Increments once per frame; only used for relative recency.
+        frame_counter: u64,
     }
 
     impl Dx12Backend {
@@ -231,7 +239,8 @@ mod windows_backend {
                     vertex_buffer: None,
                     vertex_buffer_capacity: 0,
                     textures: HashMap::new(),
-                    next_descriptor_index: 1,
+                    descriptors: crate::DescriptorAllocator::new(MAX_TEXTURES, 1),
+                    frame_counter: 0,
                 };
                 backend.rtv_descriptor_size = backend
                     .device
@@ -283,6 +292,7 @@ mod windows_backend {
     impl GraphicsBackend for Dx12Backend {
         fn begin_frame(&mut self) -> Result<(), RendererError> {
             self.frame_open = true;
+            self.frame_counter = self.frame_counter.wrapping_add(1);
             self.recorded_commands.clear();
             Ok(())
         }
@@ -443,25 +453,20 @@ mod windows_backend {
             image: &DecodedImage,
         ) -> Result<u32, RendererError> {
             let content_hash = image_hash(image);
-            if let Some(existing) = self.textures.get(key) {
+            let frame = self.frame_counter;
+            if let Some(existing) = self.textures.get_mut(key) {
                 if existing.content_hash == content_hash
                     && existing.width == image.width
                     && existing.height == image.height
                 {
+                    existing.last_used_frame = frame;
                     return Ok(existing.descriptor_index);
                 }
             }
             let descriptor_index = if let Some(existing) = self.textures.get(key) {
                 existing.descriptor_index
             } else {
-                if self.next_descriptor_index >= MAX_TEXTURES {
-                    return Err(RendererError::Backend(format!(
-                        "texture descriptor heap exhausted: requested key '{key}', capacity {MAX_TEXTURES}"
-                    )));
-                }
-                let next = self.next_descriptor_index;
-                self.next_descriptor_index += 1;
-                next
+                self.claim_descriptor_index(key)?
             };
             let texture = unsafe { self.upload_texture(image, descriptor_index)? };
             self.textures.insert(
@@ -472,9 +477,48 @@ mod windows_backend {
                     width: image.width,
                     height: image.height,
                     content_hash,
+                    last_used_frame: frame,
                 },
             );
             Ok(descriptor_index)
+        }
+
+        /// Finds a descriptor slot for a new texture: a previously freed one,
+        /// then an unused one, and only then by evicting.
+        ///
+        /// Text is cached per rendered string, so anything with a live number
+        /// in it -- a score, a timer, an FPS counter -- mints a fresh key
+        /// every time it changes. Without reclamation that exhausted the heap
+        /// and permanently dropped the app to the software renderer, which is
+        /// what `sng-zhoenus` hit on Windows.
+        ///
+        /// Evicting the GPU resource here is safe because this backend is
+        /// fully synchronous: `wait_for_gpu` runs after every Present and
+        /// after every upload, so no evicted texture can still be in flight.
+        /// Textures drawn in the *current* frame are never evicted, so a
+        /// single frame referencing more than `MAX_TEXTURES` textures still
+        /// fails loudly rather than silently dropping what it is drawing.
+        fn claim_descriptor_index(&mut self, key: &str) -> Result<u32, RendererError> {
+            let claim = self.descriptors.claim(
+                self.textures
+                    .iter()
+                    .map(|(texture_key, texture)| (texture_key.as_str(), texture.last_used_frame)),
+                self.frame_counter,
+            );
+            match claim {
+                crate::DescriptorClaim::Slot(index) => Ok(index),
+                crate::DescriptorClaim::Evict { evicted_key } => {
+                    let evicted = self
+                        .textures
+                        .remove(&evicted_key)
+                        .expect("victim key came from this map");
+                    Ok(evicted.descriptor_index)
+                }
+                crate::DescriptorClaim::Exhausted => Err(RendererError::Backend(format!(
+                    "texture descriptor heap exhausted: requested key '{key}', capacity \
+                     {MAX_TEXTURES}, and every slot is already used by the current frame"
+                ))),
+            }
         }
 
         unsafe fn upload_texture(
@@ -1632,5 +1676,149 @@ impl GraphicsBackend for Dx12Backend {
         Err(RendererError::Backend(
             "DX12 backend is only available on Windows".to_string(),
         ))
+    }
+}
+
+/// Chooses which descriptor-heap slot a newly uploaded texture should use.
+///
+/// Deliberately platform-independent and outside `windows_backend`, so it
+/// compiles and is tested on every host. The DX12 backend can only be *run*
+/// on Windows hardware, so the part of it that is pure policy is kept where
+/// it can be exercised, and the `unsafe` D3D12 calls stay thin around it.
+#[derive(Debug)]
+pub struct DescriptorAllocator {
+    capacity: u32,
+    next_index: u32,
+    free_indices: Vec<u32>,
+}
+
+/// What [`DescriptorAllocator::claim`] decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DescriptorClaim {
+    /// Use this slot; nothing had to be given up.
+    Slot(u32),
+    /// Reuse the slot belonging to this key, dropping its texture first.
+    /// The caller owns the key -> slot mapping, so it looks the index up
+    /// rather than being handed one here.
+    Evict { evicted_key: String },
+    /// Every slot is held by a texture drawn in the current frame.
+    Exhausted,
+}
+
+impl DescriptorAllocator {
+    #[must_use]
+    pub fn new(capacity: u32, first_index: u32) -> Self {
+        Self {
+            capacity,
+            next_index: first_index,
+            free_indices: Vec::new(),
+        }
+    }
+
+    /// Returns a freed slot, then an unused one, and only then evicts the
+    /// least recently used texture.
+    ///
+    /// `in_use` maps texture key to the frame it was last drawn in.
+    /// Textures drawn in `current_frame` are never evicted, so a single
+    /// frame that genuinely needs more than `capacity` textures reports
+    /// `Exhausted` rather than silently dropping what it is drawing.
+    pub fn claim<'a>(
+        &mut self,
+        in_use: impl IntoIterator<Item = (&'a str, u64)>,
+        current_frame: u64,
+    ) -> DescriptorClaim {
+        if let Some(index) = self.free_indices.pop() {
+            return DescriptorClaim::Slot(index);
+        }
+        if self.next_index < self.capacity {
+            let index = self.next_index;
+            self.next_index += 1;
+            return DescriptorClaim::Slot(index);
+        }
+        match in_use
+            .into_iter()
+            .filter(|(_, last_used)| *last_used < current_frame)
+            .min_by_key(|(_, last_used)| *last_used)
+        {
+            Some((key, _)) => DescriptorClaim::Evict {
+                evicted_key: key.to_string(),
+            },
+            None => DescriptorClaim::Exhausted,
+        }
+    }
+
+    /// Returns a slot to the pool, e.g. when a texture is dropped for a
+    /// reason other than eviction.
+    pub fn release(&mut self, index: u32) {
+        self.free_indices.push(index);
+    }
+}
+
+#[cfg(test)]
+mod descriptor_tests {
+    use super::{DescriptorAllocator, DescriptorClaim};
+
+    fn claim(
+        alloc: &mut DescriptorAllocator,
+        in_use: &[(&str, u64)],
+        frame: u64,
+    ) -> DescriptorClaim {
+        alloc.claim(in_use.iter().map(|(key, at)| (*key, *at)), frame)
+    }
+
+    #[test]
+    fn fresh_slots_are_handed_out_before_anything_is_evicted() {
+        let mut alloc = DescriptorAllocator::new(4, 1);
+        assert_eq!(claim(&mut alloc, &[], 1), DescriptorClaim::Slot(1));
+        assert_eq!(claim(&mut alloc, &[], 1), DescriptorClaim::Slot(2));
+        assert_eq!(claim(&mut alloc, &[], 1), DescriptorClaim::Slot(3));
+    }
+
+    #[test]
+    fn a_released_slot_is_reused_before_the_heap_grows() {
+        let mut alloc = DescriptorAllocator::new(4, 1);
+        assert_eq!(claim(&mut alloc, &[], 1), DescriptorClaim::Slot(1));
+        alloc.release(1);
+        assert_eq!(claim(&mut alloc, &[], 1), DescriptorClaim::Slot(1));
+    }
+
+    #[test]
+    fn a_full_heap_evicts_the_least_recently_used_texture() {
+        // The sng-zhoenus failure: a HUD number mints a new texture key
+        // every time it changes, so the heap fills with strings that will
+        // never be drawn again.
+        // Capacity 4 starting at index 1 means slots 1..=3 exist.
+        let mut alloc = DescriptorAllocator::new(4, 1);
+        assert_eq!(claim(&mut alloc, &[], 1), DescriptorClaim::Slot(1));
+        assert_eq!(claim(&mut alloc, &[], 1), DescriptorClaim::Slot(2));
+        assert_eq!(claim(&mut alloc, &[], 1), DescriptorClaim::Slot(3));
+
+        let in_use = [("score 41", 7u64), ("score 40", 3), ("title", 9)];
+        match claim(&mut alloc, &in_use, 10) {
+            DescriptorClaim::Evict { evicted_key } => assert_eq!(evicted_key, "score 40"),
+            other => panic!("expected an eviction, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_texture_drawn_this_frame_is_never_evicted() {
+        let mut alloc = DescriptorAllocator::new(1, 1);
+        claim(&mut alloc, &[], 1);
+        // Both textures belong to the frame being drawn right now, so
+        // neither can be given up -- fail loudly instead.
+        let in_use = [("a", 10u64), ("b", 10)];
+        assert_eq!(claim(&mut alloc, &in_use, 10), DescriptorClaim::Exhausted);
+    }
+
+    #[test]
+    fn eviction_resumes_once_textures_fall_out_of_the_current_frame() {
+        let mut alloc = DescriptorAllocator::new(1, 1);
+        claim(&mut alloc, &[], 1);
+        let in_use = [("a", 10u64)];
+        assert_eq!(claim(&mut alloc, &in_use, 10), DescriptorClaim::Exhausted);
+        match claim(&mut alloc, &in_use, 11) {
+            DescriptorClaim::Evict { evicted_key } => assert_eq!(evicted_key, "a"),
+            other => panic!("expected an eviction, got {other:?}"),
+        }
     }
 }

@@ -2211,7 +2211,7 @@ fn flush_queued_frame() {
 fn prepare_gles_frame(
     commands: &[FrameCommand],
     textures: &HashMap<String, SoftwareTexture>,
-    mut generated_cache: HashMap<String, SoftwareTexture>,
+    generated_cache: HashMap<String, SoftwareTexture>,
     current_font: Option<&SoftwareFont>,
 ) -> (
     Vec<FrameCommand>,
@@ -2220,6 +2220,7 @@ fn prepare_gles_frame(
 ) {
     let mut next_commands = Vec::with_capacity(commands.len());
     let mut next_textures = textures.clone();
+    let mut next_generated_cache = HashMap::new();
     let mut generated_index = 0usize;
 
     for command in commands {
@@ -2227,12 +2228,12 @@ fn prepare_gles_frame(
             FrameCommand::Text(request) => {
                 if let Some(font) = current_font {
                     let image_key = generated_text_cache_key(request, font);
-                    if !generated_cache.contains_key(&image_key) {
-                        if let Some(texture) = rasterize_text_command(request, font) {
-                            generated_cache.insert(image_key.clone(), texture);
-                        }
-                    }
-                    if let Some(texture) = generated_cache.get(&image_key) {
+                    let texture = next_generated_cache
+                        .get(&image_key)
+                        .or_else(|| generated_cache.get(&image_key))
+                        .cloned()
+                        .or_else(|| rasterize_text_command(request, font));
+                    if let Some(texture) = texture {
                         // This is the *only* place the renderer's clip can be
                         // honored on this path: the rasterizer draws into a
                         // private surface whose origin is (0, 0), so it has no
@@ -2245,7 +2246,8 @@ fn prepare_gles_frame(
                             texture.width as f32,
                             texture.height as f32,
                         );
-                        next_textures.insert(image_key.clone(), texture.clone());
+                        next_generated_cache.insert(image_key.clone(), texture.clone());
+                        next_textures.insert(image_key.clone(), texture);
                         next_commands.push(FrameCommand::Image(ImageRequest {
                             rect: draw_rect,
                             clip_rect: Some(clip),
@@ -2271,7 +2273,7 @@ fn prepare_gles_frame(
         }
     }
 
-    (next_commands, next_textures, generated_cache)
+    (next_commands, next_textures, next_generated_cache)
 }
 
 fn generated_text_cache_key(

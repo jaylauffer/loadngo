@@ -1655,29 +1655,31 @@ type TextureCache = HashMap<String, Arc<DecodedImage>>;
 fn prepare_gles_frame(
     commands: &[FrameCommand],
     textures: &TextureCache,
-    mut generated_cache: TextureCache,
+    generated_cache: TextureCache,
 ) -> (Vec<FrameCommand>, TextureCache, TextureCache) {
     let mut next_commands = Vec::with_capacity(commands.len());
     let mut next_textures = textures.clone();
+    let mut next_generated_cache = TextureCache::new();
     let mut generated_index = 0usize;
 
     for command in commands {
         match command {
             FrameCommand::Text(request) => {
                 let image_key = generated_text_cache_key(request);
-                if !generated_cache.contains_key(&image_key) {
-                    if let Some((_, image)) = rasterize_text_command(request) {
-                        generated_cache.insert(image_key.clone(), Arc::new(image));
-                    }
-                }
-                if let Some(image) = generated_cache.get(&image_key) {
+                let image = next_generated_cache
+                    .get(&image_key)
+                    .or_else(|| generated_cache.get(&image_key))
+                    .cloned()
+                    .or_else(|| rasterize_text_command(request).map(|(_, image)| Arc::new(image)));
+                if let Some(image) = image {
                     let draw_rect =
                         rasterized_text_draw_rect(request, image.width as f32, image.height as f32);
                     let Some(clip_rect) = loadngo_renderer::text_texture_clip_rect(request) else {
                         continue;
                     };
                     let clip_rect = Some(clip_rect);
-                    next_textures.insert(image_key.clone(), image.clone());
+                    next_generated_cache.insert(image_key.clone(), image.clone());
+                    next_textures.insert(image_key.clone(), image);
                     next_commands.push(FrameCommand::Image(ImageRequest {
                         rect: draw_rect,
                         clip_rect,
@@ -1704,7 +1706,7 @@ fn prepare_gles_frame(
         }
     }
 
-    (next_commands, next_textures, generated_cache)
+    (next_commands, next_textures, next_generated_cache)
 }
 
 fn generated_text_cache_key(request: &TextRequest) -> String {
