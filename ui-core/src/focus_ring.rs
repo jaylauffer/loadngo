@@ -102,7 +102,9 @@ impl FocusRing {
 
     #[must_use]
     pub fn focused_id(&self) -> Option<WidgetId> {
-        self.focused.and_then(|index| self.entries.get(index)).map(|entry| entry.id)
+        self.focused
+            .and_then(|index| self.entries.get(index))
+            .map(|entry| entry.id)
     }
 
     #[must_use]
@@ -216,7 +218,9 @@ impl FocusRing {
             .min_by(|a, b| {
                 let cost_a = a.1 + a.2 * 2.0;
                 let cost_b = b.1 + b.2 * 2.0;
-                cost_a.partial_cmp(&cost_b).unwrap_or(std::cmp::Ordering::Equal)
+                cost_a
+                    .partial_cmp(&cost_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             })
             .map(|(index, _, _)| index)
     }
@@ -282,7 +286,9 @@ mod tests {
         assert_eq!(moved.lost, Some(WidgetId(0)));
         assert_eq!(moved.gained, WidgetId(1));
 
-        let moved = ring.navigate(NavDirection::Right).expect("moves right again");
+        let moved = ring
+            .navigate(NavDirection::Right)
+            .expect("moves right again");
         assert_eq!(moved.gained, WidgetId(2));
     }
 

@@ -138,9 +138,7 @@ fn current_direction(input: &InputSnapshot) -> Option<NavDirection> {
 #[cfg(test)]
 mod tests {
     use super::{NavRepeat, HOLD_DELAY_SECONDS, REPEAT_INTERVAL_SECONDS};
-    use loadngo_host_core::{
-        GamepadButton, GamepadSnapshot, GamepadStick, InputSnapshot, PointF,
-    };
+    use loadngo_host_core::{GamepadButton, GamepadSnapshot, GamepadStick, InputSnapshot, PointF};
     use ui_core::NavDirection;
 
     fn blank_input() -> InputSnapshot {
@@ -213,9 +211,15 @@ mod tests {
         // Crossing the delay: one repeat.
         assert_eq!(nav.update(&input, 0.02), Some(NavDirection::Down));
         // Then one per interval.
-        assert_eq!(nav.update(&input, REPEAT_INTERVAL_SECONDS), Some(NavDirection::Down));
+        assert_eq!(
+            nav.update(&input, REPEAT_INTERVAL_SECONDS),
+            Some(NavDirection::Down)
+        );
         assert_eq!(nav.update(&input, REPEAT_INTERVAL_SECONDS * 0.5), None);
-        assert_eq!(nav.update(&input, REPEAT_INTERVAL_SECONDS * 0.5), Some(NavDirection::Down));
+        assert_eq!(
+            nav.update(&input, REPEAT_INTERVAL_SECONDS * 0.5),
+            Some(NavDirection::Down)
+        );
     }
 
     #[test]
@@ -259,7 +263,10 @@ mod tests {
         let mut nav = NavRepeat::new();
         // Sticks are stored y-down, so "up" is negative y -- the same
         // convention that was inverted in a real playtest bug once.
-        assert_eq!(nav.update(&with_stick(0.0, -1.0), 0.016), Some(NavDirection::Up));
+        assert_eq!(
+            nav.update(&with_stick(0.0, -1.0), 0.016),
+            Some(NavDirection::Up)
+        );
     }
 
     #[test]
@@ -274,8 +281,14 @@ mod tests {
     #[test]
     fn reversing_direction_steps_immediately_without_waiting() {
         let mut nav = NavRepeat::new();
-        assert_eq!(nav.update(&with_stick(1.0, 0.0), 0.016), Some(NavDirection::Right));
-        assert_eq!(nav.update(&with_stick(-1.0, 0.0), 0.016), Some(NavDirection::Left));
+        assert_eq!(
+            nav.update(&with_stick(1.0, 0.0), 0.016),
+            Some(NavDirection::Right)
+        );
+        assert_eq!(
+            nav.update(&with_stick(-1.0, 0.0), 0.016),
+            Some(NavDirection::Left)
+        );
     }
 
     #[test]

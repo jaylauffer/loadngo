@@ -349,7 +349,8 @@ impl GamepadTracker {
             .filter(|tracked| !seen_keys.contains(&tracked.key))
             .map(|tracked| tracked.id)
             .collect();
-        self.tracked.retain(|tracked| seen_keys.contains(&tracked.key));
+        self.tracked
+            .retain(|tracked| seen_keys.contains(&tracked.key));
         snapshots.extend(disconnected_ids.into_iter().map(GamepadSnapshot::cleared));
 
         snapshots
@@ -438,7 +439,13 @@ fn read_extended_gamepad(
             raw: gamepad.rightTrigger().value(),
         };
 
-        (buttons, left_stick, right_stick, left_trigger, right_trigger)
+        (
+            buttons,
+            left_stick,
+            right_stick,
+            left_trigger,
+            right_trigger,
+        )
     }
 }
 
