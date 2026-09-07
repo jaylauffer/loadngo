@@ -112,6 +112,30 @@ impl FocusRing {
         self.focused_id() == Some(id)
     }
 
+    /// Whether a focus indicator is worth drawing at all.
+    ///
+    /// A focus highlight exists to answer "which one of these will I get?"
+    /// — so with fewer than two entries there is no question to answer, and
+    /// drawing one is just noise. This is the common case for a dismissable
+    /// popup whose only control is a Close button: the player can already
+    /// see there is exactly one thing to press.
+    ///
+    /// Callers should gate their focus rendering on this rather than
+    /// re-deriving the rule per screen.
+    #[must_use]
+    pub fn should_indicate_focus(&self) -> bool {
+        self.entries.len() > 1
+    }
+
+    /// The focused widget, but only when a focus indicator is meaningful
+    /// ([`FocusRing::should_indicate_focus`]) — the shape a renderer wants.
+    #[must_use]
+    pub fn indicated_id(&self) -> Option<WidgetId> {
+        self.should_indicate_focus()
+            .then(|| self.focused_id())
+            .flatten()
+    }
+
     fn index_of(&self, id: WidgetId) -> Option<usize> {
         self.entries.iter().position(|entry| entry.id == id)
     }
@@ -251,6 +275,34 @@ mod tests {
             FocusEntry::new(WidgetId(1), rect(120.0, 0.0)),
         ]);
         ring
+    }
+
+    #[test]
+    fn a_single_entry_ring_does_not_indicate_focus() {
+        // A dismissable popup whose only control is Close: there is no
+        // "which one?" question for a highlight to answer.
+        let mut ring = FocusRing::new();
+        ring.set_entries(vec![FocusEntry::new(WidgetId(0), rect(0.0, 0.0))]);
+        ring.arm();
+
+        assert_eq!(ring.focused_id(), Some(WidgetId(0)));
+        assert!(!ring.should_indicate_focus());
+        assert_eq!(ring.indicated_id(), None);
+    }
+
+    #[test]
+    fn an_empty_ring_indicates_nothing() {
+        let ring = FocusRing::new();
+        assert!(!ring.should_indicate_focus());
+        assert_eq!(ring.indicated_id(), None);
+    }
+
+    #[test]
+    fn a_multi_entry_ring_does_indicate_focus() {
+        let mut ring = shuffled_row();
+        ring.arm();
+        assert!(ring.should_indicate_focus());
+        assert_eq!(ring.indicated_id(), ring.focused_id());
     }
 
     #[test]

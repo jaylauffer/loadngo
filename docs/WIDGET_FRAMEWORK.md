@@ -337,6 +337,24 @@ without knowing which is which. Up/down walking a settings screen while
 left/right adjusts whichever slider is focused falls out of the existing
 contract with no per-widget special-casing in the host.
 
+### Hover and focus are the same question, answered per input device
+
+A screen can have a mouse hovering one control and a gamepad focused on
+another. Drawing both leaves the player guessing which one will fire, so
+callers should **arbitrate on `loadngo_touch::InputMethod`** — show hover
+when the player is on keyboard/mouse, focus when they're on a gamepad —
+rather than rendering whichever happens to be set. `sng-roguelite`'s
+`RunSummaryButtonState::highlighted_id` is the reference shape: one
+`Option<WidgetId>`, resolved on the input side, handed to the renderer.
+
+### A single-control screen shows no focus indicator
+
+`FocusRing::should_indicate_focus()` is false for rings with fewer than two
+entries, and `indicated_id()` returns `None` for them. A focus highlight
+exists to answer "which of these will I get?", and a dismissable popup
+whose only control is Close has no such question — highlighting it is
+noise. Renderers should read `indicated_id()`, not `focused_id()`.
+
 Navigation is **spatial**, computed from entry rects (nearest neighbour
 along the travel axis, off-axis drift as tie-breaker), not declaration
 order -- so a row or grid behaves the way it looks, and relayout preserves
@@ -357,29 +375,13 @@ adopter, since it already manages button collections and calls `paint()`.
 
 ## Known Gaps
 
-- **`sng-roguelite`'s mouse adapter never sends `UiEvent::PointerMoved` for
-  the mouse.** Found 2026-09-06 while building a hover-respecting dropdown
-  for `sng-bass-blaster`. `crates/game-app/src/lib.rs`'s
-  `button_activated_this_frame` (the established pattern other games have
-  copied) feeds `PointerPressed`/`PointerReleased` from
-  `InputSnapshot::mouse_pressed`/`mouse_released`, and full
-  press/move/release/cancel for touch via `active_touches()` -- but never
-  feeds a mouse `PointerMoved`. Its sibling `slider_changed_this_frame`
-  does send one, specifically because `SliderModel` needs continuous drag
-  tracking, with an explicit comment marking that as an extension beyond
-  the button helper. Net effect: `ButtonModel`'s hover state (this doc's
-  own "Desktop typically wants: ... pointer hover") is live code for touch
-  but effectively dead for desktop mouse users on every button built the
-  `button_activated_this_frame` way -- `hover` only ever flips via
-  `PointerLeft`, which nothing sends either without a matching
-  `PointerMoved` history. Any composition host that wants real mouse hover
-  needs its own adapter that also sends `PointerMoved` every frame (see
-  `sng-bass-blaster/src/dropdown.rs`'s `Dropdown::update` for one), not the
-  bare `button_activated_this_frame` pattern as-is. Not yet fixed at the
-  source (`sng-roguelite` wasn't in scope for that session); a real fix
-  would either add the missing feed to `button_activated_this_frame`
-  itself or promote a corrected version of it into a shared `loadngo`
-  composition helper so every caller gets it for free.
+- ~~**`sng-roguelite`'s mouse adapter never sends `UiEvent::PointerMoved`.**~~
+  **Fixed 2026-09-07.** `button_activated_this_frame` now sends
+  `PointerMoved` every frame, the same way `slider_changed_this_frame`
+  always did, so `ButtonModel::hover` is finally live for desktop mouse
+  users rather than dead code. Found originally 2026-09-06 via
+  `sng-bass-blaster`; fixed at the source when the same screens gained
+  gamepad focus and needed hover and focus to coexist.
 
 - **No theming/skin system.** Every widget's `paint()` hardcodes its colors
   (see `ui-core/src/button.rs`'s fill/border literals), and the button style
