@@ -142,7 +142,7 @@ didn't raise: how input-source transitions (a controller going offline
 mid-hold, a player switching between gamepad and mouse/keyboard) should
 work. An initial type scaffold was committed and reverted the same day
 after review found it had no backend or caller to justify it. **A real
-macOS backend was then built 2026-09-07**, once an actual DualShock was
+macOS backend was then built 2026-09-07**, once an actual DualSense was
 connected via USB-C to a Mac Mini to build and test it against — see
 that doc's design and status instead. The open-questions bullets above
 are left as-written, as a record of what this finding actually looked
