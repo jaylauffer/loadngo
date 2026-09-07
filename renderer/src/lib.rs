@@ -282,6 +282,95 @@ pub struct FrameResourcePlan {
     pub image_keys: Vec<ImageResourceKey>,
 }
 
+/// Slack added around a pre-rasterized text box so antialiased edges,
+/// descenders, and italic overhang have somewhere to land. It is trimmed off
+/// again by [`text_texture_clip_rect`], so it never paints.
+pub const TEXT_TEXTURE_PADDING_X: f32 = 4.0;
+pub const TEXT_TEXTURE_PADDING_Y: f32 = 6.0;
+
+/// Where a pre-rasterized text texture lives, in both texture space and
+/// screen space. See [`text_texture_layout`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextTextureLayout {
+    /// Texture dimensions. Callers allocate `ceil()` of these.
+    pub texture_width: f32,
+    pub texture_height: f32,
+    /// Where to lay the text box out *inside* the texture. Exactly the size
+    /// of the requested rect, so alignment lands identically to a backend
+    /// that draws straight to the surface.
+    pub local_rect: Rect,
+    /// Where to place the finished texture on screen.
+    pub draw_rect: Rect,
+}
+
+/// Geometry for rasterizing a `TextRequest` into its own texture.
+///
+/// The rule that matters: **padding grows the texture around the text box; it
+/// never shrinks the box.** Alignment is resolved against the box, so shrinking
+/// it silently moves centred text off centre — and if the draw origin is then
+/// also shifted by the padding, the two compound.
+///
+/// Linux and Windows did both: laid the text out in a box shortened by
+/// `2 * padding_y`, then drew the texture at `rect.y - padding_y`. Net effect,
+/// every centred label sat `padding_y` (6px) above centre and `padding_x`
+/// (4px) left of centre — visible on sng-roguelite's buttons. Android shrank
+/// the box the same way but did *not* offset its draw rect, so its two errors
+/// cancelled for the common case and it looked fine. Three copies, three
+/// different conventions, one shared decision — so it lives here now.
+///
+/// `content_height` is the laid-out height of all lines (the caller knows the
+/// font); `measured_width`/`measured_height` are the ink extents. Ink larger
+/// than the box widens the texture symmetrically so nothing is cut off, while
+/// the box — and therefore the alignment — stays put.
+#[must_use]
+pub fn text_texture_layout(
+    rect: Rect,
+    content_height: f32,
+    measured_width: f32,
+    measured_height: f32,
+) -> TextTextureLayout {
+    let box_width = rect.width.max(1.0);
+    let box_height = rect.height.max(1.0);
+    let overflow_x = (measured_width.ceil() - box_width).max(0.0) * 0.5;
+    let overflow_y = (content_height.max(measured_height.ceil()) - box_height).max(0.0) * 0.5;
+    let pad_x = TEXT_TEXTURE_PADDING_X + overflow_x;
+    let pad_y = TEXT_TEXTURE_PADDING_Y + overflow_y;
+    let texture_width = box_width + pad_x * 2.0;
+    let texture_height = box_height + pad_y * 2.0;
+    TextTextureLayout {
+        texture_width,
+        texture_height,
+        local_rect: Rect {
+            x: pad_x,
+            y: pad_y,
+            width: box_width,
+            height: box_height,
+        },
+        draw_rect: text_texture_draw_rect(rect, texture_width, texture_height),
+    }
+}
+
+/// Where to place an already-rasterized text texture, recovered from the
+/// texture's dimensions alone.
+///
+/// Backends cache these textures by content, so the frame that *draws* one
+/// usually isn't the frame that made it and no longer has the layout. Because
+/// the padding is symmetric around the text box, it can be recovered exactly:
+/// half the difference between the texture and the box. This must stay in
+/// agreement with [`text_texture_layout`] — hence both living here, with the
+/// round trip pinned by a test.
+#[must_use]
+pub fn text_texture_draw_rect(rect: Rect, texture_width: f32, texture_height: f32) -> Rect {
+    let pad_x = (texture_width - rect.width.max(1.0)) * 0.5;
+    let pad_y = (texture_height - rect.height.max(1.0)) * 0.5;
+    Rect {
+        x: rect.x - pad_x,
+        y: rect.y - pad_y,
+        width: texture_width,
+        height: texture_height,
+    }
+}
+
 /// The clip an `ImageRequest` must carry when a backend has pre-rasterized a
 /// `TextRequest` into its own texture.
 ///
@@ -937,8 +1026,9 @@ fn point_distance(a: Point, b: Point) -> f32 {
 #[cfg(test)]
 mod clip_tests {
     use super::{
-        text_texture_clip_rect, FrameCommand, RenderOp, Renderer, RendererConfig, TextDirection,
-        TextRequest, TextScript,
+        text_texture_clip_rect, text_texture_draw_rect, text_texture_layout, FrameCommand,
+        RenderOp, Renderer, RendererConfig, TextDirection, TextRequest, TextScript,
+        TEXT_TEXTURE_PADDING_X, TEXT_TEXTURE_PADDING_Y,
     };
     use loadngo_host_core::RenderTextStyle;
     use ui_core::geometry::{Color, Point, Rect};
@@ -1096,6 +1186,63 @@ mod clip_tests {
             script: TextScript::Auto,
             language: None,
         }
+    }
+
+    #[test]
+    fn a_text_texture_places_its_box_exactly_where_the_request_asked() {
+        // The regression this guards: Linux and Windows shortened the layout
+        // box by the padding *and* shifted the draw origin up by it, so every
+        // centred button label sat 6px above centre.
+        let requested = rect(100.0, 200.0, 160.0, 40.0);
+        let layout = text_texture_layout(requested, 18.0, 90.0, 14.0);
+
+        // Where the box lands on screen == where it was asked to be.
+        assert_eq!(layout.draw_rect.x + layout.local_rect.x, requested.x);
+        assert_eq!(layout.draw_rect.y + layout.local_rect.y, requested.y);
+        // And it keeps its size, so centring is computed against the real box.
+        assert_eq!(layout.local_rect.width, requested.width);
+        assert_eq!(layout.local_rect.height, requested.height);
+    }
+
+    #[test]
+    fn the_draw_rect_can_be_recovered_from_a_cached_textures_size() {
+        // Backends draw cached textures without the layout that made them,
+        // so the two must agree exactly or text drifts once it is cached.
+        for (requested, content_h, ink_w, ink_h) in [
+            (rect(100.0, 200.0, 160.0, 40.0), 18.0, 90.0, 14.0),
+            (rect(0.0, 0.0, 50.0, 20.0), 60.0, 90.0, 60.0),
+            (rect(-30.0, 12.5, 1.0, 1.0), 4.0, 4.0, 4.0),
+        ] {
+            let layout = text_texture_layout(requested, content_h, ink_w, ink_h);
+            assert_eq!(
+                text_texture_draw_rect(requested, layout.texture_width, layout.texture_height),
+                layout.draw_rect,
+                "round trip failed for {requested:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn a_text_texture_grows_around_ink_larger_than_its_box() {
+        // Overflowing ink needs room on both sides, but must not drag the
+        // box (and so the alignment) off the requested position.
+        let requested = rect(100.0, 200.0, 50.0, 20.0);
+        let layout = text_texture_layout(requested, 60.0, 90.0, 60.0);
+
+        assert_eq!(layout.draw_rect.x + layout.local_rect.x, requested.x);
+        assert_eq!(layout.draw_rect.y + layout.local_rect.y, requested.y);
+        assert_eq!(layout.local_rect.width, requested.width);
+        assert_eq!(layout.local_rect.height, requested.height);
+        assert!(layout.texture_width >= 90.0, "{layout:?}");
+        assert!(layout.texture_height >= 60.0, "{layout:?}");
+    }
+
+    #[test]
+    fn a_text_texture_always_leaves_room_for_antialiased_edges() {
+        let requested = rect(0.0, 0.0, 100.0, 30.0);
+        let layout = text_texture_layout(requested, 18.0, 40.0, 14.0);
+        assert_eq!(layout.texture_width, 100.0 + TEXT_TEXTURE_PADDING_X * 2.0);
+        assert_eq!(layout.texture_height, 30.0 + TEXT_TEXTURE_PADDING_Y * 2.0);
     }
 
     #[test]

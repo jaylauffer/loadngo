@@ -2240,14 +2240,14 @@ fn prepare_gles_frame(
                         let Some(clip) = loadngo_renderer::text_texture_clip_rect(request) else {
                             continue;
                         };
+                        let draw_rect = loadngo_renderer::text_texture_draw_rect(
+                            request.rect,
+                            texture.width as f32,
+                            texture.height as f32,
+                        );
                         next_textures.insert(image_key.clone(), texture.clone());
                         next_commands.push(FrameCommand::Image(ImageRequest {
-                            rect: UiRect {
-                                x: request.rect.x,
-                                y: request.rect.y,
-                                width: texture.width as f32,
-                                height: texture.height as f32,
-                            },
+                            rect: draw_rect,
                             clip_rect: Some(clip),
                             image_key,
                             alpha: 1.0,
@@ -2308,28 +2308,25 @@ fn rasterize_text_command(
         request.style.font_size,
         1.0,
     );
-    let padding_x = 4.0;
-    let padding_y = 6.0;
     let line_box_height = single_line_text_box_height(request.style.font_size);
-    let width = request
-        .rect
-        .width
-        .max(measured.width.ceil() + padding_x * 2.0)
-        .max(1.0);
-    let height = request
-        .rect
-        .height
-        .max(line_box_height + padding_y * 2.0)
-        .max(measured.height.ceil() + padding_y * 2.0)
-        .max(1.0);
-    let mut surface = OwnedSoftwareSurface::new(width.ceil() as usize, height.ceil() as usize);
-    let mut local_request = request.clone();
-    local_request.rect = UiRect {
-        x: padding_x,
-        y: padding_y,
-        width: (width - padding_x * 2.0).max(1.0),
-        height: (height - padding_y * 2.0).max(1.0),
+    let line_count = match request.style.layout_mode {
+        loadngo_host_core::RenderTextLayoutMode::SingleLine => 1usize,
+        loadngo_host_core::RenderTextLayoutMode::MultiLine => request.text.lines().count().max(1),
     };
+    let content_height = line_box_height
+        + multiline_line_step(request.style.font_size) * line_count.saturating_sub(1) as f32;
+    let texture = loadngo_renderer::text_texture_layout(
+        request.rect,
+        content_height,
+        measured.width,
+        measured.height,
+    );
+    let mut surface = OwnedSoftwareSurface::new(
+        texture.texture_width.ceil() as usize,
+        texture.texture_height.ceil() as usize,
+    );
+    let mut local_request = request.clone();
+    local_request.rect = texture.local_rect;
     surface.draw_text(&local_request, Some(font));
     Some(surface.into_texture())
 }

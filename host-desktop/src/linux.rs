@@ -1730,14 +1730,9 @@ fn rasterized_text_draw_rect(
     texture_width: f32,
     texture_height: f32,
 ) -> UiRect {
-    let padding_x = 4.0;
-    let padding_y = 6.0;
-    UiRect {
-        x: request.rect.x - padding_x,
-        y: request.rect.y - padding_y,
-        width: texture_width,
-        height: texture_height,
-    }
+    // Padding is symmetric around the text box, so it is recovered from the
+    // texture size rather than assumed -- see `text_texture_layout`.
+    loadngo_renderer::text_texture_draw_rect(request.rect, texture_width, texture_height)
 }
 
 fn intersect_rects(a: UiRect, b: UiRect) -> Option<UiRect> {
@@ -1762,8 +1757,6 @@ fn intersect_rects(a: UiRect, b: UiRect) -> Option<UiRect> {
 fn rasterize_text_command(request: &TextRequest) -> Option<(UiRect, DecodedImage)> {
     let font = resolve_text_request_font(request);
     let measured = measure_text_impl(&request.text, &font, request.style.font_size, 1.0);
-    let padding_x = 4.0;
-    let padding_y = 6.0;
     let layout = software_text_line_layout(&font, request.style.font_size, 1.0);
     let line_box_height = ui_core::single_line_text_box_height(request.style.font_size);
     let line_step = ui_core::multiline_line_step(request.style.font_size);
@@ -1776,30 +1769,20 @@ fn rasterize_text_command(request: &TextRequest) -> Option<(UiRect, DecodedImage
         RenderTextVerticalMetricMode::VisibleInk => layout.line_height.max(1.0),
     };
     let content_height = first_line_height + line_step * line_count.saturating_sub(1) as f32;
-    let width = request
-        .rect
-        .width
-        .max(measured.width.ceil() + padding_x * 2.0)
-        .max(1.0);
-    let height = request
-        .rect
-        .height
-        .max(content_height + padding_y * 2.0)
-        .max(measured.height.ceil() + padding_y * 2.0)
-        .max(1.0);
-    let tex_width = width.ceil() as usize;
-    let tex_height = height.ceil() as usize;
+    let texture = loadngo_renderer::text_texture_layout(
+        request.rect,
+        content_height,
+        measured.width,
+        measured.height,
+    );
+    let tex_width = texture.texture_width.ceil() as usize;
+    let tex_height = texture.texture_height.ceil() as usize;
     let mut rgba = vec![0u8; tex_width * tex_height * 4];
     let mut local_request = request.clone();
-    local_request.rect = UiRect {
-        x: padding_x,
-        y: padding_y,
-        width: (width - padding_x * 2.0).max(1.0),
-        height: (height - padding_y * 2.0).max(1.0),
-    };
+    local_request.rect = texture.local_rect;
     draw_text_request(&mut rgba, tex_width, tex_height, &local_request);
     Some((
-        rasterized_text_draw_rect(request, tex_width as f32, tex_height as f32),
+        texture.draw_rect,
         DecodedImage::new(tex_width as u32, tex_height as u32, rgba),
     ))
 }

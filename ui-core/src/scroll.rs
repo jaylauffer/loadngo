@@ -256,7 +256,11 @@ pub struct ScrollThumbDragState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScrollRegionModel {
     pub viewport: Rect,
+    /// The offset actually rendered this frame. When a glide is in flight
+    /// this is easing toward `target_offset`; otherwise the two are equal.
     pub offset: f32,
+    /// Where the offset is heading. Only differs from `offset` mid-glide.
+    target_offset: f32,
     pub content_height: f32,
     content_height_known: bool,
 }
@@ -266,10 +270,23 @@ impl ScrollRegionModel {
     const INDICATOR_RIGHT_INSET: f32 = 8.0;
     const MIN_THUMB_HEIGHT: f32 = 24.0;
 
+    /// Time constant of the exponential approach used by [`Self::advance`].
+    /// The glide covers ~63% of the remaining distance per interval, so a
+    /// notch resolves in roughly 4x this. Tuned to read as motion rather
+    /// than a jump, without feeling like the list is lagging the input.
+    const GLIDE_TIME_CONSTANT_SECONDS: f32 = 0.055;
+
+    /// Below this many pixels remaining, the glide snaps. Prevents an
+    /// asymptote that never terminates and keeps redraws from being
+    /// requested forever for sub-pixel motion.
+    const GLIDE_SNAP_EPSILON: f32 = 0.5;
+
     pub fn new(viewport: Rect, offset: f32) -> Self {
+        let offset = offset.max(0.0);
         Self {
             viewport,
-            offset: offset.max(0.0),
+            offset,
+            target_offset: offset,
             content_height: viewport.height,
             content_height_known: false,
         }
@@ -286,6 +303,10 @@ impl ScrollRegionModel {
         self.clamp_offset();
     }
 
+    /// Moves the view immediately, with no glide. Correct for input that is
+    /// already continuous and must track the user 1:1 — a touch drag, a
+    /// scrollbar thumb drag, a trackpad's pixel deltas. Gliding those would
+    /// feel like drag underneath the finger.
     pub fn apply_scroll_delta(&mut self, delta: f32) {
         self.offset += delta;
         if self.content_height_known {
@@ -293,6 +314,53 @@ impl ScrollRegionModel {
         } else {
             self.offset = self.offset.max(0.0);
         }
+        self.target_offset = self.offset;
+    }
+
+    /// Moves the view *smoothly* by `delta`, easing over the next few frames.
+    ///
+    /// Correct for input that arrives in discrete jumps — a detented mouse
+    /// wheel, arrow keys, a gamepad stick. Those carry no intermediate
+    /// positions of their own, so applying them instantly makes the list
+    /// teleport a row at a time. This was the difference between macOS
+    /// (trackpads report pixel deltas, so scrolling already looked smooth)
+    /// and Linux/Windows with a real wheel, where every notch is one jump.
+    ///
+    /// Deltas accumulate, so spinning the wheel fast scrolls further and
+    /// stays smooth rather than restarting the glide from a standstill.
+    /// Requires [`Self::advance`] to be called each frame.
+    pub fn glide_scroll_delta(&mut self, delta: f32) {
+        self.target_offset += delta;
+        self.clamp_target();
+    }
+
+    /// Advances an in-flight glide. Call once per frame with the frame
+    /// duration. Returns whether the offset moved, so a caller that only
+    /// redraws on change knows a redraw is still needed.
+    pub fn advance(&mut self, delta_seconds: f32) -> bool {
+        let remaining = self.target_offset - self.offset;
+        if remaining == 0.0 {
+            return false;
+        }
+        if delta_seconds <= 0.0 {
+            return false;
+        }
+        if remaining.abs() <= Self::GLIDE_SNAP_EPSILON {
+            self.offset = self.target_offset;
+            return true;
+        }
+        // Exponential approach: framerate-independent, because the fraction
+        // covered depends on elapsed time rather than on frame count.
+        let t = 1.0 - (-delta_seconds / Self::GLIDE_TIME_CONSTANT_SECONDS).exp();
+        self.offset += remaining * t.clamp(0.0, 1.0);
+        true
+    }
+
+    /// Whether a glide is still in flight — i.e. the caller should keep
+    /// requesting redraws.
+    #[must_use]
+    pub fn is_gliding(&self) -> bool {
+        self.offset != self.target_offset
     }
 
     pub fn max_offset(&self) -> f32 {
@@ -379,6 +447,19 @@ impl ScrollRegionModel {
 
     fn clamp_offset(&mut self) {
         self.offset = self.offset.clamp(0.0, self.max_offset());
+        self.clamp_target();
+    }
+
+    /// Keeps a pending glide inside the scrollable range. Without this a
+    /// wheel spun past the end would build up a target far outside the
+    /// content and then need the same number of notches to come back.
+    fn clamp_target(&mut self) {
+        let max = if self.content_height_known {
+            self.max_offset()
+        } else {
+            f32::INFINITY
+        };
+        self.target_offset = self.target_offset.clamp(0.0, max);
     }
 
     fn is_scrollable(&self) -> bool {
@@ -402,13 +483,17 @@ impl ScrollRegionModel {
         let max_offset = self.max_offset();
         if max_offset <= 0.0 {
             self.offset = 0.0;
+            self.target_offset = 0.0;
             return;
         }
         let thumb_h = self.thumb_height(track.height, max_offset);
         let travel = (track.height - thumb_h).max(0.0);
         let local_y = thumb_top.clamp(0.0, travel);
         let t = if travel > 0.0 { local_y / travel } else { 0.0 };
+        // Dragging the thumb must track the pointer exactly, so this cancels
+        // any glide rather than easing toward the new position.
         self.offset = max_offset * t;
+        self.target_offset = self.offset;
         self.clamp_offset();
     }
 }
@@ -421,6 +506,115 @@ mod tests {
     };
 
     use super::{ScrollRegionModel, ScrollThumbDragState};
+
+    fn glide_region() -> ScrollRegionModel {
+        let mut region = ScrollRegionModel::new(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 200.0,
+            },
+            0.0,
+        );
+        region.set_content_height(1000.0);
+        region
+    }
+
+    #[test]
+    fn a_glide_eases_toward_the_target_instead_of_jumping() {
+        // The Linux/Windows regression this guards: a detented wheel notch
+        // applied instantly makes the list teleport one row at a time.
+        let mut region = glide_region();
+        region.glide_scroll_delta(30.0);
+        assert_eq!(region.offset, 0.0, "the glide must not jump on arrival");
+
+        region.advance(1.0 / 60.0);
+        let first = region.offset;
+        assert!(first > 0.0 && first < 30.0, "got {first}");
+
+        // Successive frames keep closing the gap, and it settles exactly.
+        for _ in 0..60 {
+            region.advance(1.0 / 60.0);
+        }
+        assert_eq!(region.offset, 30.0);
+        assert!(!region.is_gliding());
+    }
+
+    #[test]
+    fn a_glide_is_framerate_independent() {
+        // Same elapsed time must cover the same distance whether it arrives
+        // as one long frame or several short ones.
+        let mut coarse = glide_region();
+        let mut fine = glide_region();
+        coarse.glide_scroll_delta(100.0);
+        fine.glide_scroll_delta(100.0);
+
+        coarse.advance(1.0 / 30.0);
+        fine.advance(1.0 / 60.0);
+        fine.advance(1.0 / 60.0);
+
+        assert!(
+            (coarse.offset - fine.offset).abs() < 0.001,
+            "coarse {} vs fine {}",
+            coarse.offset,
+            fine.offset
+        );
+    }
+
+    #[test]
+    fn glide_deltas_accumulate_while_one_is_in_flight() {
+        // Spinning the wheel fast should travel further, not restart.
+        let mut region = glide_region();
+        region.glide_scroll_delta(30.0);
+        region.advance(1.0 / 60.0);
+        region.glide_scroll_delta(30.0);
+        for _ in 0..120 {
+            region.advance(1.0 / 60.0);
+        }
+        assert_eq!(region.offset, 60.0);
+    }
+
+    #[test]
+    fn a_glide_target_stays_inside_the_scrollable_range() {
+        // Over-spinning at the end must not bank up travel that has to be
+        // spun back off before the list moves again.
+        let mut region = glide_region();
+        for _ in 0..50 {
+            region.glide_scroll_delta(100.0);
+        }
+        for _ in 0..200 {
+            region.advance(1.0 / 60.0);
+        }
+        assert_eq!(region.offset, region.max_offset());
+
+        region.glide_scroll_delta(-30.0);
+        for _ in 0..120 {
+            region.advance(1.0 / 60.0);
+        }
+        assert_eq!(region.offset, region.max_offset() - 30.0);
+    }
+
+    #[test]
+    fn dragging_cancels_an_in_flight_glide() {
+        // A finger or thumb drag must track the pointer exactly, so it wins
+        // over whatever the wheel had queued up.
+        let mut region = glide_region();
+        region.glide_scroll_delta(200.0);
+        region.apply_scroll_delta(10.0);
+        assert_eq!(region.offset, 10.0);
+        assert!(!region.is_gliding());
+        region.advance(1.0 / 60.0);
+        assert_eq!(region.offset, 10.0);
+    }
+
+    #[test]
+    fn advancing_without_a_glide_reports_no_change() {
+        let mut region = glide_region();
+        assert!(!region.advance(1.0 / 60.0));
+        region.glide_scroll_delta(30.0);
+        assert!(region.advance(1.0 / 60.0));
+    }
 
     #[test]
     fn scroll_region_clamps_offset_to_content_bounds() {
