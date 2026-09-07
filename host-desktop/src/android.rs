@@ -2233,6 +2233,13 @@ fn prepare_gles_frame(
                         }
                     }
                     if let Some(texture) = generated_cache.get(&image_key) {
+                        // This is the *only* place the renderer's clip can be
+                        // honored on this path: the rasterizer draws into a
+                        // private surface whose origin is (0, 0), so it has no
+                        // way to compare a glyph against a screen-space clip.
+                        let Some(clip) = loadngo_renderer::text_texture_clip_rect(request) else {
+                            continue;
+                        };
                         next_textures.insert(image_key.clone(), texture.clone());
                         next_commands.push(FrameCommand::Image(ImageRequest {
                             rect: UiRect {
@@ -2241,7 +2248,7 @@ fn prepare_gles_frame(
                                 width: texture.width as f32,
                                 height: texture.height as f32,
                             },
-                            clip_rect: Some(request.rect),
+                            clip_rect: Some(clip),
                             image_key,
                             alpha: 1.0,
                         }));
@@ -2579,14 +2586,13 @@ impl OwnedSoftwareSurface {
                         }
                         let px = (glyph_x + col as f32).round() as i32;
                         let py = (glyph_y + row as f32).round() as i32;
-                        // Honor the request's clip rect per pixel, the same
-                        // way the Linux software rasterizer does. Without
-                        // this, text drawn inside a scroll viewport spills
-                        // past it -- which is exactly what a real Android
-                        // device showed once clipping landed.
-                        if !point_inside_clip(request.clip_rect, px, py) {
-                            continue;
-                        }
+                        // Deliberately *not* clipped here. This surface is a
+                        // private texture with its own (0, 0) origin, so `px`
+                        // and `py` are texture-local while `clip_rect` is in
+                        // screen space -- testing one against the other blanks
+                        // the whole texture. The clip is applied where the
+                        // texture is placed on screen instead, in
+                        // `prepare_gles_frame`.
                         let color = UiColor::rgba(
                             request.style.color.r,
                             request.style.color.g,

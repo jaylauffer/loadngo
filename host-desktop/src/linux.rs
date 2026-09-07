@@ -1673,10 +1673,10 @@ fn prepare_gles_frame(
                 if let Some(image) = generated_cache.get(&image_key) {
                     let draw_rect =
                         rasterized_text_draw_rect(request, image.width as f32, image.height as f32);
-                    let clip_rect = request
-                        .clip_rect
-                        .and_then(|clip| intersect_rects(clip, request.rect))
-                        .or(Some(request.rect));
+                    let Some(clip_rect) = loadngo_renderer::text_texture_clip_rect(request) else {
+                        continue;
+                    };
+                    let clip_rect = Some(clip_rect);
                     next_textures.insert(image_key.clone(), image.clone());
                     next_commands.push(FrameCommand::Image(ImageRequest {
                         rect: draw_rect,

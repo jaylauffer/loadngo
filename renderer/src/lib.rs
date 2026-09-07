@@ -282,6 +282,35 @@ pub struct FrameResourcePlan {
     pub image_keys: Vec<ImageResourceKey>,
 }
 
+/// The clip an `ImageRequest` must carry when a backend has pre-rasterized a
+/// `TextRequest` into its own texture.
+///
+/// Every software-text backend (Android, Linux, Windows) rewrites `Text` into
+/// an `Image` pointing at a generated, *padded* texture. Two clips have to
+/// survive that rewrite: the text box itself, which trims the padding back
+/// off, and whatever clip the renderer put the text under. Getting this wrong
+/// is not a cosmetic bug in either direction — dropping the renderer's clip
+/// spills text out of its scroll viewport, and dropping the text box leaks
+/// padding over neighbouring content.
+///
+/// `None` means the text is entirely outside the clip and the command should
+/// not be emitted at all.
+///
+/// This lives here, above every backend, because it existed as three separate
+/// copies and one of them was wrong: Android's dropped the renderer's clip,
+/// blanking the achievements list on a real device. One implementation with
+/// tests that run on every host is the point.
+#[must_use]
+pub fn text_texture_clip_rect(request: &TextRequest) -> Option<Rect> {
+    match request.clip_rect {
+        Some(clip) => {
+            let clipped = intersect_rects(clip, request.rect);
+            (!is_empty_rect(clipped)).then_some(clipped)
+        }
+        None => Some(request.rect),
+    }
+}
+
 /// Overlap of two rects; zero-sized when they don't overlap at all.
 fn intersect_rects(a: Rect, b: Rect) -> Rect {
     let x = a.x.max(b.x);
@@ -294,6 +323,13 @@ fn intersect_rects(a: Rect, b: Rect) -> Rect {
         width: (right - x).max(0.0),
         height: (bottom - y).max(0.0),
     }
+}
+
+/// Whether an intersection came back degenerate, i.e. the two rects don't
+/// actually overlap. `intersect_rects` clamps to zero rather than returning
+/// an `Option`, so this is the "nothing survives the clip" test.
+fn is_empty_rect(rect: Rect) -> bool {
+    rect.width <= 0.0 || rect.height <= 0.0
 }
 
 /// Whether `inner` fits entirely inside `outer` — the test for primitives
@@ -566,19 +602,36 @@ impl Renderer {
                         });
                     }
                 }
-                RenderOp::Text { rect, text, style } => commands.push(FrameCommand::Text(
-                    self.text_request(*rect, clip, text.clone(), style.clone()),
-                )),
+                // Text and images are trimmed rather than culled, so they
+                // carry the clip through to the backend -- but a *fully*
+                // clipped-away one is dropped here. Emitting it would hand
+                // every backend an empty intersection to special-case, and a
+                // backend that treats "empty" as "no clip" then draws it at
+                // full size somewhere it must never appear.
+                RenderOp::Text { rect, text, style } => {
+                    if clip.is_none_or(|clip| !is_empty_rect(intersect_rects(clip, *rect))) {
+                        commands.push(FrameCommand::Text(self.text_request(
+                            *rect,
+                            clip,
+                            text.clone(),
+                            style.clone(),
+                        )));
+                    }
+                }
                 RenderOp::BlitImage {
                     rect,
                     image_key,
                     alpha,
-                } => commands.push(FrameCommand::Image(ImageRequest {
-                    rect: *rect,
-                    clip_rect: clip,
-                    image_key: image_key.clone(),
-                    alpha: *alpha,
-                })),
+                } => {
+                    if clip.is_none_or(|clip| !is_empty_rect(intersect_rects(clip, *rect))) {
+                        commands.push(FrameCommand::Image(ImageRequest {
+                            rect: *rect,
+                            clip_rect: clip,
+                            image_key: image_key.clone(),
+                            alpha: *alpha,
+                        }));
+                    }
+                }
             }
         }
         commands
@@ -883,7 +936,11 @@ fn point_distance(a: Point, b: Point) -> f32 {
 
 #[cfg(test)]
 mod clip_tests {
-    use super::{FrameCommand, RenderOp, Renderer, RendererConfig};
+    use super::{
+        text_texture_clip_rect, FrameCommand, RenderOp, Renderer, RendererConfig, TextDirection,
+        TextRequest, TextScript,
+    };
+    use loadngo_host_core::RenderTextStyle;
     use ui_core::geometry::{Color, Point, Rect};
 
     fn renderer() -> Renderer {
@@ -1026,6 +1083,79 @@ mod clip_tests {
             FrameCommand::Image(request) => assert_eq!(request.clip_rect, Some(clip)),
             other => panic!("expected image, got {other:?}"),
         }
+    }
+
+    fn text_request_with_clip(rect_: Rect, clip_rect: Option<Rect>) -> TextRequest {
+        TextRequest {
+            rect: rect_,
+            clip_rect,
+            text: "row".to_string(),
+            style: RenderTextStyle::default(),
+            font_source: None,
+            direction: TextDirection::Auto,
+            script: TextScript::Auto,
+            language: None,
+        }
+    }
+
+    #[test]
+    fn pre_rasterized_text_keeps_both_the_text_box_and_the_renderer_clip() {
+        // The regression this guards: Android replaced the renderer's clip
+        // with the text box alone, so achievement rows drew outside their
+        // scroll viewport -- then, "fixed" in the wrong place, vanished
+        // entirely. Both rects have to survive the Text -> Image rewrite.
+        let viewport = rect(0.0, 100.0, 200.0, 100.0);
+        let row = rect(0.0, 150.0, 200.0, 100.0);
+        assert_eq!(
+            text_texture_clip_rect(&text_request_with_clip(row, Some(viewport))),
+            Some(rect(0.0, 150.0, 200.0, 50.0)),
+        );
+    }
+
+    #[test]
+    fn pre_rasterized_text_with_no_renderer_clip_is_trimmed_to_its_text_box() {
+        // The generated texture is padded, so an unclipped request still
+        // needs the text box or the padding leaks over its neighbours.
+        let row = rect(10.0, 20.0, 200.0, 30.0);
+        assert_eq!(
+            text_texture_clip_rect(&text_request_with_clip(row, None)),
+            Some(row),
+        );
+    }
+
+    #[test]
+    fn pre_rasterized_text_fully_outside_the_clip_is_dropped() {
+        let viewport = rect(0.0, 100.0, 200.0, 100.0);
+        let scrolled_away = rect(0.0, 500.0, 200.0, 30.0);
+        assert_eq!(
+            text_texture_clip_rect(&text_request_with_clip(scrolled_away, Some(viewport))),
+            None,
+        );
+    }
+
+    #[test]
+    fn text_and_images_entirely_outside_the_clip_are_dropped() {
+        // A row scrolled fully out of a viewport must not reach a backend at
+        // all. Handing one down with an empty intersection invites a backend
+        // to read "empty" as "unclipped" and paint it outside the panel --
+        // which is what the Linux and Windows text paths used to do.
+        let commands = renderer().encode_render_ops(&[
+            RenderOp::PushClip {
+                rect: rect(0.0, 100.0, 200.0, 100.0),
+            },
+            RenderOp::Text {
+                rect: rect(0.0, 500.0, 200.0, 30.0),
+                text: "scrolled away".to_string(),
+                style: loadngo_host_core::RenderTextStyle::default(),
+            },
+            RenderOp::BlitImage {
+                rect: rect(0.0, 500.0, 200.0, 30.0),
+                image_key: "key".to_string(),
+                alpha: 1.0,
+            },
+            RenderOp::PopClip,
+        ]);
+        assert!(commands.is_empty(), "got {commands:?}");
     }
 
     #[test]
