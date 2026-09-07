@@ -1,7 +1,7 @@
 use crate::{
     AcceptCompletionHandler, AcceptResult, AcceptTransfer, CompletionEnvelope, CompletionPort,
-    IoBuf, IoCompletionHandler, IoOpId, IoPort, IoResult, IoTransfer, PollEvent, ReadinessEvent,
-    ReadinessPort, UnitCompletionHandler,
+    IoBuf, IoCompletionHandler, IoOpId, IoPort, IoResult, IoTransfer, PeerAddr, PollEvent,
+    ReadinessEvent, ReadinessPort, UnitCompletionHandler,
 };
 use io_uring::{opcode, squeue, types, IoUring};
 use libc::{timespec, POLLERR, POLLHUP, POLLIN, POLLRDHUP};
@@ -22,9 +22,16 @@ const READINESS_POLL_MASK: u32 = (POLLIN | POLLERR | POLLHUP | POLLRDHUP) as u32
 /// `poll()`'s CQE dispatch distinguish an `IoPort` operation's completion
 /// from `QUEUE_TOKEN`/`WAKE_TOKEN`/a `register_readable` token without a
 /// separate side table lookup just to find out which kind of `user_data`
-/// it's looking at. Requires readiness tokens passed to
-/// `register_readable` on the same port instance to stay below 2^63 --
-/// true of every real caller (small sequential indices).
+/// it's looking at.
+///
+/// Readiness tokens therefore have two constraints on this backend: stay
+/// below 2^63, and avoid `QUEUE_TOKEN`/`WAKE_TOKEN`. This comment used to
+/// claim the latter was "true of every real caller (small sequential
+/// indices)" -- it is exactly false for indices starting at 1, and a
+/// caller that did so got a registration that silently never fired.
+/// `ProactorHandle::register_readable` now rejects
+/// `RESERVED_READINESS_TOKENS` up front, on every backend, so that can no
+/// longer happen quietly.
 const IO_OP_TAG: u64 = 1 << 63;
 
 /// A ring-mutating operation requested by `register_readable`/`deregister`
