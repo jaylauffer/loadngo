@@ -383,6 +383,19 @@ adopter, since it already manages button collections and calls `paint()`.
   `sng-bass-blaster`; fixed at the source when the same screens gained
   gamepad focus and needed hover and focus to coexist.
 
+- ~~**Discrete scroll input moved the view in whole jumps.**~~ **Fixed
+  2026-09-08.** `ScrollRegionModel` now eases toward a target offset
+  (`glide_scroll_delta` + `advance`), so a detented wheel notch, arrow key,
+  or gamepad step reads as motion rather than a teleport. Reported on Linux,
+  where X11 delivers whole notches; macOS hid it because trackpads report
+  pixel deltas that were already continuous. Input that is *already*
+  continuous — touch drags, scrollbar-thumb drags, precise pixel deltas —
+  still applies instantly via `apply_scroll_delta`, since gliding those
+  would feel like lag under the finger. The glide is framerate-independent
+  and deltas accumulate, so spinning a wheel fast travels further instead of
+  restarting. **Callers must call `advance` every frame, not only on frames
+  with input**, or a glide stalls the moment the wheel stops turning.
+
 - **No theming/skin system.** Every widget's `paint()` hardcodes its colors
   (see `ui-core/src/button.rs`'s fill/border literals), and the button style
   is a light fill with dark text. That is why `sng-roguelite` still paints

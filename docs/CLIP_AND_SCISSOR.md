@@ -199,6 +199,32 @@ every backend must interpret, the interpretation belongs in one shared,
 tested function — not in per-backend arms that a macOS build can never
 compile, let alone exercise.
 
+### The same shape, found again a day later
+
+Hoisting the clip exposed a second three-copy divergence in the *same*
+functions. Each backend's `rasterize_text_command` laid the text out in a
+box shortened by `2 * padding`, then Linux and Windows drew the resulting
+texture at `rect - padding`. Alignment resolves against the box, so every
+centred label sat `padding_y` (6px) above centre and `padding_x` (4px)
+left. Android shrank the box identically but never offset its draw rect,
+so its two errors cancelled and it looked right — which is why this
+survived so long: **the platform that looked correct was correct by
+accident, not by construction.**
+
+Now `loadngo_renderer::text_texture_layout` decides it once: padding grows
+the texture *around* a box that keeps its requested size and lands exactly
+where the request asked. `text_texture_draw_rect` recovers the same
+geometry from a cached texture's dimensions, with the round trip pinned by
+a test, because the frame that draws a cached texture no longer has the
+layout that made it.
+
+Measured on dolores against a real X11 window, before and after: button
+text moved from **−4.5px to +1.5px** relative to box centre — a 6px shift,
+exactly `padding_y`. Worth repeating that method: rather than eyeballing a
+screenshot, locate the button border rows and the text ink rows and print
+the offset. It turns "looks about right" into a number, and it is the only
+way the 4px horizontal half of this bug would ever have been noticed.
+
 ## Non-goals
 
 - Rounded-rect, path, or arbitrary-shape clipping. Rectangles only.
