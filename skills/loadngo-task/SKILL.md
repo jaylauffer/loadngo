@@ -168,9 +168,12 @@ should also decide whether the host is:
 
 Known lab SSH targets:
 
-- `jay@10.10.10.1` for `agnes`
-- `jay@10.10.10.6` for `dolores`
-- `jay@192.168.1.140` for `gretta`
+- `jay@10.10.10.4` for `agnes` (Pi 4 + SenseHAT)
+- `jay@10.10.10.6` for `dolores` (Pi 5, CI runners, the Linux gate)
+- `gretta` — **address unknown.** It was `192.168.1.140`, but `dolores`
+  now holds that address on its wifi interface, so the old URL reaches
+  `dolores` and fails there confusingly. Do not use it until gretta's
+  current address is confirmed. See `~/pudding/lab-setup.md`.
 
 Before changing repo state on those machines, inspect their branch and worktree
 first so you do not overwrite ongoing local agent work.

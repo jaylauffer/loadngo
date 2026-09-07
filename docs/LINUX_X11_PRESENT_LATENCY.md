@@ -414,5 +414,5 @@ cores to `performance` first (needs an interactive `sudo`, `vcgencmd`
 itself does not):
 
 ```bash
-ssh -t jay@192.168.1.140 'echo performance | sudo tee /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor'
+ssh -t jay@10.10.10.6 'echo performance | sudo tee /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor'
 ```
