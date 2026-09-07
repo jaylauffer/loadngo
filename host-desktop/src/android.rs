@@ -667,6 +667,10 @@ fn scale_frame_command(command: &FrameCommand, scale: f32) -> FrameCommand {
             script: request.script,
             language: request.language.clone(),
         }),
+        FrameCommand::PushClip { rect } => FrameCommand::PushClip {
+            rect: scale_rect(*rect, scale),
+        },
+        FrameCommand::PopClip => FrameCommand::PopClip,
         FrameCommand::Image(request) => FrameCommand::Image(ImageRequest {
             rect: scale_rect(request.rect, scale),
             clip_rect: request.clip_rect.map(|rect| scale_rect(rect, scale)),
@@ -976,6 +980,9 @@ fn describe_unsupported_gles_command(commands: &[FrameCommand]) -> Option<&'stat
         FrameCommand::Arc { .. } => None,
         FrameCommand::Polyline { .. } => Some("Polyline"),
         FrameCommand::ParticleBatch { .. } => Some("ParticleBatch"),
+        // Resolved by the renderer before reaching a backend, so these are
+        // never the reason a frame can't use GLES.
+        FrameCommand::PushClip { .. } | FrameCommand::PopClip => None,
     })
 }
 
@@ -3439,6 +3446,9 @@ impl<'a> SoftwareFramebuffer<'a> {
             }
             FrameCommand::Image(request) => self.blit_image(request, textures),
             FrameCommand::Text(request) => self.draw_text(request, current_font),
+            // See `docs/CLIP_AND_SCISSOR.md`: clipping is applied while
+            // encoding, so nothing reaches here needing it.
+            FrameCommand::PushClip { .. } | FrameCommand::PopClip => {}
         }
     }
 

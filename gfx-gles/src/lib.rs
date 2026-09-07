@@ -945,6 +945,11 @@ mod android {
                     }
                     FrameCommand::ParticleBatch { .. } => {}
                     FrameCommand::Text(_) => {}
+                    // Clipping is resolved by the renderer before commands
+                    // reach a backend (see `docs/CLIP_AND_SCISSOR.md`), so
+                    // there is nothing to do here. A backend that grows
+                    // real `glScissor` support would handle these instead.
+                    FrameCommand::PushClip { .. } | FrameCommand::PopClip => {}
                 }
             }
 
