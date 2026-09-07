@@ -68,7 +68,24 @@ cargo check -p loadngo-gfx-gles --target aarch64-linux-android
 `dolores` is the real Linux box and the self-hosted CI runner, so a green
 build there is a green CI. CI itself runs `cargo fmt --check` and
 `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
-both stricter than `cargo check`.
+both stricter than `cargo check` — **with `PLATFORM_EXCLUDES`**
+(`--exclude loadngo-gfx-metal --exclude loadngo-gfx-dx12 --exclude
+gui-win32 --exclude proactor-harness`). Copy that from
+`.github/workflows/ci.yml`; without it the run fails on crates CI never
+builds, which reads as a real failure and isn't one.
+
+Note that **`cargo clippy --workspace --all-targets` does not pass on
+macOS at all**, with or without `--all-features` — `gfx-metal` and
+`gfx-gles` test code references cfg'd-out items, ~68 errors at a clean
+checkout. So there is no local whole-workspace gate on macOS: lint the
+crates you touched (`-p …`), and treat dolores as the only real gate.
+
+Compiling is necessary but not sufficient. Clipping shipped compiling
+everywhere and still regressed Android twice, because the bug was in
+per-backend interpretation of a shared field. When a change adds something
+every backend must interpret, put the interpretation in one shared tested
+function rather than in per-backend arms — see
+[`docs/CLIP_AND_SCISSOR.md`](docs/CLIP_AND_SCISSOR.md).
 
 ## Architecture docs
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): layering and ownership boundaries.

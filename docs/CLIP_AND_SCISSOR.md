@@ -124,8 +124,12 @@ stack while encoding, not in each backend:
 
 - `FillRect` — intersect the rect with the active clip. A clipped
   rectangle is just a smaller rectangle; exact, and no backend knows.
-- `Text`, `BlitImage` — pass the active clip as `clip_rect`, which every
-  backend already honors.
+- `Text`, `BlitImage` — pass the active clip as `clip_rect`. **This was
+  originally written as "which every backend already honors", verified only
+  on Metal. That was false, and it cost two device regressions — see
+  "Where the assumption broke" below.** A `Text` or `BlitImage` lying
+  entirely outside the clip is dropped here rather than handed down with an
+  empty intersection, so no backend has to decide what an empty clip means.
 - `StrokeRect`, `Line`, `Circle` — **cannot** be clipped by intersecting
   geometry (clipping a stroked rect in half would draw a border along the
   cut; a circle can't become a rect). These **cull** when not fully inside
@@ -153,6 +157,47 @@ clipped circle or stroke, which no screen has today.
 - Nested scroll/panel content in `sng-rusty`'s editor.
 - `ui-core`'s `ScrollContainerModel` becoming genuinely usable by games
   rather than a geometry helper whose clipping they must fake.
+
+## Where the assumption broke
+
+"Every backend already honors `clip_rect`" was verified on `gfx-metal`
+only, then written as a statement about all of them. It was wrong, and it
+produced two consecutive regressions on the same screen — both invisible
+from macOS, both found only by a person looking at a real device.
+
+**1. Spill.** Android, Linux and Windows have no GPU text path; each
+rewrites `FrameCommand::Text` into an `Image` pointing at a generated,
+padded texture. Two clips must survive that rewrite: the text box (to trim
+the padding) and the renderer's clip. Android kept only the text box, so
+achievement rows drew outside their scroll viewport.
+
+**2. Blanking — the worse one, caused by fixing the first in the wrong
+place.** The obvious-looking fix was to test each glyph pixel against the
+clip in the rasterizer, mirroring what Linux's rasterizer does. But Android
+has *two* rasterizers, and the one on this path draws into a private
+texture with its own `(0, 0)` origin. Its pixel coordinates are
+texture-local while `clip_rect` is in screen space, so every pixel of every
+row tested outside and the list rendered completely empty.
+
+The general shape: **a clip is only meaningful in a stated coordinate
+space.** Before applying one, name the space its pixels are in. The two
+Android rasterizers are near-identical for ~60 lines and differ in one
+line — `cursor_x = 0.0` versus `cursor_x = request.rect.x` — which is the
+entire difference between texture-local and screen space.
+
+The deeper failure was structural: this single decision existed as **three
+copies, and the two correct ones were already in the tree**. Had Linux's
+`prepare_gles_frame` been read before writing Android's, there would have
+been nothing to invent. It is now one function,
+`loadngo_renderer::text_texture_clip_rect`, above every backend, with tests
+that run on every host — including for the case all three copies got wrong,
+where text falls fully outside the clip and the old `.or(request.rect)`
+fallback resurrected it as *unclipped*.
+
+**Rule of thumb this earns:** when a change adds a field or variant that
+every backend must interpret, the interpretation belongs in one shared,
+tested function — not in per-backend arms that a macOS build can never
+compile, let alone exercise.
 
 ## Non-goals
 
