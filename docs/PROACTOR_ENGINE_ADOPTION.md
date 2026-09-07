@@ -51,6 +51,13 @@ The core now supplies queued work, deadline ordering, wakeups, cancellation,
 shutdown draining, readiness registration, and real `IoPort` implementations
 for kqueue, io_uring, and IOCP.
 
+**Two open defects in that surface are recorded in
+[PROACTOR_IOPORT_DEFECTS.md](PROACTOR_IOPORT_DEFECTS.md)** (found 2026-09-08,
+neither fixed): `IoUringPort` readiness tokens silently collide with its
+reserved `QUEUE_TOKEN`/`WAKE_TOKEN` values, and `IoPort::accept` leaks the
+accepted descriptor for any non-IP peer family on all four backends. Read
+that before adopting `register_readable` or `accept` in a new consumer.
+
 `host-desktop` uses the kqueue proactor on macOS and the io_uring proactor on
 Linux for runtime wakers and deferred frame scheduling; both own their
 proactor through the shared `HostProactor` seam
