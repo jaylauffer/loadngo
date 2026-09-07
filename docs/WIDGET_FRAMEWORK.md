@@ -302,6 +302,59 @@ The minimum useful test coverage is:
 The goal is to prove widget behavior at the `loadngo` boundary so runtime bugs do
 not have to be debugged indirectly through end-to-end UI behavior.
 
+## Focus Navigation (d-pad / thumbstick)
+
+Added 2026-09-07, after real gamepad playtesting showed every game
+hand-rolling menu navigation per screen.
+
+`ui_core::FocusRing` (`ui-core/src/focus_ring.rs`) owns *which* of a set of
+widgets holds focus and moves it in response to a `NavDirection`. It
+deliberately changes no widget: the pieces it needs already existed.
+
+- Every focusable model (`ButtonModel`, `SliderModel`, `CheckboxModel`,
+  `StepperModel`, `TextAreaModel`) already has `focused: bool` driven by
+  `UiEvent::FocusChanged(bool)`, and already paints that state.
+- `ButtonModel` already activates on `Key::Enter | Key::Space`.
+- `SliderModel` already consumes `Key::Left`/`Key::Right` to adjust its
+  value, reporting `input_consumed: true`.
+
+So the host loop is:
+
+1. Refresh the ring's entries from this frame's widget rects.
+2. Offer the direction to the focused widget **first**.
+3. If the response has `input_consumed`, the widget used it (a slider
+   adjusting its value) -- leave focus alone.
+4. Otherwise `FocusRing::navigate` moves focus; emit `FocusChanged(false)`
+   to the widget that lost it and `FocusChanged(true)` to the one that
+   gained it.
+5. Confirm by forwarding `Key::Enter` to the focused widget and reading the
+   `WidgetAction` back, so activation follows the same contract a mouse
+   click does.
+
+This is why `input_consumed` matters beyond "don't bleed into runtime
+actions": it is what lets one navigation loop drive mixed widget types
+without knowing which is which. Up/down walking a settings screen while
+left/right adjusts whichever slider is focused falls out of the existing
+contract with no per-widget special-casing in the host.
+
+Navigation is **spatial**, computed from entry rects (nearest neighbour
+along the travel axis, off-axis drift as tie-breaker), not declaration
+order -- so a row or grid behaves the way it looks, and relayout preserves
+focus by widget id. The ring starts **disarmed**: a screen must observe its
+controls released before acting, so a button still held from the previous
+screen cannot confirm the instant a new screen appears.
+
+Translating hardware into a `NavDirection` is one layer up, in
+`loadngo_touch::NavRepeat` (`touch/src/nav_input.rs`), because `ui-core`
+sits below `host-core` and cannot see a `GamepadSnapshot`. `NavRepeat`
+covers both the d-pad and the left stick and owns hold-to-repeat timing
+(immediate first step, then a delay, then a repeat interval) -- without
+which a held stick would step focus once per frame.
+
+First adopter is `sng-roguelite` (reward draft, run summary, achievements,
+sound settings). `sng-rusty`'s `LoadngoButtonHost` is the natural next
+adopter, since it already manages button collections and calls `paint()`.
+
 ## Known Gaps
 
 - **`sng-roguelite`'s mouse adapter never sends `UiEvent::PointerMoved` for
@@ -327,6 +380,17 @@ not have to be debugged indirectly through end-to-end UI behavior.
   would either add the missing feed to `button_activated_this_frame`
   itself or promote a corrected version of it into a shared `loadngo`
   composition helper so every caller gets it for free.
+
+- **No theming/skin system.** Every widget's `paint()` hardcodes its colors
+  (see `ui-core/src/button.rs`'s fill/border literals), and the button style
+  is a light fill with dark text. That is why `sng-roguelite` still paints
+  its own dark `RenderOp`s and adopts these widgets for logic only: adopting
+  `ButtonModel::paint()` today would drop a light button into a dark game.
+  A palette/theme threaded through `paint()` is the real enabler for games
+  converging on shared widget visuals, and is deliberately *not* part of the
+  focus-navigation work above. Until it exists, a game can still show focus
+  by reading `focused` and painting its own highlight, which is what
+  `sng-roguelite` does (`push_focusable_button_frame`).
 
 ## Current Direction
 

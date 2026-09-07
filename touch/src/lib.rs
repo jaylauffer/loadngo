@@ -1,10 +1,12 @@
 mod form_factor;
 mod input_method;
 mod joystick;
+mod nav_input;
 
 pub use form_factor::FormFactor;
 pub use input_method::InputMethod;
 pub use joystick::VirtualJoystick;
+pub use nav_input::{NavRepeat, HOLD_DELAY_SECONDS, NAV_STICK_DEADZONE, REPEAT_INTERVAL_SECONDS};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TouchRect {

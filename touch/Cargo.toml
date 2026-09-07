@@ -5,6 +5,4 @@ edition = "2021"
 
 [dependencies]
 loadngo-host-core = { path = "../host-core" }
-
-[dev-dependencies]
 ui-core = { path = "../ui-core" }

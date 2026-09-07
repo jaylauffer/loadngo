@@ -74,6 +74,27 @@ Two distinct problems, one decided and now implemented, one genuinely open:
 
 This was motivated by a real bug, not spec work: `sng-roguelite`'s title screen, reward-cache prompt, reward-draft hint, and gameplay HUD all kept showing "Press Space"/keyboard vocabulary to a player who had been playing entirely on a DualSense for several minutes — exactly the failure mode this section predicted before any backend existed. `sng-roguelite`'s `TouchControls` now owns an `InputMethod` alongside its `FormFactor`, updated the same way, and every `FormFactor::Desktop` prompt branch became a `(FormFactor, InputMethod)` match instead.
 
+## Menu navigation moved into shared `loadngo` UI (2026-09-07)
+
+The first pass wired gamepad menu handling per screen inside
+`sng-roguelite` — a focus index and bespoke match arms on each screen.
+Playtesting made the cost obvious: only the d-pad selected reward cards
+(the left stick did nothing), the run-summary screen showed no focus
+indicator at all, and two of its four buttons were unreachable by gamepad.
+
+That capability now lives in `loadngo` and is documented in
+[WIDGET_FRAMEWORK.md](WIDGET_FRAMEWORK.md)'s "Focus Navigation" section:
+`ui_core::FocusRing` decides which widget holds focus and moves it
+spatially, and `loadngo_touch::NavRepeat` turns a d-pad or thumbstick into
+repeat-timed `NavDirection` steps. Neither required changing any existing
+widget — focus, `Key::Enter` activation, and slider `input_consumed` were
+already part of the widget contract.
+
+`sng-roguelite` consumes it on the reward draft, run summary, achievements,
+and sound-settings screens. It still paints its own visuals (see that doc's
+theming gap), reading `focused` to draw its existing highlight treatment, so
+adopting navigation changed no existing appearance.
+
 ## Platform priority and phasing
 
 **Tier 1 — desktop (macOS, Windows, Linux), highest priority.** The three platforms named above, each with its own named API. **macOS done (2026-09-07)**; Windows and Linux still design-only.
