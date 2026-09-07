@@ -282,6 +282,36 @@ pub struct FrameResourcePlan {
     pub image_keys: Vec<ImageResourceKey>,
 }
 
+/// Overlap of two rects; zero-sized when they don't overlap at all.
+fn intersect_rects(a: Rect, b: Rect) -> Rect {
+    let x = a.x.max(b.x);
+    let y = a.y.max(b.y);
+    let right = (a.x + a.width).min(b.x + b.width);
+    let bottom = (a.y + a.height).min(b.y + b.height);
+    Rect {
+        x,
+        y,
+        width: (right - x).max(0.0),
+        height: (bottom - y).max(0.0),
+    }
+}
+
+/// Whether `inner` fits entirely inside `outer` — the test for primitives
+/// that must be culled rather than trimmed.
+fn contains_rect(outer: Rect, inner: Rect) -> bool {
+    inner.x >= outer.x
+        && inner.y >= outer.y
+        && inner.x + inner.width <= outer.x + outer.width
+        && inner.y + inner.height <= outer.y + outer.height
+}
+
+fn contains_point(outer: Rect, point: Point) -> bool {
+    point.x >= outer.x
+        && point.y >= outer.y
+        && point.x <= outer.x + outer.width
+        && point.y <= outer.y + outer.height
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum FrameCommand {
     Clear {
@@ -326,6 +356,11 @@ pub enum FrameCommand {
     },
     Text(TextRequest),
     Image(ImageRequest),
+    /// See `RenderOp::PushClip` — same contract, one level down.
+    PushClip {
+        rect: Rect,
+    },
+    PopClip,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -435,58 +470,118 @@ impl Renderer {
         &self.config
     }
 
+    /// Converts host-level ops into backend commands, resolving
+    /// `PushClip`/`PopClip` into concrete clipped geometry as it goes.
+    ///
+    /// Clipping is applied *here* rather than by each GPU backend — see
+    /// `docs/CLIP_AND_SCISSOR.md`. Filled rects are intersected (a clipped
+    /// rectangle is just a smaller rectangle), text and images carry the
+    /// clip through the `clip_rect` every backend already honors, and the
+    /// primitives that can't be clipped by trimming geometry are culled
+    /// when they don't fit, which is what callers had to do by hand before
+    /// this existed.
     pub fn encode_render_ops(&self, ops: &[RenderOp]) -> Vec<FrameCommand> {
-        ops.iter()
-            .map(|op| match op {
-                RenderOp::Clear { color } => FrameCommand::Clear { color: *color },
-                RenderOp::FillRect { rect, color } => FrameCommand::FillRect {
-                    rect: *rect,
-                    color: *color,
-                },
+        let mut commands = Vec::with_capacity(ops.len());
+        let mut clips: Vec<Rect> = Vec::new();
+        for op in ops {
+            let clip = clips.last().copied();
+            match op {
+                RenderOp::PushClip { rect } => {
+                    // Intersect, never widen: a child cannot escape its
+                    // parent's clip.
+                    let next = clip.map_or(*rect, |parent| intersect_rects(parent, *rect));
+                    clips.push(next);
+                    continue;
+                }
+                RenderOp::PopClip => {
+                    clips.pop();
+                    continue;
+                }
+                _ => {}
+            }
+            // An empty clip means "draw nothing", not "no clip".
+            if clip.is_some_and(|clip| clip.width <= 0.0 || clip.height <= 0.0) {
+                continue;
+            }
+            match op {
+                RenderOp::PushClip { .. } | RenderOp::PopClip => unreachable!("handled above"),
+                RenderOp::Clear { color } => commands.push(FrameCommand::Clear { color: *color }),
+                RenderOp::FillRect { rect, color } => {
+                    let rect = clip.map_or(*rect, |clip| intersect_rects(clip, *rect));
+                    if rect.width > 0.0 && rect.height > 0.0 {
+                        commands.push(FrameCommand::FillRect {
+                            rect,
+                            color: *color,
+                        });
+                    }
+                }
                 RenderOp::StrokeRect {
                     rect,
                     color,
                     thickness,
-                } => FrameCommand::StrokeRect {
-                    rect: *rect,
-                    color: *color,
-                    thickness: *thickness,
-                },
+                } => {
+                    // Intersecting a stroke would draw a border along the
+                    // cut, so this culls instead. See the doc.
+                    if clip.is_none_or(|clip| contains_rect(clip, *rect)) {
+                        commands.push(FrameCommand::StrokeRect {
+                            rect: *rect,
+                            color: *color,
+                            thickness: *thickness,
+                        });
+                    }
+                }
                 RenderOp::Line {
                     from,
                     to,
                     color,
                     thickness,
-                } => FrameCommand::Line {
-                    from: *from,
-                    to: *to,
-                    color: *color,
-                    thickness: *thickness,
-                },
+                } => {
+                    if clip
+                        .is_none_or(|clip| contains_point(clip, *from) && contains_point(clip, *to))
+                    {
+                        commands.push(FrameCommand::Line {
+                            from: *from,
+                            to: *to,
+                            color: *color,
+                            thickness: *thickness,
+                        });
+                    }
+                }
                 RenderOp::Circle {
                     center,
                     radius,
                     color,
-                } => FrameCommand::Circle {
-                    center: *center,
-                    radius: *radius,
-                    color: *color,
-                },
-                RenderOp::Text { rect, text, style } => {
-                    FrameCommand::Text(self.text_request(*rect, None, text.clone(), style.clone()))
+                } => {
+                    let bounds = Rect {
+                        x: center.x - radius,
+                        y: center.y - radius,
+                        width: radius * 2.0,
+                        height: radius * 2.0,
+                    };
+                    if clip.is_none_or(|clip| contains_rect(clip, bounds)) {
+                        commands.push(FrameCommand::Circle {
+                            center: *center,
+                            radius: *radius,
+                            color: *color,
+                        });
+                    }
                 }
+                RenderOp::Text { rect, text, style } => commands.push(FrameCommand::Text(
+                    self.text_request(*rect, clip, text.clone(), style.clone()),
+                )),
                 RenderOp::BlitImage {
                     rect,
                     image_key,
                     alpha,
-                } => FrameCommand::Image(ImageRequest {
+                } => commands.push(FrameCommand::Image(ImageRequest {
                     rect: *rect,
-                    clip_rect: None,
+                    clip_rect: clip,
                     image_key: image_key.clone(),
                     alpha: *alpha,
-                }),
-            })
-            .collect()
+                })),
+            }
+        }
+        commands
     }
 
     pub fn encode_paint_ops(&self, ops: &[PaintOp]) -> Vec<FrameCommand> {
@@ -784,6 +879,199 @@ fn point_distance(a: Point, b: Point) -> f32 {
     let dx = b.x - a.x;
     let dy = b.y - a.y;
     (dx * dx + dy * dy).sqrt()
+}
+
+#[cfg(test)]
+mod clip_tests {
+    use super::{FrameCommand, RenderOp, Renderer, RendererConfig};
+    use ui_core::geometry::{Color, Point, Rect};
+
+    fn renderer() -> Renderer {
+        Renderer::new(RendererConfig::default())
+    }
+
+    fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    const WHITE: Color = Color {
+        r: 255,
+        g: 255,
+        b: 255,
+        a: 255,
+    };
+
+    #[test]
+    fn a_fill_rect_is_trimmed_to_the_clip_rather_than_dropped() {
+        // The whole point: a partially visible row still draws, just
+        // smaller -- which is what makes scrolling smooth instead of
+        // popping row by row.
+        let commands = renderer().encode_render_ops(&[
+            RenderOp::PushClip {
+                rect: rect(0.0, 100.0, 200.0, 100.0),
+            },
+            RenderOp::FillRect {
+                rect: rect(0.0, 50.0, 200.0, 100.0),
+                color: WHITE,
+            },
+            RenderOp::PopClip,
+        ]);
+
+        assert_eq!(
+            commands,
+            vec![FrameCommand::FillRect {
+                rect: rect(0.0, 100.0, 200.0, 50.0),
+                color: WHITE,
+            }]
+        );
+    }
+
+    #[test]
+    fn nested_clips_intersect_and_never_widen() {
+        let commands = renderer().encode_render_ops(&[
+            RenderOp::PushClip {
+                rect: rect(0.0, 0.0, 100.0, 100.0),
+            },
+            // Deliberately larger than its parent.
+            RenderOp::PushClip {
+                rect: rect(0.0, 0.0, 500.0, 500.0),
+            },
+            RenderOp::FillRect {
+                rect: rect(0.0, 0.0, 500.0, 500.0),
+                color: WHITE,
+            },
+            RenderOp::PopClip,
+            RenderOp::PopClip,
+        ]);
+
+        assert_eq!(
+            commands,
+            vec![FrameCommand::FillRect {
+                rect: rect(0.0, 0.0, 100.0, 100.0),
+                color: WHITE,
+            }],
+            "a child clip must not escape its parent"
+        );
+    }
+
+    #[test]
+    fn popping_restores_the_outer_clip() {
+        let commands = renderer().encode_render_ops(&[
+            RenderOp::PushClip {
+                rect: rect(0.0, 0.0, 10.0, 10.0),
+            },
+            RenderOp::PopClip,
+            RenderOp::FillRect {
+                rect: rect(0.0, 0.0, 500.0, 500.0),
+                color: WHITE,
+            },
+        ]);
+        assert_eq!(
+            commands,
+            vec![FrameCommand::FillRect {
+                rect: rect(0.0, 0.0, 500.0, 500.0),
+                color: WHITE,
+            }],
+            "after popping, drawing is unclipped again"
+        );
+    }
+
+    #[test]
+    fn an_empty_clip_draws_nothing_rather_than_everything() {
+        let commands = renderer().encode_render_ops(&[
+            RenderOp::PushClip {
+                rect: rect(0.0, 0.0, 100.0, 100.0),
+            },
+            RenderOp::PushClip {
+                rect: rect(500.0, 500.0, 100.0, 100.0),
+            },
+            RenderOp::FillRect {
+                rect: rect(0.0, 0.0, 100.0, 100.0),
+                color: WHITE,
+            },
+            RenderOp::PopClip,
+            RenderOp::PopClip,
+        ]);
+        assert!(commands.is_empty());
+    }
+
+    #[test]
+    fn text_and_images_carry_the_clip_through_to_the_backend() {
+        let clip = rect(0.0, 100.0, 200.0, 100.0);
+        let commands = renderer().encode_render_ops(&[
+            RenderOp::PushClip { rect: clip },
+            RenderOp::Text {
+                rect: rect(0.0, 50.0, 200.0, 100.0),
+                text: "partly visible".to_string(),
+                style: loadngo_host_core::RenderTextStyle::default(),
+            },
+            RenderOp::BlitImage {
+                rect: rect(0.0, 50.0, 200.0, 100.0),
+                image_key: "key".to_string(),
+                alpha: 1.0,
+            },
+            RenderOp::PopClip,
+        ]);
+
+        match &commands[0] {
+            FrameCommand::Text(request) => assert_eq!(request.clip_rect, Some(clip)),
+            other => panic!("expected text, got {other:?}"),
+        }
+        match &commands[1] {
+            FrameCommand::Image(request) => assert_eq!(request.clip_rect, Some(clip)),
+            other => panic!("expected image, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn primitives_that_cannot_be_trimmed_are_culled_when_they_do_not_fit() {
+        // Trimming a stroke would draw a border along the cut, and a
+        // circle can't become a rect -- so these keep the old cull
+        // behavior until real hardware scissor exists.
+        let clip = rect(0.0, 0.0, 100.0, 100.0);
+        let commands = renderer().encode_render_ops(&[
+            RenderOp::PushClip { rect: clip },
+            RenderOp::StrokeRect {
+                rect: rect(50.0, 50.0, 500.0, 500.0),
+                color: WHITE,
+                thickness: 1,
+            },
+            RenderOp::Circle {
+                center: Point { x: 50.0, y: 50.0 },
+                radius: 400.0,
+                color: WHITE,
+            },
+            RenderOp::Line {
+                from: Point { x: 10.0, y: 10.0 },
+                to: Point { x: 900.0, y: 900.0 },
+                color: WHITE,
+                thickness: 1,
+            },
+            RenderOp::PopClip,
+        ]);
+        assert!(commands.is_empty(), "got {commands:?}");
+    }
+
+    #[test]
+    fn primitives_fully_inside_the_clip_still_draw() {
+        let commands = renderer().encode_render_ops(&[
+            RenderOp::PushClip {
+                rect: rect(0.0, 0.0, 100.0, 100.0),
+            },
+            RenderOp::Circle {
+                center: Point { x: 50.0, y: 50.0 },
+                radius: 10.0,
+                color: WHITE,
+            },
+            RenderOp::PopClip,
+        ]);
+        assert_eq!(commands.len(), 1);
+    }
 }
 
 #[cfg(test)]

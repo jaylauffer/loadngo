@@ -660,6 +660,17 @@ pub enum RenderOp {
         image_key: String,
         alpha: f32,
     },
+    /// Restricts every following op to `rect`, until the matching
+    /// [`RenderOp::PopClip`].
+    ///
+    /// Pushes nest and **intersect** — a child can never draw outside its
+    /// parent's clip by pushing a larger rect, and an empty intersection
+    /// legitimately means "draw nothing". Pushes and pops must balance
+    /// within a frame. See `loadngo/docs/CLIP_AND_SCISSOR.md`.
+    PushClip {
+        rect: Rect,
+    },
+    PopClip,
 }
 
 pub trait DesktopPlatformBackend {

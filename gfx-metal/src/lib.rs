@@ -884,6 +884,11 @@ impl MetalBackend {
                     }
                 }
                 FrameCommand::Clear { .. } => {}
+                // Clipping is resolved by the renderer before commands
+                // reach a backend (see `docs/CLIP_AND_SCISSOR.md`), so
+                // these carry no work here. A backend that grows real
+                // hardware scissor would handle them instead.
+                FrameCommand::PushClip { .. } | FrameCommand::PopClip => {}
             }
         }
         Ok(visuals)
