@@ -35,7 +35,7 @@ pub use epoll::EpollPort;
 pub use error::ProactorError;
 pub use io_port::{
     AcceptCompletionHandler, AcceptResult, AcceptTransfer, IoBuf, IoCompletionHandler, IoOpId,
-    IoPort, IoResult, IoTransfer, RawFdCompat, UnitCompletionHandler,
+    IoPort, IoResult, IoTransfer, PeerAddr, RawFdCompat, UnitCompletionHandler,
 };
 #[cfg(windows)]
 pub use iocp::IocpPort;
@@ -114,6 +114,17 @@ impl CompletionEnvelope {
 pub struct ReadinessEvent {
     pub token: u64,
 }
+
+/// Token values [`ProactorHandle::register_readable`] refuses.
+///
+/// `IoUringPort` uses `user_data` 1 and 2 for its own completion-queue
+/// and wake markers, and dispatches readiness out of that same space, so
+/// a registration on either value is silently swallowed there. The values
+/// are rejected on every backend rather than only on io_uring so that a
+/// token which works on one platform cannot quietly do nothing on
+/// another.
+#[cfg(unix)]
+pub const RESERVED_READINESS_TOKENS: [u64; 2] = [1, 2];
 
 #[cfg(unix)]
 pub trait ReadinessHandler: Send + 'static {
@@ -473,12 +484,40 @@ impl<P> ProactorHandle<P>
 where
     P: ReadinessPort,
 {
+    /// Registers `fd` for readability, calling `handler` each time the
+    /// kernel reports it readable.
+    ///
+    /// `token` identifies the registration and is returned in the
+    /// [`ReadinessEvent`]. It **must not** be one of the values in
+    /// [`RESERVED_READINESS_TOKENS`]; passing one returns
+    /// [`io::ErrorKind::InvalidInput`].
+    ///
+    /// That restriction exists because `IoUringPort` dispatches readiness
+    /// on the same `user_data` space that carries its own internal queue
+    /// and wake markers, so a token of `1` or `2` there is consumed as an
+    /// internal event and the handler is never called. This check lives
+    /// here, on the shared handle, rather than in that one backend on
+    /// purpose: enforcing it only where it currently bites would let a
+    /// token of `1` work on Android and silently do nothing on Linux,
+    /// which is a worse trap than the one it fixes. One rule, every
+    /// backend.
     pub fn register_readable(
         &self,
         fd: RawFd,
         token: u64,
         handler: impl ReadinessHandler,
     ) -> io::Result<()> {
+        if RESERVED_READINESS_TOKENS.contains(&token) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "readiness token {token} is reserved for proactor-internal use; \
+                     pick any other value (existing callers use a large distinctive \
+                     constant, e.g. 0x4341_4d45_5241)"
+                ),
+            ));
+        }
+
         let shared_handler = Arc::new(Mutex::new(Box::new(handler) as Box<dyn ReadinessHandler>));
         {
             let mut readiness_handlers = self

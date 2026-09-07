@@ -344,13 +344,16 @@ impl KqueuePort {
                 let new_fd =
                     unsafe { libc::accept(fd, std::ptr::addr_of_mut!(storage).cast(), &mut len) };
                 let accept_result: AcceptResult = if new_fd >= 0 {
-                    match unsafe { SockAddr::new(storage, len) }.as_socket() {
-                        Some(peer) => Ok(AcceptTransfer { new_fd, peer }),
-                        None => Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "accept completed but the peer address family was unrecognized",
-                        )),
-                    }
+                    // Every address family now decodes to *some* PeerAddr,
+                    // including AF_UNIX and anything unrecognized, so the
+                    // accepted descriptor is always handed to the caller.
+                    // This previously returned Err for any non-IP peer and
+                    // dropped `new_fd` without closing it -- one leaked fd
+                    // per connection.
+                    Ok(AcceptTransfer {
+                        new_fd,
+                        peer: crate::io_port::peer_addr_from_storage(&storage, len),
+                    })
                 } else {
                     Err(io::Error::last_os_error())
                 };
@@ -806,13 +809,13 @@ impl IoPort for KqueuePort {
         let err = io::Error::last_os_error();
         if new_fd >= 0 || !Self::would_block(&err) {
             let accept_result: AcceptResult = if new_fd >= 0 {
-                match unsafe { SockAddr::new(storage, len) }.as_socket() {
-                    Some(peer) => Ok(AcceptTransfer { new_fd, peer }),
-                    None => Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "accept completed but the peer address family was unrecognized",
-                    )),
-                }
+                // Always hand back the descriptor: every family now
+                // decodes to some PeerAddr. This used to Err for any
+                // non-IP peer and drop `new_fd` unclosed.
+                Ok(AcceptTransfer {
+                    new_fd,
+                    peer: crate::io_port::peer_addr_from_storage(&storage, len),
+                })
             } else {
                 Err(err)
             };

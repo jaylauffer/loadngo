@@ -1,7 +1,7 @@
 use crate::{
     AcceptCompletionHandler, AcceptResult, AcceptTransfer, CompletionEnvelope, CompletionPort,
-    IoBuf, IoCompletionHandler, IoOpId, IoPort, IoResult, IoTransfer, PollEvent, RawFdCompat,
-    UnitCompletionHandler,
+    IoBuf, IoCompletionHandler, IoOpId, IoPort, IoResult, IoTransfer, PeerAddr, PollEvent,
+    RawFdCompat, UnitCompletionHandler,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
@@ -527,16 +527,24 @@ impl IocpPort {
         };
         let _ = remote_sockaddr_len;
 
-        match peer {
-            Some(peer) => Ok(AcceptTransfer {
-                new_fd: accept_socket.0 as RawFdCompat,
-                peer,
-            }),
-            None => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "AcceptEx completed but GetAcceptExSockaddrs reported no usable peer address",
-            )),
-        }
+        // Always hand back the socket. This previously returned Err for
+        // any address GetAcceptExSockaddrs did not decode to IP and
+        // dropped `accept_socket` without closing it -- and unlike the
+        // Unix backends the socket here is created up front by
+        // `AcceptEx`, so it leaked even before a peer ever connected on a
+        // family this understood.
+        let peer = match peer {
+            Some(addr) => PeerAddr::Ip(addr),
+            None if remote_sockaddr.is_null() => PeerAddr::Unknown { family: 0 },
+            None => PeerAddr::Unknown {
+                family: unsafe { (*(remote_sockaddr as *const SOCKADDR_STORAGE)).ss_family }.0,
+            },
+        };
+
+        Ok(AcceptTransfer {
+            new_fd: accept_socket.0 as RawFdCompat,
+            peer,
+        })
     }
 
     fn drain_completion(&self) -> Option<CompletionEnvelope> {

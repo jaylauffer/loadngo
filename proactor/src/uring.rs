@@ -327,16 +327,16 @@ impl IoUringPort {
             }
             InFlightOp::Accept { handler, addr } => {
                 let accept_result: AcceptResult = if ok {
-                    match addr.to_socket_addr() {
-                        Some(peer) => Ok(AcceptTransfer {
-                            new_fd: result,
-                            peer,
-                        }),
-                        None => Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "accept completed but the peer address family was unrecognized",
-                        )),
-                    }
+                    // Every address family now decodes to *some* PeerAddr,
+                    // including AF_UNIX and anything unrecognized, so the
+                    // accepted descriptor is always handed to the caller.
+                    // This previously returned Err for any non-IP peer and
+                    // dropped `result` without closing it -- one leaked fd
+                    // per connection.
+                    Ok(AcceptTransfer {
+                        new_fd: result,
+                        peer: addr.to_peer_addr(),
+                    })
                 } else {
                     Err(err())
                 };
@@ -722,6 +722,10 @@ impl RawSockAddr {
 
     fn to_socket_addr(&self) -> Option<SocketAddr> {
         unsafe { SockAddr::new(self.storage, self.len) }.as_socket()
+    }
+
+    fn to_peer_addr(&self) -> PeerAddr {
+        crate::io_port::peer_addr_from_storage(&self.storage, self.len)
     }
 }
 

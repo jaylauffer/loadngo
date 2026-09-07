@@ -1,7 +1,8 @@
 #![cfg(target_os = "android")]
 
 use loadngo_proactor::{
-    AcceptResult, Completion, CompletionKind, EpollPort, IoBuf, IoResult, Proactor, ReadinessEvent,
+    AcceptResult, Completion, CompletionKind, EpollPort, IoBuf, IoResult, PeerAddr, Proactor,
+    ReadinessEvent,
 };
 use std::io;
 use std::net::{TcpListener, UdpSocket};
@@ -252,7 +253,7 @@ fn epoll_accept_reports_the_real_connecting_peer() {
         );
     }
     let peer = accept_rx.recv_timeout(Duration::from_millis(100)).unwrap();
-    assert_eq!(peer, client_addr);
+    assert_eq!(peer, PeerAddr::Ip(client_addr));
 }
 
 #[test]
@@ -435,4 +436,88 @@ impl Drop for UnixStreamPair {
             libc::close(self.fd);
         }
     }
+}
+
+#[test]
+fn epoll_accept_hands_back_a_unix_peer_instead_of_leaking_it() {
+    // Regression: accept() used to resolve the peer through socket2's
+    // as_socket(), which returns None for AF_UNIX. The completion then
+    // reported Err(InvalidData) and dropped the already-accepted
+    // descriptor without closing it -- one leaked fd per connection.
+    let proactor = Proactor::new(EpollPort::new().unwrap());
+    let handle = proactor.handle();
+
+    let dir = std::env::temp_dir().join(format!(
+        "loadngo-proactor-epoll-unix-accept-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("s");
+
+    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    let listener_fd = listener.as_raw_fd();
+
+    let (tx, rx) = mpsc::channel();
+    handle
+        .accept(listener_fd, move |result: AcceptResult| {
+            tx.send(
+                result
+                    .map(|transfer| (transfer.new_fd, transfer.peer))
+                    .map_err(|err| err.to_string()),
+            )
+            .unwrap();
+        })
+        .unwrap();
+
+    let _client = std::os::unix::net::UnixStream::connect(&path).unwrap();
+
+    let mut dispatched = 0;
+    let start = Instant::now();
+    while dispatched < 1 {
+        dispatched += proactor.run_ready().unwrap().dispatched_completions;
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "accept never completed"
+        );
+    }
+
+    let outcome = rx.recv_timeout(Duration::from_millis(100)).unwrap();
+    let (new_fd, peer) = outcome.expect("an AF_UNIX peer must accept, not error");
+    assert!(
+        new_fd >= 0,
+        "the accepted descriptor must reach the caller, not be dropped unclosed"
+    );
+    assert!(
+        matches!(peer, PeerAddr::Unix { .. }),
+        "expected PeerAddr::Unix, got {peer:?}"
+    );
+    unsafe {
+        libc::close(new_fd);
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn epoll_register_readable_rejects_reserved_tokens() {
+    // Reserved tokens used to be accepted and then silently swallowed on
+    // io_uring, so the handler never ran and nothing reported why. They
+    // are refused on every backend so one token behaves the same
+    // everywhere.
+    let proactor = Proactor::new(EpollPort::new().unwrap());
+    let handle = proactor.handle();
+    let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let fd = socket.as_raw_fd();
+
+    for token in loadngo_proactor::RESERVED_READINESS_TOKENS {
+        let err = handle
+            .register_readable(fd, token, |_event: ReadinessEvent| {})
+            .expect_err("a reserved token must be rejected, not silently ignored");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    handle
+        .register_readable(fd, 0x4c4f_4144_4e47_4f00, |_event: ReadinessEvent| {})
+        .expect("a non-reserved token must still register");
 }
