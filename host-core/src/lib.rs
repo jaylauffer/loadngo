@@ -441,7 +441,15 @@ impl GamepadSnapshot {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// One frame of normalized input: mouse, keyboard, touch, and gamepad.
+///
+/// `Default` is an all-quiet frame — nothing pressed, nothing touched, no
+/// pad connected. Construct partial snapshots with `..Default::default()`
+/// rather than spelling out every field: this struct is shared across
+/// every game in the workspace *and* sibling repos, so adding a field to
+/// it otherwise breaks every literal construction everywhere at once (it
+/// did exactly that to `sng-rusty` when `gamepads` was added).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InputSnapshot {
     pub mouse_x: f32,
     pub mouse_y: f32,
