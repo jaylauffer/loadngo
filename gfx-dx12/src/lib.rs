@@ -825,6 +825,11 @@ mod windows_backend {
                             ),
                         });
                     }
+                    // Clipping is resolved by the renderer before commands
+                    // reach a backend (see `docs/CLIP_AND_SCISSOR.md`), so
+                    // these are no-ops rather than the hard error the
+                    // catch-all below would otherwise return for them.
+                    FrameCommand::PushClip { .. } | FrameCommand::PopClip => {}
                     _ => {
                         return Err(RendererError::Backend(
                             "DX12 backend received an unsupported command".to_string(),

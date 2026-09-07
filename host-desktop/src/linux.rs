@@ -414,6 +414,9 @@ fn describe_unsupported_gles_command(commands: &[FrameCommand]) -> Option<&'stat
         FrameCommand::Polyline { .. } => Some("Polyline"),
         FrameCommand::Arc { .. } => Some("Arc"),
         FrameCommand::ParticleBatch { .. } => Some("ParticleBatch"),
+        // Resolved by the renderer before reaching a backend, so never the
+        // reason a frame can't use GLES. See `docs/CLIP_AND_SCISSOR.md`.
+        FrameCommand::PushClip { .. } | FrameCommand::PopClip => None,
     })
 }
 
@@ -1628,6 +1631,9 @@ fn present(
                     blit_image_rgba(&mut rgba, width as usize, height as usize, image, &request);
                 }
             }
+            // Clipping is resolved while encoding, so these carry no work
+            // here -- see `docs/CLIP_AND_SCISSOR.md`.
+            FrameCommand::PushClip { .. } | FrameCommand::PopClip => {}
         }
     }
 

@@ -383,6 +383,9 @@ fn describe_unsupported_dx12_command(commands: &[FrameCommand]) -> Option<&'stat
         FrameCommand::Arc { .. } => None,
         FrameCommand::Text(_) => Some("Text"),
         FrameCommand::ParticleBatch { .. } => Some("ParticleBatch"),
+        // Resolved by the renderer before reaching a backend -- never the
+        // reason a frame can't use DX12. See `docs/CLIP_AND_SCISSOR.md`.
+        FrameCommand::PushClip { .. } | FrameCommand::PopClip => None,
     })
 }
 
@@ -1552,6 +1555,8 @@ fn present(
                     blit_image_rgba(&mut rgba, width as usize, height as usize, image, &request);
                 }
             }
+            // Clipping is resolved while encoding -- nothing to do here.
+            FrameCommand::PushClip { .. } | FrameCommand::PopClip => {}
         }
     }
 
@@ -1713,6 +1718,12 @@ fn scale_frame_command(command: FrameCommand, scale: f32) -> FrameCommand {
         },
         FrameCommand::Text(request) => FrameCommand::Text(scale_text_request(request, scale)),
         FrameCommand::Image(request) => FrameCommand::Image(scale_image_request(request, scale)),
+        // A clip rect is geometry: it has to scale with everything else or
+        // it would clip the wrong region on a high-DPI surface.
+        FrameCommand::PushClip { rect } => FrameCommand::PushClip {
+            rect: scale_rect(rect, scale),
+        },
+        FrameCommand::PopClip => FrameCommand::PopClip,
     }
 }
 
