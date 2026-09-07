@@ -16,8 +16,9 @@ use loadngo_gfx_metal::{
 };
 use loadngo_host_core::{
     AssetIoBackend, DecodedImage, DesktopGraphicsBackend, DesktopPlatformBackend, FrameDemand,
-    FrameTiming, HostFrame, HostKey, HostKeyEvent, InputSnapshot, RenderOp, RenderTextStyle,
-    SurfaceInfo, TextMetrics, WindowDescriptor, WindowIconSet,
+    FrameTiming, GamepadButton, GamepadSnapshot, GamepadStick, GamepadTrigger, HostFrame, HostKey,
+    HostKeyEvent, InputSnapshot, PointF, RenderOp, RenderTextStyle, SurfaceInfo, TextMetrics,
+    WindowDescriptor, WindowIconSet,
 };
 use loadngo_proactor::{CompletionKind, KqueuePort};
 use loadngo_renderer::{FrameCommand, Renderer, RendererConfig};
@@ -28,6 +29,7 @@ use objc2::{
     rc::Retained,
     runtime::AnyObject,
 };
+use objc2_game_controller::{GCController, GCExtendedGamepad};
 use ui_core::{
     geometry::{Color as UiColor, Rect as UiRect},
     paint::PaintOp,
@@ -182,6 +184,7 @@ impl Default for InputState {
                 key_events: Vec::new(),
                 keys_down: Vec::new(),
                 typed_text: String::new(),
+                gamepads: Vec::new(),
             },
         }
     }
@@ -250,10 +253,200 @@ impl InputState {
     }
 }
 
+/// Polls the `GameController` framework's `GCController.controllers()` list
+/// every frame and normalizes it into `loadngo-host-core`'s `GamepadSnapshot`
+/// shape — the first real backend for `loadngo/docs/GAMEPAD_INPUT.md`'s
+/// design. Poll-based rather than delegate/notification-based: it fits the
+/// existing `capture_frame()`-per-frame model directly, with no separate
+/// callback plumbing to keep in sync with the render loop.
+struct GamepadTracker {
+    tracked: Vec<TrackedGamepad>,
+    next_id: u32,
+}
+
+struct TrackedGamepad {
+    /// Pointer identity of the underlying `GCController` object. Apple's
+    /// framework hands back the same object instance for the same physical
+    /// device across calls to `controllers()`, so this is stable for the
+    /// life of one connection without needing a device-unique identifier
+    /// this binding doesn't expose.
+    key: usize,
+    id: u32,
+    last_buttons_down: Vec<GamepadButton>,
+}
+
+impl GamepadTracker {
+    fn new() -> Self {
+        Self {
+            tracked: Vec::new(),
+            next_id: 0,
+        }
+    }
+
+    fn poll(&mut self) -> Vec<GamepadSnapshot> {
+        let controllers = unsafe { GCController::controllers() };
+        let mut seen_keys = Vec::new();
+        let mut snapshots = Vec::new();
+
+        for controller in controllers.to_vec() {
+            let Some(extended) = (unsafe { controller.extendedGamepad() }) else {
+                continue;
+            };
+            let key = &*controller as *const _ as usize;
+            seen_keys.push(key);
+
+            let id = match self.tracked.iter().find(|tracked| tracked.key == key) {
+                Some(tracked) => tracked.id,
+                None => {
+                    let id = self.next_id;
+                    self.next_id += 1;
+                    self.tracked.push(TrackedGamepad {
+                        key,
+                        id,
+                        last_buttons_down: Vec::new(),
+                    });
+                    id
+                }
+            };
+
+            let (buttons_down, left_stick, right_stick, left_trigger, right_trigger) =
+                read_extended_gamepad(&extended);
+            let previous_down = self
+                .tracked
+                .iter()
+                .find(|tracked| tracked.key == key)
+                .map(|tracked| tracked.last_buttons_down.clone())
+                .unwrap_or_default();
+            let buttons_pressed = buttons_down
+                .iter()
+                .copied()
+                .filter(|button| !previous_down.contains(button))
+                .collect();
+            if let Some(tracked) = self.tracked.iter_mut().find(|tracked| tracked.key == key) {
+                tracked.last_buttons_down = buttons_down.clone();
+            }
+
+            snapshots.push(GamepadSnapshot {
+                id,
+                connected: true,
+                left_stick,
+                right_stick,
+                left_trigger,
+                right_trigger,
+                buttons_down,
+                buttons_pressed,
+            });
+        }
+
+        // A pad that disappeared from `controllers()` since the last poll
+        // gets exactly one neutral, `connected: false` snapshot so a button
+        // held (or a stick deflected) at the moment it went offline never
+        // reads as stuck on the frame after — per GAMEPAD_INPUT.md's
+        // decided stale-state-on-disconnect requirement.
+        let disconnected_ids: Vec<u32> = self
+            .tracked
+            .iter()
+            .filter(|tracked| !seen_keys.contains(&tracked.key))
+            .map(|tracked| tracked.id)
+            .collect();
+        self.tracked.retain(|tracked| seen_keys.contains(&tracked.key));
+        snapshots.extend(disconnected_ids.into_iter().map(GamepadSnapshot::cleared));
+
+        snapshots
+    }
+}
+
+/// Reads one `GCExtendedGamepad`'s current state. Face buttons are read
+/// through the same positional accessors (`buttonA`/`buttonB`/`buttonX`/
+/// `buttonY`) regardless of what a DualShock/DualSense/Xbox pad prints on
+/// them — `GCExtendedGamepad` already normalizes brand layouts to this one
+/// positional shape, which is exactly the `GamepadButton::South/East/West/
+/// North` naming `GAMEPAD_INPUT.md` calls for.
+fn read_extended_gamepad(
+    gamepad: &GCExtendedGamepad,
+) -> (
+    Vec<GamepadButton>,
+    GamepadStick,
+    GamepadStick,
+    GamepadTrigger,
+    GamepadTrigger,
+) {
+    unsafe {
+        let mut buttons = Vec::new();
+        let mut push_if_pressed = |pressed: bool, button: GamepadButton| {
+            if pressed {
+                buttons.push(button);
+            }
+        };
+
+        push_if_pressed(gamepad.buttonA().isPressed(), GamepadButton::South);
+        push_if_pressed(gamepad.buttonB().isPressed(), GamepadButton::East);
+        push_if_pressed(gamepad.buttonX().isPressed(), GamepadButton::West);
+        push_if_pressed(gamepad.buttonY().isPressed(), GamepadButton::North);
+        push_if_pressed(
+            gamepad.leftShoulder().isPressed(),
+            GamepadButton::LeftShoulder,
+        );
+        push_if_pressed(
+            gamepad.rightShoulder().isPressed(),
+            GamepadButton::RightShoulder,
+        );
+        if let Some(button) = gamepad.leftThumbstickButton() {
+            push_if_pressed(button.isPressed(), GamepadButton::LeftStick);
+        }
+        if let Some(button) = gamepad.rightThumbstickButton() {
+            push_if_pressed(button.isPressed(), GamepadButton::RightStick);
+        }
+        let dpad = gamepad.dpad();
+        push_if_pressed(dpad.up().isPressed(), GamepadButton::DPadUp);
+        push_if_pressed(dpad.down().isPressed(), GamepadButton::DPadDown);
+        push_if_pressed(dpad.left().isPressed(), GamepadButton::DPadLeft);
+        push_if_pressed(dpad.right().isPressed(), GamepadButton::DPadRight);
+        push_if_pressed(gamepad.buttonMenu().isPressed(), GamepadButton::Start);
+        if let Some(button) = gamepad.buttonOptions() {
+            push_if_pressed(button.isPressed(), GamepadButton::Select);
+        }
+        if let Some(button) = gamepad.buttonHome() {
+            push_if_pressed(button.isPressed(), GamepadButton::Guide);
+        }
+
+        // GameController's `yAxis` reports the joystick's native convention
+        // (pushing up is +1), but every other y coordinate `loadngo` hands
+        // a game is y-down (see `event_point_in_view`'s
+        // `bounds.size.height - point_in_view.y` flip for mouse input on
+        // this same platform). Negate here so `GamepadStick::raw` matches
+        // that one convention too, instead of leaking AppKit's mouse-only
+        // flip while gamepad stays un-normalized.
+        let left_thumbstick = gamepad.leftThumbstick();
+        let right_thumbstick = gamepad.rightThumbstick();
+        let left_stick = GamepadStick {
+            raw: PointF {
+                x: left_thumbstick.xAxis().value(),
+                y: -left_thumbstick.yAxis().value(),
+            },
+        };
+        let right_stick = GamepadStick {
+            raw: PointF {
+                x: right_thumbstick.xAxis().value(),
+                y: -right_thumbstick.yAxis().value(),
+            },
+        };
+        let left_trigger = GamepadTrigger {
+            raw: gamepad.leftTrigger().value(),
+        };
+        let right_trigger = GamepadTrigger {
+            raw: gamepad.rightTrigger().value(),
+        };
+
+        (buttons, left_stick, right_stick, left_trigger, right_trigger)
+    }
+}
+
 struct AppState {
     window: Retained<AnyObject>,
     view: Retained<AnyObject>,
     input: InputState,
+    gamepads: GamepadTracker,
     timing: FrameTiming,
     surface: SurfaceInfo,
     last_tick: Instant,
@@ -502,6 +695,7 @@ pub fn launch(
             window: window_obj,
             view: view_obj,
             input: InputState::default(),
+            gamepads: GamepadTracker::new(),
             timing: FrameTiming {
                 delta_seconds: 1.0 / 60.0,
             },
@@ -552,6 +746,7 @@ pub fn capture_frame() -> HostFrame {
         let state = state
             .as_mut()
             .expect("loadngo host-desktop app state is missing");
+        state.input.snapshot.gamepads = state.gamepads.poll();
         let frame = HostFrame {
             timing: state.timing,
             surface: state.surface,

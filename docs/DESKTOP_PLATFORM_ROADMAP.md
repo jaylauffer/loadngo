@@ -140,11 +140,13 @@ resolves crate placement, hand-roll-vs-crate, normalized shape, and
 platform priority/phasing, and also identifies a real gap this finding
 didn't raise: how input-source transitions (a controller going offline
 mid-hold, a player switching between gamepad and mouse/keyboard) should
-work. No code exists for this subsystem — an initial type scaffold was
-committed and reverted the same day after review found it had no backend
-or caller to justify it; see that doc's design instead. The
-open-questions bullets above are left as-written, as a record of what
-this finding actually looked like on 2026-08-30.
+work. An initial type scaffold was committed and reverted the same day
+after review found it had no backend or caller to justify it. **A real
+macOS backend was then built 2026-09-07**, once an actual DualShock was
+connected via USB-C to a Mac Mini to build and test it against — see
+that doc's design and status instead. The open-questions bullets above
+are left as-written, as a record of what this finding actually looked
+like on 2026-08-30.
 
 ## Proposed priority ordering (open for discussion, not decided)
 
@@ -153,10 +155,9 @@ this finding actually looked like on 2026-08-30.
    fixable bug (a leaking command list), not a GPU/compositor issue —
    resolved same-day, plus the identical bug found and fixed in the
    Windows backend along the way.
-3. **Finding 3 (gamepad abstraction)** is the only one left, and the
-   largest undertaking of the three — still needs real design work
-   (crate placement, per-platform backend strategy, normalized input
-   shape) before any implementation.
+3. **Finding 3 (gamepad abstraction) — macOS backend done (2026-09-07)**,
+   Windows and Linux backends still not started. See
+   [GAMEPAD_INPUT.md](GAMEPAD_INPUT.md) for the design and current status.
 
 ## Explicitly not decided yet
 

@@ -213,6 +213,7 @@ impl PendingInput {
             key_events: self.key_events.clone(),
             keys_down: self.keys_down.clone(),
             typed_text: self.typed_text.clone(),
+            gamepads: Vec::new(),
         }
     }
 

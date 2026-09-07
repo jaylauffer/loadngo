@@ -1002,6 +1002,7 @@ fn blank_snapshot() -> InputSnapshot {
         key_events: Vec::new(),
         keys_down: Vec::new(),
         typed_text: String::new(),
+        gamepads: Vec::new(),
     }
 }
 

@@ -105,7 +105,7 @@ See [DETAILS_VIEW_MODEL.md](DETAILS_VIEW_MODEL.md).
   - key events with modifiers
 - Pointer helpers in `host-core` (`pointer_in_rect`, `pointer_pressed_in_rect`, `pointer_released`) provide shared hit-testing semantics across platforms.
 - Backends map native input to `InputSnapshot`; app/UI code consumes the normalized form.
-- Physical gamepad/controller input has no code yet — see [GAMEPAD_INPUT.md](GAMEPAD_INPUT.md) for the design, which proposes a `gamepads` field on `InputSnapshot` itself (alongside `touches`) rather than a separate structure, so it stays part of the one normalized per-frame input surface.
+- Physical gamepad/controller input lives in a `gamepads: Vec<GamepadSnapshot>` field on `InputSnapshot` itself (alongside `touches`), so it stays part of the one normalized per-frame input surface. A real backend exists for macOS only (`GCController` polling in `host-desktop/src/macos.rs`, added 2026-09-07); other platforms always report an empty `gamepads` list. See [GAMEPAD_INPUT.md](GAMEPAD_INPUT.md) for the full design and per-platform status.
 
 ## Render model
 - UI/app code emits geometry/text/image operations.

@@ -314,6 +314,133 @@ pub struct TouchPoint {
     pub phase: TouchPhase,
 }
 
+/// A physical gamepad button, named by position on the pad rather than any
+/// one brand's printed label — `South`/`East`/`West`/`North` mean the same
+/// physical button whether the pad is an Xbox, PlayStation, or Switch Pro
+/// controller. See `loadngo/docs/GAMEPAD_INPUT.md` for the full design.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GamepadButton {
+    South,
+    East,
+    West,
+    North,
+    LeftShoulder,
+    RightShoulder,
+    LeftStick,
+    RightStick,
+    DPadUp,
+    DPadDown,
+    DPadLeft,
+    DPadRight,
+    Start,
+    Select,
+    /// The Xbox/PlayStation/Steam system button.
+    Guide,
+}
+
+/// A thumbstick's raw, pre-deadzone position: each axis in `-1.0..=1.0`,
+/// normalized to the same y-down convention every other coordinate on
+/// `InputSnapshot` uses (`mouse_y`, `TouchPoint`) — pushing the stick up
+/// yields a *negative* `y`, matching "up" decreasing y everywhere else in
+/// the engine. A backend whose native API reports the opposite (macOS's
+/// GameController framework reports up as `+1`) must negate before storing
+/// here — see `host-desktop/src/macos.rs`'s `read_extended_gamepad` for the
+/// precedent, mirroring how that same backend already flips AppKit's
+/// native y-up mouse coordinates for `mouse_y`. Deadzone shaping is a
+/// caller-side concern — see [`GamepadStick::with_deadzone`] — so the value
+/// kept here is always the true continuous signal, never pre-clamped to
+/// zero.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct GamepadStick {
+    pub raw: PointF,
+}
+
+impl GamepadStick {
+    /// Radial, magnitude-based deadzone: zero within `deadzone`, an
+    /// unscaled pass-through of `raw` above it, clamped to unit magnitude
+    /// beyond that — the same shape `touch::VirtualJoystick` already uses
+    /// for the on-screen stick, kept consistent across every stick input a
+    /// `loadngo` game reads regardless of source.
+    #[must_use]
+    pub fn with_deadzone(&self, deadzone: f32) -> PointF {
+        let length = (self.raw.x * self.raw.x + self.raw.y * self.raw.y).sqrt();
+        if length <= deadzone {
+            return PointF { x: 0.0, y: 0.0 };
+        }
+        if length <= 1.0 {
+            return self.raw;
+        }
+        let scale = 1.0 / length;
+        PointF {
+            x: self.raw.x * scale,
+            y: self.raw.y * scale,
+        }
+    }
+}
+
+/// An analog trigger's raw value, `0.0..=1.0` — never duplicated as a
+/// boolean crossing an internal threshold, per `loadngo/docs/
+/// INPUT_PHILOSOPHY.md`'s "prefer continuous over boolean" consequence.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct GamepadTrigger {
+    pub raw: f32,
+}
+
+/// One connected gamepad's full state for this frame. Lives in
+/// [`InputSnapshot::gamepads`] alongside `touches` rather than as a sibling
+/// on `HostFrame` — see `loadngo/docs/GAMEPAD_INPUT.md` for why: gamepad is
+/// a peer input modality to mouse/keyboard/touch, not an ancillary extra,
+/// and `touches` already proves multi-instance state belongs inside
+/// `InputSnapshot` just fine.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GamepadSnapshot {
+    /// Stable for the life of one connection; a reconnect (or a different
+    /// pad plugged in later) may reuse or change this — callers that care
+    /// about "the same physical pad across a disconnect" aren't supported
+    /// yet (see `GAMEPAD_INPUT.md`'s open questions).
+    pub id: u32,
+    pub connected: bool,
+    pub left_stick: GamepadStick,
+    pub right_stick: GamepadStick,
+    pub left_trigger: GamepadTrigger,
+    pub right_trigger: GamepadTrigger,
+    /// Continuously held, mirroring `keys_down`.
+    pub buttons_down: Vec<GamepadButton>,
+    /// This-frame press edge, mirroring `key_events`.
+    pub buttons_pressed: Vec<GamepadButton>,
+}
+
+impl GamepadSnapshot {
+    /// A fully neutral, disconnected snapshot for `id` — what a backend
+    /// must publish for exactly one frame on the `connected: true -> false`
+    /// transition, so a button held (or a stick deflected) at the moment a
+    /// pad goes offline never lingers stuck at its last live value. Mirrors
+    /// `InputSnapshot::clear_keyboard_state()`'s discipline on focus loss.
+    #[must_use]
+    pub fn cleared(id: u32) -> Self {
+        Self {
+            id,
+            connected: false,
+            left_stick: GamepadStick::default(),
+            right_stick: GamepadStick::default(),
+            left_trigger: GamepadTrigger::default(),
+            right_trigger: GamepadTrigger::default(),
+            buttons_down: Vec::new(),
+            buttons_pressed: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn button_down(&self, button: GamepadButton) -> bool {
+        self.buttons_down.contains(&button)
+    }
+
+    #[must_use]
+    pub fn button_pressed(&self, button: GamepadButton) -> bool {
+        self.buttons_pressed.contains(&button)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InputSnapshot {
     pub mouse_x: f32,
@@ -336,6 +463,10 @@ pub struct InputSnapshot {
     #[serde(default)]
     pub keys_down: Vec<HostKey>,
     pub typed_text: String,
+    /// No backend populates this on any platform except macOS yet — see
+    /// `loadngo/docs/GAMEPAD_INPUT.md`. Always empty elsewhere.
+    #[serde(default)]
+    pub gamepads: Vec<GamepadSnapshot>,
 }
 
 impl InputSnapshot {
@@ -375,6 +506,14 @@ impl InputSnapshot {
 
     pub fn active_touches(&self) -> impl Iterator<Item = TouchPoint> + '_ {
         self.touches.iter().flatten().copied()
+    }
+
+    /// The first currently-connected gamepad, if any — the natural default
+    /// for a single-player game that hasn't built its own player-assignment
+    /// scheme (`GAMEPAD_INPUT.md` doesn't propose one yet).
+    #[must_use]
+    pub fn primary_gamepad(&self) -> Option<&GamepadSnapshot> {
+        self.gamepads.iter().find(|gamepad| gamepad.connected)
     }
 
     pub fn mouse_point(&self) -> PointF {
@@ -572,6 +711,72 @@ mod tests {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[test]
+    fn gamepad_stick_deadzone_zeroes_small_magnitude() {
+        let stick = GamepadStick {
+            raw: PointF { x: 0.05, y: 0.02 },
+        };
+        assert_eq!(stick.with_deadzone(0.2), PointF { x: 0.0, y: 0.0 });
+    }
+
+    #[test]
+    fn gamepad_stick_deadzone_passes_raw_value_unscaled_above_threshold() {
+        let stick = GamepadStick {
+            raw: PointF { x: 0.5, y: 0.0 },
+        };
+        assert_eq!(stick.with_deadzone(0.2), PointF { x: 0.5, y: 0.0 });
+    }
+
+    #[test]
+    fn gamepad_stick_deadzone_clamps_beyond_unit_magnitude() {
+        let stick = GamepadStick {
+            raw: PointF { x: 2.0, y: 0.0 },
+        };
+        let clamped = stick.with_deadzone(0.2);
+        assert!((clamped.x - 1.0).abs() < f32::EPSILON);
+        assert_eq!(clamped.y, 0.0);
+    }
+
+    #[test]
+    fn gamepad_snapshot_cleared_is_neutral_and_disconnected() {
+        let mut snapshot = GamepadSnapshot {
+            id: 3,
+            connected: true,
+            left_stick: GamepadStick {
+                raw: PointF { x: 1.0, y: 1.0 },
+            },
+            right_stick: GamepadStick::default(),
+            left_trigger: GamepadTrigger { raw: 1.0 },
+            right_trigger: GamepadTrigger::default(),
+            buttons_down: vec![GamepadButton::South],
+            buttons_pressed: vec![GamepadButton::South],
+        };
+        snapshot = GamepadSnapshot::cleared(snapshot.id);
+
+        assert_eq!(snapshot.id, 3);
+        assert!(!snapshot.connected);
+        assert_eq!(snapshot.left_stick.raw, PointF { x: 0.0, y: 0.0 });
+        assert_eq!(snapshot.left_trigger.raw, 0.0);
+        assert!(snapshot.buttons_down.is_empty());
+        assert!(snapshot.buttons_pressed.is_empty());
+        assert!(!snapshot.button_down(GamepadButton::South));
+    }
+
+    #[test]
+    fn primary_gamepad_skips_disconnected_entries() {
+        let snapshot = InputSnapshot {
+            gamepads: vec![
+                GamepadSnapshot::cleared(0),
+                GamepadSnapshot {
+                    connected: true,
+                    ..GamepadSnapshot::cleared(1)
+                },
+            ],
+            ..blank_snapshot()
+        };
+        assert_eq!(snapshot.primary_gamepad().map(|pad| pad.id), Some(1));
+    }
+
     fn rgba_test_pixels() -> (u32, u32, Vec<u8>) {
         (
             2,
@@ -604,6 +809,7 @@ mod tests {
             key_events: Vec::new(),
             keys_down: Vec::new(),
             typed_text: String::new(),
+            gamepads: Vec::new(),
         }
     }
 

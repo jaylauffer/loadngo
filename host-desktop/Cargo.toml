@@ -24,6 +24,16 @@ rodio = { version = "0.17", features = ["vorbis"] }
 loadngo-gfx-metal = { path = "../gfx-metal" }
 loadngo-proactor = { path = "../proactor" }
 objc2 = "0.6.4"
+objc2-game-controller = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "GCController",
+    "GCExtendedGamepad",
+    "GCPhysicalInputProfile",
+    "GCControllerElement",
+    "GCControllerDirectionPad",
+    "GCControllerAxisInput",
+    "GCControllerButtonInput",
+] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 fontdue = "0.9.3"
