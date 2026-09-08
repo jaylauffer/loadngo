@@ -86,8 +86,8 @@ jobs:
 
       - name: cargo clippy (portable crates only)
         working-directory: ${{ env.REPO_DIR }}
-        run: cargo clippy --workspace --all-targets --all-features ${{ env.PLATFORM_EXCLUDES }} -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features ${{ env.PLATFORM_EXCLUDES }} -- -D warnings
 
       - name: cargo test (portable crates only)
         working-directory: ${{ env.REPO_DIR }}
-        run: cargo test --workspace ${{ env.PLATFORM_EXCLUDES }}
+        run: cargo test --locked --workspace ${{ env.PLATFORM_EXCLUDES }}
