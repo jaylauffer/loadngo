@@ -732,7 +732,7 @@ impl RawSockAddr {
     }
 
     fn to_peer_addr(&self) -> PeerAddr {
-        crate::io_port::peer_addr_from_storage(&self.storage, self.len)
+        crate::sockaddr::peer_addr_from_storage(&self.storage, self.len)
     }
 }
 

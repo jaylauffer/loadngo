@@ -2,6 +2,39 @@
 
 This crate is the Rust replacement for the original C++ `Machine` + `Timer` split.
 
+## The platform seam for networking
+
+`loadngo-proactor` is where raw OS address representations stop. Nothing
+above it names a `libc` or `windows` address type: `network/` works in
+`std::net` and `socket2` types, and `host-desktop` touches none of this at
+all. Keeping that boundary is what lets the layers above be genuinely
+platform-agnostic while each backend still uses the representation its
+own kernel actually speaks.
+
+Inside the crate the same rule applies one level down:
+
+| file | may contain |
+| --- | --- |
+| `io_port.rs` | the public surface only -- `PeerAddr`, `AcceptTransfer`, `IoBuf`. No `libc`, no `socket2`, no `windows::Win32`. |
+| `sockaddr.rs` | raw `sockaddr_storage` decoding, with the primitives that differ by target split per-target |
+| `uring.rs` / `kqueue.rs` / `epoll.rs` / `iocp.rs` | whatever their own platform needs |
+
+`proactor/tests/core.rs::io_port_surface_names_no_raw_platform_address_types`
+enforces the first row, so the boundary is checked rather than merely
+intended.
+
+This is not a style preference. The address types differ in shape, not
+just in name -- `sa_family_t` is `u16` on Linux and `u8` on macOS, and
+`c_char` is unsigned on aarch64 Linux and signed on darwin. When the
+decoding lived in shared code there was no cast form clippy accepted on
+every target at once (`as u16` is `unnecessary_cast` where the type is
+already `u16`; `u16::from` is `useless_conversion` in the same place), and
+the file needed an `#[allow]`. Splitting the differing primitive into
+per-target functions removes the ambiguity rather than suppressing it, and
+adding a platform means adding a branch in `sockaddr.rs` rather than
+touching anything shared.
+
+
 ## Original C++ shape
 
 The historical code separated responsibilities in two layers:

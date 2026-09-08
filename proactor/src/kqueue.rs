@@ -352,7 +352,7 @@ impl KqueuePort {
                     // per connection.
                     Ok(AcceptTransfer {
                         new_fd,
-                        peer: crate::io_port::peer_addr_from_storage(&storage, len),
+                        peer: crate::sockaddr::peer_addr_from_storage(&storage, len),
                     })
                 } else {
                     Err(io::Error::last_os_error())
@@ -814,7 +814,7 @@ impl IoPort for KqueuePort {
                 // non-IP peer and drop `new_fd` unclosed.
                 Ok(AcceptTransfer {
                     new_fd,
-                    peer: crate::io_port::peer_addr_from_storage(&storage, len),
+                    peer: crate::sockaddr::peer_addr_from_storage(&storage, len),
                 })
             } else {
                 Err(err)

@@ -15,6 +15,8 @@ mod iocp;
     target_os = "dragonfly"
 ))]
 mod kqueue;
+#[cfg(unix)]
+mod sockaddr;
 #[cfg(target_os = "linux")]
 mod uring;
 
