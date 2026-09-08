@@ -171,11 +171,14 @@ pub(crate) fn peer_addr_from_storage(
     storage: &libc::sockaddr_storage,
     len: libc::socklen_t,
 ) -> PeerAddr {
-    // Widen rather than cast: `sa_family_t` is `u16` on Linux but `u8` on
-    // macOS and the BSDs, so `as u16` is redundant on one and required on
-    // the other -- and clippy's `unnecessary_cast` fires on whichever
-    // platform it happens to be redundant on. `u16::from` is correct on
-    // both.
+    // `sa_family_t` is `u16` on Linux but `u8` on macOS and the BSDs, so
+    // there is no single expression clippy accepts everywhere: `as u16`
+    // trips `unnecessary_cast` on Linux, and `u16::from` trips
+    // `useless_conversion` there instead. Each lint is right for its own
+    // platform; the widening is genuinely needed on the other. Allowed
+    // rather than cfg-split, which would be six lines of noise for one
+    // widening.
+    #[allow(clippy::useless_conversion)]
     let family = u16::from(storage.ss_family);
 
     if family == libc::AF_UNIX as u16 {
