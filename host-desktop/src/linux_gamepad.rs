@@ -187,10 +187,16 @@ fn is_gamepad(event_name: &str) -> bool {
     capability_bit_set(&capabilities, BTN_SOUTH as usize)
 }
 
-struct GamepadDevice {
-    id: u32,
-    path: PathBuf,
-    file: File,
+/// One pad's accumulated state, and the whole decode of evdev's event
+/// stream into it.
+///
+/// Deliberately owns no file descriptor. Everything about *interpreting* a
+/// pad — which code is which button, how an axis normalizes, when a press
+/// edge appears and expires — is decided here, so it can be driven by
+/// synthetic `input_event` bytes in a test rather than only by a controller
+/// somebody has to be holding.
+#[derive(Default)]
+struct PadState {
     ranges: HashMap<u16, AbsRange>,
     left_stick: PointF,
     right_stick: PointF,
@@ -198,6 +204,13 @@ struct GamepadDevice {
     right_trigger: f32,
     held: Vec<GamepadButton>,
     pressed: Vec<GamepadButton>,
+}
+
+struct GamepadDevice {
+    id: u32,
+    path: PathBuf,
+    file: File,
+    state: PadState,
 }
 
 impl GamepadDevice {
@@ -217,16 +230,34 @@ impl GamepadDevice {
             id,
             path,
             file,
-            ranges,
-            left_stick: PointF { x: 0.0, y: 0.0 },
-            right_stick: PointF { x: 0.0, y: 0.0 },
-            left_trigger: 0.0,
-            right_trigger: 0.0,
-            held: Vec::new(),
-            pressed: Vec::new(),
+            state: PadState {
+                ranges,
+                ..PadState::default()
+            },
         })
     }
 
+    /// Drains everything the kernel has queued. Returns `false` when the
+    /// device has gone away and should be dropped.
+    fn drain(&mut self, event_bytes: usize, value_offset: usize) -> bool {
+        let mut buffer = [0u8; 512];
+        loop {
+            match self.file.read(&mut buffer) {
+                Ok(0) => return true,
+                Ok(read) => self
+                    .state
+                    .apply_encoded(&buffer[..read], event_bytes, value_offset),
+                Err(err) if err.kind() == ErrorKind::WouldBlock => return true,
+                Err(err) if err.kind() == ErrorKind::Interrupted => {}
+                // ENODEV on unplug, and anything else is equally unrecoverable
+                // for a device node that has stopped answering.
+                Err(_) => return false,
+            }
+        }
+    }
+}
+
+impl PadState {
     fn hold(&mut self, button: GamepadButton) {
         if !self.held.contains(&button) {
             self.held.push(button);
@@ -303,40 +334,30 @@ impl GamepadDevice {
         }
     }
 
-    /// Drains everything the kernel has queued. Returns `false` when the
-    /// device has gone away and should be dropped.
-    fn drain(&mut self, event_bytes: usize, value_offset: usize) -> bool {
-        let mut buffer = [0u8; 512];
-        loop {
-            match self.file.read(&mut buffer) {
-                Ok(0) => return true,
-                Ok(read) => {
-                    for chunk in buffer[..read].chunks_exact(event_bytes) {
-                        let kind =
-                            u16::from_ne_bytes([chunk[value_offset], chunk[value_offset + 1]]);
-                        let code =
-                            u16::from_ne_bytes([chunk[value_offset + 2], chunk[value_offset + 3]]);
-                        let value = i32::from_ne_bytes([
-                            chunk[value_offset + 4],
-                            chunk[value_offset + 5],
-                            chunk[value_offset + 6],
-                            chunk[value_offset + 7],
-                        ]);
-                        self.apply_event(kind, code, value);
-                    }
-                }
-                Err(err) if err.kind() == ErrorKind::WouldBlock => return true,
-                Err(err) if err.kind() == ErrorKind::Interrupted => {}
-                // ENODEV on unplug, and anything else is equally unrecoverable
-                // for a device node that has stopped answering.
-                Err(_) => return false,
-            }
+    /// Decodes a buffer of `input_event` records and applies each one.
+    ///
+    /// The records are byte-sliced rather than transmuted: the layout is
+    /// `struct timeval` followed by `__u16 type`, `__u16 code`, `__s32
+    /// value`, and `value_offset` is where that trailing 8-byte tail
+    /// begins. A trailing partial record cannot happen — the kernel writes
+    /// whole events — and `chunks_exact` drops one if it ever did.
+    fn apply_encoded(&mut self, buffer: &[u8], event_bytes: usize, value_offset: usize) {
+        for chunk in buffer.chunks_exact(event_bytes) {
+            let kind = u16::from_ne_bytes([chunk[value_offset], chunk[value_offset + 1]]);
+            let code = u16::from_ne_bytes([chunk[value_offset + 2], chunk[value_offset + 3]]);
+            let value = i32::from_ne_bytes([
+                chunk[value_offset + 4],
+                chunk[value_offset + 5],
+                chunk[value_offset + 6],
+                chunk[value_offset + 7],
+            ]);
+            self.apply_event(kind, code, value);
         }
     }
 
-    fn snapshot(&self) -> GamepadSnapshot {
+    fn snapshot(&self, id: u32) -> GamepadSnapshot {
         GamepadSnapshot {
-            id: self.id,
+            id,
             connected: true,
             left_stick: GamepadStick {
                 raw: self.left_stick,
@@ -421,7 +442,11 @@ impl GamepadTracker {
         let value_offset = event_bytes - 8;
         let mut departed = Vec::new();
         for device in &mut self.devices {
-            device.pressed.clear();
+            // Press edges expire on the poll that follows the one which
+            // reported them. Since `capture_frame` is the only caller, that
+            // makes an edge belong to exactly one read of the input — the
+            // same lifetime `key_events` has.
+            device.state.pressed.clear();
             if !device.drain(event_bytes, value_offset) {
                 departed.push(device.id);
             }
@@ -431,7 +456,7 @@ impl GamepadTracker {
             .devices
             .iter()
             .filter(|device| !departed.contains(&device.id))
-            .map(GamepadDevice::snapshot)
+            .map(|device| device.state.snapshot(device.id))
             .collect();
         self.devices.retain(|device| !departed.contains(&device.id));
         snapshots.extend(departed.into_iter().map(GamepadSnapshot::cleared));
@@ -441,8 +466,141 @@ impl GamepadTracker {
 
 #[cfg(test)]
 mod tests {
-    use super::{button_for_code, capability_bit_set, AbsRange, BTN_SOUTH};
+    use super::{
+        button_for_code, capability_bit_set, AbsRange, PadState, ABS_HAT0X, ABS_HAT0Y, ABS_RZ,
+        ABS_Y, BTN_SOUTH, BTN_TR, EV_ABS, EV_KEY,
+    };
     use loadngo_host_core::GamepadButton;
+
+    /// Byte layout of one `input_event` on this target, matching what
+    /// `GamepadTracker` computes at runtime.
+    fn event_bytes() -> usize {
+        std::mem::size_of::<libc::timeval>() + 8
+    }
+
+    /// Encodes events exactly as the kernel writes them, so the tests below
+    /// exercise the real byte-slicing and not a shortcut around it.
+    fn encode(events: &[(u16, u16, i32)]) -> Vec<u8> {
+        let size = event_bytes();
+        let mut bytes = Vec::with_capacity(size * events.len());
+        for (kind, code, value) in events {
+            // The timeval is ignored by the decoder; fill it with a value
+            // that is not zero so a decoder reading the wrong offset would
+            // produce obvious nonsense rather than a plausible zero.
+            bytes.extend(std::iter::repeat_n(0xa5, size - 8));
+            bytes.extend_from_slice(&kind.to_ne_bytes());
+            bytes.extend_from_slice(&code.to_ne_bytes());
+            bytes.extend_from_slice(&value.to_ne_bytes());
+        }
+        bytes
+    }
+
+    /// A pad whose axes report unsigned bytes, like a DualSense.
+    fn byte_ranged_pad() -> PadState {
+        let mut pad = PadState::default();
+        for code in [0x00, 0x01, 0x02, 0x03, 0x04, 0x05] {
+            pad.ranges.insert(
+                code,
+                AbsRange {
+                    minimum: 0,
+                    maximum: 255,
+                },
+            );
+        }
+        pad
+    }
+
+    fn feed(pad: &mut PadState, events: &[(u16, u16, i32)]) {
+        let size = event_bytes();
+        pad.apply_encoded(&encode(events), size, size - 8);
+    }
+
+    #[test]
+    fn a_real_event_record_decodes_into_a_button_press_that_expires_after_one_poll() {
+        let mut pad = byte_ranged_pad();
+        feed(&mut pad, &[(EV_KEY, BTN_SOUTH, 1)]);
+        let snapshot = pad.snapshot(0);
+        assert_eq!(snapshot.buttons_down, vec![GamepadButton::South]);
+        assert_eq!(snapshot.buttons_pressed, vec![GamepadButton::South]);
+
+        // What `poll` does between reads: the edge goes, the hold stays.
+        pad.pressed.clear();
+        let snapshot = pad.snapshot(0);
+        assert_eq!(snapshot.buttons_down, vec![GamepadButton::South]);
+        assert!(snapshot.buttons_pressed.is_empty());
+
+        feed(&mut pad, &[(EV_KEY, BTN_SOUTH, 0)]);
+        assert!(pad.snapshot(0).buttons_down.is_empty());
+    }
+
+    #[test]
+    fn autorepeat_does_not_manufacture_a_second_press_edge() {
+        let mut pad = byte_ranged_pad();
+        feed(&mut pad, &[(EV_KEY, BTN_TR, 1)]);
+        pad.pressed.clear();
+        // value 2 is the kernel's autorepeat.
+        feed(&mut pad, &[(EV_KEY, BTN_TR, 2)]);
+        let snapshot = pad.snapshot(0);
+        assert_eq!(snapshot.buttons_down, vec![GamepadButton::RightShoulder]);
+        assert!(snapshot.buttons_pressed.is_empty());
+    }
+
+    #[test]
+    fn pushing_the_stick_up_reports_negative_y() {
+        // The contract `GamepadStick` documents, and the one thing a
+        // backend can get exactly backwards while looking fine. evdev
+        // reports up as the *low* end of ABS_Y, so no negation is correct.
+        let mut pad = byte_ranged_pad();
+        feed(&mut pad, &[(EV_ABS, ABS_Y, 0)]);
+        assert!(pad.snapshot(0).left_stick.raw.y < -0.9);
+
+        feed(&mut pad, &[(EV_ABS, ABS_Y, 255)]);
+        assert!(pad.snapshot(0).left_stick.raw.y > 0.9);
+    }
+
+    #[test]
+    fn a_hat_axis_produces_the_same_dpad_buttons_as_a_pad_with_dpad_keys() {
+        let mut pad = byte_ranged_pad();
+        feed(&mut pad, &[(EV_ABS, ABS_HAT0Y, -1)]);
+        assert_eq!(pad.snapshot(0).buttons_down, vec![GamepadButton::DPadUp]);
+
+        // Returning to centre releases it without leaving the opposite
+        // direction stuck on.
+        feed(&mut pad, &[(EV_ABS, ABS_HAT0Y, 0)]);
+        assert!(pad.snapshot(0).buttons_down.is_empty());
+
+        feed(&mut pad, &[(EV_ABS, ABS_HAT0X, 1)]);
+        assert_eq!(pad.snapshot(0).buttons_down, vec![GamepadButton::DPadRight]);
+    }
+
+    #[test]
+    fn a_trigger_sweeps_continuously_and_is_never_reported_as_a_button() {
+        let mut pad = byte_ranged_pad();
+        feed(&mut pad, &[(EV_ABS, ABS_RZ, 128)]);
+        let snapshot = pad.snapshot(0);
+        assert!((snapshot.right_trigger.raw - 0.5).abs() < 0.01);
+        assert!(snapshot.buttons_down.is_empty());
+    }
+
+    #[test]
+    fn several_events_in_one_read_are_all_applied() {
+        // The kernel delivers a burst per read; decoding only the first
+        // would look like a laggy pad rather than a broken one.
+        let mut pad = byte_ranged_pad();
+        feed(
+            &mut pad,
+            &[
+                (EV_KEY, BTN_SOUTH, 1),
+                (EV_ABS, ABS_Y, 0),
+                (EV_ABS, ABS_RZ, 255),
+                (0x00, 0x00, 0), // EV_SYN, which carries no state
+            ],
+        );
+        let snapshot = pad.snapshot(0);
+        assert_eq!(snapshot.buttons_pressed, vec![GamepadButton::South]);
+        assert!(snapshot.left_stick.raw.y < -0.9);
+        assert!((snapshot.right_trigger.raw - 1.0).abs() < 0.01);
+    }
 
     #[test]
     fn sticks_normalize_to_signed_and_triggers_to_unsigned() {

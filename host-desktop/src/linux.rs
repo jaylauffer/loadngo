@@ -13,10 +13,10 @@ use futures::executor::LocalPool;
 use futures::task::LocalSpawnExt;
 use loadngo_gfx_gles::{linux_egl::LinuxEglWindowHandles, GlesBackend};
 use loadngo_host_core::{
-    DecodedImage, FrameDemand, FrameTiming, GamepadSnapshot, HostFrame, HostKey, HostKeyEvent,
-    ImageRegistry, InputSnapshot, RenderOp, RenderTextHorizontalAlign, RenderTextLayoutMode,
-    RenderTextOverflow, RenderTextStyle, RenderTextVerticalAlign, RenderTextVerticalMetricMode,
-    SurfaceInfo, TextMetrics, WindowDescriptor, WindowIconSet,
+    DecodedImage, FrameDemand, FrameTiming, HostFrame, HostKey, HostKeyEvent, ImageRegistry,
+    InputSnapshot, RenderOp, RenderTextHorizontalAlign, RenderTextLayoutMode, RenderTextOverflow,
+    RenderTextStyle, RenderTextVerticalAlign, RenderTextVerticalMetricMode, SurfaceInfo,
+    TextMetrics, WindowDescriptor, WindowIconSet,
 };
 use loadngo_proactor::{CompletionKind, IoUringPort};
 use loadngo_renderer::{FrameCommand, ImageRequest, Renderer, RendererConfig, TextRequest};
@@ -186,10 +186,7 @@ impl Default for PendingInput {
 }
 
 impl PendingInput {
-    /// Gamepad state is passed in rather than held on `PendingInput` because
-    /// it is polled from evdev once per frame, not accumulated from winit
-    /// events like everything else here.
-    fn snapshot(&self, gamepads: Vec<GamepadSnapshot>) -> InputSnapshot {
+    fn snapshot(&self) -> InputSnapshot {
         InputSnapshot {
             mouse_x: self.mouse_x,
             mouse_y: self.mouse_y,
@@ -211,7 +208,9 @@ impl PendingInput {
             key_events: self.key_events.clone(),
             keys_down: self.keys_down.clone(),
             typed_text: self.typed_text.clone(),
-            gamepads,
+            // Gamepads do not come from winit events like everything else
+            // here; `capture_frame` polls evdev and fills them in.
+            gamepads: Vec::new(),
         }
     }
 
@@ -266,7 +265,7 @@ impl Default for HostSharedState {
                     width: 1280.0,
                     height: 720.0,
                 },
-                input: PendingInput::default().snapshot(Vec::new()),
+                input: PendingInput::default().snapshot(),
                 foreground: true,
                 insets: loadngo_host_core::SafeAreaInsets::default(),
             },
@@ -465,6 +464,14 @@ pub fn launch(
 
 pub fn capture_frame() -> HostFrame {
     let mut state = lock_state();
+    // Polled here, as part of building the frame the caller is about to
+    // read, rather than when the frame is published — the same place macOS
+    // polls, and for the same reason every other transient below is cleared
+    // here. A press edge belongs to the *read*, not to the frame: a caller
+    // that reads twice must not see the same edge twice (that live-locked
+    // sng-roguelite's achievements screen), and a caller that misses a
+    // published frame must not lose a button press it never saw.
+    state.latest_frame.input.gamepads = state.gamepads.poll();
     let frame = state.latest_frame.clone();
     state.pending_input.clear_transient();
     state.latest_frame.input.mouse_wheel_x = 0.0;
@@ -1268,13 +1275,12 @@ fn advance_frame_clock(state: &mut HostSharedState, source: &str) {
     let now = Instant::now();
     let dt = now.saturating_duration_since(state.last_frame_instant);
     state.last_frame_instant = now;
-    let gamepads = state.gamepads.poll();
     state.latest_frame = HostFrame {
         timing: FrameTiming {
             delta_seconds: dt.as_secs_f32().max(1.0 / 240.0),
         },
         surface: state.latest_frame.surface,
-        input: state.pending_input.snapshot(gamepads),
+        input: state.pending_input.snapshot(),
         foreground: true,
         insets: loadngo_host_core::SafeAreaInsets::default(),
     };

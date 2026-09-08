@@ -145,43 +145,43 @@ shadow of the analog triggers — are deliberately left unmapped, since
 running the game must be in the `input` group. No elevation, no udev rule
 is shipped; a pad simply does not appear for a user outside that group.
 
-### Where a press edge is consumed — the two backends differ
+### A press edge belongs to the read, not to the frame
 
-**This is a live trap, found the hard way on 2026-09-09.** Linux polls in
-`advance_frame_clock`, i.e. **once per published frame**, so a frame's
-`buttons_pressed` is stable no matter how many times `capture_frame()` is
-called on it. macOS polls inside `capture_frame()` itself, so the *second*
-capture of the same host frame reports an empty `buttons_pressed` — the
-edge has been silently consumed.
+**Found the hard way on 2026-09-09, and worth stating as a rule.** Every
+transient on `InputSnapshot` — mouse wheel and click edges, `key_events`,
+`typed_text` — is consumed by `capture_frame()` on both backends. Read a
+frame twice and the second read sees no keystrokes, by design: an edge
+belongs to the *read*, not to the published frame.
 
-Linux matches what `GamepadSnapshot::buttons_pressed` documents ("this-frame
-press edge, mirroring `key_events`"), and `key_events` genuinely do survive
-repeated captures. macOS is the divergent one, and its divergence is
-load-bearing by accident: it hides app-level bugs where one press edge is
-read twice.
+The first Linux gamepad backend polled in `advance_frame_clock` instead, so
+`buttons_pressed` was the one transient that survived being read. That is
+not a defensible variation, it is an inconsistency, and it cost real time:
 
-`sng-roguelite` had exactly such a bug. South both opened the achievements
-screen (confirming the run summary's Achievements button) and closed it,
-and its frame loop `continue`s to the next screen *without awaiting a new
-frame*. On macOS the second `capture_frame()` cleared the edge and the
-screen stayed open. On Linux the same edge opened and closed the screen
-forever inside one `run_until_stalled`, so the window froze at ~70% CPU
-with all input dead — not a flicker, a hard live-lock. Fixed in that game
-by arming South only after it has been seen released, the same
-release-before-arm discipline `FocusRing` already starts with.
+`sng-roguelite` opens its achievements screen with South and also closes it
+with South, on a loop that `continue`s to the next screen *without awaiting
+a frame*. On macOS the second `capture_frame()` had already consumed the
+edge, so the screen stayed open and nobody knew there was a latent bug. On
+Linux the same edge opened and closed the screen forever inside one
+`run_until_stalled` — the window froze at ~70% CPU with keyboard and mouse
+dead too, since the event loop never got back out. Not a flicker; a hard
+live-lock, found by the first person to play it with a pad.
 
-Two things follow:
+Both ends are now fixed, and both fixes were worth making:
 
-- **Any screen that can be both entered and left by the same button needs
-  release-before-arm**, on every platform. Do not rely on the host to
-  expire an edge between two reads of the same frame.
-- **The backends should be aligned**, and the direction is macOS moving its
-  poll to frame publication, not Linux moving into `capture_frame` —
-  `capture_frame()` should be idempotent, and the contract above already
-  says so. That change is not made here: it would surface this class of app
-  bug on macOS all at once, and it deserves a deliberate pass with a
-  controller attached to a Mac rather than being smuggled in as part of a
-  Linux fix.
+- **Linux polls in `capture_frame`**, where macOS already did. Beyond the
+  consistency, polling per read is what makes an edge impossible to *miss*:
+  polling per published frame loses a press whenever a caller skips a frame
+  it never read.
+- **`sng-roguelite` arms South only after seeing it released**, the same
+  release-before-arm discipline `FocusRing` and the reward draft already
+  use. Any screen that can be both entered and left by the same button
+  needs this, on every platform — the host consuming the edge makes the
+  live-lock impossible, but it does not make "one press did two things"
+  correct.
+
+The general rule for a new backend: **poll the pad as part of building the
+frame the caller asked for, and consume press edges there** — the same
+place, and at the same moment, as every other transient.
 
 ### Verifying a backend: `gamepad_harness`
 

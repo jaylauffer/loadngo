@@ -272,16 +272,25 @@ fn paint_pads(
         empty.border = Some(PANEL_EDGE);
         empty.padding = PANEL_PADDING;
         empty.paint(scene);
-        let message = if seen_any_pad {
-            "No gamepad connected now — a pad was seen earlier this session."
+        // Single-line labels here too, for the reason `paint_lines`
+        // documents: this panel came out completely blank on Linux as a
+        // text block, which reads as a broken harness rather than as an
+        // absent pad.
+        let message: &[&str] = if seen_any_pad {
+            &["No gamepad connected now — one was seen earlier."]
         } else {
-            "No gamepad connected. Plug one in; discovery is polled, so it\n\
-             may take a second to appear."
+            &[
+                "No gamepad connected.",
+                "Plug one in; discovery is polled, so it",
+                "may take a second to appear.",
+            ]
         };
-        let mut label = TextBlockModel::new(message, empty.content_rect());
-        label.style.font_size = BODY_FONT;
-        label.style.color = DIM_INK;
-        label.paint(scene);
+        paint_lines(
+            scene,
+            empty.content_rect(),
+            message.iter().copied(),
+            DIM_INK,
+        );
         return;
     }
 
