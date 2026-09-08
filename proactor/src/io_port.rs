@@ -171,7 +171,12 @@ pub(crate) fn peer_addr_from_storage(
     storage: &libc::sockaddr_storage,
     len: libc::socklen_t,
 ) -> PeerAddr {
-    let family = storage.ss_family as u16;
+    // Widen rather than cast: `sa_family_t` is `u16` on Linux but `u8` on
+    // macOS and the BSDs, so `as u16` is redundant on one and required on
+    // the other -- and clippy's `unnecessary_cast` fires on whichever
+    // platform it happens to be redundant on. `u16::from` is correct on
+    // both.
+    let family = u16::from(storage.ss_family);
 
     if family == libc::AF_UNIX as u16 {
         return PeerAddr::Unix {
@@ -215,17 +220,25 @@ fn unix_path_from_storage(
     // aligned for any address family.
     let sun = unsafe { &*std::ptr::from_ref(storage).cast::<libc::sockaddr_un>() };
 
+    // `sun_path` is `[c_char]`, which is signed on macOS/aarch64-darwin
+    // and unsigned on aarch64 Linux. Reinterpret the whole run as bytes
+    // once, instead of a per-element `as u8` that is redundant on one
+    // target and required on another.
+    //
+    // SAFETY: `c_char` and `u8` have identical size and alignment on every
+    // supported target; this changes only the signedness of the view, and
+    // the slice is not held past `sun`'s borrow.
+    let path_bytes: &[u8] = unsafe {
+        std::slice::from_raw_parts(sun.sun_path.as_ptr().cast::<u8>(), sun.sun_path.len())
+    };
+
     let path_len = (len - family_len) as usize;
-    let raw = &sun.sun_path[..path_len.min(sun.sun_path.len())];
+    let raw = &path_bytes[..path_len.min(path_bytes.len())];
     if raw.first().is_none_or(|first| *first == 0) {
         return None;
     }
 
-    let bytes: Vec<u8> = raw
-        .iter()
-        .take_while(|byte| **byte != 0)
-        .map(|byte| *byte as u8)
-        .collect();
+    let bytes: Vec<u8> = raw.iter().copied().take_while(|byte| *byte != 0).collect();
     if bytes.is_empty() {
         return None;
     }
