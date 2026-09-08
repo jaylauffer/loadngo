@@ -1,0 +1,19 @@
+[Unit]
+Description=loadngo task-node worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jay
+Group=jay
+WorkingDirectory=/home/jay/pudding/loadngo
+EnvironmentFile=/etc/loadngo/task-node.env
+ExecStart=/usr/local/bin/loadngo-task-node-launch.sh
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
