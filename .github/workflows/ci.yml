@@ -1,6 +1,6 @@
 name: CI
 
-# Runs on the self-hosted "dolores-loadngo" runner (Raspberry Pi 5, aarch64
+# Runs on any self-hosted runner advertising `build-linux-arm64` (aarch64
 # Linux). Not actions/checkout: Cargo.toml has a path dependency on a
 # sibling repo (../qcoin) that lives next to this repo under ~/pudding/ on
 # the runner. actions/checkout only ever checks out this one repo into an
@@ -29,7 +29,7 @@ name: CI
 # paths-ignore: skip entirely when every changed file is documentation --
 # a push/PR that touches at least one non-doc file still runs normally.
 # This job runs real build/test/clippy on the shared, single-machine
-# self-hosted "dolores" runner pool (also used by sng-roguelite and
+# self-hosted aarch64 runner pool (also used by sng-roguelite and
 # sng-zhoenus), so a docs-only commit queuing a full compile is wasted
 # time on a resource other repos' pushes are also waiting on.
 on:
@@ -58,14 +58,14 @@ env:
 
 jobs:
   check:
-    # "dolores" is the runner's shared custom *label* (every runner on this
-    # box was registered with --labels dolores,rpi5,arm64), not its name
-    # (dolores-loadngo). GitHub Actions matches runs-on against labels only
-    # — the runner's own name is never implicitly one, a real mismatch this
-    # workflow hit once already. Safe to share this label across repos:
-    # each runner is still repo-scoped by registration, so a loadngo job
-    # can never reach the sng-roguelite or EAB runner regardless of label.
-    runs-on: [self-hosted, dolores]
+    # Matched by *capability*, never by machine name: GitHub matches
+    # runs-on against labels only, and a runner's own name is never
+    # implicitly one — a mismatch this workflow hit once already. Any
+    # runner advertising this label can serve the job. Safe to share the
+    # label across repos: each runner is still repo-scoped by
+    # registration, so a loadngo job can never reach another repo's runner
+    # regardless of label. See ~/pudding/pi-github-runner-setup.md.
+    runs-on: [self-hosted, build-linux-arm64]
     timeout-minutes: 30
     env:
       REPO_DIR: /home/jay/pudding/loadngo
