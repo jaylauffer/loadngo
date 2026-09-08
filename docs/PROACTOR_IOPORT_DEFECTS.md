@@ -1,14 +1,46 @@
 # Proactor IoPort Defects
 
-Status: **open**, both found 2026-09-08 while migrating `starlight` onto
-`Proactor<IoUringPort>` (see that repo's `src/runtime.rs`). Neither is
-fixed. Both are recorded here rather than fixed in place because
-`loadngo-proactor` is shared by `host-desktop` and three games, and the
-second one has a public-API dimension worth deciding deliberately.
+Status: **both fixed 2026-09-08**, the same day they were found while
+migrating `starlight` onto `Proactor<IoUringPort>`. This document is kept
+as the record of what was wrong and why the fixes took the shape they
+did; the "Suggested fix" sections below became the actual fixes.
 
-Neither defect is hypothetical: the first one silently broke starlight's
-thermal socket on real hardware, and the second is the reason starlight
-does not use `IoPort::accept` at all.
+Neither defect was hypothetical: the first silently broke starlight's
+thermal socket on real hardware, and the second was the reason starlight
+originally avoided `IoPort::accept` entirely.
+
+**What changed**
+
+| | fix |
+| --- | --- |
+| 1. reserved readiness tokens | `ProactorHandle::register_readable` rejects [`RESERVED_READINESS_TOKENS`] (`[1, 2]`) with `InvalidInput`, on every backend rather than only io_uring |
+| 2. accept descriptor leak | `AcceptTransfer::peer` became the `PeerAddr` enum; `accept` now always returns the descriptor, whatever the address family |
+
+**Verification** — all four backends, since the leak was in all four:
+
+| backend | how |
+| --- | --- |
+| `KqueuePort` | 10/10 tests on macmini, including two new ones |
+| `IoUringPort` | 11/11 tests on `dolores`, including two new ones |
+| `EpollPort` | `clippy --target aarch64-linux-android -D warnings` |
+| `IocpPort` | `clippy --target x86_64-pc-windows-msvc -D warnings` |
+
+Plus the full CI-equivalent gate on `dolores` (`cargo fmt --check`, and
+`clippy`/`test --workspace --all-targets --all-features` with
+`PLATFORM_EXCLUDES`), all clean.
+
+Six regression tests were added, two per Unix backend, and both fail
+against the previous code.
+
+**Two portability traps surfaced while fixing this**, both caught by
+`dolores` after macmini was clean, and both worth remembering:
+
+- `uring.rs` needed a `PeerAddr` import that macOS never compiles, so the
+  local clippy run was clean and wrong;
+- `sa_family_t` is `u16` on Linux and `u8` on macOS/BSD, and `c_char` is
+  unsigned on aarch64 Linux but signed on darwin. There is no cast form
+  clippy accepts on both — `as u16` trips `unnecessary_cast` on one,
+  `u16::from` trips `useless_conversion` on the other.
 
 ---
 
