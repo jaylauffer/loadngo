@@ -94,6 +94,58 @@ through CoreText rather than a glyph loop, so it does not share the walk the
 software rasterizers do. Folding it in would mean giving it the same
 measurement closure shape — worth doing, not done here.
 
+## Fitting is a binary search
+
+`fit_text_to_width` binary-searches the longest prefix (or the fewest
+characters removed from the middle) that fits, rather than growing a
+candidate one character at a time. A 512-character line costs on the order of
+`log2(512)` measurements instead of one per surviving character — for
+CoreText that is the difference between roughly seven `CTLine` constructions
+and ninety. A test asserts the measurement count stays under 24 for that
+line, so a regression to linear scanning fails rather than merely slowing
+down.
+
+The search assumes width is monotonic in prefix length. Kerning can violate
+that by sub-pixel amounts, so a repair pass walks off any error afterwards.
+In practice it runs zero times; its pathological worst case is the linear
+scan this replaced, so the search can never be worse than what came before.
+A test with a deliberately non-monotonic measurement covers it.
+
+Fitting runs on a **texture-cache miss**, not per frame — `cached_text_raster`
+on Metal and `rasterize_text_command` on Android both fit behind their cache
+key. Cost is therefore per distinct rendered string. Strings carrying live
+values (a health counter, a timer) do churn their keys, so that is where any
+fitting cost concentrates.
+
+## The conformance suite, and its one blind spot
+
+`text_overflow::conformance::assert_fitting_conformance` asserts, for a
+spread of widths and every overflow mode, that: fitted text measures within
+the width it was fitted to; truncation always leaves a visible ellipsis;
+`Clip` never alters the string; fitting is idempotent; and surviving text
+appears in the original in the original order.
+
+Backend text paths are `#[cfg(target_os = ...)]`, so no single run covers all
+of them. `conformance_holds_for_this_platforms_text_backend` runs the suite
+against whatever backend the build compiled, so macOS exercises CoreText,
+Linux and Windows exercise `fontdue`, and Android would on a device. One
+test, a different implementation under it per CI job.
+
+**What it cannot see:** the suite uses one measurement closure for both
+fitting and checking, so it is self-consistent by construction. It would have
+caught the first half of the Android bug — overflow not implemented at all,
+leaving text untruncated and un-ellipsized — but *not* the second half, where
+measurement disagreed with rasterization. Nothing that only measures can
+detect that.
+
+Closing that gap means a raster-level check: draw into a surface, find the
+rightmost lit pixel, assert it falls within the measured width. That is
+feasible for the software backends (`linux.rs` and `windows.rs` rasterize
+into a plain buffer; Android into a texture) and is the natural next step.
+Until then, Android's measurement and drawing agree *by construction* —
+`line_rendered_width` exists precisely so there is one walk rather than two —
+and the assurance beyond that is a screenshot.
+
 ## Rules going forward
 
 1. **A text feature is added to every backend or none.** A field on
