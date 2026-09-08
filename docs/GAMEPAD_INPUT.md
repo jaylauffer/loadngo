@@ -145,6 +145,44 @@ shadow of the analog triggers — are deliberately left unmapped, since
 running the game must be in the `input` group. No elevation, no udev rule
 is shipped; a pad simply does not appear for a user outside that group.
 
+### Where a press edge is consumed — the two backends differ
+
+**This is a live trap, found the hard way on 2026-09-09.** Linux polls in
+`advance_frame_clock`, i.e. **once per published frame**, so a frame's
+`buttons_pressed` is stable no matter how many times `capture_frame()` is
+called on it. macOS polls inside `capture_frame()` itself, so the *second*
+capture of the same host frame reports an empty `buttons_pressed` — the
+edge has been silently consumed.
+
+Linux matches what `GamepadSnapshot::buttons_pressed` documents ("this-frame
+press edge, mirroring `key_events`"), and `key_events` genuinely do survive
+repeated captures. macOS is the divergent one, and its divergence is
+load-bearing by accident: it hides app-level bugs where one press edge is
+read twice.
+
+`sng-roguelite` had exactly such a bug. South both opened the achievements
+screen (confirming the run summary's Achievements button) and closed it,
+and its frame loop `continue`s to the next screen *without awaiting a new
+frame*. On macOS the second `capture_frame()` cleared the edge and the
+screen stayed open. On Linux the same edge opened and closed the screen
+forever inside one `run_until_stalled`, so the window froze at ~70% CPU
+with all input dead — not a flicker, a hard live-lock. Fixed in that game
+by arming South only after it has been seen released, the same
+release-before-arm discipline `FocusRing` already starts with.
+
+Two things follow:
+
+- **Any screen that can be both entered and left by the same button needs
+  release-before-arm**, on every platform. Do not rely on the host to
+  expire an edge between two reads of the same frame.
+- **The backends should be aligned**, and the direction is macOS moving its
+  poll to frame publication, not Linux moving into `capture_frame` —
+  `capture_frame()` should be idempotent, and the contract above already
+  says so. That change is not made here: it would surface this class of app
+  bug on macOS all at once, and it deserves a deliberate pass with a
+  controller attached to a Mac rather than being smuggled in as part of a
+  Linux fix.
+
 ### Verifying a backend: `gamepad_harness`
 
 `host-desktop/src/bin/gamepad_harness.rs` shows every connected pad's live
