@@ -155,9 +155,10 @@ like on 2026-08-30.
    fixable bug (a leaking command list), not a GPU/compositor issue —
    resolved same-day, plus the identical bug found and fixed in the
    Windows backend along the way.
-3. **Finding 3 (gamepad abstraction) — macOS backend done (2026-09-07)**,
-   Windows and Linux backends still not started. See
-   [GAMEPAD_INPUT.md](GAMEPAD_INPUT.md) for the design and current status.
+3. **Finding 3 (gamepad abstraction) — macOS backend done (2026-09-07),
+   Linux `evdev` backend done (2026-09-09)**, Windows still not started.
+   See [GAMEPAD_INPUT.md](GAMEPAD_INPUT.md) for the design and current
+   status.
 
 ## Explicitly not decided yet
 

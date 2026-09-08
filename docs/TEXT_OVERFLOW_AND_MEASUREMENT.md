@@ -163,3 +163,33 @@ and the assurance beyond that is a screenshot.
 4. **Suspect measurement when fitted text still overflows.** If a string was
    trimmed to fit and is still clipped, the fitter is not wrong — the
    measurement it trusted is.
+
+## Open defect: multi-line blocks drop their leading lines on Linux
+
+Found 2026-09-09 while building `gamepad_harness`, whose notes panel came
+out missing its first paragraph. The instinct was that the new harness had
+laid it out wrong; the check that settled it was running the *untouched*
+`text_input_harness` on the same machine (dolores, Wayland/labwc via
+Xwayland, GLES backend) and screenshotting it: its notes panel is missing
+"Purpose" and the two lines under it too, and has been all along.
+
+So a `TextBlockModel` — `TextLayoutMode::MultiLine`, top-aligned,
+`TextOverflow::Clip` — silently loses its leading lines on the Linux
+backend. In one observed case the surviving lines were also shifted left of
+the block's rect, so the block appears to be positioned from something
+other than its own bounds rather than merely clipped. Short blocks (the
+three-line stick captions in the same harness) render correctly, so it is
+not every multi-line block.
+
+Not yet diagnosed, and deliberately not fixed inside the gamepad work.
+Two things follow for now:
+
+- Treat a suspicious multi-line block on Linux as this bug until proven
+  otherwise, and compare against `text_input_harness` before blaming new
+  code — that comparison cost one build and one screenshot here.
+- A panel that must read correctly today can draw its lines as individual
+  single-line labels, which are correct on every backend. `gamepad_harness`
+  does exactly that, with a comment pointing back here.
+
+This is also rule 3 arriving from the other direction: the screenshot did
+not just catch the bug, it identified whose bug it was.

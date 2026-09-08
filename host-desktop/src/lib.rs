@@ -29,6 +29,8 @@ mod fallback;
 mod ios;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+mod linux_gamepad;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "netbsd")]

@@ -13,10 +13,10 @@ use futures::executor::LocalPool;
 use futures::task::LocalSpawnExt;
 use loadngo_gfx_gles::{linux_egl::LinuxEglWindowHandles, GlesBackend};
 use loadngo_host_core::{
-    DecodedImage, FrameDemand, FrameTiming, HostFrame, HostKey, HostKeyEvent, ImageRegistry,
-    InputSnapshot, RenderOp, RenderTextHorizontalAlign, RenderTextLayoutMode, RenderTextOverflow,
-    RenderTextStyle, RenderTextVerticalAlign, RenderTextVerticalMetricMode, SurfaceInfo,
-    TextMetrics, WindowDescriptor, WindowIconSet,
+    DecodedImage, FrameDemand, FrameTiming, GamepadSnapshot, HostFrame, HostKey, HostKeyEvent,
+    ImageRegistry, InputSnapshot, RenderOp, RenderTextHorizontalAlign, RenderTextLayoutMode,
+    RenderTextOverflow, RenderTextStyle, RenderTextVerticalAlign, RenderTextVerticalMetricMode,
+    SurfaceInfo, TextMetrics, WindowDescriptor, WindowIconSet,
 };
 use loadngo_proactor::{CompletionKind, IoUringPort};
 use loadngo_renderer::{FrameCommand, ImageRequest, Renderer, RendererConfig, TextRequest};
@@ -37,6 +37,7 @@ use winit::raw_window_handle::{
 };
 use winit::window::{Icon, Window, WindowAttributes, WindowId};
 
+use crate::linux_gamepad::GamepadTracker;
 use crate::proactor_driver::HostProactor;
 
 #[derive(Clone)]
@@ -134,6 +135,7 @@ struct HostSharedState {
     backend_detail: String,
     event_proxy: Option<EventLoopProxy<LinuxUserEvent>>,
     next_frame_wakers: Vec<Waker>,
+    gamepads: GamepadTracker,
 }
 
 #[derive(Clone)]
@@ -184,7 +186,10 @@ impl Default for PendingInput {
 }
 
 impl PendingInput {
-    fn snapshot(&self) -> InputSnapshot {
+    /// Gamepad state is passed in rather than held on `PendingInput` because
+    /// it is polled from evdev once per frame, not accumulated from winit
+    /// events like everything else here.
+    fn snapshot(&self, gamepads: Vec<GamepadSnapshot>) -> InputSnapshot {
         InputSnapshot {
             mouse_x: self.mouse_x,
             mouse_y: self.mouse_y,
@@ -206,7 +211,7 @@ impl PendingInput {
             key_events: self.key_events.clone(),
             keys_down: self.keys_down.clone(),
             typed_text: self.typed_text.clone(),
-            gamepads: Vec::new(),
+            gamepads,
         }
     }
 
@@ -261,7 +266,7 @@ impl Default for HostSharedState {
                     width: 1280.0,
                     height: 720.0,
                 },
-                input: PendingInput::default().snapshot(),
+                input: PendingInput::default().snapshot(Vec::new()),
                 foreground: true,
                 insets: loadngo_host_core::SafeAreaInsets::default(),
             },
@@ -282,6 +287,7 @@ impl Default for HostSharedState {
             backend_detail: "Linux host waiting for the first frame".to_string(),
             event_proxy: None,
             next_frame_wakers: Vec::new(),
+            gamepads: GamepadTracker::new(),
         }
     }
 }
@@ -1262,12 +1268,13 @@ fn advance_frame_clock(state: &mut HostSharedState, source: &str) {
     let now = Instant::now();
     let dt = now.saturating_duration_since(state.last_frame_instant);
     state.last_frame_instant = now;
+    let gamepads = state.gamepads.poll();
     state.latest_frame = HostFrame {
         timing: FrameTiming {
             delta_seconds: dt.as_secs_f32().max(1.0 / 240.0),
         },
         surface: state.latest_frame.surface,
-        input: state.pending_input.snapshot(),
+        input: state.pending_input.snapshot(gamepads),
         foreground: true,
         insets: loadngo_host_core::SafeAreaInsets::default(),
     };

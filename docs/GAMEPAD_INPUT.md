@@ -2,9 +2,9 @@
 
 ## Status and purpose
 
-Status: **real macOS backend shipped 2026-09-07**, built against an actual DualSense (PS5 controller) connected via USB-C to a Mac Mini — the first real backend for this subsystem. Written 2026-09-05, revised same-day after a type scaffold committed earlier in the session was reverted on review, then implemented for real two days later once a physical controller was actually available to build against. This doc resolves the open questions [DESKTOP_PLATFORM_ROADMAP.md](DESKTOP_PLATFORM_ROADMAP.md)'s "Finding 3" raised on 2026-08-30 (crate placement, per-platform backend strategy, hand-roll vs. crate dependency, raw-event vs. normalized shape) and supersedes that finding as the living design doc for this subsystem going forward. It also carries forward the one concrete design consequence from [INPUT_PHILOSOPHY.md](INPUT_PHILOSOPHY.md): prefer continuous/analog representations over booleans wherever a signal is naturally continuous.
+Status: **real macOS backend shipped 2026-09-07**, built against an actual DualSense (PS5 controller) connected via USB-C to a Mac Mini — the first real backend for this subsystem. **Linux `evdev` backend shipped 2026-09-09** (`host-desktop/src/linux_gamepad.rs`), built against the same model of controller plugged into dolores, a Raspberry Pi 5 — see "Linux backend" below. Written 2026-09-05, revised same-day after a type scaffold committed earlier in the session was reverted on review, then implemented for real two days later once a physical controller was actually available to build against. This doc resolves the open questions [DESKTOP_PLATFORM_ROADMAP.md](DESKTOP_PLATFORM_ROADMAP.md)'s "Finding 3" raised on 2026-08-30 (crate placement, per-platform backend strategy, hand-roll vs. crate dependency, raw-event vs. normalized shape) and supersedes that finding as the living design doc for this subsystem going forward. It also carries forward the one concrete design consequence from [INPUT_PHILOSOPHY.md](INPUT_PHILOSOPHY.md): prefer continuous/analog representations over booleans wherever a signal is naturally continuous.
 
-Before the 2026-09-05 design pass, the only joystick-adjacent code anywhere in `loadngo` was `touch/src/joystick.rs`'s `VirtualJoystick` — an on-screen *virtual* stick for touch UI, not a physical controller input path. As of 2026-09-07, `host-core::{GamepadButton, GamepadStick, GamepadTrigger, GamepadSnapshot}` and a real `GCController`-polling backend in `host-desktop/src/macos.rs` exist and are wired into `sng-roguelite`'s gameplay input, title screen, reward draft, and terminal restart/next-seed controls (`sng-roguelite/crates/game-app/src/lib.rs`). Windows and Linux backends are still design-only — see "Platform priority and phasing" below, unchanged in substance by this revision beyond macOS now being done rather than merely first in line.
+Before the 2026-09-05 design pass, the only joystick-adjacent code anywhere in `loadngo` was `touch/src/joystick.rs`'s `VirtualJoystick` — an on-screen *virtual* stick for touch UI, not a physical controller input path. As of 2026-09-07, `host-core::{GamepadButton, GamepadStick, GamepadTrigger, GamepadSnapshot}` and a real `GCController`-polling backend in `host-desktop/src/macos.rs` exist and are wired into `sng-roguelite`'s gameplay input, title screen, reward draft, and terminal restart/next-seed controls (`sng-roguelite/crates/game-app/src/lib.rs`). Linux followed on 2026-09-09; Windows is still design-only — see "Platform priority and phasing" below, unchanged in substance by this revision beyond macOS now being done rather than merely first in line.
 
 **Same-day revision note**: the first version of this doc committed a `host-core/src/gamepad.rs` type scaffold (`GamepadSnapshot`, `GamepadButton`, deadzone helpers, a `HostFrame.gamepads` field) alongside the design writeup. On review this was reverted — it had no backend and no caller anywhere in the workspace, which is exactly the kind of speculative build-ahead-of-need this doc itself argues against elsewhere (see the `FormFactor` discussion below). The type shapes below are kept as an illustrative sketch for whoever eventually builds the first real backend, not as committed code, and two real design gaps the scaffold glossed over — where gamepad state should live, and how input-source transitions work — are corrected and addressed for the first time in this revision.
 
@@ -18,7 +18,7 @@ No `gilrs`, `sdl2`, or other cross-platform gamepad crate dependency. Consistent
 
 - **macOS: done (2026-09-07).** The `GameController` framework via `objc2-game-controller`, polled once per frame from `host-desktop/src/macos.rs`'s `capture_frame()` — `GamepadTracker::poll()` calls `GCController::controllers()` and reads each pad's `GCExtendedGamepad`, rather than registering `GCControllerDidConnectNotification`/`GCControllerDidDisconnectNotification` delegates. Poll-based was chosen because it drops straight into the existing per-frame `capture_frame()` model with no separate callback-to-frame synchronization to maintain, at the cost of connect/disconnect being detected on the next poll rather than instantly. `GCExtendedGamepad` already normalizes DualShock/DualSense/Xbox face-button layouts to one positional `buttonA`/`buttonB`/`buttonX`/`buttonY` shape, which maps directly onto `GamepadButton::South/East/West/North` with no per-brand mapping table needed on this platform. Verified against a real DualSense connected via USB-C to a Mac Mini. **Real bug found and fixed the same day this playtest surfaced it**: `GCControllerDirectionPad`'s `yAxis` reports the joystick's native up-is-positive convention, but every other y coordinate `InputSnapshot` exposes is y-down (`event_point_in_view`'s AppKit mouse-y flip is the existing precedent) — both thumbsticks were inverted (up moved down, down moved up) until `read_extended_gamepad` started negating `yAxis().value()` before storing it in `GamepadStick::raw`.
 - **Windows**: `XInput` first — it covers Xbox controllers and most third-party pads with the least integration cost — with `DirectInput` as a later fallback for older or non-XInput devices. Still design-only.
-- **Linux**: `evdev`/`udev` directly, no `gilrs` dependency, consistent with the project's existing preference for owning raw platform integration (mirrors how `host-desktop/src/netbsd_wsdesktop.rs`/`netbsd_wsdisplay.rs` already talk to `wsdisplay`/`wsmouse` device nodes directly rather than through an abstraction crate). Still design-only.
+- **Linux**: `evdev`/`udev` directly, no `gilrs` dependency, consistent with the project's existing preference for owning raw platform integration (mirrors how `host-desktop/src/netbsd_wsdesktop.rs`/`netbsd_wsdisplay.rs` already talk to `wsdisplay`/`wsmouse` device nodes directly rather than through an abstraction crate). **Done 2026-09-09**, `evdev` without `udev` — see below.
 
 ## Decision: normalized cross-pad shape, at the same level as mouse/keyboard/touch
 
@@ -95,9 +95,82 @@ and sound-settings screens. It still paints its own visuals (see that doc's
 theming gap), reading `focused` to draw its existing highlight treatment, so
 adopting navigation changed no existing appearance.
 
+## Linux backend (2026-09-09)
+
+`host-desktop/src/linux_gamepad.rs`, polled once per frame from
+`advance_frame_clock` the same way macOS polls from its frame publish. The
+decisions worth keeping:
+
+**evdev, not joydev.** Both device families are present for any pad
+(`/dev/input/event*` and `/dev/input/js*`). joydev hands out pre-normalized
+axes for free but reports *opaque button indices* whose meaning varies by
+driver, which would mean shipping and maintaining a per-controller quirk
+table to answer "which button is South?". evdev reports the kernel's
+semantic codes — `BTN_SOUTH`, `ABS_RX`, `ABS_HAT0Y` — which are already
+position-named in exactly the way `GamepadButton` is, so the mapping is a
+flat lookup with nothing device-specific in it. The price is one
+`EVIOCGABS` ioctl per axis to learn its range, which is the only `unsafe`
+in the module; everything else is ordinary file and sysfs reads.
+
+**A pad is not a device node.** A DualSense alone publishes four
+`/dev/input/event*` nodes: the gamepad, its motion sensors, its touchpad,
+and a headset jack. A scan that opened every node would report a touchpad
+as a second gamepad. Discovery instead reads
+`/sys/class/input/eventN/device/capabilities/key` and tests for `BTN_SOUTH`
+— the bit that actually separates a pad from its siblings. That file is a
+list of 64-bit hex words printed **most significant first**, so the words
+are reversed before indexing; a unit test pins that against the real mask a
+DualSense publishes (`7fdb000000000000 0 0 0 0`), because getting the word
+order backwards silently finds nothing rather than failing loudly.
+
+**No y-flip here, deliberately.** `GamepadStick` documents up as *negative*
+y. macOS must negate because GameController reports up as `+1`; evdev
+already reports up as the lower value on `ABS_Y`/`ABS_RY`. Adding a
+negation "to match macOS" would invert every stick on Linux — the
+symmetry to preserve is the contract, not the code.
+
+**Hotplug by polling, no udev.** evdev has no hotplug notification of its
+own, and taking a `udev` dependency to learn about a directory that can be
+listed in microseconds is not a trade worth making. `/dev/input` is
+rescanned once a second; a device that stops answering is dropped after
+exactly one `GamepadSnapshot::cleared(id)`, which is the same
+stale-state-on-disconnect discipline macOS follows above.
+
+**Triggers are not published twice.** `BTN_TL2`/`BTN_TR2` — the digital
+shadow of the analog triggers — are deliberately left unmapped, since
+`ABS_Z`/`ABS_RZ` already carry the continuous signal, per
+[INPUT_PHILOSOPHY.md](INPUT_PHILOSOPHY.md).
+
+**Access.** `/dev/input/event*` is `root:input` mode `0660`, so the user
+running the game must be in the `input` group. No elevation, no udev rule
+is shipped; a pad simply does not appear for a user outside that group.
+
+### Verifying a backend: `gamepad_harness`
+
+`host-desktop/src/bin/gamepad_harness.rs` shows every connected pad's live
+state — sticks as dots in their travel circles with raw and deadzone-shaped
+numbers, triggers as bars, one chip per button lighting green while held
+and amber on the press edge, plus a short log of press edges (a one-frame
+edge is otherwise impossible to read). It uses only the public host API, so
+it runs on any backend that fills `InputSnapshot::gamepads`.
+
+This exists because gamepad state is the one input modality with no visible
+trace on screen by default: an inverted axis, a mismapped button, or a
+backend returning nothing at all are indistinguishable from "the game
+ignored me". The unit tests can pin the arithmetic and the constants; only
+hardware can confirm the pad in your hands is understood.
+
+Its notes panel draws each line as its own single-line label rather than as
+one `TextBlockModel`. That is a workaround, not a preference: on the Linux
+backend today a multi-line text block drops its leading lines, reproducible
+in the untouched `text_input_harness`, whose "Purpose" paragraph is missing
+on Linux while rendering fine elsewhere. A harness whose own instructions
+render wrong is worse than no harness, so it avoids the path that is
+currently broken. Revert it to a text block once that defect is fixed.
+
 ## Platform priority and phasing
 
-**Tier 1 — desktop (macOS, Windows, Linux), highest priority.** The three platforms named above, each with its own named API. **macOS done (2026-09-07)**; Windows and Linux still design-only.
+**Tier 1 — desktop (macOS, Windows, Linux), highest priority.** The three platforms named above, each with its own named API. **macOS done (2026-09-07)**, **Linux done (2026-09-09)**; Windows still design-only.
 
 **Tier 2 — mobile with a physical controller (clip-on or wireless).** `sng-roguelite`, `sng-rusty`, and `sng-zhoenus` already ship Android builds today (some also iOS), so this tier rides app/runtime infrastructure that already exists, unlike the access-gated tiers below. A physical controller reaches a phone or tablet two ways: a clip-on adapter that clamps directly onto the device (Razer Kishi, Backbone One, GameSir X2/X3, 8BitDo, PowerA MOGA, and similar), or a standalone pad (an Xbox or PlayStation controller, for instance) paired over Bluetooth or USB independently of any clip. Both arrive at the OS the same way, as a standard controller recognized by Android's `InputDevice` gamepad APIs or iOS's `GameController` framework — the same two backends the now-superseded Finding 3 already named as mobile's counterpart to desktop, just never phased in until now. No change to the normalized shape above would be needed; a future `GamepadSnapshot` fits a clip-on or paired pad the same way it fits a desktop one.
 
@@ -111,7 +184,7 @@ Worth naming even though it doesn't change today's design: a clip-on adapter shi
 
 ## Explicitly not decided yet / non-goals
 
-- No backend implementation for Windows or Linux yet — still future work. macOS is done (2026-09-07).
+- No backend implementation for Windows yet — still future work. macOS is done (2026-09-07), Linux 2026-09-09.
 - No `FormFactor::Gamepad` variant. `touch/src/form_factor.rs`'s own doc comment states the rule directly: "grow this enum... only when a second real form factor actually exists to support... don't pre-build variants for platforms that aren't implemented yet."
 - ~~How "which input method is active" should work, for adaptive UI prompts~~ — resolved 2026-09-07, see above (`InputMethod`).
 - No connect/disconnect event type beyond a plain `connected: bool` compared across frames — the one exception being the stale-state-clearing requirement above, which is decided.
