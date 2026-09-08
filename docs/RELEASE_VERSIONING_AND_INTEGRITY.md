@@ -107,6 +107,36 @@ release manifest, verified against a known public key, would give the Linux
 path an actual authenticity guarantee for the first time, not just
 Android/iOS parity for its own sake.
 
+**What actually ships today (2026-09-08, `sng-roguelite` v0.5.9):** the
+Android APK is published to itch.io alongside a `.sha256` file so a
+downloader can check what they got. That is worth having and worth being
+precise about, because it is easy to over-read:
+
+- A checksum published *beside* the artifact, on the same storefront,
+  proves **integrity, not authenticity**. It catches a truncated or
+  corrupted download and a mirror serving the wrong file. It does not
+  resist tampering: anyone who can replace the `.apk` can replace the
+  `.sha256` next to it. That is the gap a signature closes, and it is a
+  gap *today*, independent of quantum computers.
+- **SHA-256 is not the post-quantum weak link.** Grover's algorithm gives
+  only a quadratic speedup against preimage search, so a 256-bit digest
+  retains roughly 128-bit security against a quantum adversary — which is
+  the target. What a cryptographically relevant quantum computer breaks is
+  RSA/ECDSA/Ed25519, i.e. the **signature**, not the hash. So the existing
+  `.sha256` does not need replacing; it needs *signing*.
+
+This sharpens the proposal below: the PQ work is about binding a digest to
+the project with `dilithium2`, not about changing which digest we publish.
+
+**Hash choice.** The manifest sketch below says `blake3`, and
+`loadngo-pq-auth` already exposes `sha256_file`/`sha256_bytes`. For the
+*player-facing* digest, prefer **SHA-256**: every desktop OS can check it
+with a preinstalled tool (`shasum -a 256`, `sha256sum`, `certutil
+-hashfile`), whereas blake3 requires installing something first, which
+defeats the purpose of a verification a stranger can perform. blake3 is
+the better internal choice where throughput matters (CAS lineage); there
+is no need for the two to agree.
+
 **Proposed shape (for discussion, not committed):**
 
 - A signed `release-manifest.ron` (or similar) per tag, produced by
