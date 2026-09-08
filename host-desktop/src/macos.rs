@@ -948,6 +948,7 @@ pub fn wrap_text_lines(
     lines
 }
 
+#[allow(clippy::too_many_arguments)] // public cross-platform API shared by all backend impls (linux/windows/ios/android/fallback mirror this exact signature) and consumed externally by sng-rusty - restructuring is a real breaking-API change, out of scope for a lint pass
 pub fn render_text_lines(
     lines: &[String],
     x: f32,
@@ -1546,10 +1547,7 @@ fn poll_entry_future() -> bool {
     let mut cx = Context::from_waker(&waker);
     let mut future = APP_STATE.with(|state| {
         let mut state = state.borrow_mut();
-        let Some(state) = state.as_mut() else {
-            return None;
-        };
-        state.entry_future.take()
+        state.as_mut()?.entry_future.take()
     });
 
     let Some(mut future) = future.take() else {

@@ -1659,6 +1659,9 @@ mod tests {
     }
 
     #[test]
+    // `image_resource_changed` only exists for the GLES targets; without
+    // matching gates these tests break `cargo test` on macOS entirely.
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     fn image_resource_change_detects_new_pixels_for_same_key() {
         let previous = GlesImageResource {
             width: 2,
@@ -1676,6 +1679,9 @@ mod tests {
     }
 
     #[test]
+    // `image_resource_changed` only exists for the GLES targets; without
+    // matching gates these tests break `cargo test` on macOS entirely.
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     fn image_resource_change_allows_reusing_same_pixels() {
         let rgba = Arc::<[u8]>::from(vec![3u8; 16]);
         let previous = GlesImageResource {
@@ -1694,6 +1700,9 @@ mod tests {
     }
 
     #[test]
+    // `image_resource_changed` only exists for the GLES targets; without
+    // matching gates these tests break `cargo test` on macOS entirely.
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     fn image_resource_change_allows_rebuilt_pixels_for_same_identity() {
         let previous = GlesImageResource {
             width: 2,

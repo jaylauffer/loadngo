@@ -2238,41 +2238,12 @@ fn apply_overflow(
     max_width: f32,
     overflow: RenderTextOverflow,
 ) -> String {
-    if measure_text_impl(text, font, font_size, 1.0).width <= max_width {
-        return text.to_string();
-    }
-    match overflow {
-        RenderTextOverflow::Clip => text.to_string(),
-        RenderTextOverflow::EllipsisMiddle => {
-            let chars: Vec<char> = text.chars().collect();
-            let mut left = chars.len() / 2;
-            let mut right = left;
-            while left > 0 && right < chars.len() {
-                let candidate = format!(
-                    "{}...{}",
-                    chars[..left].iter().collect::<String>(),
-                    chars[right..].iter().collect::<String>()
-                );
-                if measure_text_impl(&candidate, font, font_size, 1.0).width <= max_width {
-                    return candidate;
-                }
-                left -= 1;
-                right += 1;
-            }
-            "...".to_string()
-        }
-        RenderTextOverflow::EllipsisEnd => {
-            let mut current = text.to_string();
-            while !current.is_empty() {
-                let candidate = format!("{current}...");
-                if measure_text_impl(&candidate, font, font_size, 1.0).width <= max_width {
-                    return candidate;
-                }
-                current.pop();
-            }
-            "...".to_string()
-        }
-    }
+    // Policy lives in `crate::text_overflow` so every backend agrees on it;
+    // this backend supplies only its own measurement. See that module for
+    // why three private copies of this was a problem.
+    crate::fit_text_to_width(text, max_width, &overflow, |candidate| {
+        measure_text_impl(candidate, font, font_size, 1.0).width
+    })
 }
 
 #[allow(clippy::too_many_arguments)] // private single-call-site text rasterization helper; params are the real independent inputs

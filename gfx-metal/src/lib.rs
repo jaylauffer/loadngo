@@ -216,7 +216,7 @@ pub fn measure_text_metrics(
 ) -> Result<TextMetrics, RendererError> {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
-        return macos::measure_text_metrics(text, font_source, font_size);
+        macos::measure_text_metrics(text, font_source, font_size)
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
@@ -234,7 +234,7 @@ pub fn measure_font_line_metrics(
 ) -> Result<FontLineMetrics, RendererError> {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
-        return macos::measure_font_line_metrics(font_source, font_size);
+        macos::measure_font_line_metrics(font_source, font_size)
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
@@ -474,10 +474,10 @@ impl MetalBackend {
         for command in &self.recorded_commands {
             match command {
                 FrameCommand::FillRect { rect, color } => rects.push(SolidRect {
-                    x: rect.x as f32,
-                    y: rect.y as f32,
-                    width: rect.width as f32,
-                    height: rect.height as f32,
+                    x: rect.x,
+                    y: rect.y,
+                    width: rect.width,
+                    height: rect.height,
                     red: color.r as f32 / 255.0,
                     green: color.g as f32 / 255.0,
                     blue: color.b as f32 / 255.0,
@@ -510,33 +510,15 @@ impl MetalBackend {
                                 });
                             }
                         };
+                    push(&mut rects, rect.x, rect.y, rect.width, t);
+                    push(&mut rects, rect.x, rect.y + rect.height - t, rect.width, t);
+                    push(&mut rects, rect.x, rect.y + t, t, rect.height - 2.0 * t);
                     push(
                         &mut rects,
-                        rect.x as f32,
-                        rect.y as f32,
-                        rect.width as f32,
+                        rect.x + rect.width - t,
+                        rect.y + t,
                         t,
-                    );
-                    push(
-                        &mut rects,
-                        rect.x as f32,
-                        rect.y as f32 + rect.height as f32 - t,
-                        rect.width as f32,
-                        t,
-                    );
-                    push(
-                        &mut rects,
-                        rect.x as f32,
-                        rect.y as f32 + t,
-                        t,
-                        rect.height as f32 - 2.0 * t,
-                    );
-                    push(
-                        &mut rects,
-                        rect.x as f32 + rect.width as f32 - t,
-                        rect.y as f32 + t,
-                        t,
-                        rect.height as f32 - 2.0 * t,
+                        rect.height - 2.0 * t,
                     );
                 }
                 _ => {}
@@ -562,10 +544,10 @@ impl MetalBackend {
                     ));
                     Some(BlitImage {
                         image_key: request.image_key.clone(),
-                        x: request.rect.x as f32,
-                        y: request.rect.y as f32,
-                        width: request.rect.width as f32,
-                        height: request.rect.height as f32,
+                        x: request.rect.x,
+                        y: request.rect.y,
+                        width: request.rect.width,
+                        height: request.rect.height,
                         clip_rect: request.clip_rect,
                         alpha: request.alpha,
                         flip_vertical: false,
@@ -687,10 +669,10 @@ impl MetalBackend {
             match command {
                 FrameCommand::FillRect { rect, color } => {
                     visuals.push(FrameVisual::SolidRect(SolidRect {
-                        x: rect.x as f32,
-                        y: rect.y as f32,
-                        width: rect.width as f32,
-                        height: rect.height as f32,
+                        x: rect.x,
+                        y: rect.y,
+                        width: rect.width,
+                        height: rect.height,
                         red: color.r as f32 / 255.0,
                         green: color.g as f32 / 255.0,
                         blue: color.b as f32 / 255.0,
@@ -723,24 +705,14 @@ impl MetalBackend {
                             }));
                         }
                     };
-                    push(rect.x as f32, rect.y as f32, rect.width as f32, t);
+                    push(rect.x, rect.y, rect.width, t);
+                    push(rect.x, rect.y + rect.height - t, rect.width, t);
+                    push(rect.x, rect.y + t, t, rect.height - 2.0 * t);
                     push(
-                        rect.x as f32,
-                        rect.y as f32 + rect.height as f32 - t,
-                        rect.width as f32,
+                        rect.x + rect.width - t,
+                        rect.y + t,
                         t,
-                    );
-                    push(
-                        rect.x as f32,
-                        rect.y as f32 + t,
-                        t,
-                        rect.height as f32 - 2.0 * t,
-                    );
-                    push(
-                        rect.x as f32 + rect.width as f32 - t,
-                        rect.y as f32 + t,
-                        t,
-                        rect.height as f32 - 2.0 * t,
+                        rect.height - 2.0 * t,
                     );
                 }
                 FrameCommand::Image(request) => {
@@ -755,10 +727,10 @@ impl MetalBackend {
                     ));
                     visuals.push(FrameVisual::RegisteredImage(BlitImage {
                         image_key: request.image_key.clone(),
-                        x: request.rect.x as f32,
-                        y: request.rect.y as f32,
-                        width: request.rect.width as f32,
-                        height: request.rect.height as f32,
+                        x: request.rect.x,
+                        y: request.rect.y,
+                        width: request.rect.width,
+                        height: request.rect.height,
                         clip_rect: request.clip_rect,
                         alpha: request.alpha,
                         flip_vertical: false,
@@ -1179,7 +1151,7 @@ fn cached_text_raster(
         // is itself a logical-point rect, independent of raster resolution.
         request.text = apply_single_line_overflow(
             &request.text,
-            request.rect.width as f32,
+            request.rect.width,
             font_source,
             request.style.font_size as f32,
             &request.style.overflow,
@@ -1283,12 +1255,12 @@ fn rasterize_text_request(
         let opaque_top_in_display = raster.opaque_top_in_display / scale;
         let content_top_in_image = raster.content_top_in_image / scale;
         let text_x = match request.style.horizontal_align {
-            loadngo_host_core::RenderTextHorizontalAlign::Left => request.rect.x as f32,
+            loadngo_host_core::RenderTextHorizontalAlign::Left => request.rect.x,
             loadngo_host_core::RenderTextHorizontalAlign::Center => {
-                request.rect.x as f32 + (request.rect.width as f32 - metrics.width).max(0.0) * 0.5
+                request.rect.x + (request.rect.width - metrics.width).max(0.0) * 0.5
             }
             loadngo_host_core::RenderTextHorizontalAlign::Right => {
-                request.rect.x as f32 + (request.rect.width as f32 - metrics.width).max(0.0)
+                request.rect.x + (request.rect.width - metrics.width).max(0.0)
             }
         };
         let (metric_height, top_in_display) = match request.style.vertical_metric_mode {
@@ -1300,12 +1272,12 @@ fn rasterize_text_request(
             }
         };
         let target_top = match request.style.vertical_align {
-            loadngo_host_core::RenderTextVerticalAlign::Top => request.rect.y as f32,
+            loadngo_host_core::RenderTextVerticalAlign::Top => request.rect.y,
             loadngo_host_core::RenderTextVerticalAlign::Middle => {
-                request.rect.y as f32 + (request.rect.height as f32 - metric_height).max(0.0) * 0.5
+                request.rect.y + (request.rect.height - metric_height).max(0.0) * 0.5
             }
             loadngo_host_core::RenderTextVerticalAlign::Bottom => {
-                request.rect.y as f32 + (request.rect.height as f32 - metric_height).max(0.0)
+                request.rect.y + (request.rect.height - metric_height).max(0.0)
             }
         };
         Ok(RasterizedText {
@@ -1342,7 +1314,9 @@ fn opaque_alpha_bounds(image: &DecodedImage) -> Option<(u32, u32)> {
         let row_start = y * width * 4;
         let row_end = row_start + width * 4;
         let has_opaque = image.rgba8[row_start..row_end]
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|px| px[3] >= MIN_ALPHA);
         if has_opaque {
             top.get_or_insert(y as u32);
@@ -1488,17 +1462,17 @@ fn rasterize_line(
     thickness: i32,
 ) -> Option<GeneratedFrameImage> {
     let half = (thickness.max(1) as f32) * 0.5;
-    let min_x = from.x.min(to.x) as f32 - half - 1.0;
-    let min_y = from.y.min(to.y) as f32 - half - 1.0;
-    let max_x = from.x.max(to.x) as f32 + half + 1.0;
-    let max_y = from.y.max(to.y) as f32 + half + 1.0;
+    let min_x = from.x.min(to.x) - half - 1.0;
+    let min_y = from.y.min(to.y) - half - 1.0;
+    let max_x = from.x.max(to.x) + half + 1.0;
+    let max_y = from.y.max(to.y) + half + 1.0;
     let width = (max_x - min_x).ceil().max(1.0) as u32;
     let height = (max_y - min_y).ceil().max(1.0) as u32;
     let mut rgba = vec![0u8; width as usize * height as usize * 4];
-    let ax = from.x as f32 - min_x;
-    let ay = from.y as f32 - min_y;
-    let bx = to.x as f32 - min_x;
-    let by = to.y as f32 - min_y;
+    let ax = from.x - min_x;
+    let ay = from.y - min_y;
+    let bx = to.x - min_x;
+    let by = to.y - min_y;
     let radius = half.max(0.5);
     for y in 0..height {
         for x in 0..width {
@@ -1553,8 +1527,8 @@ fn rasterize_circle(
         image: Arc::new(DecodedImage::new(width, height, rgba)),
         placement: BlitImage {
             image_key: "__loadngo_circle".to_string(),
-            x: min_x as f32,
-            y: min_y as f32,
+            x: min_x,
+            y: min_y,
             width: width as f32,
             height: height as f32,
             clip_rect: None,
@@ -3200,7 +3174,7 @@ impl GraphicsBackend for MetalBackend {
             let visuals = self.frame_visuals()?;
             if metal_diagnostics_enabled() {
                 let frame_index = METAL_DIAGNOSTIC_FRAME_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-                if frame_index <= 8 || frame_index % 60 == 0 {
+                if frame_index <= 8 || frame_index.is_multiple_of(60) {
                     let mut solid_rects = 0usize;
                     let mut solid_geometry = 0usize;
                     let mut registered_images = 0usize;
@@ -3577,7 +3551,9 @@ mod tests {
                     let start = y * width * 4;
                     let end = start + width * 4;
                     image.rgba8[start..end]
-                        .chunks_exact(4)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
                         .filter(|px| px[3] > 0)
                         .count()
                 })
@@ -4258,7 +4234,9 @@ mod tests {
             let row_start = image_row * image.width as usize * 4;
             let row_end = row_start + image.width as usize * 4;
             let width = image.rgba8[row_start..row_end]
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|pixel| pixel[3] > 0)
                 .count();
             row_widths.push(width);

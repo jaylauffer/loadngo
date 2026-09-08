@@ -1071,6 +1071,36 @@ fn software_text_line_layout(
     }
 }
 
+/// The width one line occupies when `draw_text` rasterizes it, walked with
+/// exactly the advance rules that function uses.
+///
+/// Measuring and drawing used to be two similar-but-different loops, and the
+/// difference was invisible until text had to be *fitted* to a width: a
+/// space advanced by `advance_width.max(px * 0.3)` when drawn but only
+/// `advance_width` when measured, so a line with a dozen spaces drew wider
+/// than it measured. Fitting then trimmed to a width the rasterizer promptly
+/// exceeded, and the ellipsis it had just appended was itself clipped off —
+/// the truncation was real but invisible, which is the worst of both.
+///
+/// Anything that decides how much text fits must call this, not re-derive it.
+fn line_rendered_width(font: &SoftwareFont, line: &str, px: f32) -> f32 {
+    let mut cursor = 0.0f32;
+    let mut ink_extent = 0.0f32;
+    for character in line.chars() {
+        let metrics = font.inner.metrics(character, px);
+        if character == ' ' {
+            cursor += metrics.advance_width.max(px * 0.3);
+            continue;
+        }
+        // A glyph's ink can reach past its advance (overhangs, italics), and
+        // `draw_text` places it at `cursor + xmin`, so the rightmost pixel is
+        // what actually has to fit — not the pen position.
+        ink_extent = ink_extent.max(cursor + metrics.xmin as f32 + metrics.width as f32);
+        cursor += metrics.advance_width;
+    }
+    ink_extent.max(cursor)
+}
+
 fn font_text_metrics(
     text: &str,
     font: Option<&DesktopFont>,
@@ -1096,22 +1126,14 @@ fn font_text_metrics(
     }
     let layout = software_text_line_layout(Some(font), font_size, font_scale);
     let mut max_width = 0.0f32;
-    let mut current_width = 0.0f32;
-    let mut line_count = 1usize;
-    for ch in text.chars() {
-        if ch == '\n' {
-            max_width = max_width.max(current_width);
-            current_width = 0.0;
-            line_count += 1;
-            continue;
-        }
-        let metrics = font.inner.metrics(ch, layout.px);
-        current_width += metrics.advance_width.max(metrics.width as f32);
+    let mut line_count = 0usize;
+    for line in text.split('\n') {
+        max_width = max_width.max(line_rendered_width(font, line, layout.px));
+        line_count += 1;
     }
-    max_width = max_width.max(current_width);
     let metrics = TextMetrics {
         width: max_width,
-        height: layout.line_height.max(1) as f32 * line_count as f32,
+        height: layout.line_height.max(1) as f32 * line_count.max(1) as f32,
     };
     let mut cache = text_metrics_cache()
         .lock()
@@ -2297,12 +2319,49 @@ fn generated_text_cache_key(
     format!("generated://text/{:016x}", hasher.finish())
 }
 
+/// Fits every line of `text` to `max_width` under `overflow`, using this
+/// backend's own glyph metrics.
+///
+/// Android rasterizes text into a texture whose size comes from the measured
+/// text, so this has to run *before* that measurement — an over-wide string
+/// otherwise produces an over-wide texture, which is exactly how
+/// `RenderTextOverflow` being unimplemented here showed up on a device: the
+/// line was raw-clipped at both ends with no ellipsis. Applying it again
+/// further down the path is harmless, since fitting is idempotent.
+fn fit_text_lines(
+    text: &str,
+    font: &SoftwareFont,
+    font_size: u16,
+    max_width: f32,
+    overflow: &loadngo_host_core::RenderTextOverflow,
+) -> String {
+    let desktop_font = DesktopFont {
+        source_path: None,
+        software_font: Some(font.clone()),
+    };
+    text.split('\n')
+        .map(|line| {
+            crate::fit_text_to_width(line, max_width, overflow, |candidate| {
+                font_text_metrics(candidate, Some(&desktop_font), font_size, 1.0).width
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn rasterize_text_command(
     request: &loadngo_renderer::TextRequest,
     font: &SoftwareFont,
 ) -> Option<SoftwareTexture> {
-    let measured = font_text_metrics(
+    let fitted_text = fit_text_lines(
         &request.text,
+        font,
+        request.style.font_size,
+        request.rect.width,
+        &request.style.overflow,
+    );
+    let measured = font_text_metrics(
+        &fitted_text,
         Some(&DesktopFont {
             source_path: None,
             software_font: Some(font.clone()),
@@ -2313,7 +2372,7 @@ fn rasterize_text_command(
     let line_box_height = single_line_text_box_height(request.style.font_size);
     let line_count = match request.style.layout_mode {
         loadngo_host_core::RenderTextLayoutMode::SingleLine => 1usize,
-        loadngo_host_core::RenderTextLayoutMode::MultiLine => request.text.lines().count().max(1),
+        loadngo_host_core::RenderTextLayoutMode::MultiLine => fitted_text.lines().count().max(1),
     };
     let content_height = line_box_height
         + multiline_line_step(request.style.font_size) * line_count.saturating_sub(1) as f32;
@@ -2329,6 +2388,7 @@ fn rasterize_text_command(
     );
     let mut local_request = request.clone();
     local_request.rect = texture.local_rect;
+    local_request.text = fitted_text;
     surface.draw_text(&local_request, Some(font));
     Some(surface.into_texture())
 }
@@ -2521,6 +2581,16 @@ impl OwnedSoftwareSurface {
             loadngo_host_core::RenderTextLayoutMode::SingleLine => request.text.replace('\n', " "),
             loadngo_host_core::RenderTextLayoutMode::MultiLine => request.text.clone(),
         };
+        // Idempotent: already applied when the texture was sized, but this
+        // path is also reached directly, and a line must never be drawn
+        // wider than the rect that asked for it.
+        let normalized_text = fit_text_lines(
+            &normalized_text,
+            font,
+            request.style.font_size,
+            request.rect.width,
+            &request.style.overflow,
+        );
         let lines: Vec<&str> = normalized_text.split('\n').collect();
         let mut total_height = match request.style.layout_mode {
             loadngo_host_core::RenderTextLayoutMode::SingleLine => line_box_height,
@@ -3643,6 +3713,16 @@ impl<'a> SoftwareFramebuffer<'a> {
             loadngo_host_core::RenderTextLayoutMode::SingleLine => request.text.replace('\n', " "),
             loadngo_host_core::RenderTextLayoutMode::MultiLine => request.text.clone(),
         };
+        // Idempotent: already applied when the texture was sized, but this
+        // path is also reached directly, and a line must never be drawn
+        // wider than the rect that asked for it.
+        let normalized_text = fit_text_lines(
+            &normalized_text,
+            font,
+            request.style.font_size,
+            request.rect.width,
+            &request.style.overflow,
+        );
         let lines: Vec<&str> = normalized_text.split('\n').collect();
         let mut total_height = match request.style.layout_mode {
             loadngo_host_core::RenderTextLayoutMode::SingleLine => line_box_height,

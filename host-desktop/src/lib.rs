@@ -1,5 +1,12 @@
 mod audio;
 pub use audio::*;
+/// Shared text-fitting policy. Deliberately *not* `cfg`-gated by platform —
+/// every software text rasterizer in this crate must agree on what
+/// `RenderTextOverflow` means, and the one time they did not (Android had no
+/// implementation at all) the failure was invisible until it reached a
+/// device. See the module docs.
+mod text_overflow;
+pub use text_overflow::{fit_text_to_width, ELLIPSIS};
 mod audio_mixer;
 pub use audio_mixer::*;
 

@@ -2,6 +2,10 @@
 
 This note records the main lessons from the March 2026 macOS text-placement debugging work.
 
+For how much text *fits* — `RenderTextOverflow`, ellipsis behaviour, and why
+measuring must walk a line the same way drawing does — see
+[TEXT_OVERFLOW_AND_MEASUREMENT.md](TEXT_OVERFLOW_AND_MEASUREMENT.md).
+
 The short version:
 - do not debug shared text placement by intuition
 - do not trust subtle screenshots alone
