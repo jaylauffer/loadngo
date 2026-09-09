@@ -92,9 +92,19 @@ racing for one input device), so `LiveMonitor` is built the same way
 - **Fixed-size ring buffer, not adaptive.** `MONITOR_RING_CAPACITY`
   (8192 mono samples, ~90-185 ms depending on sample rate) absorbs the two
   devices' independent hardware clocks drifting apart between callbacks.
-  It is not a real resampler/clock-lock, so a very long monitoring session
-  could in principle drift into an audible under/overrun; not yet observed
-  in practice, not yet instrumented either.
+  It is not a real resampler/clock-lock, so a long monitoring session can
+  drift into an audible under/overrun. **Observed for the first time
+  2026-09-09** during an extended `sng-bass-blaster` session (USB PnP
+  input -> Mac mini Speakers, both nominally 48kHz): the local monitor
+  went silent and stayed silent. The underrun path itself is benign and
+  self-healing -- `next_output_sample` returns `0.0` for a missing sample
+  and resumes the moment one is available -- but that only recovers a
+  *transient* gap. If the input device's clock is the slower of the two,
+  the ring drains to empty and **stays** empty, so the output is silence
+  from then on with no recovery. Still not instrumented; the cheap first
+  step is logging `consumer.slots()` once a second, where a steady decline
+  to zero confirms drift and a sudden drop points at a stream error
+  instead.
 - **Mono internally.** Multi-channel input is averaged to mono before
   monitoring or pitch analysis, and the mono signal is duplicated to every
   output channel. A stereo-preserving path is future work if a caller
