@@ -20,7 +20,6 @@
 //! the worker's `Proactor` exists to be waited on, which is exactly the
 //! case a reactor isn't the right tool for.
 
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -77,7 +76,15 @@ struct MonitorReady {
 pub struct LiveMonitor {
     gain: Arc<AtomicU32>,
     muted: Arc<AtomicBool>,
-    tap: Arc<Mutex<VecDeque<f32>>>,
+    /// Consumer end of the analysis tap. Wrapped in a `Mutex` purely for
+    /// interior mutability behind `drain_tap`'s `&self`: this is an SPSC
+    /// ring, and the only thread that ever locks it is the one calling
+    /// `drain_tap`. The audio callback holds the producer end and never
+    /// touches this lock -- which is the whole point, see `tap_capacity`.
+    tap_consumer: Mutex<rtrb::Consumer<f32>>,
+    /// How many of the most recent samples `drain_tap` keeps; older ones
+    /// are discarded there rather than in the audio callback.
+    tap_capacity: usize,
     input_sample_rate_hz: u32,
     input_device_name: String,
     output_device_name: String,
@@ -102,7 +109,10 @@ impl LiveMonitor {
 
         let gain = Arc::new(AtomicU32::new(initial_gain.clamp(0.0, 4.0).to_bits()));
         let muted = Arc::new(AtomicBool::new(initial_muted));
-        let tap = Arc::new(Mutex::new(VecDeque::with_capacity(tap_capacity)));
+        // Twice `tap_capacity` so a caller that misses a frame or two
+        // still has room for fresh audio behind the backlog `drain_tap`
+        // will discard.
+        let (tap_producer, tap_consumer) = rtrb::RingBuffer::<f32>::new(tap_capacity * 2);
 
         let (ready_tx, ready_rx) = mpsc::channel::<Result<MonitorReady, AudioIoError>>();
 
@@ -116,7 +126,7 @@ impl LiveMonitor {
 
         let thread_gain = gain.clone();
         let thread_muted = muted.clone();
-        let thread_tap = tap.clone();
+        let thread_tap_producer = tap_producer;
 
         let worker = thread::Builder::new()
             .name("loadngo-audio-io-monitor".to_string())
@@ -126,8 +136,7 @@ impl LiveMonitor {
                     output_device_name,
                     thread_gain,
                     thread_muted,
-                    thread_tap,
-                    tap_capacity,
+                    thread_tap_producer,
                     ready_tx,
                     proactor,
                 );
@@ -138,7 +147,8 @@ impl LiveMonitor {
             Ok(Ok(ready)) => Ok(Self {
                 gain,
                 muted,
-                tap,
+                tap_consumer: Mutex::new(tap_consumer),
+                tap_capacity,
                 input_sample_rate_hz: ready.sample_rate_hz,
                 input_device_name: ready.input_device_name,
                 output_device_name: ready.output_device_name,
@@ -200,8 +210,20 @@ impl LiveMonitor {
     /// [`crate::pitch::PitchDetector`] once per UI frame; safe to call at
     /// any rate, older samples are dropped once `tap_capacity` is exceeded.
     pub fn drain_tap(&self, out: &mut Vec<f32>) {
-        if let Ok(mut buffer) = self.tap.lock() {
-            out.extend(buffer.drain(..));
+        let Ok(mut consumer) = self.tap_consumer.lock() else {
+            return;
+        };
+        // Keep only the most recent `tap_capacity` samples. This discard
+        // used to happen in the input callback (which also had to take a
+        // lock to do it); doing it here keeps the callback lock-free and
+        // its work proportional to the block it was handed rather than to
+        // however far this consumer has fallen behind.
+        let skip = consumer.slots().saturating_sub(self.tap_capacity);
+        for _ in 0..skip {
+            let _ = consumer.pop();
+        }
+        while let Ok(sample) = consumer.pop() {
+            out.push(sample);
         }
     }
 }
@@ -221,8 +243,7 @@ fn run_monitor_thread(
     output_device_name: Option<String>,
     gain: Arc<AtomicU32>,
     muted: Arc<AtomicBool>,
-    tap: Arc<Mutex<VecDeque<f32>>>,
-    tap_capacity: usize,
+    tap_producer: rtrb::Producer<f32>,
     ready_tx: mpsc::Sender<Result<MonitorReady, AudioIoError>>,
     proactor: Proactor<ChannelPort>,
 ) {
@@ -231,8 +252,7 @@ fn run_monitor_thread(
         output_device_name.as_deref(),
         gain,
         muted,
-        tap,
-        tap_capacity,
+        tap_producer,
     );
 
     match outcome {
@@ -260,8 +280,7 @@ fn open_streams(
     output_device_name: Option<&str>,
     gain: Arc<AtomicU32>,
     muted: Arc<AtomicBool>,
-    tap: Arc<Mutex<VecDeque<f32>>>,
-    tap_capacity: usize,
+    tap_producer: rtrb::Producer<f32>,
 ) -> OpenStreamsResult {
     let host = cpal::default_host();
     let input_device = resolve_device(true, &host, input_device_name)?;
@@ -305,8 +324,7 @@ fn open_streams(
         input_sample_format,
         input_channels,
         producer,
-        tap,
-        tap_capacity,
+        tap_producer,
     )?;
     let output_stream = build_output_stream(
         &output_device,
@@ -394,8 +412,7 @@ fn build_input_stream(
     sample_format: cpal::SampleFormat,
     channels: usize,
     mut producer: rtrb::Producer<f32>,
-    tap: Arc<Mutex<VecDeque<f32>>>,
-    tap_capacity: usize,
+    mut tap_producer: rtrb::Producer<f32>,
 ) -> Result<cpal::Stream, AudioIoError> {
     let publish = move |mono: &[f32]| {
         for &sample in mono {
@@ -404,12 +421,14 @@ fn build_input_stream(
             // (output side unable to keep up) is the simpler, still
             // acceptable failure mode for a monitoring tool.
             let _ = producer.push(sample);
-        }
-        if let Ok(mut buffer) = tap.lock() {
-            buffer.extend(mono.iter().copied());
-            while buffer.len() > tap_capacity {
-                buffer.pop_front();
-            }
+            // Second lock-free ring rather than a shared `Mutex<VecDeque>`:
+            // locking (and allocating) inside an audio callback is a
+            // real-time violation, and under contention it stalls capture
+            // long enough to drain the monitoring ring. Dropping the newest
+            // tap sample when the consumer has fallen a full ring behind is
+            // the acceptable failure here -- it self-corrects on the next
+            // `drain_tap`.
+            let _ = tap_producer.push(sample);
         }
     };
 

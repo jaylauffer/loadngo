@@ -24,7 +24,13 @@ or for monitoring it through speakers -- needs raw duplex device I/O
   dedicated worker thread, copies captured audio to playback (gain/mute
   applied), and exposes `drain_tap` so a second consumer (e.g. a tuner's
   `PitchDetector`) can read the same captured signal without opening a
-  second input stream.
+  second input stream. The tap is a second lock-free SPSC ring, not a
+  shared locked buffer: the input callback only pushes, and `drain_tap`
+  does the "keep the most recent `tap_capacity` samples" discarding on the
+  consumer side. It was a `Mutex<VecDeque<f32>>` until 2026-09-09, which
+  meant the audio callback took a lock and could allocate -- a real-time
+  violation, and one that stalls capture (and so drains the monitoring
+  ring) exactly when the system is already under load.
 
 The last three are gated to `cfg(any(target_os = "macos", target_os =
 "linux", target_os = "windows"))` -- desktop only. Mobile live-input
