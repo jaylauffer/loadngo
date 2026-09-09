@@ -1,16 +1,6 @@
-#[cfg(not(target_os = "linux"))]
-fn main() {
-    eprintln!("camera_preview only supported on linux (todo other platforms).");
-}
-// compile_error!("camera_preview currently supports Linux only");
-
-#[cfg(target_os = "linux")]
-mod linux_harness {
+mod harness {
     use std::fs;
-    use std::io::{ErrorKind, Read};
-    use std::os::fd::{AsRawFd, RawFd};
     use std::path::{Path, PathBuf};
-    use std::process::{Child, ChildStdout, Command, Stdio};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{self, Receiver, Sender};
     use std::sync::{Arc, Mutex};
@@ -20,10 +10,11 @@ mod linux_harness {
     use image::codecs::jpeg::JpegEncoder;
     use image::codecs::png::PngEncoder;
     use image::{ColorType, ImageEncoder};
+    use loadngo_camera::{CameraDevice, CaptureConfig, CaptureStream, StreamOutcome};
     use loadngo_host_core::{
         decode_image_from_memory, DecodedImage, FrameDemand, HostKey, RectF, WindowDescriptor,
     };
-    use loadngo_proactor::{CompletionKind, IoUringPort, Proactor, ProactorHandle, ReadinessEvent};
+    use loadngo_proactor::{CompletionKind, PlatformPort, Proactor, ProactorHandle};
     use ui_core::Color;
 
     const WINDOW_WIDTH: i32 = 1320;
@@ -90,13 +81,6 @@ mod linux_harness {
         }
     }
 
-    #[derive(Clone, Debug)]
-    struct CaptureOptions {
-        device: String,
-        video_size: Option<String>,
-        frame_rate: u32,
-    }
-
     #[derive(Debug)]
     enum CaptureEvent {
         Frame(DecodedImage),
@@ -104,65 +88,92 @@ mod linux_harness {
         Error(String),
     }
 
-    struct ActiveStream {
-        child: Child,
-        stdout: ChildStdout,
-        stdout_fd: RawFd,
-        stderr_text: Arc<Mutex<String>>,
-        stderr_join: Option<JoinHandle<()>>,
-        frame_width: u32,
-        frame_height: u32,
-        frame_len: usize,
-        pending: Vec<u8>,
-        delivered_frame: bool,
-    }
+    /// Connects a running [`CaptureStream`] to the proactor.
+    ///
+    /// This is the only part of the capture path that is still
+    /// platform-shaped, and it is shaped by the proactor, not by the camera:
+    /// `ReadinessPort` is `RawFd`-based, so Unix can hand the pipe straight
+    /// to `io_uring`/`kqueue`/`epoll`, while IOCP has no readiness model for
+    /// an anonymous pipe and needs a reader thread posting work back into the
+    /// loop instead. Frames reach `on_stream_ready` on the proactor thread
+    /// either way, so nothing above here has to care.
+    mod transport {
+        use super::{PlatformPort, ProactorHandle, CAMERA_STREAM_TOKEN};
+        use loadngo_camera::CaptureStream;
 
-    impl ActiveStream {
-        fn kill(&mut self) {
-            let _ = self.child.kill();
+        #[cfg(unix)]
+        pub(super) struct Attachment {
+            fd: std::os::fd::RawFd,
         }
 
-        fn finish(mut self) -> StreamOutcome {
-            let status_text = match self.child.wait() {
-                Ok(status) => status.to_string(),
-                Err(err) => format!("failed to wait for ffmpeg: {err}"),
-            };
-            if let Some(join) = self.stderr_join.take() {
-                let _ = join.join();
-            }
-            let stderr_text = self
-                .stderr_text
-                .lock()
-                .map(|text| text.clone())
-                .unwrap_or_else(|_| String::new());
-            StreamOutcome {
-                status_text,
-                stderr_text,
-                delivered_frame: self.delivered_frame,
-            }
+        /// Registers the capture pipe for readability. The pipe is
+        /// non-blocking (`CaptureStream::start` sets that up), so `on_ready`
+        /// can drain it without ever blocking the proactor thread.
+        #[cfg(unix)]
+        pub(super) fn attach(
+            handle: &ProactorHandle<PlatformPort>,
+            stream: &CaptureStream,
+            on_ready: impl Fn() + Send + 'static,
+        ) -> Result<Attachment, String> {
+            let fd = stream.stdout_fd();
+            handle
+                .register_readable(fd, CAMERA_STREAM_TOKEN, move |_event| on_ready())
+                .map_err(|err| format!("failed to register camera stream readiness: {err}"))?;
+            Ok(Attachment { fd })
         }
-    }
 
-    struct StreamOutcome {
-        status_text: String,
-        stderr_text: String,
-        delivered_frame: bool,
+        #[cfg(unix)]
+        pub(super) fn detach(handle: &ProactorHandle<PlatformPort>, attachment: Attachment) {
+            let _ = handle.deregister_readable(attachment.fd, CAMERA_STREAM_TOKEN);
+        }
+
+        #[cfg(windows)]
+        pub(super) struct Attachment;
+
+        /// Designed, not implemented -- see `docs/CAMERA_PREVIEW.md`.
+        ///
+        /// IOCP cannot report readiness for the anonymous pipe `ffmpeg`
+        /// writes to, so the Windows path is a dedicated reader thread
+        /// calling `CaptureStream::pump` (which returns after one blocking
+        /// read on Windows) and handing each batch back with
+        /// `ProactorHandle::enqueue_work`, so frames still arrive on the
+        /// proactor thread. What blocks it today is ownership: the reader
+        /// thread must own the stream to block on it, while shutdown must be
+        /// able to kill the child without waiting for that read to return, so
+        /// `CaptureStream` needs to split into a reader half and a control
+        /// half first. Returning an error here is deliberate -- there is no
+        /// Windows machine to compile or test against, and a plausible-looking
+        /// deadlock would be worse than an honest refusal.
+        #[cfg(windows)]
+        pub(super) fn attach(
+            _handle: &ProactorHandle<PlatformPort>,
+            _stream: &CaptureStream,
+            _on_ready: impl Fn() + Send + 'static,
+        ) -> Result<Attachment, String> {
+            Err("camera preview needs the Windows reader-thread transport, \
+                 which is designed but not implemented (see docs/CAMERA_PREVIEW.md)"
+                .to_string())
+        }
+
+        #[cfg(windows)]
+        pub(super) fn detach(_handle: &ProactorHandle<PlatformPort>, _attachment: Attachment) {}
     }
 
     struct CaptureController {
-        options: CaptureOptions,
+        options: CaptureConfig,
         sender: Sender<CaptureEvent>,
-        handle: ProactorHandle<IoUringPort>,
+        handle: ProactorHandle<PlatformPort>,
         running: AtomicBool,
         restart_pending: AtomicBool,
-        active_stream: Mutex<Option<ActiveStream>>,
+        active_stream: Mutex<Option<CaptureStream>>,
+        attachment: Mutex<Option<transport::Attachment>>,
     }
 
     impl CaptureController {
         fn new(
-            options: CaptureOptions,
+            options: CaptureConfig,
             sender: Sender<CaptureEvent>,
-            handle: ProactorHandle<IoUringPort>,
+            handle: ProactorHandle<PlatformPort>,
         ) -> Self {
             Self {
                 options,
@@ -171,10 +182,11 @@ mod linux_harness {
                 running: AtomicBool::new(true),
                 restart_pending: AtomicBool::new(false),
                 active_stream: Mutex::new(None),
+                attachment: Mutex::new(None),
             }
         }
 
-        fn run(self: Arc<Self>, proactor: Proactor<IoUringPort>) {
+        fn run(self: Arc<Self>, proactor: Proactor<PlatformPort>) {
             if let Err(err) = self.start_stream() {
                 self.schedule_restart(err);
             }
@@ -207,72 +219,37 @@ mod linux_harness {
             )));
             loadngo_host_desktop::wake_host();
 
-            let (frame_width, frame_height) = preview_frame_dimensions(&self.options)?;
-            let frame_len = frame_width as usize * frame_height as usize * 4;
-            let mut child = spawn_stream_process(&self.options)?;
-            let stderr_text = Arc::new(Mutex::new(String::new()));
-            let stderr_text_thread = Arc::clone(&stderr_text);
-            let mut stderr = child
-                .stderr
-                .take()
-                .ok_or_else(|| "failed to capture ffmpeg stderr".to_string())?;
-            let stderr_join = thread::spawn(move || {
-                let mut bytes = Vec::new();
-                let _ = stderr.read_to_end(&mut bytes);
-                if let Ok(mut sink) = stderr_text_thread.lock() {
-                    *sink = String::from_utf8_lossy(&bytes).trim().to_string();
-                }
-            });
+            let stream = CaptureStream::start(&self.options).map_err(|err| err.to_string())?;
 
-            let stdout = child
-                .stdout
-                .take()
-                .ok_or_else(|| "failed to capture ffmpeg stdout".to_string())?;
-            let stdout_fd = stdout.as_raw_fd();
-            set_nonblocking(stdout_fd)?;
+            let controller = Arc::clone(self);
+            let attachment = transport::attach(&self.handle, &stream, move || {
+                controller.on_stream_ready();
+            })?;
 
             {
                 let mut slot = self
                     .active_stream
                     .lock()
                     .map_err(|_| "camera stream lock poisoned".to_string())?;
-                *slot = Some(ActiveStream {
-                    child,
-                    stdout,
-                    stdout_fd,
-                    stderr_text,
-                    stderr_join: Some(stderr_join),
-                    frame_width,
-                    frame_height,
-                    frame_len,
-                    pending: Vec::new(),
-                    delivered_frame: false,
-                });
+                *slot = Some(stream);
             }
-
-            let controller = Arc::clone(self);
-            if let Err(err) = self.handle.register_readable(
-                stdout_fd,
-                CAMERA_STREAM_TOKEN,
-                move |_event: ReadinessEvent| {
-                    controller.on_stdout_ready();
-                },
-            ) {
-                let _ = self.shutdown_active_stream(true);
-                return Err(format!(
-                    "failed to register camera stream with io_uring: {err}"
-                ));
+            {
+                let mut slot = self
+                    .attachment
+                    .lock()
+                    .map_err(|_| "camera attachment lock poisoned".to_string())?;
+                *slot = Some(attachment);
             }
 
             self.restart_pending.store(false, Ordering::SeqCst);
             Ok(())
         }
 
-        fn on_stdout_ready(self: &Arc<Self>) {
-            let mut frames = Vec::new();
-            let mut restart_reason = None;
-
-            {
+        /// Drains whatever the capture pipe has. Called from readiness on
+        /// Unix and from the reader thread's posted work on Windows -- either
+        /// way, on the proactor thread.
+        fn on_stream_ready(self: &Arc<Self>) {
+            let (frames, restart_reason) = {
                 let mut slot = match self.active_stream.lock() {
                     Ok(slot) => slot,
                     Err(_) => {
@@ -286,39 +263,15 @@ mod linux_harness {
                 let Some(stream) = slot.as_mut() else {
                     return;
                 };
-
-                let mut scratch = [0u8; 64 * 1024];
-                loop {
-                    match stream.stdout.read(&mut scratch) {
-                        Ok(0) => {
-                            restart_reason = Some("camera stream ended unexpectedly".to_string());
-                            break;
-                        }
-                        Ok(read) => {
-                            stream.pending.extend_from_slice(&scratch[..read]);
-                            while let Some(image) = extract_next_raw_rgba_frame(
-                                &mut stream.pending,
-                                stream.frame_width,
-                                stream.frame_height,
-                                stream.frame_len,
-                            ) {
-                                stream.delivered_frame = true;
-                                frames.push(image);
-                            }
-                        }
-                        Err(err) if err.kind() == ErrorKind::WouldBlock => break,
-                        Err(err) if err.kind() == ErrorKind::Interrupted => continue,
-                        Err(err) => {
-                            restart_reason = Some(format!("failed reading ffmpeg output: {err}"));
-                            break;
-                        }
-                    }
-                }
-
-                if stream.pending.len() > 8 * 1024 * 1024 {
-                    stream.pending.clear();
-                }
-            }
+                let (frame_width, frame_height) = stream.frame_dimensions();
+                let result = stream.pump();
+                let frames = result
+                    .frames
+                    .into_iter()
+                    .map(|bytes| DecodedImage::new(frame_width, frame_height, bytes))
+                    .collect::<Vec<_>>();
+                (frames, result.ended)
+            };
 
             let delivered_frames = !frames.is_empty();
             for frame in frames {
@@ -390,13 +343,13 @@ mod linux_harness {
         }
 
         fn shutdown_active_stream(&self, terminate: bool) -> Option<StreamOutcome> {
+            if let Ok(mut slot) = self.attachment.lock() {
+                if let Some(attachment) = slot.take() {
+                    transport::detach(&self.handle, attachment);
+                }
+            }
             let stream = {
                 let mut slot = self.active_stream.lock().ok()?;
-                if let Some(stream) = slot.as_ref() {
-                    let _ = self
-                        .handle
-                        .deregister_readable(stream.stdout_fd, CAMERA_STREAM_TOKEN);
-                }
                 slot.take()
             }?;
 
@@ -423,12 +376,12 @@ mod linux_harness {
     }
 
     impl CaptureWorker {
-        fn start(options: CaptureOptions) -> Result<Self, String> {
+        fn start(options: CaptureConfig) -> Result<Self, String> {
             let (tx, rx) = mpsc::channel();
-            let proactor = Proactor::new(
-                IoUringPort::new()
-                    .map_err(|err| format!("failed to create io_uring port: {err}"))?,
-            );
+            // Whatever completion port this platform actually uses --
+            // io_uring on Linux, kqueue on macOS -- rather than naming one.
+            let proactor = loadngo_proactor::new_platform_proactor()
+                .map_err(|err| format!("failed to create proactor: {err}"))?;
             let handle = proactor.handle();
             let controller = Arc::new(CaptureController::new(options, tx, handle));
             let controller_thread = Arc::clone(&controller);
@@ -532,6 +485,19 @@ mod linux_harness {
         Ok(options)
     }
 
+    fn camera_devices() -> Vec<CameraDevice> {
+        loadngo_camera::list_devices().unwrap_or_default()
+    }
+
+    /// Device to use when `--device` is not given.
+    fn default_camera_device() -> String {
+        camera_devices()
+            .into_iter()
+            .next()
+            .map(|device| device.id)
+            .unwrap_or_default()
+    }
+
     fn usage(program: &str) -> String {
         format!(
         "Usage: {program} [--device PATH] [--video-size WxH] [--frame-rate FPS] [--output-dir DIR]\n\
@@ -570,7 +536,7 @@ mod linux_harness {
     }
 
     async fn run_preview(options: AppOptions) {
-        let capture_options = CaptureOptions {
+        let capture_options = CaptureConfig {
             device: options.device.clone(),
             video_size: options.video_size.clone(),
             frame_rate: options.frame_rate,
@@ -799,7 +765,7 @@ mod linux_harness {
     }
 
     fn draw_scene(
-        capture_options: &CaptureOptions,
+        capture_options: &CaptureConfig,
         current_texture: &Option<loadngo_host_desktop::DesktopTexture>,
         status: &str,
         last_saved: Option<&Path>,
@@ -991,107 +957,12 @@ mod linux_harness {
         })
     }
 
-    fn spawn_stream_process(options: &CaptureOptions) -> Result<Child, String> {
-        let (frame_width, frame_height) = preview_frame_dimensions(options)?;
-        let mut command = base_capture_command(options);
-        let filter = preview_filter_spec(options, frame_width, frame_height);
-        command.args([
-            "-an", "-vf", &filter, "-pix_fmt", "rgba", "-f", "rawvideo", "pipe:1",
-        ]);
-        command.stdout(Stdio::piped());
-        command.stderr(Stdio::piped());
-        command
-            .spawn()
-            .map_err(|err| format!("failed to start ffmpeg: {err}"))
-    }
-
-    fn base_capture_command(options: &CaptureOptions) -> Command {
-        let mut command = Command::new("ffmpeg");
-        command.args(["-nostdin", "-hide_banner", "-loglevel", "error"]);
-        command.args(["-fflags", "nobuffer"]);
-        command.args(["-f", "v4l2"]);
-        command.args(["-framerate", &options.frame_rate.max(1).to_string()]);
-        if let Some(video_size) = options
-            .video_size
-            .as_deref()
-            .filter(|value| !value.is_empty())
-        {
-            command.args(["-video_size", video_size]);
-        }
-        command.args(["-i", &options.device]);
-        command
-    }
-
-    fn set_nonblocking(fd: RawFd) -> Result<(), String> {
-        unsafe {
-            let flags = libc::fcntl(fd, libc::F_GETFL);
-            if flags < 0 {
-                return Err(format!(
-                    "failed to query camera stream flags: {}",
-                    std::io::Error::last_os_error()
-                ));
-            }
-            if libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
-                return Err(format!(
-                    "failed to mark camera stream nonblocking: {}",
-                    std::io::Error::last_os_error()
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn preview_frame_dimensions(options: &CaptureOptions) -> Result<(u32, u32), String> {
-        let video_size = options
-            .video_size
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or(DEFAULT_VIDEO_SIZE);
-        parse_video_size_spec(video_size)
-    }
-
-    fn preview_filter_spec(
-        options: &CaptureOptions,
-        frame_width: u32,
-        frame_height: u32,
-    ) -> String {
-        format!(
-            "fps={},scale={}x{}",
-            options.frame_rate.max(1),
-            frame_width,
-            frame_height
-        )
-    }
-
-    fn parse_video_size_spec(value: &str) -> Result<(u32, u32), String> {
-        let (width, height) = value
-            .trim()
-            .split_once('x')
-            .ok_or_else(|| format!("invalid video size: {value}"))?;
-        let width = width
-            .parse::<u32>()
-            .map_err(|_| format!("invalid video width: {value}"))?;
-        let height = height
-            .parse::<u32>()
-            .map_err(|_| format!("invalid video height: {value}"))?;
-        if width == 0 || height == 0 {
-            return Err(format!("video size must be positive: {value}"));
-        }
-        Ok((width, height))
-    }
-
-    fn extract_next_raw_rgba_frame(
-        buffer: &mut Vec<u8>,
-        width: u32,
-        height: u32,
-        frame_len: usize,
-    ) -> Option<DecodedImage> {
-        if buffer.len() < frame_len {
-            return None;
-        }
-        let tail = buffer.split_off(frame_len);
-        let frame = std::mem::replace(buffer, tail);
-        Some(DecodedImage::new(width, height, frame))
+    /// One frame, decoded. MJPEG keeps the pipe small; the preview stream
+    /// uses raw RGBA instead because it slices fixed-size frames.
+    fn capture_single_frame(config: &CaptureConfig) -> Result<DecodedImage, String> {
+        let bytes =
+            loadngo_camera::capture_single_frame(config, "mjpeg").map_err(|err| err.to_string())?;
+        decode_image_from_memory(&bytes)
     }
 
     fn parse_format(value: &str) -> Result<SaveFormat, String> {
@@ -1100,32 +971,6 @@ mod linux_harness {
             "jpg" | "jpeg" => Ok(SaveFormat::Jpeg),
             other => Err(format!("unsupported format: {other}")),
         }
-    }
-
-    fn capture_single_frame(options: &CaptureOptions) -> Result<DecodedImage, String> {
-        let mut command = base_capture_command(options);
-        command.args([
-            "-frames:v",
-            "1",
-            "-f",
-            "image2pipe",
-            "-vcodec",
-            "mjpeg",
-            "pipe:1",
-        ]);
-
-        let output = command
-            .output()
-            .map_err(|err| format!("failed to execute ffmpeg: {err}"))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return Err(if stderr.is_empty() {
-                "ffmpeg capture failed".to_string()
-            } else {
-                stderr
-            });
-        }
-        decode_image_from_memory(&output.stdout)
     }
 
     fn save_image(
@@ -1200,75 +1045,17 @@ mod linux_harness {
         PathBuf::from(value)
     }
 
-    fn default_camera_device() -> String {
-        available_camera_devices_with_labels()
-            .into_iter()
-            .map(|(device, _)| device)
-            .next()
-            .unwrap_or_else(|| "/dev/video0".to_string())
-    }
-
-    fn available_camera_devices_with_labels() -> Vec<(String, String)> {
-        let mut preferred = Vec::new();
-        let mut fallback = Vec::new();
-        if let Ok(entries) = fs::read_dir("/dev") {
-            for entry in entries.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if name.starts_with("video") {
-                        let device = format!("/dev/{name}");
-                        let label = camera_label_for(name);
-                        if is_probably_camera_device(&label) {
-                            preferred.push((device, label));
-                        } else {
-                            fallback.push((device, label));
-                        }
-                    }
-                }
-            }
-        }
-        preferred.sort();
-        preferred.dedup();
-        fallback.sort();
-        fallback.dedup();
-        if preferred.is_empty() {
-            fallback
-        } else {
-            preferred
-        }
-    }
-
-    fn camera_label_for(name: &str) -> String {
-        let sysfs = PathBuf::from("/sys/class/video4linux")
-            .join(name)
-            .join("name");
-        fs::read_to_string(sysfs)
-            .map(|label| label.trim().to_string())
-            .unwrap_or_else(|_| name.to_string())
-    }
-
-    fn is_probably_camera_device(label: &str) -> bool {
-        let normalized = label.to_ascii_lowercase();
-        !(normalized.contains("codec")
-            || normalized.contains("isp")
-            || normalized.contains("decoder")
-            || normalized.contains("-dec")
-            || normalized.contains("encoder")
-            || normalized.contains("hevc")
-            || normalized.contains("v4l2 loopback")
-            || normalized.contains("bcm2835"))
-    }
-
     pub(crate) fn run() -> Result<(), String> {
         let options = parse_args()?;
         if options.list_devices {
-            for (device, label) in available_camera_devices_with_labels() {
-                println!("{device}\t{label}");
+            for device in camera_devices() {
+                println!("{}\t{}", device.id, device.name);
             }
             return Ok(());
         }
 
         if options.once {
-            let image = capture_single_frame(&CaptureOptions {
+            let image = capture_single_frame(&CaptureConfig {
                 device: options.device.clone(),
                 video_size: options.video_size.clone(),
                 frame_rate: options.frame_rate,
@@ -1292,49 +1079,8 @@ mod linux_harness {
         });
         Ok(())
     }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn parse_video_size_spec_accepts_dimensions() {
-            assert_eq!(parse_video_size_spec("1280x720").unwrap(), (1280, 720));
-        }
-
-        #[test]
-        fn preview_filter_spec_enforces_requested_frame_rate() {
-            let options = CaptureOptions {
-                device: "/dev/video0".to_string(),
-                video_size: Some("1280x720".to_string()),
-                frame_rate: 6,
-            };
-            assert_eq!(
-                preview_filter_spec(&options, 1280, 720),
-                "fps=6,scale=1280x720"
-            );
-        }
-
-        #[test]
-        fn extract_next_raw_rgba_frame_waits_for_complete_frame() {
-            let mut buffer = vec![1u8; 15];
-            assert!(extract_next_raw_rgba_frame(&mut buffer, 2, 2, 16).is_none());
-            assert_eq!(buffer.len(), 15);
-        }
-
-        #[test]
-        fn extract_next_raw_rgba_frame_returns_one_frame_and_keeps_tail() {
-            let mut buffer = vec![7u8; 20];
-            let frame = extract_next_raw_rgba_frame(&mut buffer, 2, 2, 16).unwrap();
-            assert_eq!(frame.width, 2);
-            assert_eq!(frame.height, 2);
-            assert_eq!(frame.rgba8.len(), 16);
-            assert_eq!(buffer, vec![7u8; 4]);
-        }
-    }
 }
 
-#[cfg(target_os = "linux")]
 fn main() -> Result<(), String> {
-    linux_harness::run()
+    harness::run()
 }

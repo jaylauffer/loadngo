@@ -19,6 +19,7 @@ members = [
     "proactor-harness",
     "localization",
     "audio-io",
+    "camera",
 ]
 default-members = [
     "task",
@@ -35,6 +36,7 @@ default-members = [
     "persistence",
     "localization",
     "audio-io",
+    "camera",
 ]
 resolver = "2"
 

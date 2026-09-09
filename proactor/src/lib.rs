@@ -53,6 +53,52 @@ pub use kqueue::KqueuePort;
 #[cfg(target_os = "linux")]
 pub use uring::IoUringPort;
 
+/// The `CompletionPort` implementation this platform actually uses.
+///
+/// Every desktop/mobile target this workspace builds for has exactly one
+/// sensible backend, so callers that just want "the port for this machine"
+/// -- a camera capture loop, a host's I/O thread -- should name this instead
+/// of repeating the `cfg` ladder and silently getting it wrong on one
+/// platform. Code that deliberately targets a specific backend (benchmarks
+/// comparing two of them, backend-specific tests) should keep naming that
+/// backend directly.
+///
+/// Note that `PlatformPort` does not imply [`ReadinessPort`]: `IocpPort`
+/// deliberately does not implement it, because IOCP has no readiness model
+/// for an anonymous pipe. Code that needs readiness must bound on
+/// [`ReadinessPort`] and provide a Windows path of its own.
+#[cfg(target_os = "linux")]
+pub type PlatformPort = IoUringPort;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+pub type PlatformPort = KqueuePort;
+#[cfg(target_os = "android")]
+pub type PlatformPort = EpollPort;
+#[cfg(windows)]
+pub type PlatformPort = IocpPort;
+
+/// Builds a [`Proactor`] on this platform's [`PlatformPort`].
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly",
+    target_os = "android",
+    windows
+))]
+pub fn new_platform_proactor() -> io::Result<Proactor<PlatformPort>> {
+    Ok(Proactor::new(PlatformPort::new()?))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompletionKind {
     Exit,

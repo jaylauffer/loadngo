@@ -749,6 +749,16 @@ pub fn launch(
     });
 }
 
+/// Nudges the host to produce a frame sooner than its next scheduled one.
+///
+/// A no-op on macOS: this backend's frame loop is driven by its own display
+/// callback rather than by a wakeable event queue, so there is nothing to
+/// signal. It exists so callers can wake the host unconditionally instead of
+/// carrying a `cfg` -- the Linux backend genuinely needs it, since it parks
+/// on a winit event loop. A caller that misses a wake here simply waits out
+/// its existing `FrameDemand`.
+pub fn wake_host() {}
+
 pub fn capture_frame() -> HostFrame {
     APP_STATE.with(|state| {
         let mut state = state.borrow_mut();

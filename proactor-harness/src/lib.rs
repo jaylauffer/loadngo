@@ -22,54 +22,18 @@
 //! yet.
 
 use loadngo_proactor::{CompletionKind, Proactor, ProactorHandle};
-use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-#[cfg(target_os = "linux")]
-pub type PlatformPort = loadngo_proactor::IoUringPort;
-#[cfg(any(
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "freebsd",
-    target_os = "openbsd",
-    target_os = "netbsd",
-    target_os = "dragonfly"
-))]
-pub type PlatformPort = loadngo_proactor::KqueuePort;
-#[cfg(target_os = "android")]
-pub type PlatformPort = loadngo_proactor::EpollPort;
-#[cfg(windows)]
-pub type PlatformPort = loadngo_proactor::IocpPort;
+// Re-exported rather than redefined: `loadngo-proactor` now owns the
+// "which port does this platform use" decision, so a bench and a real
+// consumer can never disagree about it.
+pub use loadngo_proactor::PlatformPort;
 
 /// Constructs the same backend `loadngo-proactor` would pick for this
 /// platform.
-pub fn new_platform_proactor() -> io::Result<Proactor<PlatformPort>> {
-    #[cfg(target_os = "linux")]
-    {
-        Ok(Proactor::new(PlatformPort::new()?))
-    }
-    #[cfg(any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))]
-    {
-        Ok(Proactor::new(PlatformPort::new()?))
-    }
-    #[cfg(target_os = "android")]
-    {
-        Ok(Proactor::new(PlatformPort::new()?))
-    }
-    #[cfg(windows)]
-    {
-        Ok(Proactor::new(PlatformPort::new()?))
-    }
-}
+pub use loadngo_proactor::new_platform_proactor;
 
 /// Runs `proactor.run_until_stopped()` on a dedicated thread and returns a
 /// handle plus the join handle, for benches/stress tools that just need a

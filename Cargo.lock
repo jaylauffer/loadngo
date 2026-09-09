@@ -1382,6 +1382,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "loadngo-camera"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "loadngo-gfx-dx12"
 version = "0.1.0"
 dependencies = [
@@ -1432,6 +1440,7 @@ dependencies = [
  "jni",
  "lewton",
  "libc",
+ "loadngo-camera",
  "loadngo-gfx-dx12",
  "loadngo-gfx-gles",
  "loadngo-gfx-metal",

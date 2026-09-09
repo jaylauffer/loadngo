@@ -1,0 +1,17 @@
+[package]
+name = "loadngo-camera"
+description = "Platform-agnostic webcam capture: device enumeration plus ffmpeg-backed raw RGBA streaming for desktop hosts"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+# Only needed to put the capture pipe into non-blocking mode so a
+# readiness-driven caller (see `CaptureStream::stdout_fd`) can drain it
+# without blocking its proactor thread. Windows has no readiness model for
+# anonymous pipes and uses a reader thread instead, so it needs none of this.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
