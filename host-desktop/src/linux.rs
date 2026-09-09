@@ -1795,6 +1795,16 @@ fn rasterize_text_command(request: &TextRequest) -> Option<(UiRect, DecodedImage
     let mut rgba = vec![0u8; tex_width * tex_height * 4];
     let mut local_request = request.clone();
     local_request.rect = texture.local_rect;
+    // Deliberately dropped: this buffer is a private texture with its own
+    // (0, 0) origin, so `local_request.rect` is texture-local while the
+    // caller's `clip_rect` is in screen space. Testing one against the
+    // other silently eats whatever part of the text happens to fall
+    // "outside" — for a text block at (40, 80) that was the first four
+    // lines and the leftmost 38px, which is how this shipped looking like
+    // a layout bug. The real clip is applied where the texture is placed
+    // on screen, via `text_texture_clip_rect` in `prepare_gles_frame`.
+    // `android.rs` already carries this same note at its own glyph loop.
+    local_request.clip_rect = None;
     draw_text_request(&mut rgba, tex_width, tex_height, &local_request);
     Some((
         texture.draw_rect,
@@ -2484,5 +2494,73 @@ mod tests {
 
         assert_eq!(left_alpha, 0);
         assert!(clipped_alpha > 0);
+    }
+
+    #[test]
+    fn a_multi_line_block_away_from_the_origin_keeps_its_first_lines() {
+        // The shipped bug: a text block's screen-space clip was handed to
+        // the rasterizer along with a texture-local rect, so the further
+        // down and right the block sat, the more of its top-left the
+        // rasterizer silently ate. A panel at (40, 80) lost its first four
+        // lines and its leftmost 38px, which reads as a layout bug and had
+        // been wrong in `text_input_harness` for as long as it existed.
+        let mut request = sample_text_request();
+        request.rect = UiRect {
+            x: 40.0,
+            y: 80.0,
+            width: 288.0,
+            height: 320.0,
+        };
+        // What `TextBlockModel::paint` sends: clip == the content rect.
+        request.clip_rect = Some(request.rect);
+        request.style.layout_mode = RenderTextLayoutMode::MultiLine;
+        request.text = (0..12)
+            .map(|index| format!("line {index} MMMM"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let (_, image) = rasterize_text_command(&request).expect("text should rasterize");
+        let texture_width = image.width as usize;
+        let line_step = ui_core::multiline_line_step(request.style.font_size);
+        let local_top = (image.height as f32 - request.rect.height) * 0.5;
+
+        // Ink must exist in every line's band, the first one included.
+        for line_index in 0..12 {
+            let band_top = (local_top + line_step * line_index as f32).floor() as usize;
+            let band_bottom = (local_top + line_step * (line_index as f32 + 1.0)).ceil() as usize;
+            let alpha: usize = image
+                .rgba8
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| {
+                    let row = index / texture_width;
+                    row >= band_top && row < band_bottom.min(image.height as usize)
+                })
+                .map(|(_, pixel)| pixel[3] as usize)
+                .sum();
+            assert!(alpha > 0, "line {line_index} was rasterized blank");
+        }
+
+        // And the left edge of the text box must not be shaved off: the
+        // first glyph column sits within a few pixels of the box's left.
+        let local_left = (texture_width as f32 - request.rect.width) * 0.5;
+        let left_edge_alpha: usize = image
+            .rgba8
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| {
+                let column = index % texture_width;
+                column >= local_left as usize && column < local_left as usize + 40
+            })
+            .map(|(_, pixel)| pixel[3] as usize)
+            .sum();
+        assert!(
+            left_edge_alpha > 0,
+            "the left edge of the block was clipped"
+        );
     }
 }

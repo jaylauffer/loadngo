@@ -198,13 +198,15 @@ backend returning nothing at all are indistinguishable from "the game
 ignored me". The unit tests can pin the arithmetic and the constants; only
 hardware can confirm the pad in your hands is understood.
 
-Its notes panel draws each line as its own single-line label rather than as
-one `TextBlockModel`. That is a workaround, not a preference: on the Linux
-backend today a multi-line text block drops its leading lines, reproducible
-in the untouched `text_input_harness`, whose "Purpose" paragraph is missing
-on Linux while rendering fine elsewhere. A harness whose own instructions
-render wrong is worse than no harness, so it avoids the path that is
-currently broken. Revert it to a text block once that defect is fixed.
+Building it also turned up a real engine bug: its notes panel came out
+missing its first paragraph, which reproduced in the untouched
+`text_input_harness` and turned out to be a screen-space clip reaching a
+texture-local rasterizer in `linux.rs`. That is fixed — see
+[TEXT_OVERFLOW_AND_MEASUREMENT.md](TEXT_OVERFLOW_AND_MEASUREMENT.md) — and
+this harness uses an ordinary `TextBlockModel` again. Worth noting for what
+a harness is *for*: it was built to check gamepad input and immediately
+paid for itself against a different subsystem, because it is a small page
+of known-correct content rendered somewhere nobody had looked.
 
 ## Platform priority and phasing
 

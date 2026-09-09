@@ -163,38 +163,33 @@ fn paint_notes(scene: &mut Vec<PaintOp>, height: f32, press_log: &[String]) {
     title.style.color = INK;
     title.paint(scene);
 
-    let notes = [
-        "Purpose",
-        "Watch raw gamepad values while",
-        "pressing things, to check a",
-        "backend against real hardware.",
-        "",
-        "What to confirm",
-        "- one card per physical pad,",
-        "   not one per device node",
-        "- stick UP gives a NEGATIVE y",
-        "- triggers sweep 0.00 to 1.00",
-        "- each button lights the chip",
-        "   matching its position",
-        "- unplugging clears the card",
-        "",
-        "Chips",
-        "green = held this frame",
-        "amber = press edge this frame",
-        "",
-        "Escape closes the window.",
-    ];
-    paint_lines(
-        scene,
+    let mut notes = TextBlockModel::new(
+        "Purpose\n\
+Watch raw gamepad values while\n\
+pressing things, to check a\n\
+backend against real hardware.\n\n\
+What to confirm\n\
+- one card per physical pad,\n\
+   not one per device node\n\
+- stick UP gives a NEGATIVE y\n\
+- triggers sweep 0.00 to 1.00\n\
+- each button lights the chip\n\
+   matching its position\n\
+- unplugging clears the card\n\n\
+Chips\n\
+green = held this frame\n\
+amber = press edge this frame\n\n\
+Escape closes the window.",
         Rect {
             x: content.x,
             y: content.y + title_height + 12.0,
             width: content.width,
             height: content.height - title_height - 12.0,
         },
-        notes.iter().copied(),
-        DIM_INK,
     );
+    notes.style.font_size = CAPTION_FONT;
+    notes.style.color = DIM_INK;
+    notes.paint(scene);
 
     if press_log.is_empty() {
         return;
@@ -216,12 +211,11 @@ fn paint_notes(scene: &mut Vec<PaintOp>, height: f32, press_log: &[String]) {
 
 /// Draws pre-split lines as individual single-line labels.
 ///
-/// Deliberately not one `TextBlockModel`: the Linux backend currently drops
-/// the leading lines of a multi-line block (reproducible in the untouched
-/// `text_input_harness`, whose "Purpose" paragraph is missing on Linux
-/// today). A harness whose own notes render wrong is worse than useless,
-/// and single-line labels are the path known to be correct on every
-/// backend. Revert to a text block once that defect is fixed.
+/// Kept over one `TextBlockModel` only because the press log grows a line at
+/// a time and each entry is independent; there is no longer a rendering
+/// reason for it. This started life as a workaround for a Linux bug that
+/// ate a text block's leading lines — fixed in `linux.rs`, so the notes
+/// panel below is a plain text block again.
 fn paint_lines<'a>(
     scene: &mut Vec<PaintOp>,
     bounds: Rect,
@@ -272,25 +266,17 @@ fn paint_pads(
         empty.border = Some(PANEL_EDGE);
         empty.padding = PANEL_PADDING;
         empty.paint(scene);
-        // Single-line labels here too, for the reason `paint_lines`
-        // documents: this panel came out completely blank on Linux as a
-        // text block, which reads as a broken harness rather than as an
-        // absent pad.
-        let message: &[&str] = if seen_any_pad {
-            &["No gamepad connected now — one was seen earlier."]
+        let message = if seen_any_pad {
+            "No gamepad connected now — one was seen earlier."
         } else {
-            &[
-                "No gamepad connected.",
-                "Plug one in; discovery is polled, so it",
-                "may take a second to appear.",
-            ]
+            "No gamepad connected.\n\
+             Plug one in; discovery is polled, so it\n\
+             may take a second to appear."
         };
-        paint_lines(
-            scene,
-            empty.content_rect(),
-            message.iter().copied(),
-            DIM_INK,
-        );
+        let mut label = TextBlockModel::new(message, empty.content_rect());
+        label.style.font_size = BODY_FONT;
+        label.style.color = DIM_INK;
+        label.paint(scene);
         return;
     }
 

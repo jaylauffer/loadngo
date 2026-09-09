@@ -164,32 +164,50 @@ and the assurance beyond that is a screenshot.
    trimmed to fit and is still clipped, the fitter is not wrong — the
    measurement it trusted is.
 
-## Open defect: multi-line blocks drop their leading lines on Linux
+## Fixed: a screen-space clip reaching a texture-local rasterizer
 
 Found 2026-09-09 while building `gamepad_harness`, whose notes panel came
-out missing its first paragraph. The instinct was that the new harness had
-laid it out wrong; the check that settled it was running the *untouched*
-`text_input_harness` on the same machine (dolores, Wayland/labwc via
-Xwayland, GLES backend) and screenshotting it: its notes panel is missing
-"Purpose" and the two lines under it too, and has been all along.
+out missing its first paragraph, and fixed the same day.
 
-So a `TextBlockModel` — `TextLayoutMode::MultiLine`, top-aligned,
-`TextOverflow::Clip` — silently loses its leading lines on the Linux
-backend. In one observed case the surviving lines were also shifted left of
-the block's rect, so the block appears to be positioned from something
-other than its own bounds rather than merely clipped. Short blocks (the
-three-line stick captions in the same harness) render correctly, so it is
-not every multi-line block.
+The instinct was that the new harness had laid it out wrong. The check that
+settled it was running the *untouched* `text_input_harness` on the same
+machine and screenshotting it: its notes panel was missing "Purpose" and
+the two lines under it too, and had been for as long as it existed. Nobody
+had noticed, because nobody reads a harness's own instructions closely.
 
-Not yet diagnosed, and deliberately not fixed inside the gamepad work.
-Two things follow for now:
+**The cause.** Every software-text backend rewrites a `Text` command into a
+*private texture* plus an `Image` that places it. `rasterize_text_command`
+built that texture by cloning the request and overriding `rect` with the
+texture-local rect — but left `clip_rect` untouched, still in **screen
+space**. `draw_text_request` then intersected the two, and clipped the
+glyphs to the overlap of a screen rectangle and a texture rectangle, which
+is a meaningless region that happens to be non-empty.
 
-- Treat a suspicious multi-line block on Linux as this bug until proven
-  otherwise, and compare against `text_input_harness` before blaming new
-  code — that comparison cost one build and one screenshot here.
-- A panel that must read correctly today can draw its lines as individual
-  single-line labels, which are correct on every backend. `gamepad_harness`
-  does exactly that, with a comment pointing back here.
+That explains every part of the symptom, including why it looked like a
+layout bug rather than a clipping one:
 
-This is also rule 3 arriving from the other direction: the screenshot did
-not just catch the bug, it identified whose bug it was.
+- A block at screen `(40, 80)` lost its top 80px and its left 40px — four
+  lines and part of a fifth, and the leftmost glyphs of every survivor.
+  **The further down and right a text block sits, the more it loses.**
+- Single-line text almost always escaped: its box is short, so the screen
+  and texture y-ranges usually do not overlap at all, the intersection is
+  empty, and the code falls back to the correct texture-local rect.
+- Short multi-line blocks (the harness's three-line stick captions)
+  escaped for the same reason.
+
+**The fix** is to drop the clip while rasterizing: the texture is private,
+its origin is its own, and the real clip is applied where the texture is
+*placed* on screen, by `text_texture_clip_rect`. `android.rs` had already
+worked this out and says so at its glyph loop — "testing one against the
+other blanks the whole texture" — which is the second time in this session
+that an existing correct sibling implementation held the answer. Linux and
+Windows both carry the fix and a regression test that rasterizes a
+multi-line block at an offset and asserts ink in *every* line's band; both
+tests fail against the old code.
+
+Rule 5, earned here:
+
+5. **A private texture has its own origin.** Any clip, rect, or point
+   crossing into one must be translated or dropped, never passed through.
+   The bug it causes is silent, position-dependent, and reads as a layout
+   error rather than a clipping one.
