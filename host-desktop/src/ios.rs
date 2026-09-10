@@ -4,11 +4,11 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicU64, AtomicUsize, Ordering},
     Arc, Condvar, Mutex, OnceLock,
 };
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures::executor::LocalPool;
 use futures::task::LocalSpawnExt;
@@ -425,6 +425,200 @@ fn trace_input_log(message: impl AsRef<str>) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Frame pacing metrics (opt-in: `LOADNGO_FRAME_METRICS=1`)
+// ---------------------------------------------------------------------------
+//
+// This measures *scheduling* behaviour -- real frame intervals, host thread
+// spawns, wake deliveries -- and deliberately not CPU or context-switch
+// counts. A clean load profile does not prove a scheduling change is correct:
+// the Android proactor migration (2026-09-03) shipped a severe frame-pacing
+// regression with healthy-looking CPU and context-switch numbers throughout,
+// and only play-testing caught it. Intervals have to be measured directly.
+//
+// Everything on the recording path is a relaxed atomic, so it can be called
+// from the timer threads without taking the host state lock. Reporting is
+// deliberately kept *out* of the lock (see `maybe_report_frame_metrics`) so
+// the instrument does not perturb the thing it is measuring.
+//
+// `thread_spawns` is the headline figure for the proactor migration: today
+// `next_frame` spawns two OS threads per call (a condvar waiter and a
+// `thread::sleep` timer), so this should read roughly 2x the frame count
+// before the migration and zero after it.
+
+/// Upper bounds, in microseconds, for the interval histogram. Chosen around
+/// the 60Hz (16_667us) and 120Hz (8_333us) frame budgets so the buckets
+/// either side of a target actually distinguish "on time" from "one frame
+/// late", rather than smearing both into one wide bucket.
+const FRAME_BUCKET_BOUNDS_US: [u64; 13] = [
+    4_000, 8_000, 12_000, 15_000, 16_000, 17_000, 18_000, 20_000, 25_000, 33_000, 50_000, 100_000,
+    200_000,
+];
+
+struct FrameMetrics {
+    frames: AtomicU64,
+    interval_sum_us: AtomicU64,
+    interval_sq_sum: AtomicU64,
+    interval_min_us: AtomicU64,
+    interval_max_us: AtomicU64,
+    buckets: [AtomicU64; FRAME_BUCKET_BOUNDS_US.len() + 1],
+    thread_spawns: AtomicU64,
+    wakes: AtomicU64,
+}
+
+impl FrameMetrics {
+    const fn new() -> Self {
+        #[allow(clippy::declare_interior_mutable_const)]
+        const ZERO: AtomicU64 = AtomicU64::new(0);
+        Self {
+            frames: AtomicU64::new(0),
+            interval_sum_us: AtomicU64::new(0),
+            interval_sq_sum: AtomicU64::new(0),
+            interval_min_us: AtomicU64::new(u64::MAX),
+            interval_max_us: AtomicU64::new(0),
+            buckets: [ZERO; FRAME_BUCKET_BOUNDS_US.len() + 1],
+            thread_spawns: AtomicU64::new(0),
+            wakes: AtomicU64::new(0),
+        }
+    }
+}
+
+static FRAME_METRICS: FrameMetrics = FrameMetrics::new();
+
+fn frame_metrics_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        env::var("LOADNGO_FRAME_METRICS")
+            .map(|value| {
+                let value = value.trim().to_ascii_lowercase();
+                matches!(value.as_str(), "1" | "true" | "yes" | "on")
+            })
+            .unwrap_or(false)
+    })
+}
+
+/// How many frames between printed reports. 300 frames is ~5s at 60Hz.
+fn frame_metrics_report_every() -> u64 {
+    static EVERY: OnceLock<u64> = OnceLock::new();
+    *EVERY.get_or_init(|| {
+        env::var("LOADNGO_FRAME_METRICS_EVERY")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(300)
+    })
+}
+
+fn frame_metrics_start() -> Instant {
+    static START: OnceLock<Instant> = OnceLock::new();
+    *START.get_or_init(Instant::now)
+}
+
+/// Records one frame interval. Atomics only -- safe to call while the host
+/// state lock is held.
+fn record_frame_interval(dt: Duration) {
+    if !frame_metrics_enabled() {
+        return;
+    }
+    let _ = frame_metrics_start();
+    let us = dt.as_micros().min(u128::from(u64::MAX)) as u64;
+
+    FRAME_METRICS.frames.fetch_add(1, Ordering::Relaxed);
+    FRAME_METRICS
+        .interval_sum_us
+        .fetch_add(us, Ordering::Relaxed);
+    // us is bounded by the clamp below before squaring, so this cannot
+    // overflow across any realistic session length.
+    let clamped = us.min(1_000_000);
+    FRAME_METRICS
+        .interval_sq_sum
+        .fetch_add(clamped.saturating_mul(clamped), Ordering::Relaxed);
+    FRAME_METRICS
+        .interval_min_us
+        .fetch_min(us, Ordering::Relaxed);
+    FRAME_METRICS
+        .interval_max_us
+        .fetch_max(us, Ordering::Relaxed);
+
+    let index = FRAME_BUCKET_BOUNDS_US
+        .iter()
+        .position(|bound| us < *bound)
+        .unwrap_or(FRAME_BUCKET_BOUNDS_US.len());
+    FRAME_METRICS.buckets[index].fetch_add(1, Ordering::Relaxed);
+}
+
+fn record_host_thread_spawn() {
+    if frame_metrics_enabled() {
+        FRAME_METRICS.thread_spawns.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn record_host_wake() {
+    if frame_metrics_enabled() {
+        FRAME_METRICS.wakes.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Prints a report if one is due. Call this from somewhere that is **not**
+/// holding the host state lock -- it does real I/O.
+fn maybe_report_frame_metrics() {
+    if !frame_metrics_enabled() {
+        return;
+    }
+    let frames = FRAME_METRICS.frames.load(Ordering::Relaxed);
+    let every = frame_metrics_report_every();
+    if frames == 0 || frames % every != 0 {
+        return;
+    }
+
+    let elapsed = frame_metrics_start().elapsed().as_secs_f64();
+    let sum_us = FRAME_METRICS.interval_sum_us.load(Ordering::Relaxed);
+    let sq_sum = FRAME_METRICS.interval_sq_sum.load(Ordering::Relaxed);
+    let min_us = FRAME_METRICS.interval_min_us.load(Ordering::Relaxed);
+    let max_us = FRAME_METRICS.interval_max_us.load(Ordering::Relaxed);
+    let spawns = FRAME_METRICS.thread_spawns.load(Ordering::Relaxed);
+    let wakes = FRAME_METRICS.wakes.load(Ordering::Relaxed);
+
+    let mean_us = sum_us as f64 / frames as f64;
+    let variance = (sq_sum as f64 / frames as f64) - (mean_us * mean_us);
+    let stddev_us = if variance > 0.0 { variance.sqrt() } else { 0.0 };
+
+    let counts: Vec<u64> = FRAME_METRICS
+        .buckets
+        .iter()
+        .map(|bucket| bucket.load(Ordering::Relaxed))
+        .collect();
+    let pct = |target: f64| -> String {
+        let want = (frames as f64 * target).ceil() as u64;
+        let mut running = 0u64;
+        for (index, count) in counts.iter().enumerate() {
+            running += count;
+            if running >= want {
+                return match FRAME_BUCKET_BOUNDS_US.get(index) {
+                    Some(bound) => format!("<{:.1}ms", *bound as f64 / 1000.0),
+                    None => format!(">={:.1}ms", FRAME_BUCKET_BOUNDS_US[12] as f64 / 1000.0),
+                };
+            }
+        }
+        "n/a".to_string()
+    };
+
+    eprintln!(
+        "[loadngo-frame] frames={frames} elapsed={elapsed:.1}s fps={:.1} \
+         interval mean={:.2}ms stddev={:.2}ms min={:.2}ms max={:.2}ms \
+         p50={} p95={} p99={} host_thread_spawns={spawns} ({:.1}/frame) wakes={wakes}",
+        frames as f64 / elapsed.max(f64::EPSILON),
+        mean_us / 1000.0,
+        stddev_us / 1000.0,
+        min_us as f64 / 1000.0,
+        max_us as f64 / 1000.0,
+        pct(0.50),
+        pct(0.95),
+        pct(0.99),
+        spawns as f64 / frames as f64,
+    );
+}
+
 define_class!(
     #[unsafe(super = NSObject)]
     #[thread_kind = MainThreadOnly]
@@ -582,6 +776,7 @@ fn advance_frame_clock(state: &mut HostSharedState) {
     let now = Instant::now();
     let dt = now.saturating_duration_since(state.last_frame_instant);
     state.last_frame_instant = now;
+    record_frame_interval(dt);
     state.latest_frame = HostFrame {
         timing: FrameTiming {
             delta_seconds: dt.as_secs_f32().max(1.0 / 240.0),
@@ -635,6 +830,7 @@ fn wake_runtime_after_input_update() {
     cvar.notify_all();
     drop(state);
     if let Some(proxy) = proxy {
+        record_host_wake();
         let _ = proxy.send_event(IosUserEvent::Wake);
     }
 }
@@ -738,6 +934,7 @@ pub async fn next_frame(demand: FrameDemand) {
                 self.waiting_registered = true;
                 let waker = cx.waker().clone();
                 let state_arc = shared().state.clone();
+                record_host_thread_spawn();
                 thread::spawn(move || {
                     let (lock, cvar) = &*state_arc;
                     let guard = lock.lock().expect("ios host state poisoned");
@@ -750,6 +947,7 @@ pub async fn next_frame(demand: FrameDemand) {
                     self.timer_registered = true;
                     let waker = cx.waker().clone();
                     let state_arc = shared().state.clone();
+                    record_host_thread_spawn();
                     thread::spawn(move || {
                         thread::sleep(delay);
                         let (lock, cvar) = &*state_arc;
@@ -761,7 +959,11 @@ pub async fn next_frame(demand: FrameDemand) {
                         let proxy = state.event_proxy.clone();
                         cvar.notify_all();
                         drop(state);
+                        // Reporting does real I/O, so it deliberately happens
+                        // after the state lock is released.
+                        maybe_report_frame_metrics();
                         if let Some(proxy) = proxy {
+                            record_host_wake();
                             let _ = proxy.send_event(IosUserEvent::Wake);
                         }
                         waker.wake();
@@ -1155,6 +1357,7 @@ fn render_commands(commands: &[FrameCommand], font: Option<&DesktopFont>) {
     let proxy = state.event_proxy.clone();
     drop(state);
     if let Some(proxy) = proxy {
+        record_host_wake();
         let _ = proxy.send_event(IosUserEvent::Wake);
     }
 }
