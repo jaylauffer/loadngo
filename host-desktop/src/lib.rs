@@ -37,7 +37,12 @@ mod macos;
 pub mod netbsd_wsdesktop;
 #[cfg(target_os = "netbsd")]
 pub mod netbsd_wsdisplay;
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "android"))]
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "android"
+))]
 mod proactor_driver;
 #[cfg(target_os = "windows")]
 mod windows;

@@ -37,7 +37,10 @@ impl<P: CompletionPort> HostProactor<P> {
     /// `run_until_stopped()` directly on its own dedicated pump thread
     /// (see `android.rs::init_proactor`), which already loops the same
     /// dispatch logic internally, so it never calls this.
-    #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "macos", target_os = "ios", target_os = "linux")),
+        allow(dead_code)
+    )]
     pub fn drain_ready(&self) {
         loop {
             let report = self
@@ -57,9 +60,16 @@ impl<P: CompletionPort> HostProactor<P> {
     /// the top-level entry future with a raw `Context::from_waker`); Linux
     /// wakes its pending futures directly instead (see
     /// `linux.rs::HostSharedState::next_frame_wakers`), so it doesn't call
-    /// this yet -- kept here rather than moved into `macos.rs` because iOS
-    /// (the next platform migration, also `KqueuePort`-backed) is expected
-    /// to need the same raw-executor pattern macOS uses.
+    /// this.
+    ///
+    /// This was previously kept here rather than moved into `macos.rs` in
+    /// the expectation that iOS, also `KqueuePort`-backed, would need the
+    /// same raw-executor pattern. That turned out to be wrong (2026-09-10):
+    /// port type and executor pattern are independent axes. macOS uses a
+    /// raw executor because it drives a native AppKit pump and has no event
+    /// loop to hang one off; iOS is a winit host like Linux, so its
+    /// migration kept `LocalPool` and took Linux's shape instead. macOS is
+    /// the only caller, and on current evidence will stay that way.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub fn waker(&self) -> Waker {
         waker_for(self.handle.clone())

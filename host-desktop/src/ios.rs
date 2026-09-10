@@ -7,7 +7,7 @@ use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering},
     Arc, Condvar, Mutex, OnceLock,
 };
-use std::thread;
+use std::task::Waker;
 use std::time::{Duration, Instant};
 
 use futures::executor::LocalPool;
@@ -20,6 +20,7 @@ use loadngo_host_core::{
     RenderOp, RenderTextStyle, SurfaceInfo, TextMetrics, TouchPhase, TouchPoint, WindowDescriptor,
     WindowIconSet,
 };
+use loadngo_proactor::{CompletionKind, KqueuePort};
 use loadngo_renderer::{FrameCommand, ImageRequest, Renderer, RendererConfig};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -31,11 +32,13 @@ use ui_core::{
     paint::PaintOp,
     Modifiers,
 };
+
+use crate::proactor_driver::HostProactor;
 use winit::application::ApplicationHandler;
 use winit::event::{
     ElementState, Ime, Touch as WinitTouch, TouchPhase as WinitTouchPhase, WindowEvent,
 };
-use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, KeyCode, NamedKey, PhysicalKey};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::{Window, WindowAttributes, WindowId};
@@ -134,6 +137,10 @@ struct HostSharedState {
     last_backend_used: DesktopRenderBackendKind,
     backend_detail: String,
     event_proxy: Option<EventLoopProxy<IosUserEvent>>,
+    /// Wakers for futures parked in `next_frame`, woken in place wherever
+    /// `advance_frame_clock` runs. Replaces the per-call condvar-waiter
+    /// thread the host used to spawn.
+    next_frame_wakers: Vec<Waker>,
 }
 
 #[derive(Clone)]
@@ -312,6 +319,7 @@ impl Default for HostSharedState {
             last_submitted_commands: Vec::new(),
             last_submitted_font_source: None,
             next_texture_id: 0,
+            next_frame_wakers: Vec::new(),
             last_backend_used: DesktopRenderBackendKind::Unavailable,
             backend_detail: "iOS Metal host waiting for the first frame".to_string(),
             event_proxy: None,
@@ -320,6 +328,20 @@ impl Default for HostSharedState {
 }
 
 static HOST_SHARED: OnceLock<IosHostShared> = OnceLock::new();
+
+/// The host's own kqueue proactor. iOS is structurally a winit host like
+/// Linux -- not a native-pump host like macOS -- so it follows Linux's
+/// shape: keep the `LocalPool` executor, own one `Proactor` for the
+/// process lifetime, and drive it from `about_to_wait` with
+/// `ControlFlow::WaitUntil`. The port is `KqueuePort` (shared with macOS)
+/// but the executor pattern is Linux's; those are independent axes.
+static PROACTOR: OnceLock<HostProactor<KqueuePort>> = OnceLock::new();
+
+fn proactor() -> &'static HostProactor<KqueuePort> {
+    PROACTOR
+        .get()
+        .expect("iOS proactor is not initialized for loadngo host-desktop")
+}
 static IOS_RUNTIME_ENV: OnceLock<Result<IosRuntimeEnvironment, String>> = OnceLock::new();
 const IOS_TOUCH_BRIDGE_ID: u64 = u64::MAX;
 static IOS_TOUCH_CONTENT_VIEW: AtomicUsize = AtomicUsize::new(0);
@@ -547,6 +569,11 @@ fn record_frame_interval(dt: Duration) {
     FRAME_METRICS.buckets[index].fetch_add(1, Ordering::Relaxed);
 }
 
+/// Deliberately retained with no caller: as of the proactor migration the
+/// iOS host spawns no threads to schedule frames, so this reads 0 and that
+/// zero *is* the evidence. Anything that reintroduces a per-frame thread
+/// should call this, and the metric will say so.
+#[allow(dead_code)]
 fn record_host_thread_spawn() {
     if frame_metrics_enabled() {
         FRAME_METRICS.thread_spawns.fetch_add(1, Ordering::Relaxed);
@@ -788,6 +815,9 @@ fn advance_frame_clock(state: &mut HostSharedState) {
     };
     state.frame_epoch = state.frame_epoch.saturating_add(1);
     state.pending_redraw = true;
+    for waker in state.next_frame_wakers.drain(..) {
+        waker.wake();
+    }
 }
 
 fn apply_touch_point(point: TouchPoint) {
@@ -858,6 +888,9 @@ pub fn launch(
 ) {
     configure_runtime_environment().expect("failed to configure iOS runtime environment");
     let env = runtime_environment().expect("failed to access iOS runtime environment");
+    let _ = PROACTOR.set(HostProactor::new(
+        KqueuePort::new().expect("failed to create iOS kqueue port"),
+    ));
     let shared = IosHostShared {
         state: Arc::new((Mutex::new(HostSharedState::default()), Condvar::new())),
     };
@@ -906,10 +939,27 @@ pub fn capture_frame() -> HostFrame {
 }
 
 pub async fn next_frame(demand: FrameDemand) {
+    // Previously this spawned *two* OS threads on every call -- one parked
+    // on the condvar waiting for a frame-epoch bump, and (for
+    // `FrameDemand::After`) a second doing `thread::sleep`. At ~60Hz that
+    // churned ~120 threads a second, and measured on real hardware
+    // (iPhone 13 Pro Max, 2026-09-10) it held the game to 49.8 FPS with a
+    // 20.17ms mean interval against a 16.67ms budget: `thread::sleep`
+    // guarantees *at least* its delay, and thread creation, lock
+    // acquisition and wake propagation all land on top of it, every frame.
+    //
+    // Both threads are gone. A due `Waker` is stored directly in
+    // `HostSharedState::next_frame_wakers` and woken in place wherever
+    // `advance_frame_clock` already runs, and the delay is a deferred
+    // completion on the host's `Proactor<KqueuePort>` (see
+    // `schedule_frame_timer`), dispatched from `IosApp::about_to_wait` and
+    // slept on by `ControlFlow::WaitUntil` -- which targets an absolute
+    // deadline instead of sleeping a relative duration after the fact.
+    // This mirrors `linux.rs`, the host iOS actually resembles.
     struct NextFrameFuture {
         demand: FrameDemand,
         observed_epoch: u64,
-        waiting_registered: bool,
+        waker_registered: bool,
         timer_registered: bool,
     }
 
@@ -920,54 +970,24 @@ pub async fn next_frame(demand: FrameDemand) {
             mut self: Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<Self::Output> {
-            let (lock, _cvar) = &*shared().state;
-            let state = lock.lock().expect("ios host state poisoned");
-            if !state.running {
-                return std::task::Poll::Pending;
-            }
-            if state.frame_epoch > self.observed_epoch {
-                self.observed_epoch = state.frame_epoch;
-                return std::task::Poll::Ready(());
-            }
-            drop(state);
-            if !self.waiting_registered {
-                self.waiting_registered = true;
-                let waker = cx.waker().clone();
-                let state_arc = shared().state.clone();
-                record_host_thread_spawn();
-                thread::spawn(move || {
-                    let (lock, cvar) = &*state_arc;
-                    let guard = lock.lock().expect("ios host state poisoned");
-                    let _guard = cvar.wait(guard).expect("ios host wait poisoned");
-                    waker.wake();
-                });
+            {
+                let mut state = lock_state();
+                if !state.running {
+                    return std::task::Poll::Pending;
+                }
+                if state.frame_epoch > self.observed_epoch {
+                    self.observed_epoch = state.frame_epoch;
+                    return std::task::Poll::Ready(());
+                }
+                if !self.waker_registered {
+                    self.waker_registered = true;
+                    state.next_frame_wakers.push(cx.waker().clone());
+                }
             }
             if !self.timer_registered {
                 if let FrameDemand::After(delay) = self.demand {
                     self.timer_registered = true;
-                    let waker = cx.waker().clone();
-                    let state_arc = shared().state.clone();
-                    record_host_thread_spawn();
-                    thread::spawn(move || {
-                        thread::sleep(delay);
-                        let (lock, cvar) = &*state_arc;
-                        let mut state = lock.lock().expect("ios host state poisoned");
-                        if !state.running {
-                            return;
-                        }
-                        advance_frame_clock(&mut state);
-                        let proxy = state.event_proxy.clone();
-                        cvar.notify_all();
-                        drop(state);
-                        // Reporting does real I/O, so it deliberately happens
-                        // after the state lock is released.
-                        maybe_report_frame_metrics();
-                        if let Some(proxy) = proxy {
-                            record_host_wake();
-                            let _ = proxy.send_event(IosUserEvent::Wake);
-                        }
-                        waker.wake();
-                    });
+                    schedule_frame_timer(delay);
                 }
             }
             std::task::Poll::Pending
@@ -978,10 +998,32 @@ pub async fn next_frame(demand: FrameDemand) {
     NextFrameFuture {
         demand,
         observed_epoch,
-        waiting_registered: false,
+        waker_registered: false,
         timer_registered: false,
     }
     .await;
+}
+
+fn schedule_frame_timer(delay: Duration) {
+    proactor()
+        .handle
+        .defer_for(delay, CompletionKind::Timer, 0, move |_| {
+            let mut state = lock_state();
+            if !state.running {
+                return;
+            }
+            advance_frame_clock(&mut state);
+            let proxy = state.event_proxy.clone();
+            drop(state);
+            // Reporting does real I/O, so it deliberately happens after the
+            // state lock is released.
+            maybe_report_frame_metrics();
+            if let Some(proxy) = proxy {
+                record_host_wake();
+                let _ = proxy.send_event(IosUserEvent::Wake);
+            }
+        })
+        .expect("failed to schedule iOS frame timer");
 }
 
 pub fn simulate_mouse_with_touch(enabled: bool) {
@@ -1685,6 +1727,11 @@ impl ApplicationHandler<IosUserEvent> for IosApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Dispatch any proactor deferred work that's now due -- this is what
+        // actually fires a `FrameDemand::After` timer and wakes the future
+        // parked on it -- before giving the executor a chance to make
+        // progress from that wake-up.
+        proactor().drain_ready();
         self.pool.run_until_stalled();
         {
             let state = lock_state();
@@ -1695,6 +1742,13 @@ impl ApplicationHandler<IosUserEvent> for IosApp {
             }
         }
         self.request_redraw_if_needed();
+        // Block until the next deferred deadline rather than busy-polling.
+        // A real event, a user event (an external `wake_host()`), or the
+        // timer elapsing all bring the loop back here.
+        event_loop.set_control_flow(match proactor().proactor.next_deadline() {
+            Some(deadline) => ControlFlow::WaitUntil(deadline),
+            None => ControlFlow::Wait,
+        });
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: IosUserEvent) {
