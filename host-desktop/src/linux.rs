@@ -135,6 +135,10 @@ struct HostSharedState {
     backend_detail: String,
     event_proxy: Option<EventLoopProxy<LinuxUserEvent>>,
     next_frame_wakers: Vec<Waker>,
+    /// Set while a `next_frame(FrameDemand::Idle)` future is parked. An idle
+    /// runtime has no timer to advance the frame clock, so input has to do
+    /// it -- but only then. See `wake_if_idle`.
+    idle_frame_pending: bool,
     gamepads: GamepadTracker,
 }
 
@@ -286,6 +290,7 @@ impl Default for HostSharedState {
             backend_detail: "Linux host waiting for the first frame".to_string(),
             event_proxy: None,
             next_frame_wakers: Vec::new(),
+            idle_frame_pending: false,
             gamepads: GamepadTracker::new(),
         }
     }
@@ -530,6 +535,9 @@ pub async fn next_frame(demand: FrameDemand) {
                     self.waker_registered = true;
                     state.next_frame_wakers.push(cx.waker().clone());
                 }
+                if matches!(self.demand, FrameDemand::Idle) {
+                    state.idle_frame_pending = true;
+                }
             }
             if !self.timer_registered {
                 if let FrameDemand::After(delay) = self.demand {
@@ -567,6 +575,30 @@ fn schedule_frame_timer(delay: std::time::Duration) {
             }
         })
         .expect("failed to schedule Linux frame timer");
+}
+
+/// Advances the frame clock if -- and only if -- a `FrameDemand::Idle`
+/// future is parked.
+///
+/// Without this an idle runtime never observes input at all: a parked
+/// `NextFrameFuture` waits for `frame_epoch` to move, and only the frame
+/// timer moves it, and an idle runtime has no timer. `sng-mahjong` is the
+/// first game to ask for `Idle`, and on Linux it could not be clicked at
+/// all -- input reached `pending_input` and stopped there.
+///
+/// The guard is the whole point. `window_event` deliberately does not bump
+/// `frame_epoch`, because doing so on every raw event made `next_frame()`
+/// resolve at OS key-repeat rate instead of the caller's requested cadence
+/// (see the note at the top of that function). That reasoning is about a
+/// *paced* runtime and does not apply to an idle one, which has asked for
+/// precisely this behaviour: nothing is scheduled, so wake me when
+/// something happens.
+fn wake_if_idle() {
+    let mut state = lock_state();
+    if !state.running || !state.idle_frame_pending {
+        return;
+    }
+    advance_frame_clock(&mut state, "idle-input");
 }
 
 pub fn simulate_mouse_with_touch(enabled: bool) {
@@ -1235,6 +1267,9 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
             }
             _ => {}
         }
+        // Covers every arm above rather than each one individually: any
+        // window event may be the thing an idle runtime is waiting for.
+        wake_if_idle();
         self.request_redraw_if_needed();
     }
 
@@ -1286,6 +1321,7 @@ fn advance_frame_clock(state: &mut HostSharedState, source: &str) {
     };
     state.frame_epoch = state.frame_epoch.saturating_add(1);
     state.pending_redraw = true;
+    state.idle_frame_pending = false;
     for waker in state.next_frame_wakers.drain(..) {
         waker.wake();
     }
