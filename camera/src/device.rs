@@ -36,10 +36,26 @@ pub fn input_format() -> &'static str {
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
-        compile_error!(
-            "loadngo-camera has no ffmpeg input format for this platform; add one in device.rs"
-        )
+        // Unreachable in practice: every caller goes through
+        // `crate::ensure_supported`, which fails first on any platform
+        // without an ffmpeg capture path. Returning a placeholder rather
+        // than `compile_error!` keeps the crate compiling for iOS and
+        // Android, which link `host-desktop` but never capture through
+        // ffmpeg.
+        ""
     }
+}
+
+/// Whether this platform has an ffmpeg-based capture path at all.
+///
+/// False on iOS and Android: both have cameras, but they are reached through
+/// `AVCaptureSession`/`Camera2`, not by shelling out to `ffmpeg`. The crate
+/// still compiles there because `host-desktop` depends on it unconditionally
+/// -- capture and enumeration just fail with
+/// [`CameraError::Unsupported`](crate::CameraError::Unsupported).
+#[must_use]
+pub const fn is_supported() -> bool {
+    cfg!(any(target_os = "linux", target_os = "macos", windows))
 }
 
 /// How `device` is spelled after `-i`.
@@ -339,5 +355,14 @@ mod platform {
             assert_eq!(devices.len(), 1);
             assert_eq!(devices[0].id, "Integrated Camera");
         }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+mod platform {
+    use super::{CameraDevice, CameraError};
+
+    pub fn list_devices() -> Result<Vec<CameraDevice>, CameraError> {
+        Err(CameraError::Unsupported)
     }
 }

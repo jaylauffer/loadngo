@@ -60,6 +60,19 @@ pub enum CameraError {
     Stream(String),
     #[error("camera enumeration failed: {0}")]
     Enumerate(String),
+    #[error("camera capture is not supported on this platform")]
+    Unsupported,
+}
+
+/// Fails closed on platforms with no ffmpeg capture path (iOS, Android), so
+/// no caller can reach [`device::input_format`] there. See
+/// [`device::is_supported`].
+fn ensure_supported() -> Result<(), CameraError> {
+    if device::is_supported() {
+        Ok(())
+    } else {
+        Err(CameraError::Unsupported)
+    }
 }
 
 /// How to open a camera. `device` is a platform-native identifier as
@@ -153,6 +166,7 @@ fn base_command(config: &CaptureConfig) -> Command {
 /// capture, and periodic polling like `sng-rusty`'s motion detector -- so
 /// they do not each reimplement the platform input flags.
 pub fn capture_single_frame(config: &CaptureConfig, format: &str) -> Result<Vec<u8>, CameraError> {
+    ensure_supported()?;
     let mut command = base_command(config);
     command.args(["-frames:v", "1", "-f", format, "pipe:1"]);
     command.stdout(Stdio::piped());
@@ -227,6 +241,7 @@ impl CaptureStream {
     /// Starts capture. On Unix the pipe is put into non-blocking mode so
     /// [`Self::pump`] can be driven from a readiness callback.
     pub fn start(config: &CaptureConfig) -> Result<Self, CameraError> {
+        ensure_supported()?;
         let (frame_width, frame_height) = config.frame_dimensions()?;
         let frame_len = config.frame_len()?;
 

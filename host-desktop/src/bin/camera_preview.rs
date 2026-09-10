@@ -1,3 +1,10 @@
+//! Desktop-only: the preview drives `loadngo-proactor` and `wake_host`
+//! directly, neither of which the iOS or Android hosts expose. Gated the way
+//! `text_metrics_harness.rs` and the `netbsd_*` bins are, so a
+//! `cargo check -p loadngo-host-desktop --target aarch64-apple-ios` stays
+//! green (see AGENTS.md's cross-platform build rule).
+
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 mod harness {
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -1081,6 +1088,12 @@ mod harness {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 fn main() -> Result<(), String> {
     harness::run()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+fn main() {
+    eprintln!("camera_preview is only supported on desktop platforms.");
 }
