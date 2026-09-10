@@ -5,8 +5,9 @@ done (macOS/Linux 2026-09-01, Linux pending hardware evidence-gate
 measurement; Android backend **and** host migration 2026-09-03,
 on-device-verified — including a real frame-pacing regression the user's
 own play-testing caught, root-caused, and fixed same day, see the
-Android section below); iOS/Windows backends and host migrations still
-open.
+Android section below); **iOS host migrated and device-verified
+2026-09-10** on Zheonus VI, see the iOS section below; Windows backend and
+host migration still open.
 
 ## Decision
 
@@ -88,9 +89,67 @@ The remaining host gap is platform parity:
 | --- | --- | --- |
 | macOS | `KqueuePort` | reference integration exists |
 | Linux | `IoUringPort` | host scheduler migrated 2026-09-01; pending real-hardware evidence-gate measurements (dolores) |
-| iOS | `KqueuePort` | host scheduler migration required |
+| iOS | `KqueuePort` | host scheduler migrated 2026-09-10, device-verified: 49.8 -> 59.6 FPS, 2.0 -> 0 thread spawns per frame |
 | Android | `EpollPort` | backend **and** host migration done, on-device-tested 2026-09-03 (`proactor/src/epoll.rs`, `host-desktop/src/android.rs::init_proactor`) — **not io_uring**, see below |
 | Windows | `IocpPort` | host scheduler migration and real-machine validation required |
+
+## iOS: migrated 2026-09-10, and it follows Linux rather than macOS
+
+`ios.rs::next_frame` used to spawn **two** OS threads per call -- one
+parked on the condvar waiting for a frame-epoch bump, and for
+`FrameDemand::After` a second doing `thread::sleep`. At ~60Hz that is
+~120 thread creations a second purely to schedule frames.
+
+It is now a `Waker` in `HostSharedState::next_frame_wakers` plus a
+deferred completion on a host-owned `Proactor<KqueuePort>`, dispatched
+from `IosApp::about_to_wait` and slept on with `ControlFlow::WaitUntil`.
+
+**Measured on Zheonus VI (iPhone 13 Pro Max, iOS 26.6.1), release build,
+real play in both runs.** Raw captures:
+`.lab-artifacts/ios-proactor-baseline-20260910/`.
+
+| | before | after |
+| --- | --- | --- |
+| FPS | 49.8 | **59.6** |
+| mean interval | 20.17ms | **16.90ms** |
+| p50 / p95 / p99 | <25 / <25 / <25ms | **<17 / <18 / <18ms** |
+| host thread spawns | 2.0 / frame | **0** |
+| wakes | 1 / frame | 1 / frame (unchanged) |
+
+The FPS gain is the point, and it was not anticipated before measuring:
+`thread::sleep(d)` guarantees *at least* `d`, and thread creation, lock
+acquisition and wake propagation then land on top of it every frame --
+about 3.5ms, or ~10 FPS. `defer_for` targets an absolute deadline, so
+that overhead is absorbed rather than accumulated. A scheduler migration
+that looked like pure cleanup was worth 20% of the frame rate on real
+hardware.
+
+**iOS took Linux's shape, not macOS's.** An earlier note in
+`proactor_driver.rs` predicted iOS would need macOS's raw-executor
+pattern because both are `KqueuePort`-backed. That was wrong, and the
+comment is corrected in place: port type and executor pattern are
+independent axes. macOS uses a raw executor because it drives a native
+AppKit pump and has no event loop to hang one off. iOS is a winit host
+with a `LocalPool`, structurally identical to Linux, and was missing
+precisely the piece Linux's migration added. **When picking a reference
+host, match the event-loop structure, not the completion port.**
+
+### Known-remaining: unarbitrated frame-clock advance
+
+Both before and after, the minimum observed frame interval is
+sub-millisecond (0.11ms before, 0.33ms after) -- two frames advancing
+back to back. `advance_frame_clock` has three unarbitrated callers on
+iOS (input, the timer, and the render publish path), any two of which can
+fire together.
+
+**This is not iOS-specific.** `linux.rs` has the same three callers
+(`wake_host`, `timer`, `publish_frame`) and arbitrates between them no
+more than iOS does -- it only traces which one fired, via a `source`
+parameter. Linux has no frame-interval metrics, so nobody has seen it
+there. Treat this as a `loadngo`-wide defect pending a shared fix, and
+consider promoting the iOS metrics surface (`LOADNGO_FRAME_METRICS`) to
+somewhere Linux and Android can use it -- it found this on its first run
+after months of invisibility.
 
 ## Android: `io_uring` is not available to app processes, confirmed on real hardware
 
