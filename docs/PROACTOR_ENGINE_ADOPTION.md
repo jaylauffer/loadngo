@@ -134,6 +134,44 @@ with a `LocalPool`, structurally identical to Linux, and was missing
 precisely the piece Linux's migration added. **When picking a reference
 host, match the event-loop structure, not the completion port.**
 
+### Second app: sng-zhoenus, 23 minutes continuous
+
+Verified on the same host code with a second game on 2026-09-10.
+`sng-zhoenus` matters as an independent check because its frame demand
+differs: `sng-roguelite` animates continuously and sits on
+`FrameDemand::After` almost permanently, while zhoenus goes genuinely
+idle at menus and wave transitions, exercising the
+`FrameDemand::Idle` -> `ControlFlow::Wait` branch the roguelite runs
+barely touched. It also drives two simultaneous touch sticks.
+
+```
+frames=81900 elapsed=1369.0s fps=59.8 interval mean=16.72ms
+stddev=1.98ms p50=<17.0ms p95=<17.0ms p99=<18.0ms
+host_thread_spawns=0 (0.0/frame)
+```
+
+23 minutes of real play: **mean 16.72ms against a 16.67ms budget (0.3%),
+stddev 1.98ms**, zero thread spawns. This is the strongest pacing
+evidence collected for any host so far, and it confirms the idle path as
+well as the timer path.
+
+### Open observation: one unreproduced SIGABRT
+
+The *first* zhoenus run on this build aborted with signal 6 at ~25s /
+1500 frames, mid-write of a metrics line, with no panic message captured
+(the `devicectl --console` relay truncated). Recorded here rather than
+diagnosed, because it has not recurred: the immediately following run on
+the identical binary reached 81,900 frames over 23 minutes clean, and
+`sng-roguelite` ran 90s twice without incident.
+
+No evidence links it to the proactor migration. If it recurs, the
+suspects to check first are `schedule_frame_timer`'s
+`.expect("failed to schedule iOS frame timer")` (aborts if `defer_for`
+ever returns `Err`) and `lock_state()`'s poisoned-mutex `expect` (which
+would make the visible abort a cascade from an earlier panic rather than
+the root cause). Raw capture:
+`.lab-artifacts/ios-proactor-baseline-20260910/zhoenus-run1-crashed.txt`.
+
 ### Known-remaining: unarbitrated frame-clock advance
 
 Both before and after, the minimum observed frame interval is
