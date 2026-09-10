@@ -141,6 +141,10 @@ struct HostSharedState {
     /// `advance_frame_clock` runs. Replaces the per-call condvar-waiter
     /// thread the host used to spawn.
     next_frame_wakers: Vec<Waker>,
+    /// Set while a `next_frame(FrameDemand::Idle)` future is parked. An idle
+    /// runtime has no timer to advance the frame clock, so touch has to --
+    /// but only then. See the `should_publish_frame` note on `Touch`.
+    idle_frame_pending: bool,
 }
 
 #[derive(Clone)]
@@ -320,6 +324,7 @@ impl Default for HostSharedState {
             last_submitted_font_source: None,
             next_texture_id: 0,
             next_frame_wakers: Vec::new(),
+            idle_frame_pending: false,
             last_backend_used: DesktopRenderBackendKind::Unavailable,
             backend_detail: "iOS Metal host waiting for the first frame".to_string(),
             event_proxy: None,
@@ -815,6 +820,7 @@ fn advance_frame_clock(state: &mut HostSharedState) {
     };
     state.frame_epoch = state.frame_epoch.saturating_add(1);
     state.pending_redraw = true;
+    state.idle_frame_pending = false;
     for waker in state.next_frame_wakers.drain(..) {
         waker.wake();
     }
@@ -982,6 +988,9 @@ pub async fn next_frame(demand: FrameDemand) {
                 if !self.waker_registered {
                     self.waker_registered = true;
                     state.next_frame_wakers.push(cx.waker().clone());
+                }
+                if matches!(self.demand, FrameDemand::Idle) {
+                    state.idle_frame_pending = true;
                 }
             }
             if !self.timer_registered {
@@ -1696,6 +1705,16 @@ impl ApplicationHandler<IosUserEvent> for IosApp {
                 // the same mechanism Android uses) picks up the latest touch
                 // state on its own next scheduled tick, matching how mouse
                 // and keyboard input already work on every other platform.
+                //
+                // That reasoning assumes a timer exists. An idle runtime has
+                // none, so without the next line a `FrameDemand::Idle` game
+                // never observes touch at all -- sng-mahjong could not be
+                // tapped on device. Publishing only while an idle future is
+                // parked keeps the anti-flooding behaviour above exactly as
+                // it was for every paced game.
+                if lock_state().idle_frame_pending {
+                    should_publish_frame = true;
+                }
             }
             WindowEvent::Ime(Ime::Commit(text)) => {
                 let mut state = lock_state();
