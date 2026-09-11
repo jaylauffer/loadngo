@@ -2981,22 +2981,31 @@ mod macos {
                     unsafe {
                         let _: () = msg_send![
                             encoder,
-                            setVertexBytes: vertices.as_ptr().cast::<c_void>(),
-                            length: vertices.len() * std::mem::size_of::<MetalVertex>(),
-                            atIndex: 0usize
-                        ];
-                        let _: () = msg_send![
-                            encoder,
                             setFragmentBytes: color.as_ptr().cast::<c_void>(),
                             length: std::mem::size_of_val(color),
                             atIndex: 0usize
                         ];
-                        let _: () = msg_send![
-                            encoder,
-                            drawPrimitives: MTL_PRIMITIVE_TYPE_TRIANGLE,
-                            vertexStart: 0usize,
-                            vertexCount: vertices.len()
-                        ];
+                    }
+                    // `setVertexBytes` is capped at 4 KB; past that the AGX
+                    // driver aborts the whole process (found 2026-09-11 by
+                    // sng-bass-blaster's ~1,600-point waveform polyline). Draw
+                    // in whole-triangle chunks that each fit.
+                    for range in vertex_byte_chunks(vertices.len()) {
+                        let chunk = &vertices[range];
+                        unsafe {
+                            let _: () = msg_send![
+                                encoder,
+                                setVertexBytes: chunk.as_ptr().cast::<c_void>(),
+                                length: std::mem::size_of_val(chunk),
+                                atIndex: 0usize
+                            ];
+                            let _: () = msg_send![
+                                encoder,
+                                drawPrimitives: MTL_PRIMITIVE_TYPE_TRIANGLE,
+                                vertexStart: 0usize,
+                                vertexCount: chunk.len()
+                            ];
+                        }
                     }
                 }
                 PreparedVisual::RegisteredImage { texture, image }
@@ -3072,6 +3081,22 @@ mod macos {
             MetalVertex { x: x1, y: y1 },
             MetalVertex { x: x0, y: y1 },
         ]
+    }
+
+    /// Metal's documented ceiling for `setVertexBytes`.
+    const MAX_VERTEX_BYTES: usize = 4096;
+
+    /// Splits a triangle list of `vertex_count` vertices into ranges that
+    /// each hold whole triangles and fit in [`MAX_VERTEX_BYTES`].
+    pub(crate) fn vertex_byte_chunks(
+        vertex_count: usize,
+    ) -> impl Iterator<Item = std::ops::Range<usize>> {
+        let per_chunk = MAX_VERTEX_BYTES / std::mem::size_of::<MetalVertex>();
+        let per_chunk = per_chunk - per_chunk % 3;
+        let whole = vertex_count - vertex_count % 3;
+        (0..whole)
+            .step_by(per_chunk)
+            .map(move |start| start..(start + per_chunk).min(whole))
     }
 
     fn geometry_vertices(
@@ -3208,6 +3233,33 @@ mod macos {
             ]
         };
         library.ok_or_else(|| RendererError::Backend(library_error_message(error)))
+    }
+    #[cfg(test)]
+    mod vertex_chunk_tests {
+        use super::{vertex_byte_chunks, MetalVertex, MAX_VERTEX_BYTES};
+
+        #[test]
+        fn chunks_hold_whole_triangles_under_the_metal_limit() {
+            let ranges: Vec<_> = vertex_byte_chunks(9_600).collect();
+            assert!(ranges.len() > 1);
+            assert_eq!(ranges.first().unwrap().start, 0);
+            assert_eq!(ranges.last().unwrap().end, 9_600);
+            for pair in ranges.windows(2) {
+                assert_eq!(pair[0].end, pair[1].start);
+            }
+            for range in &ranges {
+                assert_eq!(range.len() % 3, 0);
+                assert!(range.len() * std::mem::size_of::<MetalVertex>() <= MAX_VERTEX_BYTES);
+            }
+        }
+
+        #[test]
+        fn small_and_empty_lists_are_one_or_zero_draws() {
+            assert_eq!(vertex_byte_chunks(6).collect::<Vec<_>>(), vec![0..6]);
+            assert_eq!(vertex_byte_chunks(0).count(), 0);
+            // A trailing partial triangle is never drawn.
+            assert_eq!(vertex_byte_chunks(7).collect::<Vec<_>>(), vec![0..6]);
+        }
     }
 }
 

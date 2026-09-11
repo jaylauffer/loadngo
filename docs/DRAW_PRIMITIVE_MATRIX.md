@@ -240,6 +240,21 @@ Status meanings:
 | `Text` | native request | rasterized text image | rasterized text image | native software text path | unsupported | future |
 | `Image` | native | native | native | native | native | future |
 
+### Metal: large geometry used to abort the process (fixed 2026-09-11)
+
+Metal's `setVertexBytes` is documented for data under 4 KB, and the AGX
+driver enforces it by **aborting the process**, with no Rust panic and
+no log line (exit 134). `gfx-metal` uploaded every `SolidGeometry` triangle
+list through it in one call, so any `Polyline`/`StrokeCircle`/lowered
+curve past 512 vertices (~85 polyline segments, since each segment is a
+6-vertex quad) killed the app on macOS **and iOS** (same module). Found by
+`sng-bass-blaster`'s ~1,600-point waveform strip; the backtrace ends in
+`-[AGXG16XFamilyRenderContext setVertexBytes:length:atIndex:]`.
+`present_scene_ordered` now draws geometry in whole-triangle chunks that
+each fit (`vertex_byte_chunks`), which needs no per-frame buffer
+allocation. The other backends take geometry through buffers and were not
+affected.
+
 ## What changed in the current pass
 
 The current backend-native geometry steps are now:
