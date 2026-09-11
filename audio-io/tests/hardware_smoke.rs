@@ -144,3 +144,87 @@ fn switches_a_converter_physical_format_and_restores_it() {
     );
     assert_eq!(restored.current_physical, Some(original));
 }
+
+/// Opens a monitor on devices named by `LOADNGO_TEST_INPUT` /
+/// `LOADNGO_TEST_OUTPUT`, silent (gain 0), and reports what it got.
+#[test]
+#[ignore]
+fn opens_a_named_input_and_output_pair() {
+    let input = std::env::var("LOADNGO_TEST_INPUT").ok();
+    let output = std::env::var("LOADNGO_TEST_OUTPUT").ok();
+    println!("requested input {input:?} -> output {output:?}");
+    let preferred_buffer_frames = std::env::var("LOADNGO_TEST_BUFFER_FRAMES")
+        .ok()
+        .and_then(|value| value.parse().ok());
+    let result = LiveMonitor::start(LiveMonitorConfig {
+        input_device_name: input,
+        output_device_name: output,
+        initial_gain: 0.0,
+        preferred_buffer_frames,
+        ..LiveMonitorConfig::default()
+    });
+    match result {
+        Ok(monitor) => {
+            let seconds: u64 = std::env::var("LOADNGO_TEST_SECONDS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(2);
+            println!(
+                "opened {:?} ({} Hz x{}) -> {:?} ({} Hz)",
+                monitor.input_device_name(),
+                monitor.input_sample_rate_hz(),
+                monitor.input_channels(),
+                monitor.output_device_name(),
+                monitor.output_sample_rate_hz(),
+            );
+            let mut tap = Vec::new();
+            for second in 1..=seconds {
+                std::thread::sleep(Duration::from_secs(1));
+                tap.clear();
+                monitor.drain_tap(&mut tap);
+                let stats = monitor.drift_stats();
+                println!(
+                    "t={second:>4}s buffered={:>5} ({:.1} ms, target {}) correction={:+8.1} ppm underruns={} overflows={} overloads={} tap={} failure={:?}",
+                    stats.buffered_samples,
+                    monitor.buffered_ms(),
+                    stats.target_samples,
+                    stats.correction_ppm,
+                    stats.underruns,
+                    stats.overflows,
+                    monitor.overloads(),
+                    tap.len(),
+                    monitor.failure()
+                );
+            }
+        }
+        Err(error) => println!("failed: {error}"),
+    }
+}
+
+/// Prints the IO buffer range and current size CoreAudio reports for each
+/// device, and what a request for `LOADNGO_TEST_BUFFER_FRAMES` resulted in.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore]
+fn reports_device_buffer_sizes() {
+    let frames: u32 = std::env::var("LOADNGO_TEST_BUFFER_FRAMES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(128);
+    let input = std::env::var("LOADNGO_TEST_INPUT").ok();
+    let output = std::env::var("LOADNGO_TEST_OUTPUT").ok();
+    let monitor = LiveMonitor::start(LiveMonitorConfig {
+        input_device_name: input,
+        output_device_name: output,
+        initial_gain: 0.0,
+        preferred_buffer_frames: Some(frames),
+        ..LiveMonitorConfig::default()
+    })
+    .expect("monitor failed");
+    std::thread::sleep(Duration::from_millis(500));
+    println!(
+        "requested {frames}: target {} samples ({:.1} ms)",
+        monitor.drift_stats().target_samples,
+        monitor.buffered_ms()
+    );
+}

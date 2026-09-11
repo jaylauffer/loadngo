@@ -16,6 +16,8 @@
 pub mod pitch;
 
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+mod backend;
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod capabilities;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod devices;
@@ -23,10 +25,10 @@ mod devices;
 mod error;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod monitor;
-#[cfg(target_os = "macos")]
-mod physical_macos;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod recording;
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+mod resample;
 
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub use capabilities::{
@@ -42,6 +44,8 @@ pub use error::AudioIoError;
 pub use monitor::{LiveMonitor, LiveMonitorConfig};
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub use recording::RecordingTap;
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+pub use resample::DriftStats;
 
 pub use pitch::{
     closest_bass_string, nearest_note, NoteReading, PitchDetector, PitchEstimate,

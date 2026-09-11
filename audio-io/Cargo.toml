@@ -9,21 +9,22 @@ license.workspace = true
 [dependencies]
 thiserror.workspace = true
 
-# Live device enumeration and full-duplex monitoring need real hardware I/O
-# (cpal). Gated the same way `loadngo-host-desktop` gates `rodio`: desktop
-# targets only. Android/iOS live-input capture is a materially different
-# problem (audio session categories, `MediaRecorder`/`AVAudioEngine`) that
-# no caller has asked for yet -- see `docs/AUDIO_IO.md` for why it's left
-# out rather than stubbed.
+# Live device enumeration and full-duplex monitoring need real hardware I/O.
+# Desktop targets only; Android/iOS live-input capture is a different
+# problem no caller has asked for (see `docs/AUDIO_IO.md`).
 [target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))'.dependencies]
-cpal.workspace = true
 rtrb.workspace = true
 loadngo-proactor = { path = "../proactor" }
 
-# Physical (converter) formats aren't exposed by `cpal`'s CoreAudio backend.
-# Not a new crate: `cpal` already builds `coreaudio-sys` with `core_audio`
-# on macOS, so this only names it directly. See `src/physical_macos.rs`.
+# macOS talks to CoreAudio's HAL directly (`src/backend/coreaudio`). Not a new
+# crate for the workspace: `cpal` (still used by `rodio` for playback) already
+# builds `coreaudio-sys` with `core_audio`.
 [target.'cfg(target_os = "macos")'.dependencies]
 coreaudio-sys = { version = "0.2", default-features = false, features = ["core_audio"] }
+
+# Linux and Windows stay on `cpal` until their own backends land
+# (`docs/AUDIO_BACKENDS.md`).
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+cpal.workspace = true
 
 [dev-dependencies]

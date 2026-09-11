@@ -39,7 +39,10 @@ or for monitoring it through speakers -- needs raw duplex device I/O
   `RecordingTap` off the same input stream, for recorders. See "Recording
   tap" below.
 
-Everything except `pitch` is gated to `cfg(any(target_os = "macos", target_os =
+Device I/O goes through a per-platform backend (`src/backend`): CoreAudio's
+HAL directly on macOS, `cpal` on Linux and Windows until their own backends
+land -- see [AUDIO_BACKENDS.md](AUDIO_BACKENDS.md). Everything except `pitch`
+is gated to `cfg(any(target_os = "macos", target_os =
 "linux", target_os = "windows"))` -- desktop only. Mobile live-input
 capture (audio session categories, `AVAudioEngine`/`MediaRecorder`) is a
 materially different problem that no caller has asked for yet; see
@@ -141,6 +144,14 @@ dropped rather than returned.
 
 ## Known limitations (v0.1)
 
+- ~~**`cpal` 0.15.3 can't see output-only devices on macOS.**~~ **Gone with
+  `cpal` on macOS (2026-09-11).** Its CoreAudio backend answered output config
+  queries with an input-enabled AudioUnit, so the Mac mini's own speakers,
+  HDMI displays, and the output half of a USB interface vanished from
+  `list_output_devices` and couldn't be opened. This was briefly worked around
+  with CoreAudio calls, then superseded the same day by the native CoreAudio
+  backend, which enumerates devices from the HAL directly. See
+  [AUDIO_BACKENDS.md](AUDIO_BACKENDS.md).
 - **AirPlay output devices only appear in `list_output_devices` once
   actively selected as the OS's current output -- not before, and not by
   their real name.** First observed 2026-09-06 while adding a device
@@ -174,27 +185,19 @@ dropped rather than returned.
   user to the OS's own Sound picker for the selection step, or implement
   real device discovery/selection independently of CoreAudio (mDNS/RAOP)
   -- see that doc's "Where this could go next" section.
-- **No sample-rate conversion.** The output stream is built at the
-  input device's sample rate; if the chosen output device can't run at
-  that rate, `LiveMonitor::start` returns a `Stream` error rather than
-  silently resampling. Pick an input/output pair that share a sample rate
-  (the common case for two devices on the same OS default rate).
-- **Fixed-size ring buffer, not adaptive.** `MONITOR_RING_CAPACITY`
-  (8192 mono samples, ~90-185 ms depending on sample rate) absorbs the two
-  devices' independent hardware clocks drifting apart between callbacks.
-  It is not a real resampler/clock-lock, so a long monitoring session can
-  drift into an audible under/overrun. **Observed for the first time
-  2026-09-09** during an extended `sng-bass-blaster` session (USB PnP
-  input -> Mac mini Speakers, both nominally 48kHz): the local monitor
-  went silent and stayed silent. The underrun path itself is benign and
-  self-healing -- `next_output_sample` returns `0.0` for a missing sample
-  and resumes the moment one is available -- but that only recovers a
-  *transient* gap. If the input device's clock is the slower of the two,
-  the ring drains to empty and **stays** empty, so the output is silence
-  from then on with no recovery. Still not instrumented; the cheap first
-  step is logging `consumer.slots()` once a second, where a steady decline
-  to zero confirms drift and a sudden drop points at a stream error
-  instead.
+- ~~**No sample-rate conversion; fixed ring, not adaptive.**~~ **Fixed
+  2026-09-11 by `DriftResampler`** (`src/resample.rs`, backend-neutral, so
+  every platform gets it). The monitor ring used to be a plain copy between
+  the two devices' callbacks: pairs had to share a sample rate, and if the
+  input clock was the slower one the ring drained to empty and the monitor
+  went silent for good -- observed 2026-09-09 in `sng-bass-blaster`. The
+  output callback now reads the ring at `input_rate / output_rate`, corrected
+  by a PI controller that holds a target fill measured with timestamps. On the
+  Mac mini (USB PnP Audio Device -> Mac mini Speakers, 128-frame buffers) it
+  holds 6.7 ms with a measured drift of a few ppm and zero underruns; a C920
+  webcam's 16 kHz stereo mic plays into a 48 kHz output. See
+  [AUDIO_BACKENDS.md](AUDIO_BACKENDS.md) for the controller design and the two
+  mistakes simulation caught.
 - **Mono internally.** Multi-channel input is averaged to mono before
   monitoring or pitch analysis, and the mono signal is duplicated to every
   output channel. A stereo-preserving path is future work if a caller

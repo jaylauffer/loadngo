@@ -1,4 +1,4 @@
-//! Error type shared by [`crate::devices`] and [`crate::monitor`]. Kept in
+//! Error type shared by the backends, [`crate::devices`], and [`crate::monitor`]. Kept in
 //! its own module (rather than inline in `monitor.rs`) since both import it
 //! independently.
 
@@ -12,10 +12,10 @@ pub enum AudioIoError {
     NoDefaultInputDevice,
     #[error("no default output device is available")]
     NoDefaultOutputDevice,
-    #[error("unsupported sample format: {0:?}")]
-    UnsupportedSampleFormat(cpal::SampleFormat),
+    #[error("unsupported sample format: {0}")]
+    UnsupportedSampleFormat(String),
     #[error("audio device query failed: {0}")]
-    Cpal(String),
+    Backend(String),
     #[error("audio stream setup failed: {0}")]
     Stream(String),
     #[error("failed to start the audio monitor worker thread: {0}")]

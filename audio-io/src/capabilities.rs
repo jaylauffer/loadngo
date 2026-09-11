@@ -13,15 +13,13 @@
 //! - **Physical formats** are what the converter's hardware stream really
 //!   runs at, e.g. 24-bit signed integer at 48 kHz. Only macOS exposes these
 //!   separately today (`kAudioStreamPropertyAvailablePhysicalFormats`, see
-//!   `physical_macos.rs`); on Linux, ALSA's stream formats already *are* the
+//!   `backend/coreaudio/formats.rs`); on Linux, ALSA's stream formats already *are* the
 //!   hardware formats for a `hw:` device, and on Windows the shared-mode
 //!   mixer format hides the converter the same way CoreAudio does, without a
 //!   physical-format query implemented here yet.
 //!
 //! [`InputCapabilities::capture_resolution`] resolves the two into the one
 //! answer a recorder needs.
-
-use cpal::traits::{DeviceTrait, HostTrait};
 
 use crate::error::AudioIoError;
 
@@ -44,22 +42,6 @@ impl SampleResolution {
     #[must_use]
     pub const fn new(bits: u16, encoding: SampleEncoding) -> Self {
         Self { bits, encoding }
-    }
-
-    /// The resolution `cpal` delivers a stream in. `None` for formats this
-    /// crate does not convert (e.g. `f64`/`i64`), matching the formats
-    /// [`crate::LiveMonitor`] accepts.
-    #[must_use]
-    pub fn from_cpal(format: cpal::SampleFormat) -> Option<Self> {
-        let encoding = if format.is_float() {
-            SampleEncoding::Float
-        } else if format.is_int() {
-            SampleEncoding::SignedInt
-        } else {
-            SampleEncoding::UnsignedInt
-        };
-        let bits = u16::try_from(format.sample_size() * 8).ok()?;
-        Some(Self { bits, encoding })
     }
 }
 
@@ -200,77 +182,24 @@ impl InputCapabilities {
 pub fn probe_input_capabilities(
     device_name: Option<&str>,
 ) -> Result<InputCapabilities, AudioIoError> {
-    let host = cpal::default_host();
-    let default_name = host
-        .default_input_device()
-        .and_then(|device| device.name().ok());
-    let device = crate::monitor::resolve_device(true, &host, device_name)?;
-    let name = device
-        .name()
-        .map_err(|error| AudioIoError::Cpal(error.to_string()))?;
-
-    let default_config = device
-        .default_input_config()
-        .map_err(|error| AudioIoError::Cpal(error.to_string()))?;
-    let current_stream = CurrentFormat {
-        sample_rate_hz: default_config.sample_rate().0,
-        channels: default_config.channels(),
-        resolution: SampleResolution::from_cpal(default_config.sample_format()).ok_or(
-            AudioIoError::UnsupportedSampleFormat(default_config.sample_format()),
-        )?,
-    };
-
-    let stream_formats = device
-        .supported_input_configs()
-        .map_err(|error| AudioIoError::Cpal(error.to_string()))?
-        .filter_map(|range| {
-            Some(FormatRange {
-                channels: range.channels(),
-                min_sample_rate_hz: range.min_sample_rate().0,
-                max_sample_rate_hz: range.max_sample_rate().0,
-                resolution: SampleResolution::from_cpal(range.sample_format())?,
-            })
-        })
-        .collect();
-
-    #[cfg(target_os = "macos")]
-    let (current_physical, physical_formats) = crate::physical_macos::physical_input_formats(&name);
-    #[cfg(not(target_os = "macos"))]
-    let (current_physical, physical_formats) = (None, Vec::new());
-
-    Ok(InputCapabilities {
-        is_default: default_name.as_deref() == Some(name.as_str()),
-        device_name: name,
-        current_stream,
-        stream_formats,
-        current_physical,
-        physical_formats,
-    })
+    crate::backend::platform::probe_input_capabilities(device_name)
 }
 
 /// Switches an input device's converter to one of its advertised
 /// [`InputCapabilities::physical_formats`] (resolution plus sample rate).
 ///
 /// This is a **system-wide, persistent** device setting -- the same one
-/// Audio MIDI Setup's "Format" menu changes -- not a per-app stream option.
-/// A running [`crate::LiveMonitor`] on the device should be restarted
-/// afterwards if the sample rate changed. Only macOS exposes physical formats
-/// today; elsewhere this returns [`AudioIoError::UnsupportedOnPlatform`].
+/// Audio MIDI Setup's "Format" menu changes -- not a per-app stream option,
+/// and it applies asynchronously: re-probe over the next few hundred
+/// milliseconds to confirm. A running [`crate::LiveMonitor`] on the device
+/// should be restarted afterwards if the sample rate changed. Only macOS
+/// exposes physical formats today; elsewhere this returns
+/// [`AudioIoError::UnsupportedOnPlatform`].
 pub fn set_input_physical_format(
     device_name: &str,
     format: &CurrentFormat,
 ) -> Result<(), AudioIoError> {
-    #[cfg(target_os = "macos")]
-    {
-        crate::physical_macos::set_physical_input_format(device_name, format)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (device_name, format);
-        Err(AudioIoError::UnsupportedOnPlatform(
-            "changing a converter's physical format",
-        ))
-    }
+    crate::backend::platform::set_input_physical_format(device_name, format)
 }
 
 #[cfg(test)]
@@ -350,21 +279,5 @@ mod tests {
             .map(|resolution| resolution.bits)
             .collect();
         assert_eq!(bits, vec![24, 16]);
-    }
-
-    #[test]
-    fn cpal_formats_map_to_their_real_width() {
-        assert_eq!(
-            SampleResolution::from_cpal(cpal::SampleFormat::I16),
-            Some(SampleResolution::new(16, SampleEncoding::SignedInt))
-        );
-        assert_eq!(
-            SampleResolution::from_cpal(cpal::SampleFormat::F32),
-            Some(SampleResolution::new(32, SampleEncoding::Float))
-        );
-        assert_eq!(
-            SampleResolution::from_cpal(cpal::SampleFormat::U16),
-            Some(SampleResolution::new(16, SampleEncoding::UnsignedInt))
-        );
     }
 }
