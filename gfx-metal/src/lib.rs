@@ -17,8 +17,24 @@ use loadngo_renderer::{
 };
 use ui_core::geometry::{Color, Point};
 
+/// A registered image plus the revision its pixels belong to. Callers keep a
+/// stable key and swap the pixels behind it (`camera/live` is a live camera
+/// frame, not a new image each time), so the key alone cannot tell the backend
+/// whether the texture it uploaded is still the right one -- the revision can.
+#[derive(Clone)]
+struct RegisteredImage {
+    image: DecodedImage,
+    revision: u64,
+}
+
+/// Matches `loadngo-gfx-gles`'s `image_resource_changed`: same size and same
+/// bytes means the GPU copy is still good.
+fn image_resource_changed(previous: &DecodedImage, next: &DecodedImage) -> bool {
+    previous.width != next.width || previous.height != next.height || previous.rgba8 != next.rgba8
+}
+
 thread_local! {
-    static REGISTERED_IMAGES: RefCell<HashMap<String, DecodedImage>> = RefCell::new(HashMap::new());
+    static REGISTERED_IMAGES: RefCell<HashMap<String, RegisteredImage>> = RefCell::new(HashMap::new());
     static TEXT_RASTER_CACHE: RefCell<HashMap<String, Arc<CachedTextRaster>>> = RefCell::new(HashMap::new());
 }
 
@@ -118,7 +134,16 @@ pub struct MetalBackend {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     sampler_state: Option<macos::MetalSamplerState>,
     #[cfg(any(target_os = "macos", target_os = "ios"))]
-    textures: HashMap<String, macos::MetalTexture>,
+    textures: HashMap<String, CachedTexture>,
+}
+
+/// A GPU texture together with the `REGISTERED_IMAGES` revision it was
+/// uploaded from, so a live key's texture can be rebuilt when its pixels move
+/// on instead of being reused forever.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+struct CachedTexture {
+    texture: macos::MetalTexture,
+    revision: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -265,10 +290,47 @@ pub fn debug_text_placement(
 
 pub fn register_image_resource(image_key: &str, image: &DecodedImage) {
     REGISTERED_IMAGES.with(|images| {
-        images
-            .borrow_mut()
-            .insert(image_key.to_string(), image.clone());
+        let mut images = images.borrow_mut();
+        // Revisions start at 1 so a texture cached straight off disk (revision
+        // 0, never in this registry) always looks stale against a registered
+        // one and gets re-uploaded from the registered pixels.
+        let revision = match images.get(image_key) {
+            Some(existing) => {
+                if !image_resource_changed(&existing.image, image) {
+                    return;
+                }
+                existing.revision.wrapping_add(1)
+            }
+            None => 1,
+        };
+        images.insert(
+            image_key.to_string(),
+            RegisteredImage {
+                image: image.clone(),
+                revision,
+            },
+        );
     });
+}
+
+/// The revision of every image key `commands` draws, in plan order.
+///
+/// A host that skips presenting a frame whose commands are unchanged needs
+/// this: a live image keeps one stable key and swaps the pixels behind it, so
+/// the command list alone cannot tell a repeated frame from a new one.
+pub fn frame_image_revisions(commands: &[FrameCommand]) -> Vec<(String, u64)> {
+    let FrameResourcePlan { image_keys } =
+        Renderer::new(RendererConfig::default()).plan_frame_resources(commands);
+    REGISTERED_IMAGES.with(|images| {
+        let images = images.borrow();
+        image_keys
+            .into_iter()
+            .map(|key| {
+                let revision = images.get(key.as_str()).map_or(0, |entry| entry.revision);
+                (key.as_str().to_string(), revision)
+            })
+            .collect()
+    })
 }
 
 impl Default for MetalBackend {
@@ -879,27 +941,44 @@ impl MetalBackend {
 
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     fn ensure_texture(&mut self, key: &ImageResourceKey) -> Result<(), RendererError> {
-        if self.textures.contains_key(key.as_str()) {
-            return Ok(());
+        // Reuse the cached texture only while it still matches the registered
+        // pixels. The revision alone answers that, so the reuse path never
+        // copies the image. A file-backed key has no registry entry and so
+        // never goes stale, exactly as before.
+        let registered_revision =
+            REGISTERED_IMAGES.with(|images| images.borrow().get(key.as_str()).map(|e| e.revision));
+        if let Some(cached) = self.textures.get(key.as_str()) {
+            let stale = registered_revision.is_some_and(|revision| revision != cached.revision);
+            if !stale {
+                return Ok(());
+            }
         }
         let device = self
             .device
             .as_ref()
             .ok_or_else(|| RendererError::Backend("Metal device is unavailable".to_string()))?;
-        let decoded = REGISTERED_IMAGES.with(|images| images.borrow().get(key.as_str()).cloned());
-        let decoded = match decoded {
-            Some(decoded) => decoded,
-            None => decode_image_from_path(std::path::Path::new(key.as_str()))
-                .map_err(RendererError::Backend)?,
+        let registered =
+            REGISTERED_IMAGES.with(|images| images.borrow().get(key.as_str()).cloned());
+        let (decoded, revision) = match registered {
+            Some(entry) => (entry.image, entry.revision),
+            None => (
+                decode_image_from_path(std::path::Path::new(key.as_str()))
+                    .map_err(RendererError::Backend)?,
+                0,
+            ),
         };
         trace_widgets_log(format!(
-            "ensure_texture key='{}' decoded=({}, {})",
+            "ensure_texture key='{}' decoded=({}, {}) revision={}",
             key.as_str(),
             decoded.width,
-            decoded.height
+            decoded.height,
+            revision
         ));
         let texture = macos::MetalTexture::from_decoded_image(device, key.as_str(), &decoded)?;
-        self.textures.insert(key.as_str().to_string(), texture);
+        self.textures.insert(
+            key.as_str().to_string(),
+            CachedTexture { texture, revision },
+        );
         Ok(())
     }
 
@@ -3308,12 +3387,16 @@ impl GraphicsBackend for MetalBackend {
                             })
                         }
                         FrameVisual::RegisteredImage(image) => {
-                            let texture = self.textures.get(&image.image_key).ok_or_else(|| {
-                                RendererError::Backend(format!(
-                                    "Metal texture was not loaded for {}",
-                                    image.image_key
-                                ))
-                            })?;
+                            let texture = self
+                                .textures
+                                .get(&image.image_key)
+                                .map(|cached| &cached.texture)
+                                .ok_or_else(|| {
+                                    RendererError::Backend(format!(
+                                        "Metal texture was not loaded for {}",
+                                        image.image_key
+                                    ))
+                                })?;
                             Ok(macos::PreparedVisual::RegisteredImage {
                                 texture,
                                 image: image.clone(),
@@ -3357,6 +3440,71 @@ mod tests {
     use loadngo_renderer::TextRequest;
     use loadngo_renderer::{FrameCommand, Renderer, RendererConfig};
     use ui_core::geometry::Color;
+
+    fn solid_image(width: u32, height: u32, fill: u8) -> DecodedImage {
+        DecodedImage::new(width, height, vec![fill; (width * height * 4) as usize])
+    }
+
+    fn image_command(image_key: &str) -> FrameCommand {
+        FrameCommand::Image(loadngo_renderer::ImageRequest {
+            image_key: image_key.to_string(),
+            rect: ui_core::geometry::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 8.0,
+                height: 8.0,
+            },
+            clip_rect: None,
+            alpha: 1.0,
+        })
+    }
+
+    #[test]
+    fn registering_new_pixels_under_one_key_bumps_its_revision() {
+        let key = "test/registering_new_pixels";
+        register_image_resource(key, &solid_image(4, 4, 0x11));
+        let first = frame_image_revisions(&[image_command(key)]);
+        register_image_resource(key, &solid_image(4, 4, 0x22));
+        let second = frame_image_revisions(&[image_command(key)]);
+        assert_ne!(
+            first, second,
+            "a live key's revision must move when its pixels do, or the host \
+             skips the frame and the backend reuses its texture"
+        );
+    }
+
+    #[test]
+    fn re_registering_identical_pixels_holds_the_revision() {
+        let key = "test/re_registering_identical_pixels";
+        register_image_resource(key, &solid_image(4, 4, 0x33));
+        let first = frame_image_revisions(&[image_command(key)]);
+        register_image_resource(key, &solid_image(4, 4, 0x33));
+        let second = frame_image_revisions(&[image_command(key)]);
+        assert_eq!(
+            first, second,
+            "an unchanged image must not force a re-upload or a redundant present"
+        );
+    }
+
+    #[test]
+    fn resizing_an_image_bumps_its_revision() {
+        let key = "test/resizing_an_image";
+        register_image_resource(key, &solid_image(4, 4, 0x44));
+        let first = frame_image_revisions(&[image_command(key)]);
+        register_image_resource(key, &solid_image(8, 8, 0x44));
+        let second = frame_image_revisions(&[image_command(key)]);
+        assert_ne!(first, second, "a resized image needs a new texture");
+    }
+
+    #[test]
+    fn unregistered_image_keys_report_revision_zero() {
+        let revisions = frame_image_revisions(&[image_command("test/never_registered.png")]);
+        assert_eq!(
+            revisions,
+            vec![("test/never_registered.png".to_string(), 0)],
+            "a file-backed key has no registry entry and must stay cacheable"
+        );
+    }
 
     #[test]
     fn unbound_backend_rejects_frames() {

@@ -109,6 +109,10 @@ struct DesktopBackendRuntime {
     pending_font_source: Option<String>,
     last_submitted_commands: Option<Vec<FrameCommand>>,
     last_submitted_font_source: Option<String>,
+    /// Revision of each image key the last presented frame drew. An identical
+    /// command list can still need a new frame, because a live image keeps one
+    /// stable key (`camera/live`) and swaps the pixels behind it.
+    last_submitted_image_revisions: Vec<(String, u64)>,
     detail: String,
 }
 
@@ -122,6 +126,7 @@ impl DesktopBackendRuntime {
             pending_font_source: None,
             last_submitted_commands: None,
             last_submitted_font_source: None,
+            last_submitted_image_revisions: Vec::new(),
             detail: "loadngo Metal backend waiting for the first frame".to_string(),
         }
     }
@@ -1174,11 +1179,13 @@ fn flush_selected_backend() {
 
         let pending_commands = std::mem::take(&mut runtime.pending_commands);
         let pending_font_source = runtime.pending_font_source.take();
+        let pending_image_revisions = loadngo_gfx_metal::frame_image_revisions(&pending_commands);
         let unchanged_frame = runtime
             .last_submitted_commands
             .as_ref()
             .is_some_and(|last| last == &pending_commands)
-            && runtime.last_submitted_font_source == pending_font_source;
+            && runtime.last_submitted_font_source == pending_font_source
+            && runtime.last_submitted_image_revisions == pending_image_revisions;
         if unchanged_frame {
             return;
         }
@@ -1194,6 +1201,7 @@ fn flush_selected_backend() {
             Ok(()) => {
                 runtime.last_submitted_commands = Some(pending_commands);
                 runtime.last_submitted_font_source = pending_font_source;
+                runtime.last_submitted_image_revisions = pending_image_revisions;
                 runtime.last_used = DesktopRenderBackendKind::Metal;
             }
             Err(err) => {

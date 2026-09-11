@@ -79,11 +79,27 @@ and a plausible-looking deadlock would be worse than an honest error.
 ## Preview behaviour
 
 - The preview uses a stable image key, `camera/live`, so the renderer treats
-  the camera as one logical texture. That only works if the graphics backend
-  invalidates the GPU texture when the bytes behind that key change; the
-  Linux GLES cache drops and recreates textures on a new pixel buffer, which
-  keeps the preview live and lets `Restart Stream` show fresh frames instead
-  of the first uploaded image.
+  the camera as one logical texture. A stable key is what makes the preview
+  cheap, and it is also the thing every caching layer between the frame and
+  the screen gets wrong by default: the key does not change, so nothing
+  downstream notices that the pixels did. Two layers have to be told.
+
+  **The GPU texture cache.** `loadngo-gfx-gles` compares an `identity` (the
+  `Arc` behind the pixels) and drops the GL texture when it moves.
+  `loadngo-gfx-metal` keeps a revision per registered key:
+  `register_image_resource` bumps it only when the size or bytes actually
+  change, and `ensure_texture` reuses its `MTLTexture` only while the cached
+  revision still matches. A key with no registry entry -- a file-backed
+  image -- has no revision and stays cached exactly as before.
+
+  **The macOS unchanged-frame check.** `flush_selected_backend` skips
+  presenting when this frame's `FrameCommand` list equals the last one. A
+  live image defeats that on its own: the commands say *draw `camera/live`
+  here*, which is byte-identical every frame. So the check also compares
+  `loadngo_gfx_metal::frame_image_revisions` for the keys the frame draws --
+  same commands but newer pixels is a new frame. Without it the preview
+  reports its real capture rate while showing one still image, because the
+  frames arrive and are dropped a layer above the backend.
 - `Restart Stream` and `R` stop the current worker, kill the active `ffmpeg`
   child, and start a fresh one. Unexpected EOF or a read failure triggers a
   deferred restart after a short backoff.
