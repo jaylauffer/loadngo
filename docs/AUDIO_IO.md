@@ -32,7 +32,14 @@ or for monitoring it through speakers -- needs raw duplex device I/O
   violation, and one that stalls capture (and so drains the monitoring
   ring) exactly when the system is already under load.
 
-The last three are gated to `cfg(any(target_os = "macos", target_os =
+- `probe_input_capabilities` / `set_input_physical_format`: what a
+  converter can really capture, and switching it to a better physical
+  format. See "Converter capabilities" below.
+- `LiveMonitor::take_recording_tap`: a lossless, full-channel-count
+  `RecordingTap` off the same input stream, for recorders. See "Recording
+  tap" below.
+
+Everything except `pitch` is gated to `cfg(any(target_os = "macos", target_os =
 "linux", target_os = "windows"))` -- desktop only. Mobile live-input
 capture (audio session categories, `AVAudioEngine`/`MediaRecorder`) is a
 materially different problem that no caller has asked for yet; see
@@ -54,6 +61,83 @@ the identical failure mode in reverse (two independent `InputStream`s
 racing for one input device), so `LiveMonitor` is built the same way
 `AudioMixer` is: exactly one `cpal::Stream` per physical device, with
 `drain_tap` as the second consumer's read path instead of a second stream.
+
+## Converter capabilities (added 2026-09-11)
+
+Built for `sng-bass-blaster`'s recorder (a port of the old Windows
+recording tool Frauu), whose requirement was to record at whatever
+resolution the converter really delivers and let the user explore what
+the converter supports.
+
+There are two different formats hiding behind "what format is this device",
+and `cpal` only reports one of them:
+
+| | what it is | macOS | Linux (ALSA) | Windows (WASAPI shared) |
+| --- | --- | --- | --- | --- |
+| stream format | what the OS hands the app | **always 32-bit float** (HAL virtual format) | the hardware format for a `hw:` device | the mixer format |
+| physical format | what the converter runs at | `kAudioStreamPropertyPhysicalFormat` | same as stream | not queried yet |
+
+`cpal`'s CoreAudio backend hardcodes `SampleFormat::F32` for every supported
+config, so on macOS a 24-bit interface and a 16-bit webcam look identical
+through `cpal`. `physical_macos.rs` reads the real formats straight from
+CoreAudio (via `coreaudio-sys`, which `cpal` already builds -- no new crate).
+`InputCapabilities::capture_resolution()` resolves the two into the one
+answer a recorder needs, and says which source it came from.
+
+Found on the first real probe of this Mac mini's devices:
+
+- **"KT USB Audio" advertises 24-bit and 16-bit physical formats but was
+  running at 16-bit.** `set_input_physical_format` switches it -- the same
+  system-wide, persistent setting Audio MIDI Setup's "Format" menu changes.
+  Verified switching 16 -> 24 -> 16 on the real device
+  (`switches_a_converter_physical_format_and_restores_it`, opt-in via
+  `LOADNGO_PHYSICAL_FORMAT_DEVICE`). The app-facing stream stays 32-bit
+  float either way, so a running monitor is unaffected by a resolution-only
+  change; a *rate* change needs the monitor restarted. **The change applies
+  asynchronously:** a probe immediately after `set_input_physical_format`
+  returns still reports the old format (it settled within a second on KT USB
+  Audio), so callers should confirm by re-probing over the next few hundred
+  milliseconds rather than reading back once.
+- **Verified end to end 2026-09-11** from `sng-bass-blaster`: KT USB Audio
+  switched to 24-bit, 2 s captured through the recording tap and written by
+  its storage proactor. Apple's `afinfo` reads the file as 48 kHz 24-bit
+  signed LE, and 95,678 of 96,256 samples have a non-zero low byte -- real
+  24-bit content, not 16-bit padded out.
+- **One USB interface can be two CoreAudio devices with the same name.**
+  "USB PnP Audio Device" enumerates an output-only object first and the
+  input object second, so a first-name-match lookup found no input streams
+  and reported no physical format. Lookups now skip same-named devices with
+  no input streams.
+
+## Recording tap (added 2026-09-11)
+
+`drain_tap` is the wrong source for a recording: it is mono, and it drops
+old samples on purpose so a tuner always sees the latest audio. The input
+callback now also writes a third lock-free SPSC ring carrying interleaved
+frames at the device's full channel count. Its rules:
+
+- **Idle until armed.** The callback checks one atomic and writes nothing
+  unless a recorder has called `RecordingTap::arm`, so a monitor with no
+  recorder doesn't spend its life counting overruns.
+- **Drops whole frames, counts them.** On a full ring the callback writes
+  the frames that fit and adds the rest to `dropped_samples`. Dropping a
+  partial frame would swap channels for the rest of the take.
+- **Settle before the final drain.** `disarm_and_settle` waits until two
+  more callback blocks complete, so a block that read `armed == true` just
+  before disarm has finished writing before the recorder drains the tail.
+- **Capacity is seconds, not samples** (`recording_buffer_seconds`, default
+  4s) -- the longest storage stall a recording survives without a gap.
+- **`f32` is exact for integer samples of 24 bits or fewer**, when scaled by
+  a power of two. The `i16` input path now divides by `32_768` rather than
+  `i16::MAX` so every platform maps integers to floats with the same rule
+  CoreAudio uses, and a WAV writer can map them back exactly. A 32-bit
+  integer converter loses its bottom 8 bits through `f32`; store those as
+  float.
+
+The tap is `Send`: a recorder takes it (`take_recording_tap`), drains it on
+its own thread, and hands it back (`return_recording_tap`). A tap from a
+monitor that has since been restarted is abandoned (`is_abandoned`) and is
+dropped rather than returned.
 
 ## Known limitations (v0.1)
 

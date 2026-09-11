@@ -20,4 +20,10 @@ cpal.workspace = true
 rtrb.workspace = true
 loadngo-proactor = { path = "../proactor" }
 
+# Physical (converter) formats aren't exposed by `cpal`'s CoreAudio backend.
+# Not a new crate: `cpal` already builds `coreaudio-sys` with `core_audio`
+# on macOS, so this only names it directly. See `src/physical_macos.rs`.
+[target.'cfg(target_os = "macos")'.dependencies]
+coreaudio-sys = { version = "0.2", default-features = false, features = ["core_audio"] }
+
 [dev-dependencies]

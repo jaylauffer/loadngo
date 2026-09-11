@@ -27,7 +27,9 @@ use std::thread::{self, JoinHandle};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use loadngo_proactor::{ChannelPort, Proactor, ProactorHandle};
 
+use crate::capabilities::SampleResolution;
 use crate::error::AudioIoError;
+use crate::recording::{recording_ring, RecordingProducer, RecordingTap};
 
 /// Ring buffer capacity between the input and output callbacks, in mono
 /// samples. At a typical `44_100`/`48_000` Hz device this is roughly
@@ -51,6 +53,12 @@ pub struct LiveMonitorConfig {
     /// older samples are dropped. `16_384` is a handful of `PitchDetector`
     /// windows' worth at typical sample rates.
     pub tap_capacity: usize,
+    /// How many seconds of full-width interleaved audio the recording ring
+    /// (see [`LiveMonitor::take_recording_tap`]) holds before the input
+    /// callback starts dropping frames. It only fills while a recorder is
+    /// armed and falling behind, so this is the longest disk stall a
+    /// recording survives without a gap.
+    pub recording_buffer_seconds: f32,
 }
 
 impl Default for LiveMonitorConfig {
@@ -61,12 +69,16 @@ impl Default for LiveMonitorConfig {
             initial_gain: 1.0,
             initial_muted: false,
             tap_capacity: 16_384,
+            recording_buffer_seconds: 4.0,
         }
     }
 }
 
 struct MonitorReady {
     sample_rate_hz: u32,
+    channels: u16,
+    resolution: Option<SampleResolution>,
+    recording_tap: RecordingTap,
     input_device_name: String,
     output_device_name: String,
 }
@@ -86,6 +98,10 @@ pub struct LiveMonitor {
     /// are discarded there rather than in the audio callback.
     tap_capacity: usize,
     input_sample_rate_hz: u32,
+    input_channels: u16,
+    input_resolution: Option<SampleResolution>,
+    /// `None` while a recorder holds it; see `take_recording_tap`.
+    recording_tap: Option<RecordingTap>,
     input_device_name: String,
     output_device_name: String,
     proactor_handle: ProactorHandle<ChannelPort>,
@@ -105,6 +121,7 @@ impl LiveMonitor {
             initial_gain,
             initial_muted,
             tap_capacity,
+            recording_buffer_seconds,
         } = config;
 
         let gain = Arc::new(AtomicU32::new(initial_gain.clamp(0.0, 4.0).to_bits()));
@@ -137,6 +154,7 @@ impl LiveMonitor {
                     thread_gain,
                     thread_muted,
                     thread_tap_producer,
+                    recording_buffer_seconds,
                     ready_tx,
                     proactor,
                 );
@@ -150,6 +168,9 @@ impl LiveMonitor {
                 tap_consumer: Mutex::new(tap_consumer),
                 tap_capacity,
                 input_sample_rate_hz: ready.sample_rate_hz,
+                input_channels: ready.channels,
+                input_resolution: ready.resolution,
+                recording_tap: Some(ready.recording_tap),
                 input_device_name: ready.input_device_name,
                 output_device_name: ready.output_device_name,
                 proactor_handle,
@@ -193,6 +214,37 @@ impl LiveMonitor {
     #[must_use]
     pub fn input_sample_rate_hz(&self) -> u32 {
         self.input_sample_rate_hz
+    }
+
+    /// The input stream's full channel count -- what a recording captures,
+    /// as opposed to the mono `drain_tap` analysis signal.
+    #[must_use]
+    pub fn input_channels(&self) -> u16 {
+        self.input_channels
+    }
+
+    /// The sample encoding the OS delivers the input stream in. On macOS this
+    /// is always 32-bit float regardless of the converter; see
+    /// [`crate::probe_input_capabilities`] for the physical format.
+    #[must_use]
+    pub fn input_stream_resolution(&self) -> Option<SampleResolution> {
+        self.input_resolution
+    }
+
+    /// Takes the lossless recording ring out of the monitor so a recorder
+    /// can drain it on its own thread. `None` if already taken. The ring is
+    /// idle until the recorder calls [`RecordingTap::arm`].
+    pub fn take_recording_tap(&mut self) -> Option<RecordingTap> {
+        self.recording_tap.take()
+    }
+
+    /// Gives a recording ring back after a recording finishes, so the next
+    /// one can take it. A tap from a *different* (since restarted) monitor
+    /// is silently dropped instead: its producer is gone for good.
+    pub fn return_recording_tap(&mut self, tap: RecordingTap) {
+        if self.recording_tap.is_none() && !tap.is_abandoned() {
+            self.recording_tap = Some(tap);
+        }
     }
 
     #[must_use]
@@ -244,6 +296,7 @@ fn run_monitor_thread(
     gain: Arc<AtomicU32>,
     muted: Arc<AtomicBool>,
     tap_producer: rtrb::Producer<f32>,
+    recording_buffer_seconds: f32,
     ready_tx: mpsc::Sender<Result<MonitorReady, AudioIoError>>,
     proactor: Proactor<ChannelPort>,
 ) {
@@ -253,6 +306,7 @@ fn run_monitor_thread(
         gain,
         muted,
         tap_producer,
+        recording_buffer_seconds,
     );
 
     match outcome {
@@ -281,6 +335,7 @@ fn open_streams(
     gain: Arc<AtomicU32>,
     muted: Arc<AtomicBool>,
     tap_producer: rtrb::Producer<f32>,
+    recording_buffer_seconds: f32,
 ) -> OpenStreamsResult {
     let host = cpal::default_host();
     let input_device = resolve_device(true, &host, input_device_name)?;
@@ -299,6 +354,11 @@ fn open_streams(
     let input_channels = input_supported.channels() as usize;
     let input_sample_format = input_supported.sample_format();
     let input_config: cpal::StreamConfig = input_supported.into();
+    let (recording_producer, recording_tap) = recording_ring(
+        input_config.channels,
+        sample_rate.0,
+        recording_buffer_seconds,
+    );
 
     let output_supported = output_device
         .default_output_config()
@@ -325,6 +385,7 @@ fn open_streams(
         input_channels,
         producer,
         tap_producer,
+        recording_producer,
     )?;
     let output_stream = build_output_stream(
         &output_device,
@@ -348,13 +409,16 @@ fn open_streams(
         output_stream,
         MonitorReady {
             sample_rate_hz: sample_rate.0,
+            channels: input_config.channels,
+            resolution: SampleResolution::from_cpal(input_sample_format),
+            recording_tap,
             input_device_name,
             output_device_name,
         },
     ))
 }
 
-fn resolve_device(
+pub(crate) fn resolve_device(
     is_input: bool,
     host: &cpal::Host,
     requested_name: Option<&str>,
@@ -413,6 +477,7 @@ fn build_input_stream(
     channels: usize,
     mut producer: rtrb::Producer<f32>,
     mut tap_producer: rtrb::Producer<f32>,
+    mut recording: RecordingProducer,
 ) -> Result<cpal::Stream, AudioIoError> {
     let publish = move |mono: &[f32]| {
         for &sample in mono {
@@ -443,6 +508,7 @@ fn build_input_stream(
             device.build_input_stream(
                 config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                    recording.push_interleaved(data);
                     downmix_to_mono(data, channels, &mut mono);
                     publish(&mono);
                 },
@@ -458,7 +524,11 @@ fn build_input_stream(
                 config,
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
                     float.clear();
-                    float.extend(data.iter().map(|&s| f32::from(s) / f32::from(i16::MAX)));
+                    // 2^15, not i16::MAX: the same power-of-two scale
+                    // CoreAudio uses, so a recorder can map samples back to
+                    // integers exactly with one rule on every platform.
+                    float.extend(data.iter().map(|&s| f32::from(s) / 32_768.0));
+                    recording.push_interleaved(&float);
                     downmix_to_mono(&float, channels, &mut mono);
                     publish(&mono);
                 },
@@ -475,6 +545,7 @@ fn build_input_stream(
                 move |data: &[u16], _: &cpal::InputCallbackInfo| {
                     float.clear();
                     float.extend(data.iter().map(|&s| (f32::from(s) - 32_768.0) / 32_768.0));
+                    recording.push_interleaved(&float);
                     downmix_to_mono(&float, channels, &mut mono);
                     publish(&mono);
                 },

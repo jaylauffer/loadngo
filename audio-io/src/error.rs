@@ -22,4 +22,8 @@ pub enum AudioIoError {
     Thread(String),
     #[error("the audio monitor worker thread exited before it signaled ready")]
     WorkerExited,
+    #[error("the device does not offer the physical format {0}")]
+    UnsupportedPhysicalFormat(String),
+    #[error("{0} is not supported on this platform")]
+    UnsupportedOnPlatform(&'static str),
 }
