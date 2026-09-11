@@ -51,6 +51,14 @@ Also present as supporting composition:
 - scroll region / scroll container
 - list row
 
+## Dialogs
+
+- **Open/Save file dialog: `FileDialogModel`, added 2026-09-11** for
+  `sng-bass-blaster`'s recorder, deliberately as a `loadngo` component rather
+  than an OS picker crate. See `WIDGET_FRAMEWORK.md`'s "Current core dialogs".
+  Not yet: a new-folder button, sorting by size/date, a date column (needs
+  local-time formatting `ui-core` doesn't have), multi-select.
+
 ## Missing Core Controls
 
 The following controls are still missing or incomplete.
@@ -59,7 +67,8 @@ The following controls are still missing or incomplete.
 
 Still missing or incomplete:
 
-- single-line editable text field
+- ~~single-line editable text field~~ **`TextFieldModel` added 2026-09-11**
+  (built on `TextAreaModel`; see `WIDGET_FRAMEWORK.md`)
 - clipboard semantics
 - undo/redo
 - IME/composition

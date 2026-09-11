@@ -95,6 +95,35 @@ Current core text widgets:
   - uses an editor-grade `TextDocument` backend for source editing
   - authoritative source buffer with caret and selection state
   - current source-editor path is desktop-first and newline-line-based
+- `TextFieldModel` (added 2026-09-11)
+  - single-line editable text, built *on* `TextAreaModel` (same document,
+    caret, selection, undo) with events filtered on the way in
+  - `Enter` emits `WidgetAction::Activate` instead of a newline; `Tab`/`Up`/
+    `Down` are left unconsumed for the host; pasted line breaks are stripped
+
+Current core dialogs:
+- `FileDialogModel` (added 2026-09-11)
+  - modal Open/Save dialog composed from `ButtonModel`, `TextFieldModel`, and
+    `ScrollRegionModel`; no OS picker and no platform crate
+  - folders first, file-type filter, hidden dot-files, places column, typed
+    paths (absolute, relative, `~/`), Save appends the filter's extension and
+    asks before replacing an existing file
+  - reads the filesystem only through a `DirectorySource` trait, so every rule
+    is unit-tested against an in-memory tree; `StdDirectorySource` is `std::fs`
+  - **routes keys to the focused control only.** `ButtonModel` activates on
+    `Enter` whether or not it is focused, so a composite that broadcasts key
+    events to every child fires all of its buttons at once
+  - the host must send it *all* input while open: typed letters also arrive as
+    `HostKey` events, so app shortcuts would otherwise fire while typing a name
+
+Host input adapter (added 2026-09-11): `InputSnapshot::ui_events()` turns a
+frame's mouse, keys, and typed text into `UiEvent`s in delivery order, and
+`HostKey::ui_key()` maps one key. Wheel input is deliberately excluded --
+`ScrollLines` can't express `mouse_wheel_precise` pixel deltas -- so pass
+`mouse_wheel_y`/`mouse_wheel_precise` to the widget directly. **Wheel sign:**
+`ui-core` widgets treat a positive `mouse_wheel_y` as scrolling toward the top
+(`offset -= wheel_y`), matching `TextAreaModel` and `sng-rusty`; `sng-roguelite`'s
+achievements list uses the opposite sign and should be checked by hand.
 
 Current core composition widgets:
 - `PanelModel`
@@ -138,6 +167,12 @@ Desktop verification harness:
   - fixed-height `ListRowModel` + `LabelModel` samples
   - a `TextBlockModel` multiline sample
 - use it before changing shared desktop text placement so runtime/editor regressions are caught in one place
+
+File dialog verification harness:
+- `cargo run --manifest-path /Users/jay/pudding/loadngo/Cargo.toml -p loadngo-host-desktop --bin file_dialog_harness` (add `-- --save` for Save mode)
+- a real-filesystem Open or Save dialog over a dimmed scene; prints each outcome
+- verified on macOS 2026-09-11 with real keyboard input: arrow/Enter navigation
+  into a folder, and Save-mode typing replacing the selected stem
 
 Workspace verification harness:
 - `cargo run --manifest-path /Users/jay/pudding/loadngo/Cargo.toml -p loadngo-host-desktop --bin workspace_harness`

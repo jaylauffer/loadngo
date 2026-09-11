@@ -8,7 +8,7 @@ use image::DynamicImage;
 use serde::{Deserialize, Serialize};
 use ui_core::{
     geometry::{Color, Point, Rect},
-    Modifiers,
+    Key, Modifiers, PointerButton, PointerState, UiEvent,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -291,6 +291,42 @@ pub enum HostKey {
     T,
 }
 
+impl HostKey {
+    /// The `ui_core` key a widget understands for this host key. Letter keys
+    /// map to lowercase `Key::Character`, which is what widgets match their
+    /// shortcuts against (`Cmd/Ctrl+A` select-all, `Cmd/Ctrl+Z` undo). `None`
+    /// for keys with no widget meaning (`F3`).
+    #[must_use]
+    pub fn ui_key(self) -> Option<Key> {
+        Some(match self {
+            HostKey::Escape => Key::Escape,
+            HostKey::Space => Key::Space,
+            HostKey::Up => Key::Up,
+            HostKey::Down => Key::Down,
+            HostKey::Left => Key::Left,
+            HostKey::Right => Key::Right,
+            HostKey::Home => Key::Home,
+            HostKey::End => Key::End,
+            HostKey::Enter => Key::Enter,
+            HostKey::Tab => Key::Tab,
+            HostKey::Backspace => Key::Backspace,
+            HostKey::Delete => Key::Delete,
+            HostKey::A => Key::Character('a'),
+            HostKey::C => Key::Character('c'),
+            HostKey::D => Key::Character('d'),
+            HostKey::F => Key::Character('f'),
+            HostKey::R => Key::Character('r'),
+            HostKey::S => Key::Character('s'),
+            HostKey::T => Key::Character('t'),
+            HostKey::V => Key::Character('v'),
+            HostKey::W => Key::Character('w'),
+            HostKey::Y => Key::Character('y'),
+            HostKey::Z => Key::Character('z'),
+            HostKey::F3 => return None,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostKeyEvent {
     pub key: HostKey,
@@ -526,6 +562,64 @@ impl InputSnapshot {
         (key == HostKey::Space && self.space_down) || self.keys_down.contains(&key)
     }
 
+    /// The mouse as a `ui_core` pointer, for widgets that take pointer state.
+    #[must_use]
+    pub fn mouse_pointer(&self) -> PointerState {
+        PointerState::mouse(
+            Point {
+                x: self.mouse_x,
+                y: self.mouse_y,
+            },
+            self.modifiers,
+        )
+    }
+
+    /// This frame's mouse, keyboard, and typed-text input as `ui_core`
+    /// events, in the order a widget host should deliver them: pointer move,
+    /// press, release, each key, then typed text.
+    ///
+    /// `PointerMoved` is always emitted, not only when the mouse moved,
+    /// because a widget whose bounds moved under a stationary mouse still
+    /// needs to recompute hover (see `WIDGET_FRAMEWORK.md`'s hover gap).
+    ///
+    /// Wheel input is deliberately **not** included: whether a delta is
+    /// notches or pixels (`mouse_wheel_precise`) changes how a scroll region
+    /// should apply it, and `UiEvent::ScrollLines` can only say "lines".
+    /// Read `mouse_wheel_y`/`mouse_wheel_precise` directly.
+    ///
+    /// Touch is not included either; touch hosts have their own adapter in
+    /// `loadngo-touch`.
+    #[must_use]
+    pub fn ui_events(&self) -> Vec<UiEvent> {
+        let pointer = self.mouse_pointer();
+        let mut events = Vec::with_capacity(3 + self.key_events.len());
+        events.push(UiEvent::PointerMoved(pointer));
+        if self.mouse_pressed {
+            events.push(UiEvent::PointerPressed {
+                button: PointerButton::Primary,
+                state: pointer,
+            });
+        }
+        if self.mouse_released {
+            events.push(UiEvent::PointerReleased {
+                button: PointerButton::Primary,
+                state: pointer,
+            });
+        }
+        events.extend(self.key_events.iter().filter_map(|event| {
+            Some(UiEvent::KeyPressed {
+                key: event.key.ui_key()?,
+                modifiers: event.modifiers,
+            })
+        }));
+        if !self.typed_text.is_empty() {
+            events.push(UiEvent::TextInput {
+                text: self.typed_text.clone(),
+            });
+        }
+        events
+    }
+
     pub fn active_touches(&self) -> impl Iterator<Item = TouchPoint> + '_ {
         self.touches.iter().flatten().copied()
     }
@@ -733,6 +827,64 @@ pub trait DesktopHostBackend:
 impl<T> DesktopHostBackend for T where
     T: DesktopPlatformBackend + AssetIoBackend + DesktopGraphicsBackend
 {
+}
+
+#[cfg(test)]
+mod ui_event_tests {
+    use super::{HostKey, HostKeyEvent, InputSnapshot};
+    use ui_core::{Key, Modifiers, PointerButton, UiEvent};
+
+    #[test]
+    fn a_click_with_typing_arrives_in_widget_delivery_order() {
+        let input = InputSnapshot {
+            mouse_x: 12.0,
+            mouse_y: 34.0,
+            mouse_pressed: true,
+            mouse_released: true,
+            key_events: vec![HostKeyEvent {
+                key: HostKey::Backspace,
+                modifiers: Modifiers::default(),
+            }],
+            typed_text: "ok".to_string(),
+            ..InputSnapshot::default()
+        };
+        let events = input.ui_events();
+        assert!(matches!(events[0], UiEvent::PointerMoved(state) if state.position.x == 12.0));
+        assert!(matches!(
+            events[1],
+            UiEvent::PointerPressed {
+                button: PointerButton::Primary,
+                ..
+            }
+        ));
+        assert!(matches!(events[2], UiEvent::PointerReleased { .. }));
+        assert_eq!(
+            events[3],
+            UiEvent::KeyPressed {
+                key: Key::Backspace,
+                modifiers: Modifiers::default()
+            }
+        );
+        assert_eq!(
+            events[4],
+            UiEvent::TextInput {
+                text: "ok".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn an_idle_frame_still_reports_pointer_position() {
+        let events = InputSnapshot::default().ui_events();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], UiEvent::PointerMoved(_)));
+    }
+
+    #[test]
+    fn letter_keys_map_to_lowercase_characters_for_shortcuts() {
+        assert_eq!(HostKey::Z.ui_key(), Some(Key::Character('z')));
+        assert_eq!(HostKey::F3.ui_key(), None);
+    }
 }
 
 #[cfg(test)]

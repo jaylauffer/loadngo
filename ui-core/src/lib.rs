@@ -4,6 +4,7 @@ pub mod checkbox;
 pub mod combo;
 pub mod component;
 pub mod details_view;
+pub mod file_dialog;
 pub mod focus_ring;
 pub mod geometry;
 pub mod input;
@@ -24,6 +25,7 @@ pub mod text;
 pub mod text_area;
 pub mod text_block;
 pub mod text_document;
+pub mod text_field;
 pub mod tree;
 pub mod widget;
 pub mod workspace;
@@ -34,6 +36,10 @@ pub use checkbox::CheckboxModel;
 pub use combo::ListCombo;
 pub use component::Component;
 pub use details_view::{DetailsSection, DetailsViewModel};
+pub use file_dialog::{
+    DirectoryEntry, DirectorySource, FileDialogMode, FileDialogModel, FileDialogOutcome,
+    FileDialogPlace, FileDialogResponse, FileTypeFilter, PathKind, StdDirectorySource,
+};
 pub use focus_ring::{FocusEntry, FocusMove, FocusRing, NavDirection};
 pub use geometry::{Color, Insets, Point, Rect, Scalar, Size};
 pub use input::{Key, Modifiers, PointerButton, PointerSource, PointerState, UiEvent};
@@ -59,6 +65,7 @@ pub use text::{multiline_line_step, single_line_text_box_height};
 pub use text_area::{TextArea, TextAreaLayoutCache, TextAreaLineLayout, TextAreaModel};
 pub use text_block::{TextBlock, TextBlockModel};
 pub use text_document::TextDocument;
+pub use text_field::TextFieldModel;
 pub use tree::{TreeCombo, TreeControl, TreeNode};
 pub use widget::{WidgetAction, WidgetId, WidgetResponse};
 pub use workspace::{
