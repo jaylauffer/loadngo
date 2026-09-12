@@ -243,7 +243,13 @@ struct MusicTrack {
 
 struct ActiveVoice {
     samples: Arc<Vec<f32>>,
-    cursor: usize,
+    /// Fractional *frame* position rather than a sample index, so playback
+    /// rate can be honoured the way rodio's `sink.set_speed` does. Ignoring
+    /// the rate silently -- as this backend first did -- is worse than the
+    /// mobile backends refusing it, because rodio supports it on the very
+    /// same platform.
+    position: f64,
+    rate: f64,
     left: f32,
     right: f32,
     looped: bool,
@@ -334,20 +340,32 @@ impl MixerState {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn mix_voices(&mut self, out: &mut [f32], channels: usize) {
         let stride = channels.max(1);
         self.voices.retain_mut(|(_, voice)| {
+            let frames = voice.samples.len() / 2;
+            if frames < 2 {
+                return false;
+            }
             let mut index = 0;
             while index + 1 < out.len() {
-                if voice.cursor + 1 >= voice.samples.len() {
+                let mut frame = voice.position.floor() as usize;
+                if frame + 1 >= frames {
                     if !voice.looped {
                         return false;
                     }
-                    voice.cursor = 0;
+                    voice.position = 0.0;
+                    frame = 0;
                 }
-                out[index] += voice.samples[voice.cursor] * voice.left;
-                out[index + 1] += voice.samples[voice.cursor + 1] * voice.right;
-                voice.cursor += 2;
+                let fraction = (voice.position - voice.position.floor()) as f32;
+                let left = voice.samples[frame * 2];
+                let right = voice.samples[frame * 2 + 1];
+                let next_left = voice.samples[(frame + 1) * 2];
+                let next_right = voice.samples[(frame + 1) * 2 + 1];
+                out[index] += (left + (next_left - left) * fraction) * voice.left;
+                out[index + 1] += (right + (next_right - right) * fraction) * voice.right;
+                voice.position += voice.rate;
                 index += stride;
             }
             true
@@ -751,7 +769,8 @@ impl VoiceController {
                 id,
                 ActiveVoice {
                     samples: clip.samples,
-                    cursor: 0,
+                    position: 0.0,
+                    rate: 1.0,
                     left: self.volume,
                     right: self.volume,
                     looped: false,
@@ -869,7 +888,8 @@ impl SfxController {
                 id.value(),
                 ActiveVoice {
                     samples: clip.samples,
-                    cursor: 0,
+                    position: 0.0,
+                    rate: f64::from(request.playback_rate),
                     left,
                     right,
                     looped: request.looped,
@@ -1075,8 +1095,9 @@ mod tests {
             voices: vec![(
                 1,
                 ActiveVoice {
-                    samples: Arc::new(vec![1.0, 1.0]),
-                    cursor: 0,
+                    samples: Arc::new(vec![1.0, 1.0, 1.0, 1.0]),
+                    position: 0.0,
+                    rate: 1.0,
                     left: 1.0,
                     right: 1.0,
                     looped: false,
@@ -1125,5 +1146,43 @@ mod tests {
             "resuming should play the samples the pause held back"
         );
         drop(sender);
+    }
+
+    /// Rate is honoured, and by selecting different samples rather than by
+    /// merely not crashing: at 2x a voice should read every other frame.
+    #[test]
+    fn playback_rate_advances_the_voice_faster() {
+        // Left channel carries a marker identifying the frame, scaled so it
+        // survives `fill`'s clamp to +/-1.0 -- encoding the raw frame index
+        // made 2, 4 and 6 all clamp to 1.0 and hid what was really read.
+        let samples: Vec<f32> = (0..8u8)
+            .flat_map(|frame| [f32::from(frame) * 0.1, 0.0])
+            .collect();
+        let mut state = MixerState {
+            music_mix_volume: 1.0,
+            voices: vec![(
+                1,
+                ActiveVoice {
+                    samples: Arc::new(samples),
+                    position: 0.0,
+                    rate: 2.0,
+                    left: 1.0,
+                    right: 1.0,
+                    looped: false,
+                },
+            )],
+            ..MixerState::default()
+        };
+        let mut out = [0.0; 8];
+        state.fill(&mut out, 2);
+        // Four output frames at 2x read source frames 0, 2, 4, 6.
+        let heard: Vec<f32> = out.chunks(2).map(|frame| frame[0]).collect();
+        let expected = [0.0, 0.2, 0.4, 0.6];
+        for (got, want) in heard.iter().zip(expected) {
+            assert!(
+                (got - want).abs() < 1e-6,
+                "got {heard:?}, expected {expected:?}"
+            );
+        }
     }
 }
