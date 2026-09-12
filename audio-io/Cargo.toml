@@ -22,9 +22,14 @@ loadngo-proactor = { path = "../proactor" }
 [target.'cfg(target_os = "macos")'.dependencies]
 coreaudio-sys = { version = "0.2", default-features = false, features = ["core_audio"] }
 
-# Linux and Windows stay on `cpal` until their own backends land
-# (`docs/AUDIO_BACKENDS.md`).
-[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+# Linux talks to ALSA through `libasound` directly (`src/backend/alsa`), with
+# bindings declared in that module -- no crate, and nothing for a non-Linux
+# host to install, so `cargo check --target aarch64-unknown-linux-gnu` works
+# from a Mac.
+
+# Windows stays on `cpal` until a WASAPI backend lands, which waits for a real
+# Windows machine to verify it on (`docs/AUDIO_BACKENDS.md`).
+[target.'cfg(target_os = "windows")'.dependencies]
 cpal.workspace = true
 
 [dev-dependencies]

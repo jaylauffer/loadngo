@@ -1,6 +1,7 @@
 //! The seam between backend-neutral audio code (`LiveMonitor`, the taps,
 //! `DriftResampler`) and each platform's device I/O. One backend per build,
-//! chosen by `cfg`, exposed as `platform`. See
+//! chosen by `cfg`, exposed as `platform`: CoreAudio on macOS, ALSA on Linux,
+//! `cpal` on Windows until a WASAPI backend lands. See
 //! `loadngo/docs/AUDIO_BACKENDS.md`.
 //!
 //! Every backend provides the same functions with the same signatures:
@@ -13,9 +14,14 @@ pub(crate) mod coreaudio;
 #[cfg(target_os = "macos")]
 pub(crate) use coreaudio as platform;
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(target_os = "linux")]
+pub(crate) mod alsa;
+#[cfg(target_os = "linux")]
+pub(crate) use alsa as platform;
+
+#[cfg(target_os = "windows")]
 pub(crate) mod cpal_host;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 pub(crate) use cpal_host as platform;
 
 use crate::capabilities::SampleResolution;
