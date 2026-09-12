@@ -170,25 +170,32 @@ fn dual_stack_node_receives_on_v4_and_v6_sockets() {
     sender_v4.send_to(&frame_v4, v4_target).unwrap();
     sender_v6.send_to(&frame_v6, v6_target).unwrap();
 
+    // Break on what has been *received so far*, not on the count returned by
+    // a single drain. The two datagrams need not land in the same 5 ms poll
+    // window -- under load they routinely do not -- and when they arrive in
+    // separate polls each call returns 1, so a `drained >= 2` condition never
+    // matches even though `seen` already holds both. That is what made this
+    // test fail roughly one run in four, and why a longer deadline never
+    // helped: nothing was late, the condition was simply asking the wrong
+    // question.
     let mut seen = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(1);
-    let drained = loop {
-        let drained = net
-            .drain_and_dispatch(&mut |source, _header, _message| {
-                seen.push(source);
-            })
-            .unwrap();
-        if drained >= 2 {
-            break drained;
+    loop {
+        net.drain_and_dispatch(&mut |source, _header, _message| {
+            seen.push(source);
+        })
+        .unwrap();
+        if seen.len() >= 2 {
+            break;
         }
         assert!(
             Instant::now() < deadline,
             "timed out waiting for dual-stack delivery"
         );
         thread::sleep(Duration::from_millis(5));
-    };
+    }
 
-    assert_eq!(drained, 2);
+    assert_eq!(seen.len(), 2);
     assert!(seen.iter().any(SocketAddr::is_ipv4));
     assert!(seen.iter().any(SocketAddr::is_ipv6));
 }
