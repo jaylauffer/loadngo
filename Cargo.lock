@@ -1442,6 +1442,7 @@ dependencies = [
  "jni",
  "lewton",
  "libc",
+ "loadngo-audio-io",
  "loadngo-camera",
  "loadngo-gfx-dx12",
  "loadngo-gfx-gles",

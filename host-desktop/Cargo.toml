@@ -19,6 +19,15 @@ ui-core = { path = "../ui-core" }
 futures = "0.3"
 
 [target.'cfg(all(not(target_os = "android"), not(target_os = "netbsd"), not(target_os = "ios")))'.dependencies]
+# `lewton` + `loadngo-audio-io` are the replacement for rodio/cpal here: the
+# same decoder the Android and iOS backends use, feeding the CoreAudio/ALSA
+# output seam this workspace already owns and hardware-verified. rodio stays
+# alongside them until the replacement is proven on both macOS and Linux --
+# these are the platforms where audio currently works best, and swapping them
+# in one step would open a long window where the only way to find a
+# regression is by ear.
+lewton = "0.10"
+loadngo-audio-io = { path = "../audio-io" }
 rodio = { version = "0.17", features = ["vorbis"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

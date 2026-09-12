@@ -26,6 +26,8 @@ mod error;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod monitor;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+mod output;
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod recording;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod resample;
@@ -42,6 +44,8 @@ pub use devices::{list_input_devices, list_output_devices, AudioDeviceInfo};
 pub use error::AudioIoError;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub use monitor::{LiveMonitor, LiveMonitorConfig};
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+pub use output::{open_output_stream, OutputFormat, OutputStream};
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub use recording::RecordingTap;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]

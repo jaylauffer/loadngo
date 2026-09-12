@@ -260,6 +260,23 @@ impl MixerState {
             music.finished = music.chunks.try_recv().is_err() && music.pending.is_empty();
             return;
         }
+        // First-order low shelf: add a lowpassed copy back in. Android gets
+        // this from the platform's own bass-boost effect; there is no
+        // equivalent to borrow here, so it is done by hand -- but it should
+        // still *sound* like the other backends.
+        //
+        // Both values mirror the desktop backend deliberately. Its
+        // `MUSIC_BASS_CUTOFF_HZ` is 180, and the one-pole coefficient for
+        // that at 48 kHz is `1 - exp(-2*PI*180/48000)`; the 0.15 used here
+        // first was about six times too wide, lifting everything up past a
+        // kilohertz instead of bass. Its `MUSIC_BASS_POST_GAIN` of 0.9 is
+        // applied to the music bus whether or not any boost is mixed in
+        // (both branches of `append_music_source` end in `.amplify`), so it
+        // is unconditional here too -- without it this backend ran the music
+        // bus about a decibel hot relative to effects.
+        const BASS_ONE_POLE: f32 = 0.0234;
+        const MUSIC_POST_GAIN: f32 = 0.9;
+
         let volume = self.music_volume;
         let boost = self.bass_boost;
         for (index, sample) in out.iter_mut().enumerate() {
@@ -267,12 +284,9 @@ impl MixerState {
                 break;
             };
             let channel = index % 2;
-            // First-order low shelf: add a lowpassed copy back in. Android
-            // gets this from the platform's own bass-boost effect; there is
-            // no equivalent to borrow here, so it is done by hand.
-            let low = self.bass_state[channel] + 0.15 * (value - self.bass_state[channel]);
+            let low = self.bass_state[channel] + BASS_ONE_POLE * (value - self.bass_state[channel]);
             self.bass_state[channel] = low;
-            *sample += (value + low * boost) * volume;
+            *sample += (value + low * boost) * volume * MUSIC_POST_GAIN;
         }
     }
 
