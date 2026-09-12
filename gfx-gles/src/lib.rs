@@ -1,5 +1,5 @@
 #[cfg(any(target_os = "android", target_os = "linux"))]
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use loadngo_renderer::{FrameCommand, GraphicsBackend, RendererError};
@@ -29,6 +29,16 @@ pub struct GlesImageResource {
     pub identity: usize,
 }
 
+/// How many presents a replaced texture is held before its name is freed.
+///
+/// A frame's draws are still being rasterised after the GL calls return --
+/// emphatically so on a tile-based GPU like the Pi's VideoCore, which defers
+/// rasterisation to the end of the frame. Freeing a texture name lets the
+/// driver hand it straight back out, and the pending draw then samples
+/// whatever took its place. Two presents is a cheap margin.
+#[cfg(any(target_os = "android", target_os = "linux"))]
+const TEXTURE_RETIRE_FRAMES: u8 = 2;
+
 #[cfg(any(target_os = "android", target_os = "linux"))]
 fn image_resource_changed(previous: &GlesImageResource, next: &GlesImageResource) -> bool {
     previous.width != next.width
@@ -54,6 +64,14 @@ pub struct GlesBackend {
     image_resources: HashMap<String, GlesImageResource>,
     #[cfg(any(target_os = "android", target_os = "linux"))]
     gpu_textures: HashMap<String, u32>,
+    /// Keys whose pixels changed and whose texture must be re-uploaded by the
+    /// next present, once a GL context is actually current.
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    stale_textures: HashSet<String>,
+    /// Textures whose key is gone, with the number of presents still to wait
+    /// before the name is freed. See [`TEXTURE_RETIRE_FRAMES`].
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    retired_textures: Vec<(u32, u8)>,
     #[cfg(target_os = "android")]
     display: Option<android::EglDisplay>,
     #[cfg(target_os = "android")]
@@ -93,6 +111,10 @@ impl GlesBackend {
             image_resources: HashMap::new(),
             #[cfg(any(target_os = "android", target_os = "linux"))]
             gpu_textures: HashMap::new(),
+            #[cfg(any(target_os = "android", target_os = "linux"))]
+            stale_textures: HashSet::new(),
+            #[cfg(any(target_os = "android", target_os = "linux"))]
+            retired_textures: Vec::new(),
             #[cfg(target_os = "android")]
             display: None,
             #[cfg(target_os = "android")]
@@ -123,6 +145,10 @@ impl GlesBackend {
             image_resources: HashMap::new(),
             #[cfg(any(target_os = "android", target_os = "linux"))]
             gpu_textures: HashMap::new(),
+            #[cfg(any(target_os = "android", target_os = "linux"))]
+            stale_textures: HashSet::new(),
+            #[cfg(any(target_os = "android", target_os = "linux"))]
+            retired_textures: Vec::new(),
             #[cfg(target_os = "android")]
             display: None,
             #[cfg(target_os = "android")]
@@ -177,36 +203,37 @@ impl GlesBackend {
             for (key, resource) in resources {
                 next.insert(key, resource);
             }
-            let mut changed_keys = Vec::new();
+            // Deliberately no GL here. This runs before the frame's
+            // `eglMakeCurrent`, so a context is current only when the previous
+            // present happened to leave one bound, and on the first frame none
+            // exists at all. Worse, deleting a texture frees its name for
+            // immediate reuse while the previous frame's draws may still be
+            // rasterising, so a pending draw samples whatever lands there --
+            // seen on a Pi as multicoloured static over exactly the text that
+            // changes every frame. Record the work; let `present_scene` do it
+            // with a live context.
             for (key, resource) in next.iter_mut() {
                 if let Some(previous) = self.image_resources.get(key) {
                     if image_resource_changed(previous, resource) {
-                        changed_keys.push(key.clone());
+                        self.stale_textures.insert(key.clone());
                     } else {
                         *resource = previous.clone();
                     }
                 }
             }
-            for key in changed_keys {
-                if let Some(texture) = self.gpu_textures.remove(&key) {
-                    #[cfg(target_os = "android")]
-                    android::destroy_texture(&texture);
-                    #[cfg(target_os = "linux")]
-                    linux_egl::destroy_texture(&texture);
-                }
-            }
             self.image_resources.retain(|key, _| next.contains_key(key));
+            // Moved out so the closure isn't a second mutable borrow of self.
+            let mut retired = std::mem::take(&mut self.retired_textures);
             self.gpu_textures.retain(|key, texture| {
                 if next.contains_key(key) {
                     true
                 } else {
-                    #[cfg(target_os = "android")]
-                    android::destroy_texture(texture);
-                    #[cfg(target_os = "linux")]
-                    linux_egl::destroy_texture(texture);
+                    retired.push((*texture, TEXTURE_RETIRE_FRAMES));
                     false
                 }
             });
+            self.retired_textures = retired;
+            self.stale_textures.retain(|key| next.contains_key(key));
             self.image_resources = next;
         }
 
@@ -233,6 +260,8 @@ impl GlesBackend {
             textured_vbo: 0,
             image_resources: HashMap::new(),
             gpu_textures: HashMap::new(),
+            stale_textures: HashSet::new(),
+            retired_textures: Vec::new(),
             display: Some(display),
             context: Some(context),
             surface: Some(surface),
@@ -265,6 +294,8 @@ impl GlesBackend {
             textured_vbo: 0,
             image_resources: HashMap::new(),
             gpu_textures: HashMap::new(),
+            stale_textures: HashSet::new(),
+            retired_textures: Vec::new(),
             linux_binding: Some(binding),
         })
     }
@@ -358,6 +389,8 @@ impl GraphicsBackend for GlesBackend {
                         &mut self.textured_vbo,
                         &self.image_resources,
                         &mut self.gpu_textures,
+                        &mut self.stale_textures,
+                        &mut self.retired_textures,
                         self.surface_width.max(1),
                         self.surface_height.max(1),
                         &self.recorded_commands,
@@ -376,6 +409,8 @@ impl GraphicsBackend for GlesBackend {
                         &mut self.textured_vbo,
                         &self.image_resources,
                         &mut self.gpu_textures,
+                        &mut self.stale_textures,
+                        &mut self.retired_textures,
                         self.surface_width.max(1),
                         self.surface_height.max(1),
                         &self.recorded_commands,
@@ -805,6 +840,8 @@ mod android {
         textured_vbo: &mut u32,
         image_resources: &std::collections::HashMap<String, super::GlesImageResource>,
         gpu_textures: &mut std::collections::HashMap<String, GlTexture>,
+        stale_textures: &mut std::collections::HashSet<String>,
+        retired_textures: &mut Vec<(GlTexture, u8)>,
         width: i32,
         height: i32,
         commands: &[FrameCommand],
@@ -813,6 +850,24 @@ mod android {
             if eglMakeCurrent(display, surface, surface, context) == EGL_FALSE {
                 return Err(last_egl_error("eglMakeCurrent"));
             }
+            // The context is current only from here, so this is the first
+            // point at which texture uploads and deletes are legal.
+            for key in stale_textures.drain() {
+                if let (Some(texture), Some(resource)) =
+                    (gpu_textures.get(&key), image_resources.get(&key))
+                {
+                    upload_texture(*texture, resource);
+                }
+            }
+            retired_textures.retain_mut(|(texture, frames)| {
+                if *frames == 0 {
+                    destroy_texture(texture);
+                    false
+                } else {
+                    *frames -= 1;
+                    true
+                }
+            });
             glViewport(0, 0, width, height);
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1359,6 +1414,31 @@ mod android {
         Ok(())
     }
 
+    /// Re-specifies `texture`'s storage from `resource`.
+    ///
+    /// Used both to fill a newly created texture and to replace the pixels of
+    /// one whose content changed. Replacing the contents of a live texture is
+    /// safe even while an earlier frame's draw still references it -- the
+    /// driver ghosts the old storage or stalls as needed -- whereas deleting
+    /// the texture frees its name for immediate reuse, and a pending draw then
+    /// samples whatever occupies it next.
+    pub fn upload_texture(texture: GlTexture, resource: &super::GlesImageResource) {
+        unsafe {
+            glBindTexture(GL_TEXTURE_2D, texture);
+            glTexImage2D(
+                GL_TEXTURE_2D,
+                0,
+                GL_RGBA as i32,
+                resource.width.max(1),
+                resource.height.max(1),
+                0,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                resource.rgba8.as_ptr().cast(),
+            );
+        }
+    }
+
     fn ensure_gpu_texture(
         key: &str,
         resource: &super::GlesImageResource,
@@ -1368,7 +1448,7 @@ mod android {
             return Ok(*texture);
         }
 
-        unsafe {
+        let texture = unsafe {
             let mut texture = 0;
             glGenTextures(1, &mut texture);
             if texture == 0 {
@@ -1381,20 +1461,11 @@ mod android {
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glTexImage2D(
-                GL_TEXTURE_2D,
-                0,
-                GL_RGBA as i32,
-                resource.width.max(1),
-                resource.height.max(1),
-                0,
-                GL_RGBA,
-                GL_UNSIGNED_BYTE,
-                resource.rgba8.as_ptr().cast(),
-            );
-            gpu_textures.insert(key.to_string(), texture);
-            Ok(texture)
-        }
+            texture
+        };
+        upload_texture(texture, resource);
+        gpu_textures.insert(key.to_string(), texture);
+        Ok(texture)
     }
 
     fn rect_vertices(rect: ui_core::geometry::Rect, width: i32, height: i32) -> [f32; 12] {

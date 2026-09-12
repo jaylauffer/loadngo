@@ -367,6 +367,8 @@ pub fn present_scene(
     textured_vbo: &mut u32,
     image_resources: &std::collections::HashMap<String, super::GlesImageResource>,
     gpu_textures: &mut std::collections::HashMap<String, u32>,
+    stale_textures: &mut std::collections::HashSet<String>,
+    retired_textures: &mut Vec<(u32, u8)>,
     width: i32,
     height: i32,
     commands: &[FrameCommand],
@@ -382,6 +384,24 @@ pub fn present_scene(
         {
             return Err(last_egl_error("eglMakeCurrent"));
         }
+        // The context is current only from here, so this is the first point at
+        // which texture uploads and deletes are legal.
+        for key in stale_textures.drain() {
+            if let (Some(texture), Some(resource)) =
+                (gpu_textures.get(&key), image_resources.get(&key))
+            {
+                upload_texture(*texture, resource);
+            }
+        }
+        retired_textures.retain_mut(|(texture, frames)| {
+            if *frames == 0 {
+                destroy_texture(texture);
+                false
+            } else {
+                *frames -= 1;
+                true
+            }
+        });
         glViewport(0, 0, width, height);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -960,6 +980,31 @@ fn draw_images(
     Ok(())
 }
 
+/// Re-specifies `texture`'s storage from `resource`.
+///
+/// Used both to fill a newly created texture and to replace the pixels of one
+/// whose content changed. Replacing the contents of a live texture is safe
+/// even while an earlier frame's draw still references it -- the driver ghosts
+/// the old storage or stalls as needed -- whereas deleting the texture frees
+/// its name for immediate reuse, and a pending draw then samples whatever
+/// occupies it next.
+pub fn upload_texture(texture: u32, resource: &super::GlesImageResource) {
+    unsafe {
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexImage2D(
+            GL_TEXTURE_2D,
+            0,
+            GL_RGBA as i32,
+            resource.width.max(1),
+            resource.height.max(1),
+            0,
+            GL_RGBA,
+            GL_UNSIGNED_BYTE,
+            resource.rgba8.as_ptr().cast(),
+        );
+    }
+}
+
 fn ensure_gpu_texture(
     key: &str,
     resource: &super::GlesImageResource,
@@ -969,7 +1014,7 @@ fn ensure_gpu_texture(
         return Ok(*texture);
     }
 
-    unsafe {
+    let texture = unsafe {
         let mut texture = 0;
         glGenTextures(1, &mut texture);
         if texture == 0 {
@@ -982,20 +1027,11 @@ fn ensure_gpu_texture(
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexImage2D(
-            GL_TEXTURE_2D,
-            0,
-            GL_RGBA as i32,
-            resource.width.max(1),
-            resource.height.max(1),
-            0,
-            GL_RGBA,
-            GL_UNSIGNED_BYTE,
-            resource.rgba8.as_ptr().cast(),
-        );
-        gpu_textures.insert(key.to_string(), texture);
-        Ok(texture)
-    }
+        texture
+    };
+    upload_texture(texture, resource);
+    gpu_textures.insert(key.to_string(), texture);
+    Ok(texture)
 }
 
 fn rect_vertices(rect: ui_core::geometry::Rect, width: i32, height: i32) -> [f32; 12] {
