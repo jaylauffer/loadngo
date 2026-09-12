@@ -166,13 +166,25 @@ pub struct AudioMixer {
     voice: VoiceController,
     music_creative_mix: f32,
     prefs: AudioPreferences,
-    #[cfg(all(not(target_os = "android"), not(target_os = "netbsd")))]
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "netbsd"),
+        not(target_os = "ios")
+    ))]
     _shared_stream: Option<rodio::OutputStream>,
-    #[cfg(all(not(target_os = "android"), not(target_os = "netbsd")))]
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "netbsd"),
+        not(target_os = "ios")
+    ))]
     shared_handle: Option<rodio::OutputStreamHandle>,
 }
 
-#[cfg(all(not(target_os = "android"), not(target_os = "netbsd")))]
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "netbsd"),
+    not(target_os = "ios")
+))]
 impl AudioMixer {
     pub fn new(config: AudioMixerConfig, prefs: AudioPreferences) -> Self {
         let prefs = prefs.normalized();
@@ -249,7 +261,9 @@ impl AudioMixer {
     }
 }
 
-#[cfg(any(target_os = "android", target_os = "netbsd"))]
+// iOS joins these two: its backend owns its own output unit, so there is no
+// shared rodio `OutputStream` for the mixer to open and hand around.
+#[cfg(any(target_os = "android", target_os = "netbsd", target_os = "ios"))]
 impl AudioMixer {
     pub fn new(config: AudioMixerConfig, prefs: AudioPreferences) -> Self {
         let prefs = prefs.normalized();

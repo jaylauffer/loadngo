@@ -864,6 +864,14 @@ mod imp {
     }
 }
 
+/// iOS has no rodio (and so no cpal): playback is loadngo's own RemoteIO
+/// backend. Kept in its own file rather than inlined like the others --
+/// `audio.rs` is already 2000 lines, and this one owns a decoder thread and
+/// a render callback.
+#[cfg(target_os = "ios")]
+#[path = "audio_ios.rs"]
+mod imp;
+
 #[cfg(target_os = "netbsd")]
 mod imp {
     use super::{SfxPlayRequest, SfxSettings, SfxVoiceId};
@@ -1058,7 +1066,11 @@ mod imp {
     }
 }
 
-#[cfg(all(not(target_os = "android"), not(target_os = "netbsd")))]
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "netbsd"),
+    not(target_os = "ios")
+))]
 mod imp {
     use super::{SfxPlayRequest, SfxSettings, SfxVoiceId};
     use std::collections::{HashMap, VecDeque};
@@ -2040,7 +2052,11 @@ pub use imp::*;
 /// `crate::audio_mixer::AudioMixer::new` open one shared output stream on
 /// the rodio backend instead of each controller opening its own. A no-op
 /// on Android/NetBSD, which have no such backend and don't export this.
-#[cfg(all(not(target_os = "android"), not(target_os = "netbsd")))]
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "netbsd"),
+    not(target_os = "ios")
+))]
 pub(crate) use imp::open_output_stream;
 
 #[cfg(test)]

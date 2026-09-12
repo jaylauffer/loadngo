@@ -18,7 +18,7 @@ ui-core = { path = "../ui-core" }
 [target.'cfg(any(target_os = "ios", target_os = "linux", target_os = "windows"))'.dependencies]
 futures = "0.3"
 
-[target.'cfg(all(not(target_os = "android"), not(target_os = "netbsd")))'.dependencies]
+[target.'cfg(all(not(target_os = "android"), not(target_os = "netbsd"), not(target_os = "ios")))'.dependencies]
 rodio = { version = "0.17", features = ["vorbis"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -48,6 +48,14 @@ ndk-context = "0.1"
 ndk-sys = "0.5"
 
 [target.'cfg(target_os = "ios")'.dependencies]
+# Audio playback is loadngo's own: a RemoteIO AudioUnit fed by `lewton`,
+# rather than rodio/cpal. `audio_unit` is where RemoteIO lives, and on iOS
+# its symbols ship inside the AudioToolbox framework.
+coreaudio-sys = { version = "0.2", default-features = false, features = [
+    "audio_toolbox",
+    "audio_unit",
+] }
+lewton = "0.10"
 loadngo-gfx-metal = { path = "../gfx-metal" }
 loadngo-proactor = { path = "../proactor" }
 objc2 = "0.6.4"
