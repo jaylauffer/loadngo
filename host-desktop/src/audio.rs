@@ -872,6 +872,19 @@ mod imp {
 #[path = "audio_ios.rs"]
 mod imp;
 
+/// The desktop replacement for rodio, behind `native-desktop-audio`. Two
+/// `mod imp` definitions cannot coexist under one `cfg`, so a feature is how
+/// both backends stay compilable and comparable on one machine rather than
+/// one replacing the other in a single irreversible step.
+#[cfg(all(
+    feature = "native-desktop-audio",
+    not(target_os = "android"),
+    not(target_os = "netbsd"),
+    not(target_os = "ios")
+))]
+#[path = "audio_desktop.rs"]
+mod imp;
+
 #[cfg(target_os = "netbsd")]
 mod imp {
     use super::{SfxPlayRequest, SfxSettings, SfxVoiceId};
@@ -1067,6 +1080,7 @@ mod imp {
 }
 
 #[cfg(all(
+    not(feature = "native-desktop-audio"),
     not(target_os = "android"),
     not(target_os = "netbsd"),
     not(target_os = "ios")
@@ -2053,6 +2067,7 @@ pub use imp::*;
 /// the rodio backend instead of each controller opening its own. A no-op
 /// on Android/NetBSD, which have no such backend and don't export this.
 #[cfg(all(
+    not(feature = "native-desktop-audio"),
     not(target_os = "android"),
     not(target_os = "netbsd"),
     not(target_os = "ios")

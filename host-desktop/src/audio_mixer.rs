@@ -167,12 +167,14 @@ pub struct AudioMixer {
     music_creative_mix: f32,
     prefs: AudioPreferences,
     #[cfg(all(
+        not(feature = "native-desktop-audio"),
         not(target_os = "android"),
         not(target_os = "netbsd"),
         not(target_os = "ios")
     ))]
     _shared_stream: Option<rodio::OutputStream>,
     #[cfg(all(
+        not(feature = "native-desktop-audio"),
         not(target_os = "android"),
         not(target_os = "netbsd"),
         not(target_os = "ios")
@@ -181,6 +183,7 @@ pub struct AudioMixer {
 }
 
 #[cfg(all(
+    not(feature = "native-desktop-audio"),
     not(target_os = "android"),
     not(target_os = "netbsd"),
     not(target_os = "ios")
@@ -261,9 +264,17 @@ impl AudioMixer {
     }
 }
 
-// iOS joins these two: its backend owns its own output unit, so there is no
-// shared rodio `OutputStream` for the mixer to open and hand around.
-#[cfg(any(target_os = "android", target_os = "netbsd", target_os = "ios"))]
+// iOS and the native desktop backend join these two: each owns its own
+// output, so there is no shared rodio `OutputStream` for the mixer to open
+// and hand around. Exhaustive against the gate above -- feature on selects
+// this arm on every target, feature off splits desktop from mobile -- so
+// exactly one `impl` exists in every configuration.
+#[cfg(any(
+    target_os = "android",
+    target_os = "netbsd",
+    target_os = "ios",
+    feature = "native-desktop-audio"
+))]
 impl AudioMixer {
     pub fn new(config: AudioMixerConfig, prefs: AudioPreferences) -> Self {
         let prefs = prefs.normalized();

@@ -5,6 +5,15 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+# Desktop playback on loadngo's own CoreAudio/ALSA output seam instead of
+# rodio/cpal. Off by default on purpose: macOS and Linux are where audio
+# currently works best, so the replacement becomes the default only once it
+# has been measured against the incumbent on real hardware. Both paths
+# implement the same `imp` contract, so enabling this swaps the backend
+# without any caller changing.
+native-desktop-audio = []
+
 [dependencies]
 image.workspace = true
 loadngo-camera = { path = "../camera" }
