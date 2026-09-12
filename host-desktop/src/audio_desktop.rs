@@ -967,3 +967,122 @@ impl SfxController {
         id
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A track holding `chunk`, with its sender either kept alive (a decoder
+    /// still running) or dropped (a decoder that finished).
+    fn track(chunk: Vec<f32>, decoder_alive: bool) -> (MusicTrack, Option<SyncSender<Chunk>>) {
+        let (tx, rx) = sync_channel::<Chunk>(4);
+        if !chunk.is_empty() {
+            tx.send(chunk).expect("test channel accepts one chunk");
+        }
+        let track = MusicTrack {
+            key: "test".to_string(),
+            chunks: rx,
+            pending: VecDeque::new(),
+            current_volume: 1.0,
+            target_volume: 1.0,
+            playing: true,
+            finished: false,
+        };
+        if decoder_alive {
+            (track, Some(tx))
+        } else {
+            (track, None)
+        }
+    }
+
+    fn mixer_with(tracks: Vec<MusicTrack>) -> MixerState {
+        MixerState {
+            tracks,
+            music_mix_volume: 1.0,
+            ..MixerState::default()
+        }
+    }
+
+    /// The regression test for the bug that cycled the playlist every two
+    /// seconds: `try_recv` returning `Err` covers both `Empty` and
+    /// `Disconnected`, so a decoder that simply had not refilled yet was read
+    /// as a track that had ended.
+    #[test]
+    fn a_decoder_that_has_not_refilled_yet_is_not_finished() {
+        let (track, sender) = track(Vec::new(), true);
+        let mut state = mixer_with(vec![track]);
+        state.fill(&mut [0.0; 8], 2);
+        assert!(
+            !state.tracks[0].finished,
+            "an empty queue with a live decoder is a decoder falling behind, not a finished track"
+        );
+        drop(sender);
+    }
+
+    #[test]
+    fn a_closed_channel_with_nothing_pending_is_finished() {
+        let (track, _) = track(Vec::new(), false);
+        let mut state = mixer_with(vec![track]);
+        state.fill(&mut [0.0; 8], 2);
+        assert!(
+            state.tracks[0].finished,
+            "a dropped sender and an empty queue is how a decoder signals the end"
+        );
+    }
+
+    #[test]
+    fn music_is_scaled_by_volume_and_the_unconditional_post_gain() {
+        let (track, sender) = track(vec![0.5; 8], true);
+        let mut state = mixer_with(vec![track]);
+        let mut out = vec![0.0; 8];
+        state.fill(&mut out, 2);
+        // With no bass boost the shelf contributes nothing, leaving the post
+        // gain rodio also applies to its music bus.
+        let expected = 0.5 * MUSIC_BASS_POST_GAIN;
+        for sample in &out {
+            assert!(
+                (sample - expected).abs() < 1e-6,
+                "expected {expected}, got {sample}"
+            );
+        }
+        drop(sender);
+    }
+
+    #[test]
+    fn a_hard_left_pan_silences_the_right_channel() {
+        let (left, right) = stereo_volume(1.0, -1.0);
+        assert!((left - 1.0).abs() < 1e-6, "left was {left}");
+        assert!(right.abs() < 1e-6, "right was {right}");
+        let (left, right) = stereo_volume(1.0, 1.0);
+        assert!(left.abs() < 1e-6, "left was {left}");
+        assert!((right - 1.0).abs() < 1e-6, "right was {right}");
+    }
+
+    #[test]
+    fn a_one_shot_voice_is_retired_once_it_runs_out() {
+        let mut state = MixerState {
+            music_mix_volume: 1.0,
+            voices: vec![(
+                1,
+                ActiveVoice {
+                    samples: Arc::new(vec![1.0, 1.0]),
+                    cursor: 0,
+                    left: 1.0,
+                    right: 1.0,
+                    looped: false,
+                },
+            )],
+            ..MixerState::default()
+        };
+        let mut out = vec![0.0; 8];
+        state.fill(&mut out, 2);
+        assert!(
+            state.voices.is_empty(),
+            "a finished one-shot must not linger"
+        );
+        assert!(
+            out[0] > 0.0 && out[1] > 0.0,
+            "its samples should have been mixed"
+        );
+    }
+}
