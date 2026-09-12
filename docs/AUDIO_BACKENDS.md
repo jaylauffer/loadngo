@@ -237,11 +237,22 @@ Backend-neutral pieces:
 3. **WASAPI** (Windows) -- when a Windows machine exists; a type check is not
    a gate.
 4. **Playback** -- iOS is done (RemoteIO, verified by ear on both games).
-   Desktop has a native path behind `native-desktop-audio`, verified on macOS
-   against rodio: trace-identical through fade-in, cue and resume, and
-   acoustically within the measuring instrument's ~0.8 dB repeatability across
-   100 Hz-6 kHz. It stays default-off until Linux is verified the same way.
-   `cpal` leaves the workspace only once that flag flips *and* Windows has a
-   WASAPI backend -- `rodio` is still the default desktop path today.
+   Desktop has a native path behind `native-desktop-audio`:
+   - **macOS**: trace-identical to rodio through fade-in, cue and resume, and
+     acoustically within the measuring instrument's ~0.8 dB repeatability
+     across 100 Hz-6 kHz on the same passage.
+   - **Linux** (`agnes`): the same trace parity, and routing confirmed --
+     `wpctl` shows a `PipeWire ALSA [audio_harness]` node with both channels
+     linked `[active]` to a hardware sink, appearing and disappearing with the
+     process. Note the process holds no `/dev/snd` handle and should not: the
+     PipeWire client plugin loads into it while the daemon owns the kernel
+     node, so an fd check is the wrong instrument on such a machine.
+   - **Not yet**: audible confirmation on Linux. That box's dongle sits in an
+     IEC958 passthrough profile, and active links say nothing about analogue
+     sound leaving it.
+
+   It stays default-off until that last point is closed. `cpal` leaves the
+   workspace only once the flag flips *and* Windows has a WASAPI backend --
+   `rodio` is still the default desktop path today.
 
 Android/iOS capture has no caller; no backend is planned until one exists.
