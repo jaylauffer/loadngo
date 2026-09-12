@@ -5,6 +5,12 @@ loadngo-owned platform backends, one platform at a time. CoreAudio (macOS)
 and ALSA (Linux) are in; Windows stays on `cpal` behind the same seam until
 WASAPI lands.
 
+Playback followed capture. iOS is off rodio and cpal entirely (its own
+RemoteIO backend), and desktop has a native path behind the
+`native-desktop-audio` feature, default off until it has been measured
+against rodio on each platform. Android never used cpal at all -- it plays
+through `android.media.MediaPlayer`.
+
 Linux needs no ALSA crate. The bindings are declared in-tree, so nothing
 depends on `pkg-config` finding a target ALSA install -- which is also what
 had stopped `cargo check --target aarch64-unknown-linux-gnu` from working on
@@ -40,13 +46,21 @@ general-purpose abstraction that gets these wrong, and fits the rule that
 ## Shape
 
 ```
-LiveMonitor / RecordingTap / probe_input_capabilities / list_*_devices
-        (backend-neutral: rings, taps, DriftResampler, gain/mute)
+capture:  LiveMonitor / RecordingTap / probe_input_capabilities / list_*_devices
+                (backend-neutral: rings, taps, DriftResampler, gain/mute)
+playback: AudioMixer -> MusicController / SfxController / VoiceController
+                (backend-neutral: buses, volumes, mute, preferences)
                           |
                  backend::platform
           +---------------+----------------+
   coreaudio (macOS)     alsa (Linux)      cpal_host (Windows, interim)
 ```
+
+Playback reaches those same backends through `open_output_stream`, the
+public half of what `LiveMonitor` does internally. A game host wants
+somewhere to push mixed samples and has no input device at all; giving it a
+second, parallel audio stack would double the places a device-death or
+format bug can hide.
 
 Each platform module provides the same handful of functions -- no trait
 object, one backend per build, selected by `cfg`:
@@ -128,6 +142,40 @@ Backend-neutral pieces:
   its headers and can't be grepped out, so the constant values were read off
   `dolores` with a C probe rather than guessed.
 
+## iOS backend (playback)
+
+- **One RemoteIO `AudioUnit`** whose render callback mixes a streaming music
+  track with resident effects. `audio-io` is desktop-only by `cfg`, so iOS
+  drives CoreAudio directly through `coreaudio-sys` rather than the seam
+  above -- on iOS the AudioUnit symbols ship inside AudioToolbox.
+- **Music streams, effects don't**, because the assets differ by three orders
+  of magnitude: the games' music runs 5-10 minutes (`flutterrung.ogg` is
+  603 s, ~212 MB decoded to `f32`) while their effects are 20 clips of at
+  most 17 KB. Decoding is `lewton`, the same decoder Android uses.
+- **48 kHz, and the two 44.1 kHz tracks convert on the decoder thread**, so
+  the render callback never resamples.
+- **`AVAudioSession` must be set and activated** or nothing plays at all, and
+  a refusal leaves the app silent but otherwise healthy -- so it is reported
+  rather than discarded.
+- **No fades and no playback-rate control**, matching Android rather than
+  inventing a bar no mobile backend meets.
+
+## Desktop backend (playback, `native-desktop-audio`)
+
+- **Feature-gated, default off.** Two `mod imp` definitions cannot coexist
+  under one `cfg`, so a feature is what keeps rodio and the native path both
+  compilable and comparable on one machine. macOS and Linux are where audio
+  currently works best; swapping them in one step would leave no way to tell
+  a regression from a change.
+- **Richer than the mobile backends**, because the games rely on it: several
+  tracks decode at once so one can fade under another, there is a cue/resume
+  state machine with a two-second advance debounce, and tracks can play from
+  `&'static [u8]`.
+- **`audio_harness`** (`host-desktop/src/bin`) drives `AudioMixer` end to end
+  under either backend. The interesting code only runs when something calls
+  `update(dt)` -- the fade ramp, a cue interrupting a playlist, the resume
+  behind it -- which no unit test reaches.
+
 ## What testing found
 
 - **Simulation caught two controller mistakes before any hardware run.** The
@@ -184,11 +232,16 @@ Backend-neutral pieces:
    statistics over a long run, recording, and converter format switching.
 2. **ALSA** (Linux) -- verified on `dolores` against a USB PnP dongle: device
    lists with the default flagged, capability probe, a recording tap, a duplex
-   monitor, and a ten-minute drift run. Not yet exercised by a real app.
+   monitor, and a ten-minute drift run. Then exercised by a real app:
+   `sng-bass-blaster` recorded a take through it, dongle in and HDMI out.
 3. **WASAPI** (Windows) -- when a Windows machine exists; a type check is not
    a gate.
-4. **Playback** -- `loadngo-host-desktop`'s `AudioMixer` still plays through
-   `rodio`, and so through `cpal`. Removing `cpal` from the workspace means
-   moving playback onto these backends too.
+4. **Playback** -- iOS is done (RemoteIO, verified by ear on both games).
+   Desktop has a native path behind `native-desktop-audio`, verified on macOS
+   against rodio: trace-identical through fade-in, cue and resume, and
+   acoustically within the measuring instrument's ~0.8 dB repeatability across
+   100 Hz-6 kHz. It stays default-off until Linux is verified the same way.
+   `cpal` leaves the workspace only once that flag flips *and* Windows has a
+   WASAPI backend -- `rodio` is still the default desktop path today.
 
 Android/iOS capture has no caller; no backend is planned until one exists.
