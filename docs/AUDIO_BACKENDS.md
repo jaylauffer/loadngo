@@ -241,15 +241,24 @@ Backend-neutral pieces:
    - **macOS**: trace-identical to rodio through fade-in, cue and resume, and
      acoustically within the measuring instrument's ~0.8 dB repeatability
      across 100 Hz-6 kHz on the same passage.
-   - **Linux** (`agnes`): the same trace parity, and routing confirmed --
-     `wpctl` shows a `PipeWire ALSA [audio_harness]` node with both channels
-     linked `[active]` to a hardware sink, appearing and disappearing with the
-     process. Note the process holds no `/dev/snd` handle and should not: the
-     PipeWire client plugin loads into it while the daemon owns the kernel
-     node, so an fd check is the wrong instrument on such a machine.
-   - **Not yet**: audible confirmation on Linux. That box's dongle sits in an
-     IEC958 passthrough profile, and active links say nothing about analogue
-     sound leaving it.
+   - **Linux**: the same trace parity on both lab machines, and routing
+     confirmed on each -- by *opposite* instruments, which is the part worth
+     remembering. On `agnes`, `wpctl` shows a `PipeWire ALSA [audio_harness]`
+     node with both channels linked `[active]` to a hardware sink, appearing
+     and disappearing with the process, while the process holds no `/dev/snd`
+     handle at all: the PipeWire client plugin loads into it and the daemon
+     owns the kernel node. On `dolores` there is no PipeWire ALSA plugin
+     installed and no custom `asound.conf`, so `default` resolves straight to
+     hardware -- nothing appears in `wpctl`'s stream list, and the proof is
+     the opposite one, `/dev/snd/pcmC0D0p` held by the process and `fuser`
+     naming it the only holder. Checking the wrong one of those two returns
+     an empty result that looks exactly like failure.
+   - **Not yet**: audible confirmation on Linux, and neither lab machine can
+     currently measure it. `agnes` has a microphone but its default sink is
+     the dongle's IEC958 passthrough; `dolores` reaches a real HDMI monitor
+     but has no capture device at all since the dongle moved. Switching the
+     dongle's card profile to analogue duplex would put both halves on one
+     machine and make a measured answer possible.
 
    It stays default-off until that last point is closed. `cpal` leaves the
    workspace only once the flag flips *and* Windows has a WASAPI backend --
