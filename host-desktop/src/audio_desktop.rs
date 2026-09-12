@@ -253,6 +253,10 @@ struct ActiveVoice {
 struct MixerState {
     tracks: Vec<MusicTrack>,
     music_mix_volume: f32,
+    /// Music-only pause, and deliberately not a zeroed volume: muting would
+    /// leave the decoders running, so a resume would land further into the
+    /// track and a long pause could advance the playlist entirely.
+    paused: bool,
     bass_boost: f32,
     bass_state: [f32; 2],
     bass_coefficient: f32,
@@ -270,6 +274,13 @@ impl MixerState {
     }
 
     fn mix_music(&mut self, out: &mut [f32], channels: usize) {
+        if self.paused {
+            // Return *without* draining `pending`: the bounded chunk queue
+            // then fills, the decoder blocks in `send_chunk`, and the track
+            // holds its position. That is what makes this a pause rather
+            // than a mute. Effects still play; this pauses music only.
+            return;
+        }
         let mix = self.music_mix_volume;
         let boost = self.bass_boost;
         let coefficient = self.bass_coefficient;
@@ -536,7 +547,8 @@ impl MusicController {
                 playing: true,
                 finished: false,
             });
-            state.music_mix_volume = if self.paused { 0.0 } else { self.mix_volume };
+            state.music_mix_volume = self.mix_volume;
+            state.paused = false;
             state.bass_boost = self.bass_boost;
         }
         self.active_track = Some(selected);
@@ -655,22 +667,20 @@ impl MusicController {
     pub fn pause(&mut self) {
         self.paused = true;
         if let Ok(mut state) = mixer().lock() {
-            state.music_mix_volume = 0.0;
+            state.paused = true;
         }
     }
 
     pub fn resume(&mut self) {
         self.paused = false;
         if let Ok(mut state) = mixer().lock() {
+            state.paused = false;
             state.music_mix_volume = self.mix_volume;
         }
     }
 
     pub fn set_mix_volume(&mut self, volume: f32) {
         self.mix_volume = finite_clamped(volume, 0.0, 2.0, 1.0);
-        if self.paused {
-            return;
-        }
         if let Ok(mut state) = mixer().lock() {
             state.music_mix_volume = self.mix_volume;
         }
@@ -1084,5 +1094,36 @@ mod tests {
             out[0] > 0.0 && out[1] > 0.0,
             "its samples should have been mixed"
         );
+    }
+
+    /// Pause must hold the track, not silence it. Muting left the decoders
+    /// running, so a resume landed further into the music and a long enough
+    /// pause could advance the playlist -- and sng-roguelite pauses on focus
+    /// loss, so this is a path players actually take.
+    #[test]
+    fn pausing_holds_the_track_rather_than_muting_it() {
+        let (track, sender) = track(vec![0.5; 8], true);
+        let mut state = mixer_with(vec![track]);
+        state.paused = true;
+
+        let mut out = [0.0; 8];
+        state.fill(&mut out, 2);
+        assert!(
+            out.iter().all(|sample| sample.abs() < 1e-6),
+            "paused music must be silent"
+        );
+        assert!(
+            state.tracks[0].pending.is_empty(),
+            "a pause must not consume the queue, or the track advances while stopped"
+        );
+
+        state.paused = false;
+        state.fill(&mut out, 2);
+        let expected = 0.5 * MUSIC_BASS_POST_GAIN;
+        assert!(
+            out.iter().all(|sample| (sample - expected).abs() < 1e-6),
+            "resuming should play the samples the pause held back"
+        );
+        drop(sender);
     }
 }
