@@ -293,13 +293,19 @@ fn open_and_configure(
     period_frames: u32,
 ) -> Result<(Pcm, Configured), AudioIoError> {
     let pcm = Pcm::open(pcm_name, capture, nonblock)?;
-    match configure(&pcm, None, period_frames) {
+    match configure(&pcm, None, period_frames, is_hardware_pcm(pcm_name)) {
         Ok(configured) => Ok((pcm, configured)),
         Err(error) => {
             pcm.close();
             Err(error)
         }
     }
+}
+
+/// Whether `pcm_name` addresses the hardware directly, rather than going
+/// through a plug or virtual PCM (`default`, `plughw:`, a PipeWire node).
+pub(crate) fn is_hardware_pcm(pcm_name: &str) -> bool {
+    pcm_name.starts_with("hw:")
 }
 
 fn plug_name(pcm_name: &str) -> Option<String> {
@@ -314,6 +320,7 @@ pub(crate) fn configure(
     pcm: &Pcm,
     preferred_rate_hz: Option<u32>,
     period_frames: u32,
+    hardware: bool,
 ) -> Result<Configured, AudioIoError> {
     let params = HwParams::any(pcm)?;
     let formats = params.supported_formats(pcm);
@@ -322,15 +329,43 @@ pub(crate) fn configure(
             "device offers no PCM format this backend converts".to_string(),
         ));
     };
-    let (_, channels) = params.channel_range();
+    let (min_channels, max_channels) = params.channel_range();
     let (rate_min, rate_max) = params.rate_range();
+
+    // A `hw:` PCM's maxima are the hardware's own, so taking the widest it
+    // offers is exactly "record at the converter's native resolution". A plug
+    // or virtual PCM is the opposite: it advertises everything it is willing
+    // to *convert to*, not anything it has. PipeWire offers 64 channels at up
+    // to 384 kHz, so taking those maxima opened a 64-channel 192 kHz resampled
+    // stream that no hardware here can feed -- fiction the drift resampler
+    // would then dutifully track. Ask a plug device for ordinary values and
+    // let it do the converting it exists for.
+    let channels = if hardware {
+        max_channels
+    } else if min_channels > 2 {
+        min_channels
+    } else {
+        max_channels.min(2)
+    };
     let rate = preferred_rate_hz
         .filter(|rate| params.supports_rate(pcm, *rate))
         .or_else(|| {
-            crate::capabilities::STANDARD_SAMPLE_RATES_HZ
-                .into_iter()
-                .rev()
-                .find(|rate| params.supports_rate(pcm, *rate))
+            if hardware {
+                crate::capabilities::STANDARD_SAMPLE_RATES_HZ
+                    .into_iter()
+                    .rev()
+                    .find(|rate| params.supports_rate(pcm, *rate))
+            } else {
+                // 48 kHz first, then the nearest standard rate below it.
+                std::iter::once(48_000)
+                    .chain(
+                        crate::capabilities::STANDARD_SAMPLE_RATES_HZ
+                            .into_iter()
+                            .rev()
+                            .filter(|rate| *rate < 48_000),
+                    )
+                    .find(|rate| params.supports_rate(pcm, *rate))
+            }
         })
         .unwrap_or(rate_max.min(rate_min.max(48_000)));
 
