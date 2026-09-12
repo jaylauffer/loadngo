@@ -91,3 +91,56 @@ jobs:
       - name: cargo test (portable crates only)
         working-directory: ${{ env.REPO_DIR }}
         run: cargo test --locked --workspace ${{ env.PLATFORM_EXCLUDES }}
+
+  macos:
+    # Same capability-label rule as `check`. This host also advertises
+    # `build-ios`, but a job asks for the capability it needs, not the
+    # machine that happens to have both.
+    runs-on: [self-hosted, build-macos-arm64]
+    timeout-minutes: 45
+    env:
+      # Deliberately NOT ~/pudding/loadngo. The sync step below runs
+      # `git reset --hard` and `git clean -fd`, which is harmless on the
+      # dedicated Pis but would wipe a live working tree on a workstation.
+      # CI gets its own clone, with the `qcoin` sibling beside it that this
+      # repo's path dependencies need.
+      REPO_DIR: /Users/jay/ci/pudding/loadngo
+      # Metal is *included* here: this is the only host that can compile it,
+      # and excluding it everywhere is why the GLES/Metal backends have gone
+      # unlinted. DX12 and the win32 GUI stay out until a Windows runner
+      # exists; proactor-harness stays out for the same build-time reason as
+      # in `check`.
+      MACOS_EXCLUDES: --exclude loadngo-gfx-dx12 --exclude gui-win32 --exclude proactor-harness
+    steps:
+      - name: Sync checkout to the triggering commit
+        run: |
+          cd "$REPO_DIR"
+          git fetch github "$GITHUB_SHA"
+          git reset --hard "$GITHUB_SHA"
+          git clean -fd
+
+      - name: Add cargo to PATH
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: cargo fmt --check
+        working-directory: ${{ env.REPO_DIR }}
+        run: cargo fmt --check
+
+      - name: cargo clippy (macOS, including Metal)
+        working-directory: ${{ env.REPO_DIR }}
+        run: cargo clippy --locked --workspace --all-targets --all-features ${{ env.MACOS_EXCLUDES }} -- -D warnings
+
+      - name: cargo test (macOS)
+        working-directory: ${{ env.REPO_DIR }}
+        run: cargo test --locked --workspace ${{ env.MACOS_EXCLUDES }}
+
+      # Compile-only, and `check` rather than `clippy -D warnings`: the iOS
+      # target carries pre-existing lint debt (deprecated `msg_send_id`,
+      # dead code in gfx-metal) that would land this red on day one for
+      # reasons unrelated to whatever change is being gated. No signing is
+      # involved, so a lapsed provisioning profile can never break CI --
+      # this exists to catch the regression class that was unguarded when
+      # the iOS audio backend landed.
+      - name: cargo check (iOS target, compile-only)
+        working-directory: ${{ env.REPO_DIR }}
+        run: cargo check --locked -p loadngo-host-desktop --target aarch64-apple-ios --all-targets
