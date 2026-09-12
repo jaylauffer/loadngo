@@ -228,3 +228,156 @@ fn reports_device_buffer_sizes() {
         monitor.buffered_ms()
     );
 }
+
+/// Exercises the public output API on its own -- no input device, no
+/// `LiveMonitor`, no drift stage.
+///
+/// That combination is what a game host actually uses, and it is the path the
+/// desktop audio backend is being built on, so it is worth proving against
+/// real hardware before anything depends on it: a fault here would otherwise
+/// only show up tangled together with a new mixer's own bugs.
+///
+/// Emits a quiet 440 Hz tone for one second. The step assumes 48 kHz, so on a
+/// 44.1 kHz device the pitch is slightly flat -- irrelevant for a smoke test,
+/// which is asking whether samples reach the speaker at all.
+#[test]
+#[ignore]
+fn plays_a_tone_through_the_public_output_api() {
+    use std::f32::consts::TAU;
+
+    let mut phase = 0.0f32;
+    let stream = loadngo_audio_io::open_output_stream(None, Some(256), move |out, channels| {
+        let step = TAU * 440.0 / 48_000.0;
+        for frame in out.chunks_mut(channels.max(1)) {
+            let value = phase.sin() * 0.05;
+            phase = (phase + step) % TAU;
+            for sample in frame.iter_mut() {
+                *sample = value;
+            }
+        }
+    })
+    .expect("failed to open the default output device");
+
+    println!(
+        "output {:?} at {} Hz x{} (buffer frames {:?})",
+        stream.format().device_name,
+        stream.sample_rate_hz(),
+        stream.channels(),
+        stream.format().buffer_frames
+    );
+    std::thread::sleep(Duration::from_secs(1));
+    println!(
+        "failure={:?} overloads={}",
+        stream.failure(),
+        stream.overloads()
+    );
+    assert!(
+        stream.failure().is_none(),
+        "the output stream reported a failure"
+    );
+}
+
+/// Single-frequency energy, normalised by length so runs of different
+/// duration compare directly. Goertzel rather than a full FFT because only a
+/// few known frequencies matter here, and rather than `PitchDetector`
+/// because that is tuned for bass and would be the wrong instrument for
+/// asserting 440 Hz.
+fn goertzel(samples: &[f32], frequency: f32, sample_rate_hz: f32) -> f32 {
+    if samples.is_empty() || sample_rate_hz <= 0.0 {
+        return 0.0;
+    }
+    let omega = std::f32::consts::TAU * frequency / sample_rate_hz;
+    let coefficient = 2.0 * omega.cos();
+    let (mut previous, mut older) = (0.0f32, 0.0f32);
+    for sample in samples {
+        let current = sample + coefficient * previous - older;
+        older = previous;
+        previous = current;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let length = samples.len() as f32;
+    (previous * previous + older * older - coefficient * previous * older).max(0.0) / length
+}
+
+/// Proves output actually reaches the air, by playing a tone and *hearing it
+/// back* through a microphone rather than trusting the API's own "no error".
+///
+/// The two are not the same claim, and today's iOS work showed why: a backend
+/// can start, report healthy, and still be silent. Measuring closes the loop
+/// end to end -- mixer, output device, speaker, room, microphone, capture
+/// path -- with no human asked to describe a sound.
+///
+/// Set `LOADNGO_TEST_INPUT` to pick the microphone. It defaults to the C920
+/// because the machine's *default* input is a USB audio interface, which
+/// hears the room not at all.
+#[test]
+#[ignore]
+fn measures_its_own_tone_through_a_microphone() {
+    use std::f32::consts::TAU;
+
+    let input =
+        std::env::var("LOADNGO_TEST_INPUT").unwrap_or_else(|_| "HD Pro Webcam C920".to_string());
+    let monitor = LiveMonitor::start(LiveMonitorConfig {
+        input_device_name: Some(input.clone()),
+        // Never feed the microphone back to the speakers: that would measure
+        // a feedback loop rather than the tone.
+        initial_gain: 0.0,
+        ..LiveMonitorConfig::default()
+    })
+    .expect("failed to open the microphone");
+    #[allow(clippy::cast_precision_loss)]
+    let rate = monitor.input_sample_rate_hz() as f32;
+    println!("listening on {input:?} at {rate} Hz");
+
+    // Baseline first. Without knowing the room's own 440 Hz energy, ambient
+    // noise or microphone AGC could be mistaken for the tone.
+    std::thread::sleep(Duration::from_millis(400));
+    let mut room = Vec::new();
+    monitor.drain_tap(&mut room);
+    room.clear();
+    std::thread::sleep(Duration::from_millis(700));
+    monitor.drain_tap(&mut room);
+    let baseline = goertzel(&room, 440.0, rate);
+
+    let mut phase = 0.0f32;
+    let tone = loadngo_audio_io::open_output_stream(None, Some(256), move |out, channels| {
+        let step = TAU * 440.0 / 48_000.0;
+        for frame in out.chunks_mut(channels.max(1)) {
+            let value = phase.sin() * 0.2;
+            phase = (phase + step) % TAU;
+            for sample in frame.iter_mut() {
+                *sample = value;
+            }
+        }
+    })
+    .expect("failed to open the default output device");
+    println!("playing 440 Hz through {:?}", tone.format().device_name);
+
+    std::thread::sleep(Duration::from_millis(300));
+    let mut heard = Vec::new();
+    monitor.drain_tap(&mut heard);
+    heard.clear();
+    std::thread::sleep(Duration::from_millis(700));
+    monitor.drain_tap(&mut heard);
+
+    let at_440 = goertzel(&heard, 440.0, rate);
+    let below = goertzel(&heard, 300.0, rate);
+    let above = goertzel(&heard, 700.0, rate);
+    println!(
+        "baseline440={baseline:.6} heard440={at_440:.6} at300={below:.6} at700={above:.6} \
+         samples={} tone_failure={:?}",
+        heard.len(),
+        tone.failure()
+    );
+
+    assert!(!heard.is_empty(), "captured no audio from {input}");
+    assert!(
+        at_440 > baseline * 4.0,
+        "440 Hz did not rise above the room's own level ({at_440:.6} vs {baseline:.6})"
+    );
+    assert!(
+        at_440 > below * 4.0 && at_440 > above * 4.0,
+        "440 Hz did not dominate its neighbours ({at_440:.6} vs {below:.6}/{above:.6}) -- \
+         the microphone heard something, but not our tone"
+    );
+}
