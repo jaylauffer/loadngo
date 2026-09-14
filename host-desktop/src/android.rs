@@ -1498,6 +1498,10 @@ pub unsafe fn android_native_activity_on_create(
             .expect("ANativeActivity callbacks should be present");
         callbacks.onNativeWindowCreated = Some(on_native_window_created);
         callbacks.onNativeWindowDestroyed = Some(on_native_window_destroyed);
+        callbacks.onNativeWindowResized = Some(on_native_window_resized);
+        callbacks.onNativeWindowRedrawNeeded = Some(on_native_window_redraw_needed);
+        callbacks.onContentRectChanged = Some(on_content_rect_changed);
+        callbacks.onConfigurationChanged = Some(on_configuration_changed);
         callbacks.onInputQueueCreated = Some(on_input_queue_created);
         callbacks.onInputQueueDestroyed = Some(on_input_queue_destroyed);
         callbacks.onPause = Some(on_pause);
@@ -1655,6 +1659,69 @@ unsafe extern "C" fn on_window_focus_changed(
     if has_focus != 0 {
         refresh_system_ui();
     }
+}
+
+/// Rotation, split-screen, and foldable posture changes all arrive through
+/// these four callbacks, never through `on_native_window_created`: the
+/// packaged manifest declares `orientation|screenSize|...` in
+/// `configChanges`, so Android keeps the activity and resizes its existing
+/// native window rather than recreating it.
+///
+/// Without them a `FrameDemand::Idle` game never learns the surface changed.
+/// Nothing bumps `event_epoch`, so it keeps presenting its last frame laid
+/// out for the old orientation until the next tap. Continuously animating
+/// games hid this, because their next paced frame re-reads the surface
+/// anyway; `sng-mahjong` was the first to rotate while idle.
+///
+/// `on_configuration_changed` can fire before the window reports its new
+/// size. That is fine: `on_native_window_resized` follows with the real
+/// dimensions and wakes the runtime again, and `advance_frame_clock`
+/// re-reads the surface on every frame regardless.
+unsafe extern "C" fn on_native_window_resized(
+    _activity: *mut ndk_sys::ANativeActivity,
+    _window: *mut ndk_sys::ANativeWindow,
+) {
+    notify_window_geometry_changed("native window resized");
+}
+
+unsafe extern "C" fn on_native_window_redraw_needed(
+    _activity: *mut ndk_sys::ANativeActivity,
+    _window: *mut ndk_sys::ANativeWindow,
+) {
+    notify_window_geometry_changed("native window redraw needed");
+}
+
+unsafe extern "C" fn on_content_rect_changed(
+    _activity: *mut ndk_sys::ANativeActivity,
+    _rect: *const ndk_sys::ARect,
+) {
+    notify_window_geometry_changed("content rect changed");
+}
+
+unsafe extern "C" fn on_configuration_changed(_activity: *mut ndk_sys::ANativeActivity) {
+    notify_window_geometry_changed("configuration changed");
+}
+
+/// The Android counterpart of `ios.rs`'s `WindowEvent::Resized` arm: refresh
+/// safe-area insets (the navigation bar moves to a different edge on
+/// rotation), refresh the logical surface, then wake an idle runtime the
+/// same way real input does.
+fn notify_window_geometry_changed(reason: &str) {
+    refresh_system_ui();
+    let surface = {
+        let mut state = app_state().lock().expect("android app state poisoned");
+        if let Some(window) = state.window.as_ref() {
+            state.surface = logical_surface_info(window, state.display_scale);
+        }
+        state.event_epoch = state.event_epoch.saturating_add(1);
+        wake_next_frame_waiters(&mut state);
+        state.surface
+    };
+    android_log_info(&format!(
+        "Android {reason}: logical surface {}x{}",
+        surface.width, surface.height
+    ));
+    request_frame_callback();
 }
 
 /// Reapplies immersive mode if the game has requested it, then re-queries
