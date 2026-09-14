@@ -1661,6 +1661,12 @@ unsafe extern "C" fn on_window_focus_changed(
     }
 }
 
+/// Consecutive frames re-requested because the GLES surface had not caught up
+/// with a resized window, and the most that will be requested in a row.
+static SURFACE_MISMATCH_REDRAWS: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+const MAX_SURFACE_MISMATCH_REDRAWS: u32 = 30;
+
 /// Rotation, split-screen, and foldable posture changes all arrive through
 /// these four callbacks, never through `on_native_window_created`: the
 /// packaged manifest declares `orientation|screenSize|...` in
@@ -2157,6 +2163,7 @@ fn flush_queued_frame() {
     let mut rendered = false;
     let mut render_elapsed = Duration::ZERO;
     let mut backend_used = "none";
+    let mut redraw_for_surface = false;
 
     if requested == DesktopRenderBackendKind::Gles {
         let gles_result = {
@@ -2197,8 +2204,34 @@ fn flush_queued_frame() {
                         .render(backend, &gles_commands);
                     render_elapsed = render_started.elapsed();
                     backend_used = "gles";
+                    let surface_mismatch = backend.take_surface_mismatch();
                     match result {
                         Ok(()) => {
+                            // A frame drawn into a not-yet-resized buffer (see
+                            // `GlesBackend::take_surface_mismatch`) would stay
+                            // on screen in an idle app, so wake the runtime
+                            // for one more. Capped, so a surface that never
+                            // agrees with its window cannot pin the device at
+                            // full frame rate.
+                            let consecutive = if surface_mismatch {
+                                SURFACE_MISMATCH_REDRAWS
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                                    + 1
+                            } else {
+                                SURFACE_MISMATCH_REDRAWS
+                                    .store(0, std::sync::atomic::Ordering::Relaxed);
+                                0
+                            };
+                            if surface_mismatch && consecutive <= MAX_SURFACE_MISMATCH_REDRAWS {
+                                android_log_info(&format!(
+                                    "Android GLES surface size lagged the window ({}x{}); redrawing",
+                                    window.width(),
+                                    window.height()
+                                ));
+                                state.event_epoch = state.event_epoch.saturating_add(1);
+                                wake_next_frame_waiters(&mut state);
+                                redraw_for_surface = true;
+                            }
                             state.last_backend_used = DesktopRenderBackendKind::Gles;
                             update_backend_detail(
                                 &mut state,
@@ -2235,6 +2268,9 @@ fn flush_queued_frame() {
             Some(Ok(())) => rendered = true,
             Some(Err(err)) => android_log_error(&format!("Android GLES render failed: {err}")),
             None => {}
+        }
+        if redraw_for_surface {
+            request_frame_callback();
         }
     }
 

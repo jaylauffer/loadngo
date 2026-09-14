@@ -72,6 +72,10 @@ pub struct GlesBackend {
     /// before the name is freed. See [`TEXTURE_RETIRE_FRAMES`].
     #[cfg(any(target_os = "android", target_os = "linux"))]
     retired_textures: Vec<(u32, u8)>,
+    /// Set by a present whose EGL surface was not the size the frame was
+    /// drawn at. See [`GlesBackend::take_surface_mismatch`].
+    #[cfg(target_os = "android")]
+    surface_mismatch: bool,
     #[cfg(target_os = "android")]
     display: Option<android::EglDisplay>,
     #[cfg(target_os = "android")]
@@ -116,6 +120,8 @@ impl GlesBackend {
             #[cfg(any(target_os = "android", target_os = "linux"))]
             retired_textures: Vec::new(),
             #[cfg(target_os = "android")]
+            surface_mismatch: false,
+            #[cfg(target_os = "android")]
             display: None,
             #[cfg(target_os = "android")]
             context: None,
@@ -150,6 +156,8 @@ impl GlesBackend {
             #[cfg(any(target_os = "android", target_os = "linux"))]
             retired_textures: Vec::new(),
             #[cfg(target_os = "android")]
+            surface_mismatch: false,
+            #[cfg(target_os = "android")]
             display: None,
             #[cfg(target_os = "android")]
             context: None,
@@ -170,6 +178,26 @@ impl GlesBackend {
         #[cfg(target_os = "linux")]
         if let Some(binding) = self.linux_binding.as_mut() {
             linux_egl::resize(binding, self.surface_width, self.surface_height);
+        }
+    }
+
+    /// Whether the last present drew into an EGL surface of a different size
+    /// than the frame was laid out for, clearing the flag.
+    ///
+    /// Android resizes a window surface's buffers lazily -- the new size only
+    /// takes effect at a later buffer dequeue -- so the first frame after a
+    /// rotation can be rendered at the new size into an old-size buffer and
+    /// then scaled by the compositor. A continuously animating app paints over
+    /// it one frame later; an idle one would leave it on screen. Hosts should
+    /// answer `true` by presenting one more frame.
+    pub fn take_surface_mismatch(&mut self) -> bool {
+        #[cfg(target_os = "android")]
+        {
+            std::mem::take(&mut self.surface_mismatch)
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            false
         }
     }
 
@@ -262,6 +290,7 @@ impl GlesBackend {
             gpu_textures: HashMap::new(),
             stale_textures: HashSet::new(),
             retired_textures: Vec::new(),
+            surface_mismatch: false,
             display: Some(display),
             context: Some(context),
             surface: Some(surface),
@@ -379,7 +408,7 @@ impl GraphicsBackend for GlesBackend {
                     let surface = self.surface.ok_or_else(|| {
                         RendererError::Backend("EGL surface is unavailable".to_string())
                     })?;
-                    android::present_scene(
+                    let surface_mismatch = android::present_scene(
                         display,
                         context,
                         surface,
@@ -394,7 +423,9 @@ impl GraphicsBackend for GlesBackend {
                         self.surface_width.max(1),
                         self.surface_height.max(1),
                         &self.recorded_commands,
-                    )
+                    )?;
+                    self.surface_mismatch = surface_mismatch;
+                    Ok(())
                 }
                 #[cfg(target_os = "linux")]
                 {
@@ -639,6 +670,8 @@ mod android {
     const EGL_ALPHA_SIZE: EglInt = 0x3021;
     const EGL_CONTEXT_CLIENT_VERSION: EglInt = 0x3098;
     const EGL_NONE: EglInt = 0x3038;
+    const EGL_HEIGHT: EglInt = 0x3056;
+    const EGL_WIDTH: EglInt = 0x3057;
     const GL_COLOR_BUFFER_BIT: u32 = 0x0000_4000;
     const GL_BLEND: u32 = 0x0BE2;
     const GL_SRC_ALPHA: u32 = 0x0302;
@@ -699,6 +732,27 @@ mod android {
         fn eglDestroyContext(display: EglDisplay, context: EglContext) -> EglBoolean;
         fn eglTerminate(display: EglDisplay) -> EglBoolean;
         fn eglGetError() -> EglInt;
+        fn eglQuerySurface(
+            display: EglDisplay,
+            surface: EglSurface,
+            attribute: EglInt,
+            value: *mut EglInt,
+        ) -> EglBoolean;
+    }
+
+    /// The EGL surface's own idea of its size, which on Android can trail the
+    /// native window's through a resize. `None` if EGL declines to answer.
+    unsafe fn egl_surface_size(display: EglDisplay, surface: EglSurface) -> Option<(i32, i32)> {
+        let mut width: EglInt = 0;
+        let mut height: EglInt = 0;
+        unsafe {
+            if eglQuerySurface(display, surface, EGL_WIDTH, &mut width) == EGL_FALSE
+                || eglQuerySurface(display, surface, EGL_HEIGHT, &mut height) == EGL_FALSE
+            {
+                return None;
+            }
+        }
+        Some((width, height))
     }
 
     #[link(name = "GLESv2")]
@@ -845,11 +899,17 @@ mod android {
         width: i32,
         height: i32,
         commands: &[FrameCommand],
-    ) -> Result<(), RendererError> {
+    ) -> Result<bool, RendererError> {
         unsafe {
             if eglMakeCurrent(display, surface, surface, context) == EGL_FALSE {
                 return Err(last_egl_error("eglMakeCurrent"));
             }
+            // Checked both before drawing and after the swap: the buffer this
+            // frame lands in may still be the old size, and the swap is what
+            // lets the surface pick up the window's new geometry.
+            let size_differs =
+                |size: Option<(i32, i32)>| size.is_some_and(|actual| actual != (width, height));
+            let mut surface_mismatch = size_differs(egl_surface_size(display, surface));
             // The context is current only from here, so this is the first
             // point at which texture uploads and deletes are legal.
             for key in stale_textures.drain() {
@@ -1011,7 +1071,8 @@ mod android {
             if eglSwapBuffers(display, surface) == EGL_FALSE {
                 return Err(last_egl_error("eglSwapBuffers"));
             }
-            Ok(())
+            surface_mismatch |= size_differs(egl_surface_size(display, surface));
+            Ok(surface_mismatch)
         }
     }
 
