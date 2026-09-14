@@ -8,8 +8,6 @@ use ui_core::geometry::Color;
 #[cfg(any(target_os = "android", target_os = "linux", test))]
 use ui_core::geometry::Point;
 
-#[cfg(target_os = "android")]
-mod android_egl;
 #[cfg(target_os = "linux")]
 pub mod linux_egl;
 
@@ -884,6 +882,7 @@ mod android {
         }
     }
 
+    #[allow(clippy::too_many_arguments)] // low-level GL/EGL FFI dispatch entry point; each param is real, distinct GPU state
     pub fn present_scene(
         display: EglDisplay,
         context: EglContext,
@@ -931,14 +930,12 @@ mod android {
             glViewport(0, 0, width, height);
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            let mut cleared = false;
             if !commands
                 .iter()
                 .any(|command| matches!(command, FrameCommand::Clear { .. }))
             {
                 glClearColor(0.0, 0.0, 0.0, 1.0);
                 glClear(GL_COLOR_BUFFER_BIT);
-                cleared = true;
             }
 
             for command in commands {
@@ -951,7 +948,6 @@ mod android {
                             color.a as f32 / 255.0,
                         );
                         glClear(GL_COLOR_BUFFER_BIT);
-                        cleared = true;
                     }
                     FrameCommand::FillRect { rect, color } => {
                         ensure_solid_pipeline(solid_program, solid_vbo)?;
@@ -1265,6 +1261,7 @@ mod android {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)] // private single-call-site GL draw helper; params are the real independent inputs
     fn draw_polyline(
         program: u32,
         vbo: u32,
@@ -1316,6 +1313,7 @@ mod android {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)] // private single-call-site GL draw helper; params are the real independent inputs
     fn draw_line(
         program: u32,
         vbo: u32,
@@ -1343,6 +1341,7 @@ mod android {
         draw_solid_vertices(program, vbo, &vertices, color, "GLES solid circle")
     }
 
+    #[allow(clippy::too_many_arguments)] // private single-call-site GL draw helper; params are the real independent inputs
     fn draw_arc(
         program: u32,
         vbo: u32,
@@ -1387,7 +1386,7 @@ mod android {
 
             glBufferData(
                 GL_ARRAY_BUFFER,
-                (vertices.len() * std::mem::size_of::<f32>()) as isize,
+                std::mem::size_of_val(vertices) as isize,
                 vertices.as_ptr().cast(),
                 GL_STREAM_DRAW,
             );
@@ -1438,8 +1437,8 @@ mod android {
                 (2 * std::mem::size_of::<f32>()) as *const c_void,
             );
 
-            let u_tint = glGetUniformLocation(program, b"u_tint\0".as_ptr().cast());
-            let u_tex = glGetUniformLocation(program, b"u_tex\0".as_ptr().cast());
+            let u_tint = glGetUniformLocation(program, c"u_tint".as_ptr().cast());
+            let u_tex = glGetUniformLocation(program, c"u_tex".as_ptr().cast());
             if u_tint < 0 || u_tex < 0 {
                 return Err(RendererError::Backend(
                     "GLES textured shader uniforms are unavailable".to_string(),
@@ -1532,10 +1531,10 @@ mod android {
     fn rect_vertices(rect: ui_core::geometry::Rect, width: i32, height: i32) -> [f32; 12] {
         let width = width.max(1) as f32;
         let height = height.max(1) as f32;
-        let x0 = rect.x as f32;
-        let y0 = rect.y as f32;
-        let x1 = (rect.x + rect.width) as f32;
-        let y1 = (rect.y + rect.height) as f32;
+        let x0 = rect.x;
+        let y0 = rect.y;
+        let x1 = rect.x + rect.width;
+        let y1 = rect.y + rect.height;
 
         let to_clip_x = |x: f32| (x / width) * 2.0 - 1.0;
         let to_clip_y = |y: f32| 1.0 - (y / height) * 2.0;
