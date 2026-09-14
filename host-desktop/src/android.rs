@@ -545,6 +545,20 @@ fn logical_point(value: f32, display_scale: f32) -> f32 {
     value / display_scale.max(0.01)
 }
 
+/// `WindowInsets` report device pixels, but `HostFrame::surface` is logical
+/// (see `logical_surface_info`), and games subtract one from the other. iOS
+/// has always matched them, since UIKit's safe-area insets are already in
+/// points; Android handed games physical insets against a logical surface,
+/// reserving ~2.75x the navigation bar's real size on a 440dpi phone.
+fn logical_insets(insets: SafeAreaInsets, display_scale: f32) -> SafeAreaInsets {
+    SafeAreaInsets {
+        left: logical_point(insets.left, display_scale),
+        top: logical_point(insets.top, display_scale),
+        right: logical_point(insets.right, display_scale),
+        bottom: logical_point(insets.bottom, display_scale),
+    }
+}
+
 fn scale_rect(rect: UiRect, scale: f32) -> UiRect {
     UiRect {
         x: rect.x * scale,
@@ -3330,7 +3344,7 @@ pub fn capture_frame() -> HostFrame {
         surface: state.surface,
         input: state.input.clone(),
         foreground: state.foreground,
-        insets: state.insets,
+        insets: logical_insets(state.insets, state.display_scale),
     };
     let state_mut = &mut *state;
     let input = &mut state_mut.input;

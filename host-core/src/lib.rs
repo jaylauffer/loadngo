@@ -164,8 +164,10 @@ pub struct SurfaceInfo {
     pub height: f32,
 }
 
-/// Device-pixel screen space reserved by the platform's own system bars
-/// (status bar, navigation bar) along each edge. Deliberately excludes the
+/// Screen space reserved by the platform's own system bars (status bar,
+/// navigation bar) along each edge, in the same units as
+/// `HostFrame::surface` -- logical units on Android and iOS -- so a game can
+/// subtract it from the surface directly. Deliberately excludes the
 /// display cutout: a cutout notch sits at one point along an edge, not the
 /// whole edge, so folding its safe-inset scalar in here would conservatively
 /// push content anchored anywhere else on that edge — confirmed on-device
@@ -253,8 +255,8 @@ pub struct HostFrame {
     /// while this is `false`, matching platform-expected app-lifecycle
     /// behavior instead of continuing to run (and make noise) off-screen.
     pub foreground: bool,
-    /// Device-pixel screen space reserved by the platform's own system bars
-    /// (status bar, navigation bar) — see `SafeAreaInsets`'s own doc comment
+    /// Screen space, in `surface`'s units, reserved by the platform's own
+    /// system bars (status bar, navigation bar) — see `SafeAreaInsets`'s own doc comment
     /// for why the display cutout is deliberately not included. On Android
     /// this reflects a real `WindowInsets` query; platforms with no such
     /// query wired up always report all-zero. Games that place interactive
