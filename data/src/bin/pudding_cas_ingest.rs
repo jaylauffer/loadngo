@@ -7,6 +7,7 @@ use data::pudding::{
 };
 use qcoin_crypto::{PrivateKey, PublicKey};
 use std::collections::BTreeSet;
+#[cfg(unix)]
 use std::ffi::OsString;
 use std::fs;
 #[cfg(unix)]
