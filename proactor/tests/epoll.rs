@@ -6,6 +6,7 @@ use loadngo_proactor::{
 };
 use std::io;
 use std::net::{TcpListener, UdpSocket};
+use std::os::android::net::SocketAddrExt;
 use std::os::fd::AsRawFd;
 use std::sync::mpsc;
 use std::thread;
@@ -447,15 +448,15 @@ fn epoll_accept_hands_back_a_unix_peer_instead_of_leaking_it() {
     let proactor = Proactor::new(EpollPort::new().unwrap());
     let handle = proactor.handle();
 
-    let dir = std::env::temp_dir().join(format!(
+    // Abstract namespace: SELinux refuses the adb shell a socket file under
+    // /data/local/tmp, and an abstract name needs no filesystem at all.
+    let path = <std::os::unix::net::SocketAddr as SocketAddrExt>::from_abstract_name(format!(
         "loadngo-proactor-epoll-unix-accept-{}",
         std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("s");
+    ))
+    .unwrap();
 
-    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    let listener = std::os::unix::net::UnixListener::bind_addr(&path).unwrap();
     let listener_fd = listener.as_raw_fd();
 
     let (tx, rx) = mpsc::channel();
@@ -470,7 +471,7 @@ fn epoll_accept_hands_back_a_unix_peer_instead_of_leaking_it() {
         })
         .unwrap();
 
-    let _client = std::os::unix::net::UnixStream::connect(&path).unwrap();
+    let _client = std::os::unix::net::UnixStream::connect_addr(&path).unwrap();
 
     let mut dispatched = 0;
     let start = Instant::now();
@@ -495,8 +496,6 @@ fn epoll_accept_hands_back_a_unix_peer_instead_of_leaking_it() {
     unsafe {
         libc::close(new_fd);
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

@@ -346,13 +346,10 @@ fn kqueue_accept_hands_back_a_unix_peer_instead_of_leaking_it() {
     let proactor = Proactor::new(KqueuePort::new().unwrap());
     let handle = proactor.handle();
 
-    let dir = std::env::temp_dir().join(format!(
-        "loadngo-proactor-kqueue-unix-accept-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("s");
+    // Kept short: an iOS app's temp dir is ~90 bytes deep already, and
+    // sun_path holds 104 including the terminator.
+    let path = std::env::temp_dir().join(format!("lpu{}", std::process::id()));
+    let _ = std::fs::remove_file(&path);
 
     let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
     let listener_fd = listener.as_raw_fd();
@@ -395,7 +392,7 @@ fn kqueue_accept_hands_back_a_unix_peer_instead_of_leaking_it() {
         libc::close(new_fd);
     }
 
-    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
