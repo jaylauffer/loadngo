@@ -420,3 +420,96 @@ fn kqueue_register_readable_rejects_reserved_tokens() {
         .register_readable(fd, 0x4c4f_4144_4e47_4f00, |_event: ReadinessEvent| {})
         .expect("a non-reserved token must still register");
 }
+
+/// A 1 MiB file of a repeating, position-dependent byte pattern, so a read
+/// from the wrong offset cannot pass by accident.
+fn patterned_file(name: &str) -> (std::path::PathBuf, Vec<u8>) {
+    let path = std::env::temp_dir().join(format!(
+        "loadngo-proactor-kqueue-{name}-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let contents: Vec<u8> = (0..1_u32 << 20).map(|index| (index % 251) as u8).collect();
+    std::fs::write(&path, &contents).unwrap();
+    (path, contents)
+}
+
+#[test]
+fn kqueue_a_batch_of_file_reads_completes_byte_exact() {
+    // A regular file never reports "would block", so these reads run on the
+    // file-offload workers instead of one after another during submission.
+    let proactor = Proactor::new(KqueuePort::new().unwrap());
+    let handle = proactor.handle();
+    let (path, contents) = patterned_file("batch");
+    let file = std::fs::File::open(&path).unwrap();
+    let fd = file.as_raw_fd();
+
+    let ranges: Vec<(usize, usize)> = (0..64_usize)
+        .map(|index| (index * 16_381, 4096 + index * 13))
+        .collect();
+    let (tx, rx) = mpsc::channel();
+    for (index, &(offset, len)) in ranges.iter().enumerate() {
+        let tx = tx.clone();
+        handle
+            .read(
+                fd,
+                IoBuf::with_capacity(len),
+                offset as u64,
+                move |result: IoResult| {
+                    tx.send((index, result.map(|transfer| transfer.buf.into_vec())))
+                        .unwrap();
+                },
+            )
+            .unwrap();
+    }
+    drop(tx);
+
+    let mut dispatched = 0;
+    let start = Instant::now();
+    while dispatched < ranges.len() {
+        dispatched += proactor.run_once().unwrap().dispatched_completions;
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "file reads never completed"
+        );
+    }
+    let received: Vec<_> = rx.iter().collect();
+    assert_eq!(received.len(), ranges.len());
+    for (index, bytes) in received {
+        let (offset, len) = ranges[index];
+        assert_eq!(bytes.unwrap(), &contents[offset..offset + len]);
+    }
+
+    drop(file);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn kqueue_shutdown_waits_for_offloaded_file_reads_instead_of_hanging() {
+    let proactor = Proactor::new(KqueuePort::new().unwrap());
+    let handle = proactor.handle();
+    let (path, _) = patterned_file("shutdown");
+    let file = std::fs::File::open(&path).unwrap();
+    let fd = file.as_raw_fd();
+
+    for index in 0..64_u64 {
+        handle
+            .read(fd, IoBuf::with_capacity(8192), index * 8192, |_result| {})
+            .unwrap();
+    }
+
+    let worker = thread::spawn(move || {
+        let started = Instant::now();
+        proactor.run_until_stopped().unwrap();
+        started.elapsed()
+    });
+    handle.stop().unwrap();
+
+    let elapsed = worker.join().unwrap();
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "run_until_stopped did not drain the offloaded reads and return"
+    );
+    drop(file);
+    let _ = std::fs::remove_file(&path);
+}

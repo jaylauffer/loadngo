@@ -3,6 +3,16 @@ mod deferred;
 #[cfg(target_os = "android")]
 mod epoll;
 mod error;
+#[cfg(any(
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+mod file_offload;
 mod io_port;
 #[cfg(windows)]
 mod iocp;

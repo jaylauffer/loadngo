@@ -28,6 +28,7 @@
 //! a fd on any single event, not just the direction that fired, which
 //! would be wrong the moment two directions are outstanding at once.
 
+use crate::file_offload::{blocks_without_readiness, CompletionQueue, FileOffload};
 use crate::{
     AcceptCompletionHandler, AcceptResult, AcceptTransfer, CompletionEnvelope, CompletionPort,
     IoBuf, IoCompletionHandler, IoOpId, IoPort, IoResult, IoTransfer, PollEvent, ReadinessEvent,
@@ -44,7 +45,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::os::fd::RawFd;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Sentinel `epoll_event.u64` tags for the two control eventfds, chosen
@@ -156,11 +157,14 @@ pub struct EpollPort {
     /// attempt (no epoll round-trip needed at all), or one that
     /// `cancel_io` synchronously cancelled. Drained the same way `queue`
     /// is, via the same `QUEUE_TAG` wake. Same role as `kqueue.rs`'s
-    /// identically-named field.
-    io_completions: Mutex<VecDeque<Box<dyn FnOnce() + Send>>>,
+    /// identically-named field, including finished `file_offload` ops.
+    io_completions: CompletionQueue,
     in_flight: Mutex<HashMap<IoOpId, InFlightOp>>,
     fds: Mutex<HashMap<RawFd, FdEntry>>,
     next_io_op_id: AtomicU64,
+    /// Regular-file and block-device reads/writes, which epoll never reports
+    /// as "would block"; see `file_offload.rs`.
+    file_offload: FileOffload,
 }
 
 impl EpollPort {
@@ -187,6 +191,16 @@ impl EpollPort {
             return Err(err);
         }
 
+        let io_completions: CompletionQueue = Arc::new(Mutex::new(VecDeque::new()));
+        // Workers wake `poll` through the queue eventfd, which `Drop` keeps
+        // open until they have been joined.
+        let file_offload = FileOffload::new(
+            Arc::clone(&io_completions),
+            Arc::new(move || {
+                let _ = Self::trigger(queue_fd);
+            }),
+        );
+
         // `port` owns all three fds from here on — an error below drops
         // it, and `Drop for EpollPort` closes them, so no manual cleanup
         // is needed past this point.
@@ -195,10 +209,11 @@ impl EpollPort {
             queue_fd,
             wake_fd,
             queue: Mutex::new(VecDeque::new()),
-            io_completions: Mutex::new(VecDeque::new()),
+            io_completions,
             in_flight: Mutex::new(HashMap::new()),
             fds: Mutex::new(HashMap::new()),
             next_io_op_id: AtomicU64::new(0),
+            file_offload,
         };
         port.register_control_fd(queue_fd, QUEUE_TAG)?;
         port.register_control_fd(wake_fd, WAKE_TAG)?;
@@ -245,10 +260,12 @@ impl EpollPort {
             .lock()
             .expect("epoll io-completion queue poisoned")
             .push_back(thunk);
-        self.trigger(self.queue_fd)
+        Self::trigger(self.queue_fd)
     }
 
-    fn trigger(&self, fd: c_int) -> io::Result<()> {
+    /// Takes the descriptor rather than `&self` so `file_offload` workers,
+    /// which hold only the queue eventfd, can wake `poll` too.
+    fn trigger(fd: c_int) -> io::Result<()> {
         let value: u64 = 1;
         let result = unsafe { libc::write(fd, (&raw const value).cast(), 8) };
         if result == -1 {
@@ -646,7 +663,7 @@ impl CompletionPort for EpollPort {
             .lock()
             .expect("epoll completion queue poisoned")
             .push_back(envelope);
-        self.trigger(self.queue_fd)
+        Self::trigger(self.queue_fd)
     }
 
     fn poll(&self, timeout: Option<Duration>) -> io::Result<PollEvent> {
@@ -717,7 +734,7 @@ impl CompletionPort for EpollPort {
     }
 
     fn wake(&self) -> io::Result<()> {
-        self.trigger(self.wake_fd)
+        Self::trigger(self.wake_fd)
     }
 
     fn begin_shutdown(&self) {
@@ -740,10 +757,13 @@ impl CompletionPort for EpollPort {
     }
 
     fn shutdown_complete(&self) -> bool {
+        // An offloaded file op cannot be interrupted mid-syscall; its worker
+        // still owns the buffer, so shutdown waits for it to finish.
         self.in_flight
             .lock()
             .expect("epoll in-flight op table poisoned")
             .is_empty()
+            && self.file_offload.pending() == 0
     }
 }
 
@@ -765,8 +785,25 @@ impl IoPort for EpollPort {
         offset: u64,
         handler: impl IoCompletionHandler,
     ) -> io::Result<IoOpId> {
-        Self::set_nonblocking(fd)?;
         let handler: Box<dyn IoCompletionHandler> = Box::new(handler);
+        if blocks_without_readiness(fd) {
+            let op_id = self.allocate_io_op_id();
+            self.file_offload.submit(Box::new(move || {
+                let mut buf = buf;
+                let rc = unsafe {
+                    libc::pread(
+                        fd,
+                        buf.as_mut_ptr().cast(),
+                        buf.capacity(),
+                        offset as libc::off_t,
+                    )
+                };
+                let io_result = Self::finish_read_like(rc, buf);
+                Box::new(move || handler.run(io_result))
+            }))?;
+            return Ok(op_id);
+        }
+        Self::set_nonblocking(fd)?;
         let rc = unsafe {
             libc::pread(
                 fd,
@@ -806,8 +843,19 @@ impl IoPort for EpollPort {
         offset: u64,
         handler: impl IoCompletionHandler,
     ) -> io::Result<IoOpId> {
-        Self::set_nonblocking(fd)?;
         let handler: Box<dyn IoCompletionHandler> = Box::new(handler);
+        if blocks_without_readiness(fd) {
+            let op_id = self.allocate_io_op_id();
+            self.file_offload.submit(Box::new(move || {
+                let rc = unsafe {
+                    libc::pwrite(fd, buf.as_ptr().cast(), buf.len(), offset as libc::off_t)
+                };
+                let io_result = Self::finish_write_like(rc, buf);
+                Box::new(move || handler.run(io_result))
+            }))?;
+            return Ok(op_id);
+        }
+        Self::set_nonblocking(fd)?;
         let rc = unsafe { libc::pwrite(fd, buf.as_ptr().cast(), buf.len(), offset as libc::off_t) };
         let err = io::Error::last_os_error();
         if rc >= 0 || !Self::would_block(&err) {
@@ -1083,6 +1131,10 @@ impl IoPort for EpollPort {
 
 impl Drop for EpollPort {
     fn drop(&mut self) {
+        // Join the file workers first: each one wakes `poll` through
+        // `queue_fd`, which must not be closed (and its number reused)
+        // underneath them.
+        self.file_offload.shutdown();
         unsafe {
             close(self.wake_fd);
             close(self.queue_fd);

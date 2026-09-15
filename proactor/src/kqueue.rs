@@ -1,3 +1,4 @@
+use crate::file_offload::{blocks_without_readiness, CompletionQueue, FileOffload};
 use crate::{
     AcceptCompletionHandler, AcceptResult, AcceptTransfer, CompletionEnvelope, CompletionPort,
     IoBuf, IoCompletionHandler, IoOpId, IoPort, IoResult, IoTransfer, PollEvent, ReadinessEvent,
@@ -15,7 +16,7 @@ use std::net::SocketAddr;
 use std::os::fd::RawFd;
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const QUEUE_IDENT: usize = 1;
@@ -86,11 +87,16 @@ pub struct KqueuePort {
     /// Pre-resolved `IoPort` completions -- either an op that succeeded
     /// (or failed) immediately on its first, optimistic non-blocking
     /// attempt (no kqueue round-trip needed at all), or one that
-    /// `cancel_io` synchronously cancelled. Drained the same way `queue`
-    /// is, via the same `QUEUE_IDENT` wake.
-    io_completions: Mutex<VecDeque<Box<dyn FnOnce() + Send>>>,
+    /// `cancel_io` synchronously cancelled, or a file op a
+    /// `file_offload` worker finished. Drained the same way `queue` is, via
+    /// the same `QUEUE_IDENT` wake.
+    io_completions: CompletionQueue,
     in_flight: Mutex<HashMap<IoOpId, InFlightOp>>,
     next_io_op_id: AtomicU64,
+    /// Regular-file and block-device reads/writes. kqueue never reports
+    /// those as "would block", so doing them inline would serialize every
+    /// batch; see `file_offload.rs`.
+    file_offload: FileOffload,
 }
 
 impl KqueuePort {
@@ -100,12 +106,22 @@ impl KqueuePort {
             return Err(io::Error::last_os_error());
         }
 
+        let io_completions: CompletionQueue = Arc::new(Mutex::new(VecDeque::new()));
+        // Workers wake `poll` through the kqueue itself, which `Drop` keeps
+        // open until they have been joined.
+        let file_offload = FileOffload::new(
+            Arc::clone(&io_completions),
+            Arc::new(move || {
+                let _ = Self::trigger_user_event_on(kq, QUEUE_IDENT);
+            }),
+        );
         let port = Self {
             kq,
             queue: Mutex::new(VecDeque::new()),
-            io_completions: Mutex::new(VecDeque::new()),
+            io_completions,
             in_flight: Mutex::new(HashMap::new()),
             next_io_op_id: AtomicU64::new(0),
+            file_offload,
         };
         if let Err(err) = port.register_user_event(QUEUE_IDENT) {
             unsafe {
@@ -133,9 +149,15 @@ impl KqueuePort {
     }
 
     fn trigger_user_event(&self, ident: usize) -> io::Result<()> {
+        Self::trigger_user_event_on(self.kq, ident)
+    }
+
+    /// `trigger_user_event` without a `&self`, for `file_offload` workers,
+    /// which hold only the kqueue descriptor.
+    fn trigger_user_event_on(kq: c_int, ident: usize) -> io::Result<()> {
         let change = Self::user_event(ident, EV_ADD | EV_RECEIPT, NOTE_TRIGGER);
         let mut receipt = Self::empty_event();
-        let result = unsafe { kevent(self.kq, &change, 1, &mut receipt, 1, ptr::null()) };
+        let result = unsafe { kevent(kq, &change, 1, &mut receipt, 1, ptr::null()) };
         if result == -1 {
             return Err(io::Error::last_os_error());
         }
@@ -560,10 +582,13 @@ impl CompletionPort for KqueuePort {
     }
 
     fn shutdown_complete(&self) -> bool {
+        // An offloaded file op cannot be interrupted mid-syscall; its worker
+        // still owns the buffer, so shutdown waits for it to finish.
         self.in_flight
             .lock()
             .expect("kqueue in-flight op table poisoned")
             .is_empty()
+            && self.file_offload.pending() == 0
     }
 }
 
@@ -597,8 +622,25 @@ impl IoPort for KqueuePort {
         offset: u64,
         handler: impl IoCompletionHandler,
     ) -> io::Result<IoOpId> {
-        Self::set_nonblocking(fd)?;
         let handler: Box<dyn IoCompletionHandler> = Box::new(handler);
+        if blocks_without_readiness(fd) {
+            let op_id = self.allocate_io_op_id();
+            self.file_offload.submit(Box::new(move || {
+                let mut buf = buf;
+                let rc = unsafe {
+                    libc::pread(
+                        fd,
+                        buf.as_mut_ptr().cast(),
+                        buf.capacity(),
+                        offset as libc::off_t,
+                    )
+                };
+                let io_result = Self::finish_read_like(rc, buf);
+                Box::new(move || handler.run(io_result))
+            }))?;
+            return Ok(op_id);
+        }
+        Self::set_nonblocking(fd)?;
         let rc = unsafe {
             libc::pread(
                 fd,
@@ -638,8 +680,19 @@ impl IoPort for KqueuePort {
         offset: u64,
         handler: impl IoCompletionHandler,
     ) -> io::Result<IoOpId> {
-        Self::set_nonblocking(fd)?;
         let handler: Box<dyn IoCompletionHandler> = Box::new(handler);
+        if blocks_without_readiness(fd) {
+            let op_id = self.allocate_io_op_id();
+            self.file_offload.submit(Box::new(move || {
+                let rc = unsafe {
+                    libc::pwrite(fd, buf.as_ptr().cast(), buf.len(), offset as libc::off_t)
+                };
+                let io_result = Self::finish_write_like(rc, buf);
+                Box::new(move || handler.run(io_result))
+            }))?;
+            return Ok(op_id);
+        }
+        Self::set_nonblocking(fd)?;
         let rc = unsafe { libc::pwrite(fd, buf.as_ptr().cast(), buf.len(), offset as libc::off_t) };
         let err = io::Error::last_os_error();
         if rc >= 0 || !Self::would_block(&err) {
@@ -917,6 +970,9 @@ impl IoPort for KqueuePort {
 
 impl Drop for KqueuePort {
     fn drop(&mut self) {
+        // Join the file workers first: each one wakes `poll` through `kq`,
+        // which must not be closed (and its number reused) underneath them.
+        self.file_offload.shutdown();
         unsafe {
             close(self.kq);
         }
