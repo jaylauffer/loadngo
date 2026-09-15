@@ -4,9 +4,10 @@ version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Model weight files and their numeric formats, written from the published specifications: safetensors, bfloat16 and IEEE binary16, OCP MX FP4."
+description = "Model weight files and their numeric formats, written from the published specifications: safetensors, bfloat16 and IEEE binary16, OCP MX FP4, read through loadngo-proactor."
 
 [dependencies]
+loadngo-proactor = { path = "../proactor" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

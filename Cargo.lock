@@ -1529,6 +1529,7 @@ dependencies = [
 name = "loadngo-weights"
 version = "0.1.0"
 dependencies = [
+ "loadngo-proactor",
  "serde",
  "serde_json",
  "tempfile",

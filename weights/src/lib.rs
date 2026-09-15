@@ -7,6 +7,8 @@
 //!   UTF-8 JSON header, then a byte buffer every tensor indexes into.
 //! - [`shards`]: a checkpoint split across several safetensors files, located through
 //!   the `model.safetensors.index.json` weight map or by listing the directory.
+//! - [`reader`]: tensor bytes read as positioned completion I/O through
+//!   `loadngo-proactor`, a whole batch submitted before any read is awaited.
 //! - [`dtype`]: element types, and exact widening of bfloat16 and IEEE 754 binary16.
 //! - [`dense`]: matrix-vector products straight out of half-precision bytes.
 //! - [`mxfp4`]: OCP Microscaling (MX) v1.0 MXFP4, 4-bit E2M1 elements sharing one E8M0
@@ -17,5 +19,6 @@
 pub mod dense;
 pub mod dtype;
 pub mod mxfp4;
+pub mod reader;
 pub mod safetensors;
 pub mod shards;
