@@ -168,8 +168,12 @@ jobs:
       # current `windows` crate at all (imports that crate no longer exports
       # there, and a `gui_win32::` path inside gui-win32's own sources) --
       # a repair of their own, not lint debt, so they stay out until that is
-      # done. DX12 is *in*: this is the only host that can build it.
-      WINDOWS_EXCLUDES: --exclude loadngo-gfx-metal --exclude gui --exclude gui-win32 --exclude proactor-harness
+      # done. `task` goes with them: it depends on `gui`, and `--exclude`
+      # only drops a crate from the lint list, not from the build of a crate
+      # that depends on it, so leaving `task` in rebuilt gui-win32 anyway
+      # (first Windows run, 2026-09-15). Nothing else depends on `task`.
+      # DX12 is *in*: this is the only host that can build it.
+      WINDOWS_EXCLUDES: --exclude loadngo-gfx-metal --exclude gui --exclude gui-win32 --exclude task --exclude proactor-harness
     steps:
       - name: Trust the checkout for the runner's service account
         # The checkout was cloned by the administrator who provisioned the

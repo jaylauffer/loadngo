@@ -43,7 +43,7 @@ mod imp {
                 anyhow::bail!("GlobalAlloc failed");
             }
 
-            let locked = GlobalLock(hmem) as *mut c_void;
+            let locked = GlobalLock(hmem);
             if locked.is_null() {
                 let _ = CloseClipboard();
                 anyhow::bail!("GlobalLock failed");
