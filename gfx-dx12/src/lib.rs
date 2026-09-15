@@ -673,6 +673,7 @@ mod windows_backend {
             Ok(texture)
         }
 
+        #[allow(clippy::type_complexity)] // one private call site destructures the (clear, vertices, draws) triple immediately
         fn build_draws(
             &mut self,
         ) -> Result<(Option<Color>, Vec<Vertex>, Vec<DrawItem>), RendererError> {
@@ -1104,7 +1105,7 @@ mod windows_backend {
             let semantics = [s!("POSITION"), s!("TEXCOORD"), s!("COLOR")];
             let input_layouts = [
                 D3D12_INPUT_ELEMENT_DESC {
-                    SemanticName: PCSTR(semantics[0].as_ptr() as *const u8),
+                    SemanticName: PCSTR(semantics[0].as_ptr()),
                     SemanticIndex: 0,
                     Format: DXGI_FORMAT_R32G32_FLOAT,
                     InputSlot: 0,
@@ -1113,7 +1114,7 @@ mod windows_backend {
                     InstanceDataStepRate: 0,
                 },
                 D3D12_INPUT_ELEMENT_DESC {
-                    SemanticName: PCSTR(semantics[1].as_ptr() as *const u8),
+                    SemanticName: PCSTR(semantics[1].as_ptr()),
                     SemanticIndex: 0,
                     Format: DXGI_FORMAT_R32G32_FLOAT,
                     InputSlot: 0,
@@ -1122,7 +1123,7 @@ mod windows_backend {
                     InstanceDataStepRate: 0,
                 },
                 D3D12_INPUT_ELEMENT_DESC {
-                    SemanticName: PCSTR(semantics[2].as_ptr() as *const u8),
+                    SemanticName: PCSTR(semantics[2].as_ptr()),
                     SemanticIndex: 0,
                     Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
                     InputSlot: 0,
@@ -1240,7 +1241,7 @@ mod windows_backend {
             FillMode: D3D12_FILL_MODE_SOLID,
             CullMode: D3D12_CULL_MODE_NONE,
             FrontCounterClockwise: false.into(),
-            DepthBias: D3D12_DEFAULT_DEPTH_BIAS as i32,
+            DepthBias: D3D12_DEFAULT_DEPTH_BIAS,
             DepthBiasClamp: D3D12_DEFAULT_DEPTH_BIAS_CLAMP,
             SlopeScaledDepthBias: D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS,
             DepthClipEnable: true.into(),
@@ -1540,6 +1541,7 @@ mod windows_backend {
         polyline_triangle_points(points.as_slice(), thickness, false)
     }
 
+    #[allow(clippy::too_many_arguments)] // private quad helper with two call sites; params are the real independent vertex inputs
     fn push_quad_vertices(
         vertices: &mut Vec<Vertex>,
         x0: f32,

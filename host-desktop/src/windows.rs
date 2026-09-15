@@ -719,6 +719,7 @@ pub fn wrap_text_lines(
     lines
 }
 
+#[allow(clippy::too_many_arguments)] // public host API shared with the other platform modules; each param is a real, independent text input
 pub fn render_text_lines(
     lines: &[String],
     x: f32,
@@ -1626,7 +1627,7 @@ fn present(
         }
     }
 
-    for (dst, chunk) in buffer.iter_mut().zip(rgba.chunks_exact(4)) {
+    for (dst, chunk) in buffer.iter_mut().zip(rgba.as_chunks::<4>().0) {
         *dst = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);
     }
     buffer.present().expect("failed to present Windows surface");
@@ -1637,6 +1638,15 @@ fn present(
         "Windows software renderer rendered the queued frame",
     );
 }
+
+/// What `prepare_dx12_frame` hands back: the rewritten commands, the texture
+/// set they draw from, and the generated-text cache to carry into the next
+/// frame.
+type PreparedDx12Frame = (
+    Vec<FrameCommand>,
+    HashMap<String, Arc<DecodedImage>>,
+    HashMap<String, Arc<DecodedImage>>,
+);
 
 /// Rewrites text into pre-rasterized image commands for the DX12 backend.
 ///
@@ -1649,11 +1659,7 @@ fn prepare_dx12_frame(
     commands: &[FrameCommand],
     textures: &HashMap<String, Arc<DecodedImage>>,
     generated_cache: HashMap<String, Arc<DecodedImage>>,
-) -> (
-    Vec<FrameCommand>,
-    HashMap<String, Arc<DecodedImage>>,
-    HashMap<String, Arc<DecodedImage>>,
-) {
+) -> PreparedDx12Frame {
     let mut next_commands = Vec::with_capacity(commands.len());
     let mut next_textures = textures.clone();
     let mut next_generated_cache = HashMap::new();
@@ -2382,6 +2388,7 @@ fn apply_overflow(
     })
 }
 
+#[allow(clippy::too_many_arguments)] // private software-raster helper; params are the real independent glyph inputs
 fn draw_text_line(
     buffer: &mut [u8],
     width: usize,
@@ -2588,13 +2595,17 @@ mod tests {
         draw_text_request(&mut rgba, width, height, &request);
 
         let left_alpha: usize = rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .enumerate()
             .filter(|(idx, _)| idx % width < 60)
             .map(|(_, px)| px[3] as usize)
             .sum();
         let clipped_alpha: usize = rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .enumerate()
             .filter(|(idx, _)| idx % width >= 60 && idx % width < 200)
             .map(|(_, px)| px[3] as usize)
@@ -2636,7 +2647,9 @@ mod tests {
             let band_bottom = (local_top + line_step * (line_index as f32 + 1.0)).ceil() as usize;
             let alpha: usize = image
                 .rgba8
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .enumerate()
                 .filter(|(index, _)| {
                     let row = index / texture_width;
