@@ -107,9 +107,9 @@ jobs:
       REPO_DIR: /Users/jay/ci/pudding/loadngo
       # Metal is *included* here: this is the only host that can compile it,
       # and excluding it everywhere is why the GLES/Metal backends have gone
-      # unlinted. DX12 and the win32 GUI stay out until a Windows runner
-      # exists; proactor-harness stays out for the same build-time reason as
-      # in `check`.
+      # unlinted. DX12 and the win32 GUI are Windows-only; the `windows` job
+      # below is where DX12 gets linted. proactor-harness stays out for the
+      # same build-time reason as in `check`.
       MACOS_EXCLUDES: --exclude loadngo-gfx-dx12 --exclude gui-win32 --exclude proactor-harness
     steps:
       - name: Sync checkout to the triggering commit
@@ -144,3 +144,61 @@ jobs:
       - name: cargo check (iOS target, compile-only)
         working-directory: ${{ env.REPO_DIR }}
         run: cargo check --locked -p loadngo-host-desktop --target aarch64-apple-ios --all-targets
+
+  windows:
+    # Same capability-label rule as `check`. The machine is provisioned by
+    # ~/pudding/provision-windows-runner.ps1 (see
+    # ~/pudding/windows-github-runner-setup.md): machine-wide Rust under
+    # C:\rust, the runner as NETWORK SERVICE, and this checkout -- with its
+    # `qcoin` sibling beside it -- under C:\pudding, which only CI uses.
+    runs-on: [self-hosted, build-windows-x64]
+    timeout-minutes: 60
+    defaults:
+      run:
+        # cmd, not PowerShell: Windows PowerShell 5.1 turns anything a native
+        # tool writes to stderr into a terminating error under the runner's
+        # `$ErrorActionPreference = 'Stop'`, and git and cargo both report
+        # progress there. Under cmd a step fails on exit codes alone, so each
+        # command in a multi-command step checks its own with `|| exit /b 1`.
+        shell: cmd
+    env:
+      REPO_DIR: C:\pudding\loadngo
+      # Metal is macOS-only and proactor-harness stays out for build time, as
+      # in the other jobs. gui and gui-win32 do not compile against the
+      # current `windows` crate at all (imports that crate no longer exports
+      # there, and a `gui_win32::` path inside gui-win32's own sources) --
+      # a repair of their own, not lint debt, so they stay out until that is
+      # done. DX12 is *in*: this is the only host that can build it.
+      WINDOWS_EXCLUDES: --exclude loadngo-gfx-metal --exclude gui --exclude gui-win32 --exclude proactor-harness
+    steps:
+      - name: Trust the checkout for the runner's service account
+        # The checkout was cloned by the administrator who provisioned the
+        # machine, and git refuses to work in a repository owned by another
+        # account ("detected dubious ownership"). Adds the entry only when it
+        # is missing, so repeated runs do not pile up duplicates.
+        run: |
+          git config --global --get-all safe.directory | findstr /x /c:"C:/pudding/loadngo" >nul || git config --global --add safe.directory C:/pudding/loadngo || exit /b 1
+
+      - name: Sync checkout to the triggering commit
+        run: |
+          cd /d "%REPO_DIR%" || exit /b 1
+          git fetch github %GITHUB_SHA% || exit /b 1
+          git reset --hard %GITHUB_SHA% || exit /b 1
+          git clean -fd || exit /b 1
+
+      - name: Toolchain
+        run: |
+          rustc --version || exit /b 1
+          cargo --version || exit /b 1
+
+      - name: cargo fmt --check
+        working-directory: ${{ env.REPO_DIR }}
+        run: cargo fmt --check
+
+      - name: cargo clippy (Windows, including DX12)
+        working-directory: ${{ env.REPO_DIR }}
+        run: cargo clippy --locked --workspace --all-targets --all-features ${{ env.WINDOWS_EXCLUDES }} -- -D warnings
+
+      - name: cargo test (Windows, including the IOCP proactor suite)
+        working-directory: ${{ env.REPO_DIR }}
+        run: cargo test --locked --workspace ${{ env.WINDOWS_EXCLUDES }}

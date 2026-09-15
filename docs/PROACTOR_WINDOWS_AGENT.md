@@ -1,112 +1,86 @@
-# Windows Proactor Agent Runbook
+# Windows Proactor Runbook
 
-This runbook is for validating and continuing the `IOCP` backend on a Windows machine.
+State of `loadngo-proactor` on Windows, and how to validate it on a real
+machine.
 
-## Goal
+## Status (2026-09-15)
 
-Validate that `loadngo-proactor` on Windows behaves like the original C++ `Machine`:
+- **Backend.** `IocpPort` (`proactor/src/iocp.rs`) implements the whole
+  `IoPort` surface -- `read`, `write`, `recv`, `send`, `recv_from`,
+  `send_to`, `accept`, `connect`, `cancel_io` -- plus queued work, wakeups
+  and shutdown draining.
+- **Tests.** `proactor/tests/iocp.rs` exercises that surface against real
+  handles and sockets, matching the Unix backends' suites: queued work in
+  order, wake, stop, a file round trip including an offset read, UDP
+  `recv_from`/`send_to`, TCP `accept` on IPv4 and IPv6 with data through the
+  accepted socket, `connect` with a usable connected socket, `cancel_io`, and
+  shutdown with an operation still in flight.
+- **Host.** `host-desktop/src/windows.rs` owns a `HostProactor<IocpPort>` for
+  the process lifetime and follows the `linux.rs`/`ios.rs` shape: frame
+  timers are proactor deferred work dispatched from `about_to_wait`, and the
+  winit loop blocks on `ControlFlow::WaitUntil(next_deadline)`. `next_frame`
+  no longer spawns a thread per call. `wake_host` exists, as on Linux.
+- **CI.** `loadngo`'s `ci.yml` `windows` job runs fmt, clippy with warnings as
+  errors, and the workspace tests on the `build-windows-x64` runner.
 
-- immediate work posts through `IOCP`
-- wake events interrupt blocking waits
-- deferred work remains owned by the Rust core, not by the Windows backend
-- host integration can replace polling loops cleanly
+Defects fixed on 2026-09-15, each pinned by a test:
 
-## Current code locations
+| defect | effect | test |
+| --- | --- | --- |
+| `read` passed `ReadFile` the zero-capacity placeholder it swapped out, not the caller's buffer | every read completed having read nothing | `iocp_write_then_read_round_trip_an_overlapped_file` |
+| `accept`'s pre-created socket was always `AF_INET` | every IPv6 listener failed | `iocp_accept_works_on_an_ipv6_listener` |
+| a failed or cancelled accept dropped the pre-created socket | one leaked socket per failed accept, including every accept cancelled at shutdown | covered by the shutdown and accept paths |
+| no `SO_UPDATE_CONNECT_CONTEXT` after `ConnectEx` | `getpeername`/`shutdown` failed on connected sockets | `iocp_connect_reaches_a_real_listener_and_leaves_a_usable_socket` |
+| error codes re-read with `GetLastError` after the `windows` crate had already captured them, and reported as text | wrong or missing `raw_os_error()` | `iocp_cancel_io_completes_the_op_with_operation_aborted` |
 
-- Core proactor: `proactor/src/lib.rs`
-- Deferred queue: `proactor/src/deferred.rs`
-- Windows backend: `proactor/src/iocp.rs`
-- Shared tests: `proactor/tests/core.rs`
-- Windows tests: `proactor/tests/iocp.rs`
-- Architecture note: `docs/PROACTOR_ARCHITECTURE.md`
+## Contract a caller must meet
 
-## Required validation steps
+- **Files must be opened with `FILE_FLAG_OVERLAPPED`.** IOCP only queues
+  completions for overlapped handles. A plain `std::fs::File` completes its
+  I/O synchronously and never posts a completion, so the operation's handler
+  never runs. Use `std::os::windows::fs::OpenOptionsExt::custom_flags`.
+- Sockets created by `std::net` are already overlapped.
+- `RawFdCompat` is `RawSocket` (`u64`) on Windows; pass a file's
+  `as_raw_handle()` cast through `usize`.
+- There is no readiness API (`ReadinessPort`) on Windows. IOCP is
+  completion-based. Code that needs readiness on Unix -- such as the camera
+  preview's capture pipe -- needs a completion-shaped Windows path instead.
 
-Run from the `loadngo` repo root.
+## Validating on a Windows machine
 
-1. Build and test the proactor crate on Windows.
+From the `loadngo` root:
 
 ```powershell
-cargo test -p loadngo-proactor
+cargo test -p loadngo-proactor --test iocp -- --nocapture
+cargo clippy -p loadngo-proactor -p loadngo-host-desktop -p loadngo-gfx-dx12 --all-targets --all-features -- -D warnings
 ```
 
-2. Run a Windows-targeted workspace check.
+Then run a game on the host and confirm frame pacing, idle behaviour
+(`FrameDemand::Idle` should leave the process asleep), window close, and
+minimise/restore. Compiling and unit tests do not prove presentation: the
+DX12 heap-exhaustion bug passed both.
 
-```powershell
-cargo check
-```
+From macOS or Linux, `scripts/check-windows.sh` type-checks the Windows host
+and DX12 backend, and
+`cargo clippy -p loadngo-proactor --target x86_64-pc-windows-msvc --all-targets -- -D warnings`
+lints the backend and its tests. Neither runs anything.
 
-3. If the proactor tests fail, inspect these areas first:
-- `IocpPort::new()`
-- `IocpPort::post()`
-- `IocpPort::poll()`
-- `IocpPort::wake()`
+## Still open
 
-4. Confirm the Windows-only tests actually run.
-- `iocp_dispatches_enqueued_work`
-- `iocp_wake_interrupts_blocking_poll`
-
-## Expected semantics
-
-The Windows backend should only own completion delivery.
-
-It should not own:
-- deferred scheduling
-- redraw policy
-- runtime invalidation policy
-- script pacing
-
-Those remain in the core proactor and higher-level runtime/host code.
-
-## Next host integration target on Windows
-
-After the backend tests pass, the next step is to remove polling from the Windows host loop and drive it from the proactor.
-
-The order should be:
-
-1. Replace any fixed sleep/tick loop with proactor wakeups and timer deadlines.
-2. Keep native window message pumping as the event source.
-3. Use the proactor for:
-   - runtime wakeups
-   - deferred frame ticks
-   - later network / async task completions
-4. Only after that, move toward invalidation-driven redraw policy.
-
-## Scheduling policy guidance
-
-Do not conflate these two modes:
-
-- frame-paced mode
-  - draw every presentation interval while animation is active
-- dirty-driven mode
-  - draw only when state changed or a timer/deadline says another frame is required
-
-For a more animated VN, both are needed.
-
-Recommended policy:
-- if transitions, live effects, text reveal, particles, or active drag are running: frame-paced
-- if the scene is static: dirty-driven
-
-The proactor should support both by scheduling the next frame only when needed.
+- **No host-level measurement yet.** The Windows host has not been measured
+  against its old thread-per-wait loop the way iOS was (49.8 -> 59.6 FPS);
+  see `PROACTOR_ENGINE_ADOPTION.md`'s evidence gate.
+- **Completions posted from other threads do not wake the winit loop by
+  themselves.** The host proactor only carries frame timers today, which the
+  loop's own deadline covers. Anything that enqueues work on it from another
+  thread must also call `wake_host`. Linux has the same shape.
+- **`gui` and `gui-win32` do not compile** against the current `windows`
+  crate and are excluded from CI.
 
 ## What not to do
 
-Do not reintroduce:
-- fixed `sleep(...)` host loops
+- fixed `sleep(...)` host loops, or a thread per pending frame
 - unconditional redraw forever while idle
 - backend-specific timer threads for normal scheduling
-- deferred work queues inside the Windows backend itself
-
-## If Windows compile breaks
-
-Capture and report:
-
-```powershell
-cargo test -p loadngo-proactor -- --nocapture
-cargo check -p loadngo-proactor -v
-```
-
-Include:
-- exact compiler error
-- file and line
-- whether failure is API binding, handle lifetime, timeout handling, or wake/completion semantics
+- deferred work queues inside the Windows backend itself -- deadlines belong
+  to the core proactor
