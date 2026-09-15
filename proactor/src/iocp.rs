@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::ptr;
 use std::sync::Mutex;
 use std::time::Duration;
-use windows::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows::Win32::Networking::WinSock::{
     WSAGetLastError, WSAIoctl, SIO_GET_EXTENSION_FUNCTION_POINTER, SOCKADDR, SOCKADDR_STORAGE,
     SOCKET, SOCKET_ERROR, WSABUF, WSA_IO_PENDING,
@@ -29,6 +29,31 @@ const WAKE_KEY: usize = 2;
 const IO_OP_KEY: usize = 3;
 const WAIT_TIMEOUT_ERROR: u32 = 258;
 const INFINITE_TIMEOUT_MS: u32 = u32::MAX;
+
+/// The Win32 error code a `windows` crate call failed with, if it was one.
+///
+/// The crate captures `GetLastError` at the moment a call fails and packs it
+/// into the error's HRESULT (`HRESULT_FROM_WIN32`: severity bit set,
+/// `FACILITY_WIN32`), so read it back from there. Calling `GetLastError`
+/// again afterwards reports whatever the most recent Win32 call on this
+/// thread left behind, which need not be the call that failed.
+fn win32_code(err: &windows::core::Error) -> Option<u32> {
+    let hresult = err.code().0 as u32;
+    if hresult & 0xFFFF_0000 == 0x8007_0000 {
+        Some(hresult & 0xFFFF)
+    } else {
+        None
+    }
+}
+
+/// `err` as an `io::Error` carrying the raw OS code when there is one, so
+/// callers can match on `raw_os_error()`/`kind()` instead of parsing text.
+fn win32_io_error(err: &windows::core::Error) -> io::Error {
+    match win32_code(err) {
+        Some(code) => io::Error::from_raw_os_error(code as i32),
+        None => io::Error::other(err.to_string()),
+    }
+}
 
 /// Recovered directly from the `*mut OVERLAPPED` `GetQueuedCompletionStatus`
 /// hands back -- `overlapped` must be this struct's first field so a
@@ -97,6 +122,9 @@ enum OverlappedOpKind {
         handler: Box<dyn AcceptCompletionHandler>,
     },
     Connect {
+        /// The connecting socket, which needs `SO_UPDATE_CONNECT_CONTEXT`
+        /// once `ConnectEx` succeeds -- see `resolve_io_completion`.
+        socket: SOCKET,
         /// Same lifetime reasoning as `SendTo::target` -- must outlive the
         /// call in case `ConnectEx` completes asynchronously.
         target: SOCKADDR_STORAGE,
@@ -373,6 +401,28 @@ impl IocpPort {
         Ok(std::mem::transmute_copy(&fn_ptr))
     }
 
+    /// The address family `socket` was created with, read back with
+    /// `getsockname`. `AcceptEx` needs its pre-created accept socket to
+    /// match the listener's family, and a listening socket is always bound,
+    /// so it always has a local address to read.
+    fn socket_family(
+        socket: SOCKET,
+    ) -> io::Result<windows::Win32::Networking::WinSock::ADDRESS_FAMILY> {
+        let mut storage: SOCKADDR_STORAGE = unsafe { std::mem::zeroed() };
+        let mut len = std::mem::size_of::<SOCKADDR_STORAGE>() as i32;
+        let rc = unsafe {
+            windows::Win32::Networking::WinSock::getsockname(
+                socket,
+                &mut storage as *mut SOCKADDR_STORAGE as *mut SOCKADDR,
+                &mut len,
+            )
+        };
+        if rc == SOCKET_ERROR {
+            return Err(io::Error::from_raw_os_error(unsafe { WSAGetLastError() }.0));
+        }
+        Ok(storage.ss_family)
+    }
+
     /// Looks up and removes `overlapped`'s `OverlappedOp` (reclaiming the
     /// `Box` `read`/`write`/etc. leaked via `Box::into_raw` at
     /// submission) and builds a ready-to-run thunk from the real result.
@@ -431,10 +481,28 @@ impl IocpPort {
                     Self::finish_accept(listen_socket, accept_socket, &addr_buf, io_error);
                 Box::new(move || handler.run(accept_result))
             }
-            OverlappedOpKind::Connect { handler, .. } => {
+            OverlappedOpKind::Connect {
+                socket, handler, ..
+            } => {
                 let unit_result = match io_error {
                     Some(err) => Err(err),
-                    None => Ok(()),
+                    None => {
+                        // `ConnectEx` leaves the socket without the context
+                        // plain `connect` sets, and until it is applied
+                        // `getpeername`, `getsockopt` and `shutdown` fail on
+                        // the connected socket. Documented `ConnectEx`
+                        // requirement, the counterpart of `finish_accept`'s
+                        // `SO_UPDATE_ACCEPT_CONTEXT`.
+                        unsafe {
+                            let _ = windows::Win32::Networking::WinSock::setsockopt(
+                                socket,
+                                windows::Win32::Networking::WinSock::SOL_SOCKET,
+                                windows::Win32::Networking::WinSock::SO_UPDATE_CONNECT_CONTEXT,
+                                None,
+                            );
+                        }
+                        Ok(())
+                    }
                 };
                 Box::new(move || handler.run(unit_result))
             }
@@ -481,12 +549,26 @@ impl IocpPort {
         addr_buf: &[u8; ACCEPT_ADDR_BUF_LEN],
         io_error: Option<io::Error>,
     ) -> AcceptResult {
+        // `AcceptEx` needed `accept_socket` created up front, so every early
+        // return below still owns it and must close it. Both returns used
+        // to drop it instead -- a socket leaked for every failed or
+        // cancelled accept, including each one cancelled at shutdown.
+        let close_accept_socket = || unsafe {
+            let _ = windows::Win32::Networking::WinSock::closesocket(accept_socket);
+        };
         if let Some(err) = io_error {
+            close_accept_socket();
             return Err(err);
         }
 
         let get_sockaddrs: LpfnGetAcceptExSockaddrs =
-            unsafe { Self::load_extension_fn(listen_socket, WSAID_GETACCEPTEXSOCKADDRS) }?;
+            match unsafe { Self::load_extension_fn(listen_socket, WSAID_GETACCEPTEXSOCKADDRS) } {
+                Ok(get_sockaddrs) => get_sockaddrs,
+                Err(err) => {
+                    close_accept_socket();
+                    return Err(err);
+                }
+            };
 
         let local_addr_len = (std::mem::size_of::<SOCKADDR_STORAGE>() + 16) as u32;
         let remote_addr_len = local_addr_len;
@@ -579,7 +661,7 @@ impl IocpPort {
             let is_pending =
                 err.code() == windows::Win32::Foundation::ERROR_IO_PENDING.to_hresult();
             if !is_pending {
-                return self.fail_sync(overlapped_raw, op_id, io::Error::other(err.to_string()));
+                return self.fail_sync(overlapped_raw, op_id, win32_io_error(&err));
             }
         }
         Ok(())
@@ -687,22 +769,15 @@ impl CompletionPort for IocpPort {
         // wait failed" would silently drop every failed I/O completion
         // instead of ever delivering it to its handler.
         if !overlapped.is_null() {
-            let io_error = if result.is_err() {
-                Some(io::Error::from_raw_os_error(
-                    unsafe { GetLastError().0 } as i32
-                ))
-            } else {
-                None
-            };
+            let io_error = result.as_ref().err().map(win32_io_error);
             return Ok(self.resolve_io_completion(overlapped, bytes_transferred, io_error));
         }
 
         if let Err(err) = result {
-            let last_error = unsafe { GetLastError().0 };
-            if last_error == WAIT_TIMEOUT_ERROR {
+            if win32_code(&err) == Some(WAIT_TIMEOUT_ERROR) {
                 return Ok(PollEvent::Timeout);
             }
-            return Err(io::Error::other(err.to_string()));
+            return Err(win32_io_error(&err));
         }
 
         match completion_key {
@@ -773,25 +848,24 @@ impl IoPort for IocpPort {
         handler: impl IoCompletionHandler,
     ) -> io::Result<IoOpId> {
         self.ensure_associated(fd as usize)?;
+        // Take the pointer from the caller's buffer before moving it into
+        // the op: moving an `IoBuf` moves its `Vec` header, never the heap
+        // bytes it points at. This used to swap the buffer into the op and
+        // then read `ptr`/`len` from the zero-capacity placeholder left
+        // behind in the local, so every `ReadFile` got an empty buffer and
+        // completed having read nothing.
+        let ptr = buf.as_mut_ptr();
+        let len = buf.capacity();
         let mut op = Box::new(OverlappedOp {
             overlapped: unsafe { std::mem::zeroed() },
             kind: OverlappedOpKind::Read {
-                buf: IoBuf::with_capacity(0),
+                buf,
                 handler: Box::new(handler),
             },
         });
         op.overlapped.Anonymous.Anonymous.Offset = offset as u32;
         op.overlapped.Anonymous.Anonymous.OffsetHigh = (offset >> 32) as u32;
-        std::mem::swap(
-            match &mut op.kind {
-                OverlappedOpKind::Read { buf, .. } => buf,
-                _ => unreachable!(),
-            },
-            &mut buf,
-        );
 
-        let ptr = buf.as_mut_ptr();
-        let len = buf.capacity();
         let overlapped_raw = Box::into_raw(op);
         let op_id = IoOpId(overlapped_raw as usize as u64);
         self.in_flight
@@ -1061,15 +1135,13 @@ impl IoPort for IocpPort {
 
         // A fresh, unbound, unconnected socket for AcceptEx to attach the
         // accepted connection to -- unlike plain accept(), AcceptEx needs
-        // this pre-created rather than creating it itself. Address family/
-        // type/protocol must match the listening socket's; IPv4 TCP is
-        // assumed here since that's what this whole IoPort surface targets
-        // elsewhere (recv_from/send_to's SocketAddr is address-family
-        // agnostic, but this specific WSASocket call is not -- a real gap
-        // if IPv6 listeners need this, flagged rather than silently wrong).
+        // this pre-created rather than creating it itself. Its address
+        // family must match the listener's, so read that back rather than
+        // assuming IPv4: a hard-coded AF_INET made every IPv6 listener fail.
+        let family = Self::socket_family(listen_socket)?;
         let accept_socket = unsafe {
             windows::Win32::Networking::WinSock::WSASocketW(
-                windows::Win32::Networking::WinSock::AF_INET.0 as i32,
+                family.0 as i32,
                 windows::Win32::Networking::WinSock::SOCK_STREAM.0,
                 0,
                 None,
@@ -1166,6 +1238,7 @@ impl IoPort for IocpPort {
         let op = Box::new(OverlappedOp {
             overlapped: unsafe { std::mem::zeroed() },
             kind: OverlappedOpKind::Connect {
+                socket,
                 target: target_storage,
                 handler: Box::new(handler),
             },

@@ -53,3 +53,8 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
 # module doc for why this models the ring-lock/pending-ops/wake pattern
 # rather than driving IoUringPort's real io_uring syscalls directly.
 loom = "0.7"
+
+[target.'cfg(windows)'.dev-dependencies]
+# tests/iocp.rs needs an unconnected overlapped socket for ConnectEx, which
+# std has no way to create without also connecting it.
+windows.workspace = true
