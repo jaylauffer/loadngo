@@ -14,10 +14,35 @@ use loadngo_proactor::IoUringPort;
 ))]
 use loadngo_proactor::KqueuePort;
 use loadngo_proactor::{ChannelPort, Proactor};
-use network::{p2p, Config, Network};
+// Used only by `registered_proactor_pump_handles_dual_stack_node_sockets`,
+// so gated to exactly the targets that test runs on; ungated, they are
+// unused imports on Windows and fail clippy there.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+use network::Config;
+use network::{p2p, Network};
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
 use std::{
-    net::{SocketAddr, SocketAddrV6, UdpSocket},
+    net::{SocketAddr, SocketAddrV6},
     sync::atomic::{AtomicUsize, Ordering},
+};
+use std::{
+    net::UdpSocket,
     sync::{mpsc, Arc},
     thread,
     time::{Duration, Instant},
