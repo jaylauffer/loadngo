@@ -20,6 +20,7 @@ members = [
     "localization",
     "audio-io",
     "camera",
+    "weights",
 ]
 default-members = [
     "task",
@@ -37,6 +38,7 @@ default-members = [
     "localization",
     "audio-io",
     "camera",
+    "weights",
 ]
 resolver = "2"
 
