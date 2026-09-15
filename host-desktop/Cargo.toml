@@ -98,6 +98,7 @@ loadngo-proactor = { path = "../proactor" }
 arboard = "3"
 fontdue = "0.9.3"
 loadngo-gfx-dx12 = { path = "../gfx-dx12" }
+loadngo-proactor = { path = "../proactor" }
 softbuffer = "0.4"
 winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 windows.workspace = true

@@ -38,7 +38,12 @@ impl<P: CompletionPort> HostProactor<P> {
     /// (see `android.rs::init_proactor`), which already loops the same
     /// dispatch logic internally, so it never calls this.
     #[cfg_attr(
-        not(any(target_os = "macos", target_os = "ios", target_os = "linux")),
+        not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "linux",
+            target_os = "windows"
+        )),
         allow(dead_code)
     )]
     pub fn drain_ready(&self) {
@@ -76,7 +81,15 @@ impl<P: CompletionPort> HostProactor<P> {
     }
 }
 
-#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+#[cfg_attr(
+    not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "windows"
+    )),
+    allow(dead_code)
+)]
 fn report_has_activity(report: RunReport) -> bool {
     report.dispatched_completions > 0
         || report.dispatched_deferred > 0

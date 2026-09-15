@@ -31,6 +31,9 @@ mod harness {
     const BUTTON_GAP: f32 = 16.0;
     const BUTTON_WIDTH: f32 = 180.0;
     const PREVIEW_IMAGE_KEY: &str = "camera/live";
+    /// Readiness token for the capture pipe. Unix only: IOCP has no readiness
+    /// model, so the Windows transport never registers one.
+    #[cfg(unix)]
     const CAMERA_STREAM_TOKEN: u64 = 0x4341_4d45_5241;
     const DEFAULT_FRAME_RATE: u32 = 6;
     const DEFAULT_VIDEO_SIZE: &str = "1280x720";
@@ -105,7 +108,9 @@ mod harness {
     /// loop instead. Frames reach `on_stream_ready` on the proactor thread
     /// either way, so nothing above here has to care.
     mod transport {
-        use super::{PlatformPort, ProactorHandle, CAMERA_STREAM_TOKEN};
+        #[cfg(unix)]
+        use super::CAMERA_STREAM_TOKEN;
+        use super::{PlatformPort, ProactorHandle};
         use loadngo_camera::CaptureStream;
 
         #[cfg(unix)]

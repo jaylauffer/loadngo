@@ -6,8 +6,8 @@ use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-use std::thread;
-use std::time::Instant;
+use std::task::Waker;
+use std::time::{Duration, Instant};
 
 use arboard::Clipboard;
 use fontdue::{Font, FontSettings};
@@ -20,6 +20,7 @@ use loadngo_host_core::{
     RenderTextStyle, RenderTextVerticalAlign, RenderTextVerticalMetricMode, SurfaceInfo,
     TextMetrics, WindowDescriptor, WindowIconSet,
 };
+use loadngo_proactor::{CompletionKind, IocpPort};
 use loadngo_renderer::{FrameCommand, ImageRequest, Renderer, RendererConfig, TextRequest};
 use softbuffer::{Context, Surface};
 use ui_core::{
@@ -30,10 +31,12 @@ use ui_core::{
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, KeyCode, NamedKey, PhysicalKey};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::{Icon, Window, WindowAttributes, WindowId};
+
+use crate::proactor_driver::HostProactor;
 
 #[derive(Clone)]
 pub struct DesktopFont {
@@ -115,6 +118,9 @@ struct HostSharedState {
     latest_frame: HostFrame,
     pending_input: PendingInput,
     frame_epoch: u64,
+    /// Wakers of `next_frame` futures parked until the next frame-epoch
+    /// bump, woken in place by `advance_frame_clock`.
+    next_frame_wakers: Vec<Waker>,
     last_frame_instant: Instant,
     dpi_scale: f32,
     running: bool,
@@ -262,6 +268,7 @@ impl Default for HostSharedState {
             },
             pending_input: PendingInput::default(),
             frame_epoch: 0,
+            next_frame_wakers: Vec::new(),
             last_frame_instant: Instant::now(),
             dpi_scale: 1.0,
             running: true,
@@ -284,6 +291,19 @@ static HOST_SHARED: OnceLock<WindowsHostShared> = OnceLock::new();
 static DEFAULT_FONT: OnceLock<DesktopFont> = OnceLock::new();
 static FONT_CACHE: OnceLock<Mutex<HashMap<String, DesktopFont>>> = OnceLock::new();
 static TRACE_ENABLED: OnceLock<bool> = OnceLock::new();
+
+/// The host's own IOCP proactor. Windows is a winit host like Linux and iOS,
+/// so it takes their shape rather than macOS's: keep the `LocalPool`
+/// executor, own one `Proactor` for the process lifetime, and drive it from
+/// `about_to_wait` with `ControlFlow::WaitUntil`. Frame timers are its
+/// deferred work.
+static PROACTOR: OnceLock<HostProactor<IocpPort>> = OnceLock::new();
+
+fn proactor() -> &'static HostProactor<IocpPort> {
+    PROACTOR
+        .get()
+        .expect("Windows proactor is not initialized for loadngo host-desktop")
+}
 
 fn shared() -> &'static WindowsHostShared {
     HOST_SHARED.get().expect("windows host not initialized")
@@ -435,6 +455,9 @@ pub fn launch(
     icon: Option<WindowIconSet>,
     entry: impl Future<Output = ()> + 'static,
 ) {
+    let _ = PROACTOR.set(HostProactor::new(
+        IocpPort::new().expect("failed to create Windows IOCP port"),
+    ));
     let shared = WindowsHostShared {
         state: Arc::new((Mutex::new(HostSharedState::default()), Condvar::new())),
     };
@@ -471,10 +494,24 @@ pub fn capture_frame() -> HostFrame {
 }
 
 pub async fn next_frame(demand: FrameDemand) {
+    // This used to spawn two OS threads on every call -- one parked on the
+    // condvar waiting for a frame-epoch bump and, for `FrameDemand::After`,
+    // a second doing `thread::sleep` -- the pattern that held iOS to 49.8 FPS
+    // against a 60 Hz budget until its own migration (see `ios.rs`):
+    // `thread::sleep` guarantees *at least* its delay, and thread creation,
+    // locking and wake propagation land on top of it every frame.
+    //
+    // Both threads are gone. The waker is stored in
+    // `HostSharedState::next_frame_wakers` and woken in place by
+    // `advance_frame_clock`, and the delay is a deferred completion on the
+    // host's `Proactor<IocpPort>` (`schedule_frame_timer`), dispatched from
+    // `WindowsApp::about_to_wait` and slept on by `ControlFlow::WaitUntil`,
+    // which targets an absolute deadline. Same shape as `linux.rs` and
+    // `ios.rs`.
     struct NextFrameFuture {
         demand: FrameDemand,
         observed_epoch: u64,
-        waiting_registered: bool,
+        waker_registered: bool,
         timer_registered: bool,
     }
 
@@ -485,48 +522,24 @@ pub async fn next_frame(demand: FrameDemand) {
             mut self: Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<Self::Output> {
-            let (lock, _cvar) = &*shared().state;
-            let state = lock.lock().expect("windows host state poisoned");
-            if !state.running {
-                return std::task::Poll::Pending;
-            }
-            if state.frame_epoch > self.observed_epoch {
-                self.observed_epoch = state.frame_epoch;
-                return std::task::Poll::Ready(());
-            }
-            drop(state);
-            if !self.waiting_registered {
-                self.waiting_registered = true;
-                let waker = cx.waker().clone();
-                let state_arc = shared().state.clone();
-                thread::spawn(move || {
-                    let (lock, cvar) = &*state_arc;
-                    let guard = lock.lock().expect("windows host state poisoned");
-                    let _guard = cvar.wait(guard).expect("windows host wait poisoned");
-                    waker.wake();
-                });
+            {
+                let mut state = lock_state();
+                if !state.running {
+                    return std::task::Poll::Pending;
+                }
+                if state.frame_epoch > self.observed_epoch {
+                    self.observed_epoch = state.frame_epoch;
+                    return std::task::Poll::Ready(());
+                }
+                if !self.waker_registered {
+                    self.waker_registered = true;
+                    state.next_frame_wakers.push(cx.waker().clone());
+                }
             }
             if !self.timer_registered {
                 if let FrameDemand::After(delay) = self.demand {
                     self.timer_registered = true;
-                    let waker = cx.waker().clone();
-                    let state_arc = shared().state.clone();
-                    thread::spawn(move || {
-                        thread::sleep(delay);
-                        let (lock, cvar) = &*state_arc;
-                        let mut state = lock.lock().expect("windows host state poisoned");
-                        if !state.running {
-                            return;
-                        }
-                        advance_frame_clock(&mut state);
-                        let proxy = state.event_proxy.clone();
-                        cvar.notify_all();
-                        drop(state);
-                        if let Some(proxy) = proxy {
-                            let _ = proxy.send_event(WindowsUserEvent::Wake);
-                        }
-                        waker.wake();
-                    });
+                    schedule_frame_timer(delay);
                 }
             }
             std::task::Poll::Pending
@@ -537,10 +550,49 @@ pub async fn next_frame(demand: FrameDemand) {
     NextFrameFuture {
         demand,
         observed_epoch,
-        waiting_registered: false,
+        waker_registered: false,
         timer_registered: false,
     }
     .await;
+}
+
+fn schedule_frame_timer(delay: Duration) {
+    proactor()
+        .handle
+        .defer_for(delay, CompletionKind::Timer, 0, move |_| {
+            let mut state = lock_state();
+            if !state.running {
+                return;
+            }
+            advance_frame_clock(&mut state);
+            let proxy = state.event_proxy.clone();
+            drop(state);
+            if let Some(proxy) = proxy {
+                let _ = proxy.send_event(WindowsUserEvent::Wake);
+            }
+        })
+        .expect("failed to schedule Windows frame timer");
+}
+
+/// Wakes the host from outside its event loop, from any thread: advances the
+/// frame clock so a parked `next_frame` resolves, then nudges the winit loop
+/// so the executor runs. The Windows counterpart of `linux.rs::wake_host`,
+/// which background producers such as the camera preview call when they have
+/// something new to show.
+pub fn wake_host() {
+    let Some(shared) = HOST_SHARED.get() else {
+        return;
+    };
+    let mut state = shared.state.0.lock().expect("windows host state poisoned");
+    if !state.running {
+        return;
+    }
+    advance_frame_clock(&mut state);
+    let proxy = state.event_proxy.clone();
+    drop(state);
+    if let Some(proxy) = proxy {
+        let _ = proxy.send_event(WindowsUserEvent::Wake);
+    }
 }
 
 pub fn simulate_mouse_with_touch(enabled: bool) {
@@ -1205,6 +1257,10 @@ impl ApplicationHandler<WindowsUserEvent> for WindowsApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Dispatch proactor deferred work that is now due -- this is what
+        // fires a `FrameDemand::After` timer and wakes the future parked on
+        // it -- before giving the executor a chance to run.
+        proactor().drain_ready();
         self.pool.run_until_stalled();
         {
             let state = lock_state();
@@ -1216,6 +1272,13 @@ impl ApplicationHandler<WindowsUserEvent> for WindowsApp {
             }
         }
         self.request_redraw_if_needed();
+        // Block until the next deferred deadline instead of on a sleeping
+        // thread. A window event, a user event (`wake_host`), or the deadline
+        // passing all bring the loop back here.
+        event_loop.set_control_flow(match proactor().proactor.next_deadline() {
+            Some(deadline) => ControlFlow::WaitUntil(deadline),
+            None => ControlFlow::Wait,
+        });
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: WindowsUserEvent) {
@@ -1238,6 +1301,9 @@ fn advance_frame_clock(state: &mut HostSharedState) {
     };
     state.frame_epoch = state.frame_epoch.saturating_add(1);
     state.pending_redraw = true;
+    for waker in state.next_frame_wakers.drain(..) {
+        waker.wake();
+    }
 }
 
 fn handle_keyboard_input(event: winit::event::KeyEvent) {
