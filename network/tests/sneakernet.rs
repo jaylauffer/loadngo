@@ -28,6 +28,12 @@ use loadngo_proactor::{ChannelPort, Proactor};
 ))]
 use network::Config;
 use network::{p2p, Network};
+use std::{
+    net::UdpSocket,
+    sync::{mpsc, Arc},
+    thread,
+    time::{Duration, Instant},
+};
 #[cfg(any(
     target_os = "linux",
     target_os = "macos",
@@ -40,12 +46,6 @@ use network::{p2p, Network};
 use std::{
     net::{SocketAddr, SocketAddrV6},
     sync::atomic::{AtomicUsize, Ordering},
-};
-use std::{
-    net::UdpSocket,
-    sync::{mpsc, Arc},
-    thread,
-    time::{Duration, Instant},
 };
 use tempfile::tempdir;
 
