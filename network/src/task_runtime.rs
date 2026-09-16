@@ -103,9 +103,16 @@ pub fn reward_receipt_bytes(receipt: &RewardReceipt) -> Result<Vec<u8>> {
     serde_json::to_vec(receipt).context("failed to serialize reward receipt")
 }
 
+/// The anchor domain and version this receipt's commitment is bound to. Bump the version
+/// with any change to `RewardReceipt`'s fields or their order: the hash a ledger already
+/// carries stays verifiable only against the encoding that produced it.
+pub const REWARD_RECEIPT_DOMAIN: &str = "loadngo.task.reward-receipt";
+pub const REWARD_RECEIPT_VERSION: u16 = 1;
+
 pub fn reward_metadata_hash(receipt: &RewardReceipt) -> Result<Hash256> {
     let bytes = reward_receipt_bytes(receipt)?;
-    Ok(*blake3::hash(&bytes).as_bytes())
+    loadngo_anchor::anchor_hash(REWARD_RECEIPT_DOMAIN, REWARD_RECEIPT_VERSION, &bytes)
+        .context("failed to frame the reward receipt for anchoring")
 }
 
 pub fn reward_owner_hash(worker_node_id: &str) -> Hash256 {
@@ -141,7 +148,7 @@ mod tests {
         artifact_hash_hex, block_contains_tx_id, reward_metadata_hash, reward_owner_hash,
         reward_transaction, tx_id_hex, RewardReceipt,
     };
-    use qcoin_crypto::{Dilithium2Scheme, PqSignatureScheme};
+    use loadngo_pq_crypto::{Dilithium2Scheme, PqSignatureScheme};
     use qcoin_types::{Output, Transaction, TransactionCore, TransactionKind, TransactionWitness};
     use std::fs;
 

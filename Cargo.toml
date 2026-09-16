@@ -21,6 +21,8 @@ members = [
     "audio-io",
     "camera",
     "weights",
+    "pq-crypto",
+    "anchor",
 ]
 default-members = [
     "task",
@@ -39,6 +41,8 @@ default-members = [
     "audio-io",
     "camera",
     "weights",
+    "pq-crypto",
+    "anchor",
 ]
 resolver = "2"
 
@@ -94,5 +98,11 @@ hex = "0.4"
 getrandom = "0.2"
 cpal = "0.15"
 rtrb = "0.3"
-qcoin-crypto = { path = "../qcoin/qcoin-crypto" }
+pqcrypto-dilithium = "0.5"
+pqcrypto-falcon = "0.4"
+pqcrypto-traits = "0.3"
+zeroize = { version = "1", features = ["alloc"] }
+loadngo-pq-crypto = { path = "pq-crypto" }
+loadngo-anchor = { path = "anchor" }
+# The ledger's own types still live in qcoin; only the PQ primitives moved here.
 qcoin-types = { path = "../qcoin/qcoin-types" }

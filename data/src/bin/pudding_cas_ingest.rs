@@ -5,7 +5,7 @@ use data::pudding::{
     WorkspaceConfig, WorkspaceFileManifestEntry, WorkspaceManifest, WorkspaceRepoState,
     WORKSPACE_CONFIG_FORMAT_V1,
 };
-use qcoin_crypto::{PrivateKey, PublicKey};
+use loadngo_pq_crypto::{PrivateKey, PublicKey};
 use std::collections::BTreeSet;
 #[cfg(unix)]
 use std::ffi::OsString;
@@ -613,7 +613,7 @@ fn unix_now() -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use qcoin_crypto::{default_registry, PqSchemeRegistry, SignatureSchemeId};
+    use loadngo_pq_crypto::{default_registry, PqSchemeRegistry, SignatureSchemeId};
 
     #[test]
     fn parse_git_ls_files_output_uses_nul_delimiters() {

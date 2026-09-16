@@ -1,0 +1,22 @@
+[package]
+name = "loadngo-pq-crypto"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Post-quantum signature primitives: Dilithium2 and Falcon-512 keys, signatures, and a scheme registry."
+
+[lib]
+name = "loadngo_pq_crypto"
+path = "src/lib.rs"
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+pqcrypto-dilithium.workspace = true
+pqcrypto-falcon.workspace = true
+pqcrypto-traits.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

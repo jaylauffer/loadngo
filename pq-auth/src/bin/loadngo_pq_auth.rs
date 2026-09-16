@@ -3,7 +3,7 @@ use loadngo_pq_auth::{
     current_unix_seconds, load_token, parse_scheme, random_nonce_hex, save_token, sha256_file,
     UnsignedAuthToken, VerifyPolicy,
 };
-use qcoin_crypto::{default_registry, PqSchemeRegistry, PrivateKey, PublicKey};
+use loadngo_pq_crypto::{default_registry, PqSchemeRegistry, PrivateKey, PublicKey};
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -38,7 +38,7 @@ fn command_keygen(args: Vec<String>) -> Result<()> {
     let scheme = parse_flag_value(&args, "--scheme")
         .map(parse_scheme)
         .transpose()?
-        .unwrap_or(qcoin_crypto::SignatureSchemeId::Dilithium2);
+        .unwrap_or(loadngo_pq_crypto::SignatureSchemeId::Dilithium2);
     let public_key_path = required_path(&args, "--public-key")?;
     let private_key_path = required_path(&args, "--private-key")?;
 

@@ -6,7 +6,7 @@ instead of leaving signed-auth experiments scattered across other projects.
 ## What It Is
 
 `loadngo-pq-auth` is a small signed challenge-token layer built on top of the
-local `qcoin-crypto` PQ signature registry.
+local `loadngo-pq-crypto` PQ signature registry.
 
 It is not a TOTP clone.
 

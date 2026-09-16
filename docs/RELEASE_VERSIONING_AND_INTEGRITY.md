@@ -80,15 +80,16 @@ already has real, working post-quantum signing tooling:
   [PQ_AUTHENTICATOR.md](PQ_AUTHENTICATOR.md)): a signed challenge-token
   issue/verify flow, with `dilithium2`/`falcon512` key generation already
   wired up.
-- `qcoin-crypto` (sibling repo, `../qcoin/qcoin-crypto`, consumed as a
-  workspace path dependency): the actual PQ primitives — `dilithium2`,
+- `loadngo-pq-crypto` (this repo, `pq-crypto/`, a workspace member; moved
+  here from `qcoin/qcoin-crypto` so loadngo no longer depends on the
+  ledger): the actual PQ primitives — `dilithium2`,
   `falcon512` — behind an explicit, algorithm-agile `SignatureSchemeId`
   scheme (`Dilithium2`/`Falcon512`/`Unknown(u16)`), designed from the start
   to support adding or rotating schemes later.
 - CAS root-manifest signing (`data/src/bin/pudding_cas_ingest.rs`,
   documented in [PUDDING_CAS_PQ_MODEL.md](PUDDING_CAS_PQ_MODEL.md)): an
   existing, working precedent for PQ-signing a manifest that asserts "this
-  content is authoritative," using the same `qcoin-crypto` key material.
+  content is authoritative," using the same `loadngo-pq-crypto` key material.
 
 None of these currently cover player-facing release artifacts (APKs, IPAs,
 Linux binaries, itch.io uploads) — that's the actual gap. The proposal is to
@@ -142,7 +143,7 @@ is no need for the two to agree.
 - A signed `release-manifest.ron` (or similar) per tag, produced by
   `release.yml` on `dolores` alongside the existing build artifacts:
   version, git commit, and per-artifact `(path, arch, blake3 hash)`, signed
-  with the project's `qcoin-crypto` key — `dilithium2`, matching
+  with the project's `loadngo-pq-crypto` key — `dilithium2`, matching
   `loadngo-pq-auth`'s existing default.
 - A small verification routine — a new `loadngo` crate, or an extension of
   `loadngo-pq-auth` — that a game or future updater calls: fetch the

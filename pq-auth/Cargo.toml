@@ -20,4 +20,4 @@ ron.workspace = true
 sha2.workspace = true
 hex.workspace = true
 getrandom.workspace = true
-qcoin-crypto.workspace = true
+loadngo-pq-crypto.workspace = true

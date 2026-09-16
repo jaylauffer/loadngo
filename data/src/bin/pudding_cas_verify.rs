@@ -4,7 +4,7 @@ use data::pudding::{
     DigestAlgorithm, DigestRef, SignedRootManifest, WorkspaceManifest, ROOT_MANIFEST_FORMAT_V1,
     SIGNED_ROOT_MANIFEST_FORMAT_V1, WORKSPACE_MANIFEST_FORMAT_V1,
 };
-use qcoin_crypto::PublicKey;
+use loadngo_pq_crypto::PublicKey;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -302,7 +302,7 @@ mod tests {
         FileSnapshotState, RootManifest, SignedRootManifest, WorkspaceFileManifestEntry,
         WorkspaceManifest, WorkspaceRepoState,
     };
-    use qcoin_crypto::{default_registry, PqSchemeRegistry, SignatureSchemeId};
+    use loadngo_pq_crypto::{default_registry, PqSchemeRegistry, SignatureSchemeId};
 
     #[test]
     fn verify_signed_root_checks_signature_manifest_and_blobs() {

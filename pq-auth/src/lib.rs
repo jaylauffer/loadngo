@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
-use qcoin_crypto::{
+use loadngo_pq_crypto::{
     default_registry, PqSchemeRegistry, PrivateKey, PublicKey, Signature, SignatureSchemeId,
 };
 use serde::{Deserialize, Serialize};

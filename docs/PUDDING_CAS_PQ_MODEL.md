@@ -52,7 +52,7 @@ CAS layer is not yet a complete post-quantum repository model.
   [loadngo_cas.rs](../../sng-rusty/src/loadngo_cas.rs)
 - root-manifest signing in
   [pudding_cas_ingest.rs](../data/src/bin/pudding_cas_ingest.rs), using
-  `qcoin-crypto` key material
+  `loadngo-pq-crypto` key material
 - initial post-quantum signed challenge-token tooling in
   [PQ_AUTHENTICATOR.md](PQ_AUTHENTICATOR.md)
 - transitional tarball/signature workflows documented in
@@ -404,7 +404,7 @@ The current slice should remain small and testable:
 
 - `pudding_cas_ingest` emits a workspace manifest, transitional root manifest,
   and optional signed root envelope
-- key files are hex-encoded `qcoin-crypto` key material, matching
+- key files are hex-encoded `loadngo-pq-crypto` key material, matching
   `loadngo_pq_auth keygen`
 - smoke tests should cover unsigned ingest, signed ingest, and verification of
   the envelope payload

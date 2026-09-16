@@ -671,7 +671,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "hex",
- "qcoin-crypto",
+ "loadngo-pq-crypto",
  "ron",
  "serde",
  "serde_json",
@@ -1372,6 +1372,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df1d3c3b53da64cf5760482273a98e575c651a67eec7f77df96b5b642de8f039"
 
 [[package]]
+name = "loadngo-anchor"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "loadngo-audio-io"
 version = "0.1.0"
 dependencies = [
@@ -1490,10 +1500,23 @@ dependencies = [
  "anyhow",
  "getrandom 0.2.17",
  "hex",
- "qcoin-crypto",
+ "loadngo-pq-crypto",
  "ron",
  "serde",
  "sha2",
+]
+
+[[package]]
+name = "loadngo-pq-crypto"
+version = "0.1.0"
+dependencies = [
+ "pqcrypto-dilithium",
+ "pqcrypto-falcon",
+ "pqcrypto-traits",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "zeroize",
 ]
 
 [[package]]
@@ -1684,8 +1707,9 @@ dependencies = [
  "blake3",
  "data",
  "hex",
+ "loadngo-anchor",
+ "loadngo-pq-crypto",
  "loadngo-proactor",
- "qcoin-crypto",
  "qcoin-types",
  "serde",
  "serde_json",
@@ -2415,23 +2439,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5a041e753da8b807c9255f28de81879c78c876392ff2469cde94799b2896b9d"
 
 [[package]]
-name = "qcoin-crypto"
-version = "0.1.1"
-dependencies = [
- "pqcrypto-dilithium",
- "pqcrypto-falcon",
- "pqcrypto-traits",
- "serde",
- "thiserror 1.0.69",
- "zeroize",
-]
-
-[[package]]
 name = "qcoin-types"
 version = "0.1.1"
 dependencies = [
  "blake3",
- "qcoin-crypto",
+ "loadngo-pq-crypto",
  "serde",
  "thiserror 1.0.69",
 ]

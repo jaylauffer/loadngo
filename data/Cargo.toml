@@ -14,7 +14,7 @@ tracing.workspace = true
 sha2.workspace = true
 blake3.workspace = true
 hex.workspace = true
-qcoin-crypto.workspace = true
+loadngo-pq-crypto.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true

@@ -1,0 +1,17 @@
+[package]
+name = "loadngo-anchor"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Domain-separated, versioned hashing for records anchored into an external ledger."
+
+[lib]
+name = "loadngo_anchor"
+path = "src/lib.rs"
+
+[dependencies]
+blake3.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

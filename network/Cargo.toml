@@ -13,6 +13,7 @@ serde_json.workspace = true
 blake3.workspace = true
 hex.workspace = true
 data = { path = "../data" }
+loadngo-anchor.workspace = true
 loadngo-proactor = { path = "../proactor" }
 qcoin-types.workspace = true
 socket2 = "0.5"
@@ -22,4 +23,4 @@ windows.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
-qcoin-crypto.workspace = true
+loadngo-pq-crypto.workspace = true

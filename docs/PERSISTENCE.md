@@ -18,7 +18,7 @@ This crate solves *how* to write one safely, independent of platform.
 ## Why a new crate instead of `loadngo/data`
 
 `loadngo/data`'s own doc comment scopes it to "the Rust port of loadngo
-Task," and it depends on `qcoin-crypto`. It also already has two
+Task," and it depends on `loadngo-pq-crypto`. It also already has two
 almost-this: `cas.rs`'s private `save_index`/`load_index` (write-to-temp
 then rename, but no corruption or version check on read) and the crate's
 `persistence` module (`write_task_file`/`read_task_file`, which writes a
