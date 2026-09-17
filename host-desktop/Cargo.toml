@@ -13,8 +13,18 @@ license.workspace = true
 # implement the same `imp` contract, so enabling this swaps the backend
 # without any caller changing.
 native-desktop-audio = []
+# The read-only Archive CAS browser is a desktop tool, not part of the host.
+# Its dependencies sit behind this feature so the games that depend on this
+# crate never compile the CAS, its signature code, or pqcrypto's C sources.
+archive-cas-browser = ["dep:anyhow", "dep:data", "dep:serde_json"]
+
+[[bin]]
+name = "archive_cas_browser"
+required-features = ["archive-cas-browser"]
 
 [dependencies]
+anyhow = { workspace = true, optional = true }
+data = { path = "../data", optional = true }
 image.workspace = true
 loadngo-camera = { path = "../camera" }
 loadngo-host-core = { path = "../host-core" }
@@ -22,6 +32,7 @@ loadngo-persistence = { path = "../persistence" }
 loadngo-renderer = { path = "../renderer" }
 ron.workspace = true
 serde.workspace = true
+serde_json = { workspace = true, optional = true }
 ui-core = { path = "../ui-core" }
 
 [target.'cfg(any(target_os = "ios", target_os = "linux", target_os = "windows"))'.dependencies]
