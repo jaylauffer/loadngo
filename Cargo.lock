@@ -671,6 +671,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "hex",
+ "loadngo-anchor",
  "loadngo-pq-crypto",
  "ron",
  "serde",
@@ -1444,8 +1445,10 @@ dependencies = [
 name = "loadngo-host-desktop"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "arboard",
  "coreaudio-sys",
+ "data",
  "fontdue",
  "futures",
  "image 0.24.9",
@@ -1471,6 +1474,7 @@ dependencies = [
  "rodio",
  "ron",
  "serde",
+ "serde_json",
  "softbuffer",
  "ui-core",
  "windows 0.58.0",
