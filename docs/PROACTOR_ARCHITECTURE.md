@@ -77,30 +77,38 @@ Backend status:
   operations; host integration still needs real-machine validation
 - Linux: `IoUringPort` implements completion delivery, readiness, and real
   `IoPort` operations
-- Android: `ALooper` integration still needs a completion port and host
-  integration
+- Android: `EpollPort` implements completion delivery, readiness, and real
+  `IoPort` operations. `host-desktop` owns it on a dedicated pump thread;
+  Android app processes cannot use `io_uring`, and this is deliberately not an
+  `ALooper_addFd` integration.
 
 The current in-memory `ChannelPort` exists only as a test/reference backend. It proves the core semantics without baking in any OS choice.
 
 ## Host adoption status
 
-The macOS and Linux `host-desktop` paths each own a proactor for the
-application's lifetime -- `KqueuePort` on macOS, `IoUringPort` on Linux.
-Runtime wakers route through it, `FrameDemand::After` schedules its wait as
-deferred proactor work, and the native event pump (`NSApplication` on macOS,
-`winit`'s `ControlFlow::WaitUntil` on Linux) blocks on the proactor's next
-deadline instead of a fixed poll interval. Both hosts share one ownership
-pattern, `host-desktop/src/proactor_driver.rs::HostProactor`, rather than
-each hand-rolling it -- see "Portable host-driver seam" below.
+The macOS, Linux, and iOS `host-desktop` paths each own a proactor for the
+application's lifetime -- `KqueuePort` on macOS and iOS, `IoUringPort` on
+Linux. Runtime wakers route through it, `FrameDemand::After` schedules its
+wait as deferred proactor work, and the native event pump (`NSApplication` on
+macOS; `winit`'s `ControlFlow::WaitUntil` on Linux and iOS) blocks on the
+proactor's next deadline instead of a fixed poll interval. Those hosts share
+`host-desktop/src/proactor_driver.rs::HostProactor` rather than each
+hand-rolling ownership.
+
+Android also owns `HostProactor<EpollPort>` for the application lifetime, but
+uses a dedicated thread blocked in `Proactor::run_until_stopped`: Android's
+NativeActivity callback model has no native event-loop hook equivalent to the
+macOS/Linux/iOS paths. Windows owns `HostProactor<IocpPort>` too (2026-09-15; CI
+and the IOCP tests are green on `acerj`), but has not yet been run with a game,
+so its pacing and idle behaviour are unmeasured.
 
 On Linux this replaced a per-call `thread::spawn` in `next_frame()`'s
 `FrameDemand::After` path (one new OS thread per pending frame timer,
 previously undetected because ephemeral threads don't show up as steady
 `/proc/<pid>/status` thread-count growth -- see
 `docs/LINUX_X11_PRESENT_LATENCY.md`'s "What was ruled out" for that exact
-measurement). The remaining iOS, Android, and Windows host paths still need
-to adopt the same ownership model; several currently rely on platform-local
-timer and future machinery.
+measurement). iOS, Android and Windows have since adopted the same
+host-ownership contract with platform-appropriate pump shapes.
 
 ## Portable host-driver seam
 
@@ -112,8 +120,9 @@ matches the drain pattern macOS/NetBSD each used to hand-roll) and
 `waker()`/`waker_for()` (a `Waker` that pokes the completion port so a
 blocked native event pump re-checks the runtime future). This is the "Phase
 1" portable seam called for in
-[PROACTOR_ENGINE_ADOPTION.md](PROACTOR_ENGINE_ADOPTION.md); macOS and Linux
-both build on it today.
+[PROACTOR_ENGINE_ADOPTION.md](PROACTOR_ENGINE_ADOPTION.md). macOS, Linux, and
+iOS use its drain/waker shape; Android uses the same ownership type with its
+dedicated proactor thread rather than an event-pump hook.
 
 The required contract, evidence gate, and rollout order are defined in
 [PROACTOR_ENGINE_ADOPTION.md](PROACTOR_ENGINE_ADOPTION.md).

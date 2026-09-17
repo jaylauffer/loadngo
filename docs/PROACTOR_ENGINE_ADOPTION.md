@@ -50,7 +50,7 @@ an application policy:
 
 The core now supplies queued work, deadline ordering, wakeups, cancellation,
 shutdown draining, readiness registration, and real `IoPort` implementations
-for kqueue, io_uring, and IOCP.
+for kqueue, io_uring, epoll, and IOCP.
 
 Two defects in that surface were found and **fixed** on 2026-09-08, both
 recorded in
@@ -465,9 +465,10 @@ battery behavior against the previous host loop.
    Linux still drives `winit`'s event loop -- the proactor only supplies the
    wait deadline and deferred dispatch, per `ControlFlow::WaitUntil`.)
 3. Make runtime wake, frame deadline, invalidation, and shutdown flow through
-   that contract. (Done for macOS, Linux, and Android — Android's own
-   shape is a dedicated pump thread rather than a native-event-pump hook,
-   see Phase 3 below; iOS/Windows still outstanding.)
+   that contract. **Done for macOS, Linux, iOS, Android, and Windows.** Android's
+   own shape is a dedicated pump thread rather than a native-event-pump hook
+   (see Phase 3 below). Windows is migrated in code (2026-09-15) but has not
+   yet been run with a game.
 4. Add deterministic host-level tests for idle wakeups and deferred frames.
    **Not yet done** -- still relying on the proactor crate's own unit/loom
    tests plus manual host smoke passes; no host-level automated regression
@@ -475,14 +476,18 @@ battery behavior against the previous host loop.
 
 ### Phase 2: Migrate the active non-Android game hosts
 
-1. **Code done, hardware evidence pending (2026-09-01).** Moved Linux onto
-   `IoUringPort` (`host-desktop/src/linux.rs`), replacing the
-   `thread::spawn`-per-frame-wait model. Not yet measured on the three games
-   per the evidence gate -- needs a `dolores` run (see "Immediate Work").
-2. Move iOS onto `KqueuePort` and repeat device tests, including the existing
-   `sng-rusty` touch investigation.
-3. Compare each migration with its recorded baseline before treating it as an
-   improvement.
+1. **Host code done; broader evidence incomplete (2026-09-01).** Moved Linux
+   onto `IoUringPort` (`host-desktop/src/linux.rs`), replacing the
+   `thread::spawn`-per-frame-wait model. A focused proactor-suite run and
+   `sng-roguelite` playtest on `dolores` are recorded in `WORKLOG.md`; the
+   complete three-game, same-machine evidence gate remains outstanding (see
+   "Immediate Work").
+2. **Done (2026-09-10).** Moved iOS onto `KqueuePort` and device-verified it
+   with `sng-roguelite` and `sng-zhoenus`; see the iOS section above. The
+   separate `sng-rusty` touch investigation remains a consumer-level issue,
+   not an uncompleted host migration.
+3. Complete the common baseline and measurement record before treating each
+   platform as fully accepted by the evidence gate.
 
 ### Phase 3: Close mobile and Windows parity
 
@@ -529,17 +534,21 @@ their own event loop, timer thread, or scheduler.
 
 ## Immediate Work
 
-1. Validate the 2026-09-01 Linux migration on `dolores`: `cargo test`/
-   `cargo clippy` via CI, then a manual playtest of `sng-roguelite`,
-   `sng-zhoenus`, and `sng-rusty` (window close, background/foreground,
-   held-key input) to confirm no correctness regression before this counts
-   as adopted.
+1. Complete and centralize the Linux evidence record on `dolores`. A focused
+   proactor-suite run and `sng-roguelite` playtest are recorded in
+   `WORKLOG.md`; capture the prescribed baseline and three-game flow
+   (`sng-roguelite`, `sng-zhoenus`, and `sng-rusty`, including window close,
+   background/foreground, and held-key input) in the repeatable evidence
+   format before treating Linux as fully accepted.
 2. Design and add the host-level measurement surface (idle CPU/thread count,
    wakeups/sec, frame interval jitter, input-to-present latency).
 3. Capture the macOS and Linux baselines (old thread-per-wait Linux host vs.
    the new `IoUringPort` host makes a real before/after comparison possible
    for the first time) and select explicit pass thresholds.
-4. Repeat the same proof on iOS. Android (`EpollPort`, backend and host
-   migration both) is done and on-device-verified (2026-09-03) — no
-   remaining step for Android specifically. Windows (`IocpPort`) still
-   needs both a backend migration and a real machine to validate on.
+4. Extend the iOS proof rather than repeating the migration: promote its
+   frame metrics to a shared host surface, arbitrate the duplicate
+   frame-clock advances, and preserve diagnostics for the unreproduced abort.
+   Android (`EpollPort`, backend and host migration both) is done and
+   on-device-verified (2026-09-03). Windows (`IocpPort`) host
+   migration is done in code (2026-09-15, CI green on `acerj`); it still needs a
+   game run on real hardware to validate pacing and idle.
