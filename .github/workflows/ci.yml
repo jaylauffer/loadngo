@@ -111,7 +111,7 @@ jobs:
       # dedicated Pis but would wipe a live working tree on a workstation.
       # CI gets its own clone, with the `qcoin` sibling beside it that this
       # repo's path dependencies need.
-      REPO_DIR: /Users/jay/ci/pudding/loadngo
+      REPO_DIR: /Volumes/Jarraya/ci/pudding/loadngo
       # Metal is *included* here: this is the only host that can compile it,
       # and excluding it everywhere is why the GLES/Metal backends have gone
       # unlinted. DX12 and the win32 GUI are Windows-only; the `windows` job
@@ -119,6 +119,15 @@ jobs:
       # same build-time reason as in `check`.
       MACOS_EXCLUDES: --exclude loadngo-gfx-dx12 --exclude gui-win32 --exclude proactor-harness
     steps:
+      - name: Acquire the shared Jarraya macOS CI workspace
+        run: |
+          lock_dir=/Volumes/Jarraya/ci/.macos-ci-lock
+          until mkdir "$lock_dir" 2>/dev/null; do
+            echo "Waiting for the shared Jarraya macOS CI workspace"
+            sleep 5
+          done
+          echo "$GITHUB_REPOSITORY $GITHUB_RUN_ID $GITHUB_JOB" > "$lock_dir/owner"
+
       - name: Sync checkout to the triggering commit
         run: |
           cd "$REPO_DIR"
@@ -151,6 +160,12 @@ jobs:
       - name: cargo check (iOS target, compile-only)
         working-directory: ${{ env.REPO_DIR }}
         run: cargo check --locked -p loadngo-host-desktop --target aarch64-apple-ios --all-targets
+
+      - name: Release the shared Jarraya macOS CI workspace
+        if: always()
+        run: |
+          rm -f /Volumes/Jarraya/ci/.macos-ci-lock/owner
+          rmdir /Volumes/Jarraya/ci/.macos-ci-lock 2>/dev/null || true
 
   windows:
     # Same capability-label rule as `check`. The machine is provisioned by
