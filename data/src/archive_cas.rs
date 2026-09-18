@@ -15,7 +15,26 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const ARCHIVE_CAS_FORMAT_V1: &str = "loadngo-archive-cas-v1";
 pub const ARCHIVE_MANIFEST_FORMAT_V1: &str = "loadngo-archive-manifest-v1";
 pub const ARCHIVE_MANIFEST_FORMAT_V2: &str = "loadngo-archive-manifest-v2";
+pub const ARCHIVE_DELETE_LOG_FORMAT_V1: &str = "loadngo-archive-delete-log-v1";
 pub const DEFAULT_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+
+/// A record of a manual content removal: which paths were dropped from a
+/// manifest, by whom, and why. Written as a sidecar next to the superseding
+/// manifest it describes; it is not itself a CAS object, so it carries no
+/// content-address guarantee of its own -- the manifest chain
+/// (`supersedes_archive_root`) is the tamper-evident record, this is the
+/// human-readable explanation alongside it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchiveDeleteLog {
+    pub format: String,
+    pub archive_id: String,
+    pub base_manifest_root: CasHash,
+    pub superseding_manifest_root: CasHash,
+    pub removed_at_unix_secs: u64,
+    pub actor: String,
+    pub reason: String,
+    pub removed_paths: Vec<String>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArchiveObject {
@@ -194,6 +213,94 @@ impl ArchiveManifest {
         )?;
         amended.supersedes_archive_root = Some(self.digest()?);
         Ok(amended)
+    }
+
+    /// Produces a new manifest with the named entries removed, and a log
+    /// describing the removal. A directory path also drops everything
+    /// nested under it. This never touches blob objects or other manifest
+    /// files -- it is a purely logical, append-only edit; reclaiming the
+    /// disk space of any now-unreferenced blob is a separate, explicit GC
+    /// step that must first confirm no other manifest in the CAS root still
+    /// references that blob.
+    pub fn with_entries_removed(
+        &self,
+        paths: &[String],
+        reason: impl Into<String>,
+        actor: impl Into<String>,
+        created_at_unix_secs: u64,
+    ) -> Result<(Self, ArchiveDeleteLog)> {
+        let reason = reason.into();
+        let actor = actor.into();
+        if reason.trim().is_empty() {
+            bail!("removal reason must not be empty");
+        }
+        if actor.trim().is_empty() {
+            bail!("removal actor must not be empty");
+        }
+        if paths.is_empty() {
+            bail!("no paths given to remove");
+        }
+        for requested in paths {
+            if !self.entries.iter().any(|entry| entry.path() == requested) {
+                bail!("path not present in manifest: {requested:?}");
+            }
+        }
+        let directory_prefixes: Vec<String> = paths
+            .iter()
+            .filter(|requested| {
+                self.entries.iter().any(|entry| {
+                    entry.path() == requested.as_str()
+                        && matches!(entry, ArchiveEntry::Directory { .. })
+                })
+            })
+            .map(|requested| format!("{requested}/"))
+            .collect();
+        let drop_exact: std::collections::BTreeSet<&str> =
+            paths.iter().map(String::as_str).collect();
+        let remaining: Vec<ArchiveEntry> = self
+            .entries
+            .iter()
+            .filter(|entry| {
+                let path = entry.path();
+                if drop_exact.contains(path) {
+                    return false;
+                }
+                !directory_prefixes
+                    .iter()
+                    .any(|prefix| path.starts_with(prefix.as_str()))
+            })
+            .cloned()
+            .collect();
+        if remaining.len() == self.entries.len() {
+            bail!("removal selection matched no manifest entries");
+        }
+        let removed_paths: Vec<String> = self
+            .entries
+            .iter()
+            .map(|entry| entry.path().to_string())
+            .filter(|path| !remaining.iter().any(|kept| kept.path() == path))
+            .collect();
+
+        let base_root = self.digest()?;
+        let mut amended = Self::new(
+            self.archive_id.clone(),
+            self.source_label.clone(),
+            created_at_unix_secs,
+            remaining,
+        )?;
+        amended.supersedes_archive_root = Some(base_root);
+        let superseding_root = amended.digest()?;
+        let log = ArchiveDeleteLog {
+            format: ARCHIVE_DELETE_LOG_FORMAT_V1.to_string(),
+            archive_id: self.archive_id.clone(),
+            base_manifest_root: base_root,
+            superseding_manifest_root: superseding_root,
+            removed_at_unix_secs: created_at_unix_secs,
+            actor,
+            reason,
+            removed_paths,
+        };
+        Ok((amended, log))
     }
 }
 
@@ -622,6 +729,143 @@ impl ArchiveCasStorage {
         Ok(manifest)
     }
 
+    /// Writes a delete-log sidecar next to the manifest it describes. Refuses
+    /// to overwrite an existing sidecar, same as every other write path here.
+    pub fn write_delete_log(
+        &self,
+        manifest_path: &Path,
+        log: &ArchiveDeleteLog,
+    ) -> Result<PathBuf> {
+        let stem = manifest_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or_else(|| {
+                anyhow!(
+                    "manifest path has no usable file stem: {}",
+                    manifest_path.display()
+                )
+            })?;
+        let path = self.manifests.join(format!("{stem}.delete-log.json"));
+        let bytes = serde_json::to_vec_pretty(log).context("failed to serialize delete log")?;
+        write_synced_file(&path, &bytes)
+            .with_context(|| format!("failed to write delete log {}", path.display()))?;
+        sync_parent(&path)?;
+        Ok(path)
+    }
+
+    /// Every canonical manifest currently readable under `manifests/`, newest
+    /// paths mixed with old ones -- callers that need "what's still live"
+    /// (GC) must include every manifest here, since blobs are globally
+    /// deduplicated across archives with no refcounting.
+    pub fn list_manifests(&self) -> Result<Vec<PathBuf>> {
+        let mut paths = Vec::new();
+        for entry in fs::read_dir(&self.manifests)
+            .with_context(|| format!("failed to enumerate {}", self.manifests.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) == Some("json")
+                && !path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.ends_with(".delete-log.json") || name.ends_with(".signature.json")
+                    })
+            {
+                paths.push(path);
+            }
+        }
+        paths.sort();
+        Ok(paths)
+    }
+
+    /// Removes one blob object. Callers must have already established, by
+    /// scanning every manifest in the CAS root (see [`Self::list_manifests`]),
+    /// that no manifest anywhere references this hash. This performs no such
+    /// check itself -- it is the low-level primitive a GC sweep calls once
+    /// per confirmed-orphaned object.
+    pub fn remove_object(&self, hash: CasHash) -> Result<u64> {
+        let path = self.object_path(hash);
+        let size = fs::metadata(&path)
+            .with_context(|| format!("archive object is missing: {}", path.display()))?
+            .len();
+        fs::remove_file(&path)
+            .with_context(|| format!("failed to remove archive object {}", path.display()))?;
+        Ok(size)
+    }
+
+    /// Every blob currently stored under `objects/`, as `(hash, size)`. A GC
+    /// sweep computes the referenced set from [`Self::list_manifests`] and
+    /// treats everything here that isn't in that set as orphaned.
+    pub fn list_objects(&self) -> Result<Vec<(CasHash, u64)>> {
+        self.list_objects_with_progress(|_| {})
+    }
+
+    /// Same as [`Self::list_objects`], but calls `on_progress(count)` after
+    /// every object found -- this is a full directory walk plus one
+    /// `metadata()` stat per object, which on a large CAS (hundreds of
+    /// thousands of blobs) on slow or removable storage can take long
+    /// enough that a caller needs its own sense of progress. Callers know
+    /// the *expected* object count cheaply and in advance, from summing
+    /// `unique_objects` across the manifests they've already read -- this
+    /// is only the (slow) confirmation walk against what's actually on
+    /// disk, not a source of the expected total itself.
+    pub fn list_objects_with_progress(
+        &self,
+        mut on_progress: impl FnMut(usize),
+    ) -> Result<Vec<(CasHash, u64)>> {
+        let mut objects = Vec::new();
+        for shard in fs::read_dir(&self.objects)
+            .with_context(|| format!("failed to enumerate {}", self.objects.display()))?
+        {
+            let shard = shard?;
+            if !shard.file_type()?.is_dir() {
+                continue;
+            }
+            for blob in fs::read_dir(shard.path())
+                .with_context(|| format!("failed to enumerate {}", shard.path().display()))?
+            {
+                let blob = blob?;
+                let path = blob.path();
+                let Some(stem) = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .and_then(|name| name.strip_suffix(".blob"))
+                else {
+                    continue;
+                };
+                let bytes = hex::decode(stem)
+                    .with_context(|| format!("non-hex object file name: {}", path.display()))?;
+                let hash = CasHash::from_slice(&bytes)
+                    .with_context(|| format!("invalid object hash: {}", path.display()))?;
+                let size = blob.metadata()?.len();
+                objects.push((hash, size));
+                on_progress(objects.len());
+            }
+        }
+        objects.sort_by_key(|(hash, _)| *hash);
+        Ok(objects)
+    }
+
+    /// Removes one manifest file and, if present, its `.delete-log.json`
+    /// sidecar. Does not touch any signature file (`{stem}.signature.json`
+    /// lives in the same directory under the object-hash naming the signer
+    /// chose) -- callers that prune history are responsible for deciding
+    /// what to do with a signature that now describes a removed manifest.
+    pub fn remove_manifest_file(&self, manifest_path: &Path) -> Result<()> {
+        fs::remove_file(manifest_path)
+            .with_context(|| format!("failed to remove manifest {}", manifest_path.display()))?;
+        if let Some(stem) = manifest_path.file_stem().and_then(|stem| stem.to_str()) {
+            let sidecar = self.manifests.join(format!("{stem}.delete-log.json"));
+            if sidecar.exists() {
+                fs::remove_file(&sidecar).with_context(|| {
+                    format!("failed to remove delete log {}", sidecar.display())
+                })?;
+            }
+        }
+        Ok(())
+    }
+
     fn partial_path(&self, source_key: &str, stamp: SourceStamp) -> PathBuf {
         let mut hasher = blake3::Hasher::new();
         hasher.update(ARCHIVE_CAS_FORMAT_V1.as_bytes());
@@ -890,5 +1134,194 @@ mod tests {
             Some(root) => tempfile::tempdir_in(root).unwrap(),
             None => tempfile::tempdir_in(fallback.path()).unwrap(),
         }
+    }
+
+    fn file_entry(store: &ArchiveCasStorage, path: &str, bytes: &[u8]) -> ArchiveEntry {
+        let object = store.add_content(bytes).unwrap().object;
+        ArchiveEntry::File {
+            path: path.to_string(),
+            object,
+            modified_at_unix_secs: None,
+        }
+    }
+
+    #[test]
+    fn with_entries_removed_drops_a_single_file_and_supersedes() {
+        let directory = tempdir().unwrap();
+        let store = ArchiveCasStorage::new(directory.path().join("cas")).unwrap();
+        let entries = vec![
+            file_entry(&store, "keep.txt", b"keep"),
+            file_entry(&store, "drop.txt", b"drop"),
+        ];
+        let manifest = ArchiveManifest::new("archive-a", "test", 1, entries).unwrap();
+        let base_root = manifest.digest().unwrap();
+
+        let (amended, log) = manifest
+            .with_entries_removed(&["drop.txt".to_string()], "cleanup", "jay", 2)
+            .unwrap();
+
+        assert_eq!(amended.entries.len(), 1);
+        assert_eq!(amended.entries[0].path(), "keep.txt");
+        assert_eq!(amended.supersedes_archive_root, Some(base_root));
+        assert_eq!(log.base_manifest_root, base_root);
+        assert_eq!(log.superseding_manifest_root, amended.digest().unwrap());
+        assert_eq!(log.removed_paths, vec!["drop.txt".to_string()]);
+        assert_eq!(log.actor, "jay");
+        assert_eq!(log.reason, "cleanup");
+    }
+
+    #[test]
+    fn with_entries_removed_drops_a_directory_recursively() {
+        let directory = tempdir().unwrap();
+        let store = ArchiveCasStorage::new(directory.path().join("cas")).unwrap();
+        let entries = vec![
+            ArchiveEntry::Directory {
+                path: "old".to_string(),
+                modified_at_unix_secs: None,
+            },
+            file_entry(&store, "old/a.txt", b"a"),
+            file_entry(&store, "old/nested/b.txt", b"b"),
+            file_entry(&store, "keep.txt", b"keep"),
+        ];
+        let manifest = ArchiveManifest::new("archive-a", "test", 1, entries).unwrap();
+
+        let (amended, log) = manifest
+            .with_entries_removed(&["old".to_string()], "cleanup", "jay", 2)
+            .unwrap();
+
+        assert_eq!(amended.entries.len(), 1);
+        assert_eq!(amended.entries[0].path(), "keep.txt");
+        let mut removed = log.removed_paths.clone();
+        removed.sort();
+        assert_eq!(
+            removed,
+            vec![
+                "old".to_string(),
+                "old/a.txt".to_string(),
+                "old/nested/b.txt".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn with_entries_removed_rejects_an_absent_path() {
+        let directory = tempdir().unwrap();
+        let store = ArchiveCasStorage::new(directory.path().join("cas")).unwrap();
+        let entries = vec![file_entry(&store, "keep.txt", b"keep")];
+        let manifest = ArchiveManifest::new("archive-a", "test", 1, entries).unwrap();
+        let error = manifest
+            .with_entries_removed(&["missing.txt".to_string()], "cleanup", "jay", 2)
+            .unwrap_err();
+        assert!(error.to_string().contains("not present in manifest"));
+    }
+
+    #[test]
+    fn gc_reference_scan_keeps_a_blob_shared_by_another_manifest() {
+        // This mirrors what archive_cas_gc does: union the referenced blobs
+        // across every manifest in the CAS root before deciding what's
+        // orphaned. A blob two archives share must survive removing it from
+        // just one of them.
+        let directory = tempdir().unwrap();
+        let store = ArchiveCasStorage::new(directory.path().join("cas")).unwrap();
+        let shared_object = store.add_content(b"shared bytes").unwrap().object;
+
+        let manifest_a = ArchiveManifest::new(
+            "archive-a",
+            "test",
+            1,
+            vec![ArchiveEntry::File {
+                path: "shared.bin".to_string(),
+                object: shared_object,
+                modified_at_unix_secs: None,
+            }],
+        )
+        .unwrap();
+        let manifest_b = ArchiveManifest::new(
+            "archive-b",
+            "test",
+            1,
+            vec![ArchiveEntry::File {
+                path: "also-shared.bin".to_string(),
+                object: shared_object,
+                modified_at_unix_secs: None,
+            }],
+        )
+        .unwrap();
+        store.write_manifest(&manifest_a).unwrap();
+        store.write_manifest(&manifest_b).unwrap();
+
+        // Remove archive-a's only entry -- archive-b still references the
+        // same blob.
+        let (amended_a, log) = manifest_a
+            .with_entries_removed(&["shared.bin".to_string()], "cleanup", "jay", 2)
+            .unwrap();
+        assert!(amended_a.entries.is_empty());
+        let (amended_manifest_path, _) = store.write_manifest(&amended_a).unwrap();
+        store
+            .write_delete_log(&amended_manifest_path, &log)
+            .unwrap();
+
+        let mut referenced = std::collections::BTreeSet::new();
+        for path in store.list_manifests().unwrap() {
+            let manifest = store.read_manifest(&path).unwrap();
+            referenced.insert(manifest.digest().unwrap());
+            for entry in &manifest.entries {
+                if let ArchiveEntry::File { object, .. } = entry {
+                    referenced.insert(object.hash);
+                }
+            }
+        }
+        assert!(
+            referenced.contains(&shared_object.hash),
+            "blob still referenced by archive-b's original manifest must not look orphaned"
+        );
+
+        let objects = store.list_objects().unwrap();
+        assert!(objects.iter().any(|(hash, _)| *hash == shared_object.hash));
+    }
+
+    #[test]
+    fn list_manifests_excludes_delete_log_and_signature_sidecars() {
+        // A real bug: list_manifests originally excluded only
+        // `.delete-log.json`, not `.signature.json` -- both of which also
+        // end in `.json` and sit in the same directory next to the manifest
+        // they describe. Once a manifest was actually signed (the normal,
+        // expected state for anything worth pruning/GC-ing), every caller
+        // of list_manifests -- archive_cas_gc's reference scan and
+        // archive_cas_prune_manifests's ancestor walk -- tried to parse the
+        // signature file as a manifest and failed outright.
+        let directory = tempdir().unwrap();
+        let store = ArchiveCasStorage::new(directory.path().join("cas")).unwrap();
+        let entries = vec![file_entry(&store, "a.txt", b"a")];
+        let manifest = ArchiveManifest::new("archive-a", "test", 1, entries).unwrap();
+        let (manifest_path, _) = store.write_manifest(&manifest).unwrap();
+        let (_amended, log) = manifest
+            .with_entries_removed(&["a.txt".to_string()], "cleanup", "jay", 2)
+            .unwrap();
+        store.write_delete_log(&manifest_path, &log).unwrap();
+        let stem = manifest_path.file_stem().unwrap().to_str().unwrap();
+        let signature_path = manifest_path.with_file_name(format!("{stem}.signature.json"));
+        fs::write(&signature_path, b"{\"not\":\"a manifest\"}").unwrap();
+
+        let listed = store.list_manifests().unwrap();
+        assert_eq!(listed, vec![manifest_path]);
+    }
+
+    #[test]
+    fn list_objects_with_progress_reports_every_object_exactly_once() {
+        let directory = tempdir().unwrap();
+        let store = ArchiveCasStorage::new(directory.path().join("cas")).unwrap();
+        store.add_content(b"one").unwrap();
+        store.add_content(b"two").unwrap();
+        store.add_content(b"three").unwrap();
+
+        let mut progress_calls = Vec::new();
+        let objects = store
+            .list_objects_with_progress(|found| progress_calls.push(found))
+            .unwrap();
+
+        assert_eq!(objects.len(), 3);
+        // One callback per object, strictly increasing, ending at the total.
+        assert_eq!(progress_calls, vec![1, 2, 3]);
     }
 }

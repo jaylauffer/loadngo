@@ -16,7 +16,7 @@ native-desktop-audio = []
 # The read-only Archive CAS browser is a desktop tool, not part of the host.
 # Its dependencies sit behind this feature so the games that depend on this
 # crate never compile the CAS, its signature code, or pqcrypto's C sources.
-archive-cas-browser = ["dep:anyhow", "dep:data", "dep:serde_json"]
+archive-cas-browser = ["dep:anyhow", "dep:data", "dep:loadngo-pq-crypto", "dep:serde_json"]
 
 [[bin]]
 name = "archive_cas_browser"
@@ -29,11 +29,15 @@ image.workspace = true
 loadngo-camera = { path = "../camera" }
 loadngo-host-core = { path = "../host-core" }
 loadngo-persistence = { path = "../persistence" }
+loadngo-pq-crypto = { path = "../pq-crypto", optional = true }
 loadngo-renderer = { path = "../renderer" }
 ron.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, optional = true }
 ui-core = { path = "../ui-core" }
+
+[dev-dependencies]
+tempfile = "3"
 
 [target.'cfg(any(target_os = "ios", target_os = "linux", target_os = "windows"))'.dependencies]
 futures = "0.3"
