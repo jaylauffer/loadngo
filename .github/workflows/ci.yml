@@ -2,12 +2,14 @@ name: CI
 
 # Runs on any self-hosted runner advertising `build-linux-arm64` (aarch64
 # Linux). Not actions/checkout: Cargo.toml has a path dependency on a
-# sibling repo (../qcoin) that lives next to this repo under ~/pudding/ on
-# the runner. actions/checkout only ever checks out this one repo into an
-# isolated ephemeral workspace, so that sibling would never be present
-# there. Instead, sync the persistent clone that's already correctly
-# positioned next to it to the exact commit that triggered this run. This
-# also keeps target/ warm between runs for faster incremental builds.
+# sibling repo (../qcoin) that lives next to this repo under ~/ci/pudding/
+# on the runner -- a CI-only clone, separate from the ~/pudding/ checkout
+# a human or agent may be using interactively on the same Pi. actions/checkout
+# only ever checks out this one repo into an isolated ephemeral workspace, so
+# that sibling would never be present there. Instead, sync the persistent
+# clone that's already correctly positioned next to it to the exact commit
+# that triggered this run. This also keeps target/ warm between runs for
+# faster incremental builds.
 #
 # --exclude loadngo-gfx-metal/--exclude loadngo-gfx-dx12/--exclude
 # gui-win32: these are genuinely platform-specific backends (Metal is
@@ -68,7 +70,12 @@ jobs:
     runs-on: [self-hosted, build-linux-arm64]
     timeout-minutes: 30
     env:
-      REPO_DIR: /home/jay/pudding/loadngo
+      # Deliberately NOT ~/pudding/loadngo, same reasoning as the macos
+      # job below: `git reset --hard`/`git clean -fd` here must never touch
+      # the interactive checkout a human or agent is using on this Pi for
+      # manual dev/testing. CI gets its own clone under ~/ci/pudding, with
+      # the qcoin sibling beside it that this repo's path dependencies need.
+      REPO_DIR: /home/jay/ci/pudding/loadngo
     steps:
       - name: Sync checkout to the triggering commit
         run: |
