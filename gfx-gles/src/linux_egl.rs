@@ -126,7 +126,6 @@ unsafe extern "C" {
     fn glDeleteProgram(program: u32);
     fn glUseProgram(program: u32);
     fn glGetUniformLocation(program: u32, name: *const i8) -> i32;
-    fn glUniform4f(location: i32, v0: f32, v1: f32, v2: f32, v3: f32);
     fn glGenBuffers(n: i32, buffers: *mut u32);
     fn glBindBuffer(target: u32, buffer: u32);
     fn glBufferData(target: u32, size: isize, data: *const c_void, usage: u32);
@@ -422,12 +421,34 @@ pub fn present_scene(
         // rendering mode - the screen goes blank when set.
         let skip_draw_commands =
             std::env::var("LOADNGO_LINUX_SKIP_DRAW").is_ok_and(|value| value.trim() == "1");
+
+        // Accumulate consecutive same-pipeline draws here instead of
+        // issuing GL calls per command; see "Batched drawing" above.
+        // `image_batch_texture` tracks which texture `image_batch`'s
+        // pending vertices belong to, so a texture change flushes the
+        // batch before starting a new one. Whichever accumulator isn't
+        // being appended to right now is flushed first wherever that
+        // matters for draw order (switching pipelines, or `Clear`, which
+        // does a real GL op the accumulated draws must precede).
+        let mut solid_batch: Vec<f32> = Vec::new();
+        let mut image_batch: Vec<f32> = Vec::new();
+        let mut image_batch_texture: Option<u32> = None;
+
         for command in commands.iter().filter(|_| !skip_draw_commands) {
             match command {
                 // Clipping is resolved by the renderer before commands
                 // reach a backend (see `docs/CLIP_AND_SCISSOR.md`).
                 FrameCommand::PushClip { .. } | FrameCommand::PopClip => {}
                 FrameCommand::Clear { color } => {
+                    flush_solid_batch(*solid_program, *solid_vbo, &mut solid_batch)?;
+                    if let Some(texture) = image_batch_texture.take() {
+                        flush_image_batch(
+                            *textured_program,
+                            *textured_vbo,
+                            texture,
+                            &mut image_batch,
+                        )?;
+                    }
                     glClearColor(
                         color.r as f32 / 255.0,
                         color.g as f32 / 255.0,
@@ -438,13 +459,15 @@ pub fn present_scene(
                 }
                 FrameCommand::FillRect { rect, color } => {
                     ensure_solid_pipeline(solid_program, solid_vbo)?;
-                    draw_solid_rects(
-                        *solid_program,
-                        *solid_vbo,
-                        width,
-                        height,
-                        &[(*rect, *color)],
-                    )?;
+                    if let Some(texture) = image_batch_texture.take() {
+                        flush_image_batch(
+                            *textured_program,
+                            *textured_vbo,
+                            texture,
+                            &mut image_batch,
+                        )?;
+                    }
+                    push_rect(&mut solid_batch, width, height, *rect, *color);
                 }
                 FrameCommand::StrokeRect {
                     rect,
@@ -452,8 +475,17 @@ pub fn present_scene(
                     thickness,
                 } => {
                     ensure_solid_pipeline(solid_program, solid_vbo)?;
-                    let rects = super::stroke_rects(*rect, *color, *thickness);
-                    draw_solid_rects(*solid_program, *solid_vbo, width, height, &rects)?;
+                    if let Some(texture) = image_batch_texture.take() {
+                        flush_image_batch(
+                            *textured_program,
+                            *textured_vbo,
+                            texture,
+                            &mut image_batch,
+                        )?;
+                    }
+                    for (rect, color) in super::stroke_rects(*rect, *color, *thickness) {
+                        push_rect(&mut solid_batch, width, height, rect, color);
+                    }
                 }
                 FrameCommand::Line {
                     from,
@@ -462,16 +494,23 @@ pub fn present_scene(
                     thickness,
                 } => {
                     ensure_solid_pipeline(solid_program, solid_vbo)?;
-                    draw_line(
-                        *solid_program,
-                        *solid_vbo,
+                    if let Some(texture) = image_batch_texture.take() {
+                        flush_image_batch(
+                            *textured_program,
+                            *textured_vbo,
+                            texture,
+                            &mut image_batch,
+                        )?;
+                    }
+                    push_line(
+                        &mut solid_batch,
                         width,
                         height,
                         *from,
                         *to,
                         *color,
                         *thickness,
-                    )?;
+                    );
                 }
                 FrameCommand::Circle {
                     center,
@@ -479,15 +518,15 @@ pub fn present_scene(
                     color,
                 } => {
                     ensure_solid_pipeline(solid_program, solid_vbo)?;
-                    draw_circle(
-                        *solid_program,
-                        *solid_vbo,
-                        width,
-                        height,
-                        *center,
-                        *radius,
-                        *color,
-                    )?;
+                    if let Some(texture) = image_batch_texture.take() {
+                        flush_image_batch(
+                            *textured_program,
+                            *textured_vbo,
+                            texture,
+                            &mut image_batch,
+                        )?;
+                    }
+                    push_circle(&mut solid_batch, width, height, *center, *radius, *color);
                 }
                 FrameCommand::Arc {
                     center,
@@ -498,9 +537,16 @@ pub fn present_scene(
                     thickness,
                 } => {
                     ensure_solid_pipeline(solid_program, solid_vbo)?;
-                    draw_arc(
-                        *solid_program,
-                        *solid_vbo,
+                    if let Some(texture) = image_batch_texture.take() {
+                        flush_image_batch(
+                            *textured_program,
+                            *textured_vbo,
+                            texture,
+                            &mut image_batch,
+                        )?;
+                    }
+                    push_arc(
+                        &mut solid_batch,
                         width,
                         height,
                         *center,
@@ -509,7 +555,7 @@ pub fn present_scene(
                         *sweep_angle,
                         *color,
                         *thickness,
-                    )?;
+                    );
                 }
                 FrameCommand::Polyline {
                     points,
@@ -518,31 +564,50 @@ pub fn present_scene(
                     closed,
                 } => {
                     ensure_solid_pipeline(solid_program, solid_vbo)?;
-                    draw_polyline(
-                        *solid_program,
-                        *solid_vbo,
+                    if let Some(texture) = image_batch_texture.take() {
+                        flush_image_batch(
+                            *textured_program,
+                            *textured_vbo,
+                            texture,
+                            &mut image_batch,
+                        )?;
+                    }
+                    push_polyline(
+                        &mut solid_batch,
                         width,
                         height,
                         points.as_slice(),
                         *color,
                         *thickness,
                         *closed,
-                    )?;
+                    );
                 }
                 FrameCommand::Image(request) => {
                     ensure_textured_pipeline(textured_program, textured_vbo)?;
-                    draw_images(
-                        *textured_program,
-                        *textured_vbo,
-                        width,
-                        height,
-                        std::slice::from_ref(request),
-                        image_resources,
-                        gpu_textures,
-                    )?;
+                    flush_solid_batch(*solid_program, *solid_vbo, &mut solid_batch)?;
+                    let Some(resource) = image_resources.get(request.image_key.as_str()) else {
+                        continue;
+                    };
+                    let texture =
+                        ensure_gpu_texture(request.image_key.as_str(), resource, gpu_textures)?;
+                    if image_batch_texture.is_some_and(|current| current != texture) {
+                        flush_image_batch(
+                            *textured_program,
+                            *textured_vbo,
+                            image_batch_texture.take().expect("checked Some above"),
+                            &mut image_batch,
+                        )?;
+                    }
+                    image_batch_texture = Some(texture);
+                    push_image(&mut image_batch, width, height, request);
                 }
                 FrameCommand::ParticleBatch { .. } | FrameCommand::Text(_) => {}
             }
+        }
+
+        flush_solid_batch(*solid_program, *solid_vbo, &mut solid_batch)?;
+        if let Some(texture) = image_batch_texture.take() {
+            flush_image_batch(*textured_program, *textured_vbo, texture, &mut image_batch)?;
         }
 
         let draw_ms = draw_started.elapsed().as_secs_f64() * 1000.0;
@@ -619,13 +684,17 @@ fn ensure_solid_pipeline(
 ) -> Result<(), RendererError> {
     unsafe {
         if *solid_program == 0 {
+            // Color is a per-vertex attribute, not a uniform: batching many
+            // differently-colored shapes into one draw call (see
+            // `flush_solid_batch`) requires it to vary within a single
+            // draw, which a uniform can't do.
             let vertex_shader = compile_shader(
                 GL_VERTEX_SHADER,
-                b"#version 300 es\nlayout(location = 0) in vec2 a_pos;\nvoid main() { gl_Position = vec4(a_pos, 0.0, 1.0); }\n\0",
+                b"#version 300 es\nlayout(location = 0) in vec2 a_pos;\nlayout(location = 1) in vec4 a_color;\nout vec4 v_color;\nvoid main() { v_color = a_color; gl_Position = vec4(a_pos, 0.0, 1.0); }\n\0",
             )?;
             let fragment_shader = compile_shader(
                 GL_FRAGMENT_SHADER,
-                b"#version 300 es\nprecision mediump float;\nuniform vec4 u_color;\nout vec4 frag_color;\nvoid main() { frag_color = u_color; }\n\0",
+                b"#version 300 es\nprecision mediump float;\nin vec4 v_color;\nout vec4 frag_color;\nvoid main() { frag_color = v_color; }\n\0",
             )?;
             let program = glCreateProgram();
             glAttachShader(program, vertex_shader);
@@ -664,13 +733,16 @@ fn ensure_textured_pipeline(
 ) -> Result<(), RendererError> {
     unsafe {
         if *textured_program == 0 {
+            // Tint is a per-vertex attribute, not a uniform, for the same
+            // reason as the solid pipeline's color: it must be able to vary
+            // within one batched draw call.
             let vertex_shader = compile_shader(
                 GL_VERTEX_SHADER,
-                b"#version 300 es\nlayout(location = 0) in vec2 a_pos;\nlayout(location = 1) in vec2 a_uv;\nout vec2 v_uv;\nvoid main() { v_uv = a_uv; gl_Position = vec4(a_pos, 0.0, 1.0); }\n\0",
+                b"#version 300 es\nlayout(location = 0) in vec2 a_pos;\nlayout(location = 1) in vec2 a_uv;\nlayout(location = 2) in vec4 a_tint;\nout vec2 v_uv;\nout vec4 v_tint;\nvoid main() { v_uv = a_uv; v_tint = a_tint; gl_Position = vec4(a_pos, 0.0, 1.0); }\n\0",
             )?;
             let fragment_shader = compile_shader(
                 GL_FRAGMENT_SHADER,
-                b"#version 300 es\nprecision mediump float;\nin vec2 v_uv;\nuniform sampler2D u_tex;\nuniform vec4 u_tint;\nout vec4 frag_color;\nvoid main() { frag_color = texture(u_tex, v_uv) * u_tint; }\n\0",
+                b"#version 300 es\nprecision mediump float;\nin vec2 v_uv;\nin vec4 v_tint;\nuniform sampler2D u_tex;\nout vec4 frag_color;\nvoid main() { frag_color = texture(u_tex, v_uv) * v_tint; }\n\0",
             )?;
             let program = glCreateProgram();
             glAttachShader(program, vertex_shader);
@@ -703,156 +775,92 @@ fn ensure_textured_pipeline(
     Ok(())
 }
 
-/// Uploads all rects' vertex data in one `glBufferData` call instead of
-/// one call per rect. Calling `glBufferData` repeatedly with
-/// `GL_STREAM_DRAW` on the same VBO is a real GL idiom (it tells the
-/// driver "orphan the old storage rather than stall on in-flight GPU
-/// reads of it") — but on this Pi's Mesa `v3d` driver, doing it once per
-/// rect (a `StrokeRect` alone expands to 4 via `stroke_rects`) produced
-/// unbounded growth in `/sys/kernel/debug/dri/0/bo_stats`' allocated
-/// buffer-object count over a run's lifetime (confirmed: 262 to 1320+
-/// BOs over 12s, tracking almost exactly with the present-latency growth
-/// documented in `docs/LINUX_X11_PRESENT_LATENCY.md`), evidently from
-/// orphaned buffers not being reclaimed as fast as new ones are
-/// requested. One upload per frame instead of one per rect removes that
-/// multiplication entirely — see that doc for the full investigation.
-fn draw_solid_rects(
-    program: u32,
-    vbo: u32,
-    width: i32,
-    height: i32,
-    rects: &[(ui_core::geometry::Rect, Color)],
-) -> Result<(), RendererError> {
-    unsafe {
-        glUseProgram(program);
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 2, GL_FLOAT, 0, 0, ptr::null());
+// ------------------------------------------------------------------
+// Batched drawing
+// ------------------------------------------------------------------
+//
+// `present_scene` no longer issues one `glBufferData`+`glDrawArrays` pair
+// per shape/sprite (or, for solid rects, one shared upload but still one
+// draw call each). Every solid shape or sprite in a command run is instead
+// appended (CPU-side, no GL calls) to a shared accumulator by the `push_*`
+// functions below, and the whole run is submitted as one buffer upload and
+// one draw call by `flush_solid_batch` / `flush_image_batch` -- only when
+// the next command needs a different pipeline or texture, or the command
+// stream ends. This is a strict improvement on the single-upload-many-draws
+// scheme the doc comment below used to describe: it still uploads once per
+// batch (so the Mesa `v3d` `bo_stats` growth investigation in
+// `docs/LINUX_X11_PRESENT_LATENCY.md` remains addressed), and now also
+// collapses the draw-call count itself, which used to scale with the
+// number of shapes/sprites on screen. Color/tint moved from a uniform to a
+// per-vertex attribute to make that possible -- a uniform can't vary
+// within a single batched draw.
+const SOLID_VERTEX_FLOATS: usize = 6; // x, y, r, g, b, a
+const TEXTURED_VERTEX_FLOATS: usize = 8; // x, y, u, v, r, g, b, a
 
-        let color_location = glGetUniformLocation(program, c"u_color".as_ptr().cast());
-        if color_location < 0 {
-            return Err(RendererError::Backend(
-                "u_color uniform not found in Linux GLES solid program".to_string(),
-            ));
-        }
-
-        let visible_rects: Vec<&(ui_core::geometry::Rect, Color)> = rects
-            .iter()
-            .filter(|(rect, _)| rect.width > 0.0 && rect.height > 0.0)
-            .collect();
-        let mut batched_vertices: Vec<f32> = Vec::with_capacity(visible_rects.len() * 12);
-        for (rect, _) in &visible_rects {
-            batched_vertices.extend_from_slice(&rect_vertices(*rect, width, height));
-        }
-        if !batched_vertices.is_empty() {
-            glBufferData(
-                GL_ARRAY_BUFFER,
-                (batched_vertices.len() * std::mem::size_of::<f32>()) as isize,
-                batched_vertices.as_ptr().cast(),
-                GL_STREAM_DRAW,
-            );
-        }
-
-        for (index, (_, color)) in visible_rects.iter().enumerate() {
-            glUniform4f(
-                color_location,
-                color.r as f32 / 255.0,
-                color.g as f32 / 255.0,
-                color.b as f32 / 255.0,
-                color.a as f32 / 255.0,
-            );
-            glDrawArrays(GL_TRIANGLES, (index * 6) as i32, 6);
-        }
-
-        glDisableVertexAttribArray(0);
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-    }
-    Ok(())
+fn color_floats(color: Color) -> [f32; 4] {
+    [
+        color.r as f32 / 255.0,
+        color.g as f32 / 255.0,
+        color.b as f32 / 255.0,
+        color.a as f32 / 255.0,
+    ]
 }
 
-#[allow(clippy::too_many_arguments)] // private single-call-site GL draw helper; params are the real independent inputs
-fn draw_polyline(
-    program: u32,
-    vbo: u32,
+/// Appends `positions` (flat x,y pairs) to `batch`, interleaving in `color`
+/// per vertex.
+fn push_colored(batch: &mut Vec<f32>, positions: &[f32], color: Color) {
+    let rgba = color_floats(color);
+    batch.reserve(positions.len() / 2 * SOLID_VERTEX_FLOATS);
+    let (pairs, _remainder) = positions.as_chunks::<2>();
+    for pair in pairs {
+        batch.push(pair[0]);
+        batch.push(pair[1]);
+        batch.extend_from_slice(&rgba);
+    }
+}
+
+fn push_rect(
+    batch: &mut Vec<f32>,
     width: i32,
     height: i32,
-    points: &[ui_core::geometry::Point],
+    rect: ui_core::geometry::Rect,
     color: Color,
-    thickness: i32,
-    closed: bool,
-) -> Result<(), RendererError> {
-    let vertices = super::polyline_triangle_vertices(points, thickness, closed, width, height);
-    if vertices.is_empty() {
-        return Ok(());
+) {
+    if rect.width <= 0.0 || rect.height <= 0.0 {
+        return;
     }
-
-    unsafe {
-        glUseProgram(program);
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 2, GL_FLOAT, 0, 0, ptr::null());
-
-        let color_location = glGetUniformLocation(program, c"u_color".as_ptr().cast());
-        if color_location < 0 {
-            return Err(RendererError::Backend(
-                "u_color uniform not found in Linux GLES solid polyline program".to_string(),
-            ));
-        }
-
-        glBufferData(
-            GL_ARRAY_BUFFER,
-            (vertices.len() * std::mem::size_of::<f32>()) as isize,
-            vertices.as_ptr().cast(),
-            GL_STREAM_DRAW,
-        );
-        glUniform4f(
-            color_location,
-            color.r as f32 / 255.0,
-            color.g as f32 / 255.0,
-            color.b as f32 / 255.0,
-            color.a as f32 / 255.0,
-        );
-        glDrawArrays(GL_TRIANGLES, 0, (vertices.len() / 2) as i32);
-
-        glDisableVertexAttribArray(0);
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-    }
-
-    Ok(())
+    push_colored(batch, &rect_vertices(rect, width, height), color);
 }
 
-#[allow(clippy::too_many_arguments)] // private single-call-site GL draw helper; params are the real independent inputs
-fn draw_line(
-    program: u32,
-    vbo: u32,
+#[allow(clippy::too_many_arguments)] // one real independent input per param, not incidental grouping
+fn push_line(
+    batch: &mut Vec<f32>,
     width: i32,
     height: i32,
     from: ui_core::geometry::Point,
     to: ui_core::geometry::Point,
     color: Color,
     thickness: i32,
-) -> Result<(), RendererError> {
+) {
     let vertices = super::line_triangle_vertices(from, to, thickness, width, height);
-    draw_solid_vertices(program, vbo, &vertices, color, "Linux GLES solid line")
+    push_colored(batch, &vertices, color);
 }
 
-fn draw_circle(
-    program: u32,
-    vbo: u32,
+fn push_circle(
+    batch: &mut Vec<f32>,
     width: i32,
     height: i32,
     center: ui_core::geometry::Point,
     radius: f32,
     color: Color,
-) -> Result<(), RendererError> {
+) {
     let vertices = super::circle_triangle_vertices(center, radius, width, height);
-    draw_solid_vertices(program, vbo, &vertices, color, "Linux GLES solid circle")
+    push_colored(batch, &vertices, color);
 }
 
-#[allow(clippy::too_many_arguments)] // private single-call-site GL draw helper; params are the real independent inputs
-fn draw_arc(
-    program: u32,
-    vbo: u32,
+#[allow(clippy::too_many_arguments)] // one real independent input per param, not incidental grouping
+fn push_arc(
+    batch: &mut Vec<f32>,
     width: i32,
     height: i32,
     center: ui_core::geometry::Point,
@@ -861,122 +869,137 @@ fn draw_arc(
     sweep_angle: f32,
     color: Color,
     thickness: i32,
-) -> Result<(), RendererError> {
+) {
     let points = super::arc_polyline_points(center, radius, start_angle, sweep_angle);
     let vertices = super::polyline_triangle_vertices(&points, thickness, false, width, height);
-    draw_solid_vertices(program, vbo, &vertices, color, "Linux GLES solid arc")
+    push_colored(batch, &vertices, color);
 }
 
-fn draw_solid_vertices(
-    program: u32,
-    vbo: u32,
-    vertices: &[f32],
+fn push_polyline(
+    batch: &mut Vec<f32>,
+    width: i32,
+    height: i32,
+    points: &[ui_core::geometry::Point],
     color: Color,
-    label: &str,
-) -> Result<(), RendererError> {
-    if vertices.is_empty() {
+    thickness: i32,
+    closed: bool,
+) {
+    let vertices = super::polyline_triangle_vertices(points, thickness, closed, width, height);
+    push_colored(batch, &vertices, color);
+}
+
+fn push_image(batch: &mut Vec<f32>, width: i32, height: i32, request: &ImageRequest) {
+    let vertices = textured_rect_vertices(request, width, height);
+    let tint = [1.0, 1.0, 1.0, request.alpha.clamp(0.0, 1.0)];
+    batch.reserve(vertices.len() / 4 * TEXTURED_VERTEX_FLOATS);
+    let (quads, _remainder) = vertices.as_chunks::<4>();
+    for quad in quads {
+        batch.extend_from_slice(quad);
+        batch.extend_from_slice(&tint);
+    }
+}
+
+/// Submits every vertex accumulated in `batch` as one draw call, then
+/// clears it. A no-op when nothing was accumulated.
+fn flush_solid_batch(program: u32, vbo: u32, batch: &mut Vec<f32>) -> Result<(), RendererError> {
+    if batch.is_empty() {
         return Ok(());
     }
-
     unsafe {
         glUseProgram(program);
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 2, GL_FLOAT, 0, 0, ptr::null());
-
-        let color_location = glGetUniformLocation(program, c"u_color".as_ptr().cast());
-        if color_location < 0 {
-            return Err(RendererError::Backend(format!(
-                "u_color uniform not found in {label} program"
-            )));
-        }
-
         glBufferData(
             GL_ARRAY_BUFFER,
-            std::mem::size_of_val(vertices) as isize,
-            vertices.as_ptr().cast(),
+            (batch.len() * std::mem::size_of::<f32>()) as isize,
+            batch.as_ptr().cast(),
             GL_STREAM_DRAW,
         );
-        glUniform4f(
-            color_location,
-            color.r as f32 / 255.0,
-            color.g as f32 / 255.0,
-            color.b as f32 / 255.0,
-            color.a as f32 / 255.0,
+        let stride = (SOLID_VERTEX_FLOATS * std::mem::size_of::<f32>()) as i32;
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, 0, stride, ptr::null());
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            1,
+            4,
+            GL_FLOAT,
+            0,
+            stride,
+            (2 * std::mem::size_of::<f32>()) as *const c_void,
         );
-        glDrawArrays(GL_TRIANGLES, 0, (vertices.len() / 2) as i32);
-
+        glDrawArrays(GL_TRIANGLES, 0, (batch.len() / SOLID_VERTEX_FLOATS) as i32);
         glDisableVertexAttribArray(0);
+        glDisableVertexAttribArray(1);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
-
+    batch.clear();
     Ok(())
 }
 
-fn draw_images(
+/// Submits every vertex accumulated in `batch`, sampling `texture`, as one
+/// draw call, then clears it. A no-op when nothing was accumulated.
+fn flush_image_batch(
     program: u32,
     vbo: u32,
-    width: i32,
-    height: i32,
-    images: &[ImageRequest],
-    image_resources: &std::collections::HashMap<String, super::GlesImageResource>,
-    gpu_textures: &mut std::collections::HashMap<String, u32>,
+    texture: u32,
+    batch: &mut Vec<f32>,
 ) -> Result<(), RendererError> {
+    if batch.is_empty() {
+        return Ok(());
+    }
     unsafe {
         glUseProgram(program);
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glEnableVertexAttribArray(0);
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(
-            0,
-            2,
-            GL_FLOAT,
-            0,
-            (4 * std::mem::size_of::<f32>()) as i32,
-            ptr::null(),
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            (batch.len() * std::mem::size_of::<f32>()) as isize,
+            batch.as_ptr().cast(),
+            GL_STREAM_DRAW,
         );
+        let stride = (TEXTURED_VERTEX_FLOATS * std::mem::size_of::<f32>()) as i32;
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, 0, stride, ptr::null());
+        glEnableVertexAttribArray(1);
         glVertexAttribPointer(
             1,
             2,
             GL_FLOAT,
             0,
-            (4 * std::mem::size_of::<f32>()) as i32,
+            stride,
             (2 * std::mem::size_of::<f32>()) as *const c_void,
         );
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(
+            2,
+            4,
+            GL_FLOAT,
+            0,
+            stride,
+            (4 * std::mem::size_of::<f32>()) as *const c_void,
+        );
 
-        let u_tint = glGetUniformLocation(program, c"u_tint".as_ptr().cast());
         let u_tex = glGetUniformLocation(program, c"u_tex".as_ptr().cast());
-        if u_tint < 0 || u_tex < 0 {
+        if u_tex < 0 {
             return Err(RendererError::Backend(
-                "Linux GLES textured shader uniforms are unavailable".to_string(),
+                "u_tex uniform not found in Linux GLES textured program".to_string(),
             ));
         }
-
         glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, texture);
         glUniform1i(u_tex, 0);
 
-        for request in images {
-            let Some(resource) = image_resources.get(request.image_key.as_str()) else {
-                continue;
-            };
-            let texture = ensure_gpu_texture(request.image_key.as_str(), resource, gpu_textures)?;
-            let vertices = textured_rect_vertices(request, width, height);
-            glBufferData(
-                GL_ARRAY_BUFFER,
-                (vertices.len() * std::mem::size_of::<f32>()) as isize,
-                vertices.as_ptr().cast(),
-                GL_STREAM_DRAW,
-            );
-            glBindTexture(GL_TEXTURE_2D, texture);
-            glUniform4f(u_tint, 1.0, 1.0, 1.0, request.alpha.clamp(0.0, 1.0));
-            glDrawArrays(GL_TRIANGLES, 0, 6);
-        }
+        glDrawArrays(
+            GL_TRIANGLES,
+            0,
+            (batch.len() / TEXTURED_VERTEX_FLOATS) as i32,
+        );
 
         glBindTexture(GL_TEXTURE_2D, 0);
         glDisableVertexAttribArray(0);
         glDisableVertexAttribArray(1);
+        glDisableVertexAttribArray(2);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
+    batch.clear();
     Ok(())
 }
 
