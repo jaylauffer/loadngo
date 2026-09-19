@@ -8,7 +8,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::ptr::NonNull;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex, OnceLock,
+};
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use std::time::{Duration, Instant};
 
@@ -852,7 +855,12 @@ unsafe extern "C" fn on_frame_callback(_frame_time_nanos: i64, _data: *mut c_voi
         let mut state = app_state().lock().expect("android app state poisoned");
         state.frame_callback_scheduled = false;
     }
+    record_host_wake();
     pump_main_thread_reactor(true);
+    // Reporting does real I/O, so it deliberately happens after the state
+    // lock (released inside pump_main_thread_reactor/advance_frame_clock)
+    // is no longer held.
+    maybe_report_frame_metrics();
 }
 
 fn process_control_messages() -> (bool, bool) {
@@ -2940,10 +2948,197 @@ fn intersect_rects(a: UiRect, b: UiRect) -> Option<UiRect> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Frame pacing metrics (opt-in: `LOADNGO_FRAME_METRICS=1`)
+// ---------------------------------------------------------------------------
+//
+// Mirrors ios.rs's frame-metrics instrument field-for-field and line-for-line
+// (same env vars, same `[loadngo-frame]` report format) so a session on
+// either platform is directly comparable. The one difference is the sink:
+// Android's NativeActivity stderr does not reliably reach `adb logcat`, so
+// reports go through `android_log_info` (tag `loadngo`, level INFO) instead
+// of `eprintln!`.
+
+const FRAME_BUCKET_BOUNDS_US: [u64; 13] = [
+    4_000, 8_000, 12_000, 15_000, 16_000, 17_000, 18_000, 20_000, 25_000, 33_000, 50_000, 100_000,
+    200_000,
+];
+
+struct FrameMetrics {
+    frames: AtomicU64,
+    interval_sum_us: AtomicU64,
+    interval_sq_sum: AtomicU64,
+    interval_min_us: AtomicU64,
+    interval_max_us: AtomicU64,
+    buckets: [AtomicU64; FRAME_BUCKET_BOUNDS_US.len() + 1],
+    wakes: AtomicU64,
+}
+
+impl FrameMetrics {
+    const fn new() -> Self {
+        #[allow(clippy::declare_interior_mutable_const)]
+        const ZERO: AtomicU64 = AtomicU64::new(0);
+        Self {
+            frames: AtomicU64::new(0),
+            interval_sum_us: AtomicU64::new(0),
+            interval_sq_sum: AtomicU64::new(0),
+            interval_min_us: AtomicU64::new(u64::MAX),
+            interval_max_us: AtomicU64::new(0),
+            buckets: [ZERO; FRAME_BUCKET_BOUNDS_US.len() + 1],
+            wakes: AtomicU64::new(0),
+        }
+    }
+}
+
+static FRAME_METRICS: FrameMetrics = FrameMetrics::new();
+
+/// Low-level `getprop` read. Prefer `crate::debug_config_value`, which adds
+/// the `env::var`-first / `debug.*`-prefix convention this crate uses
+/// everywhere else.
+pub(crate) fn android_system_property(name: &str) -> Option<String> {
+    let output = std::process::Command::new("/system/bin/getprop")
+        .arg(name)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn frame_metrics_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        crate::debug_config_value("LOADNGO_FRAME_METRICS")
+            .map(|value| {
+                let value = value.trim().to_ascii_lowercase();
+                matches!(value.as_str(), "1" | "true" | "yes" | "on")
+            })
+            .unwrap_or(false)
+    })
+}
+
+/// How many frames between printed reports. 300 frames is ~5s at 60Hz.
+fn frame_metrics_report_every() -> u64 {
+    static EVERY: OnceLock<u64> = OnceLock::new();
+    *EVERY.get_or_init(|| {
+        crate::debug_config_value("LOADNGO_FRAME_METRICS_EVERY")
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(300)
+    })
+}
+
+fn frame_metrics_start() -> Instant {
+    static START: OnceLock<Instant> = OnceLock::new();
+    *START.get_or_init(Instant::now)
+}
+
+/// Records one frame interval. Atomics only -- safe to call while the app
+/// state lock is held.
+fn record_frame_interval(dt: Duration) {
+    if !frame_metrics_enabled() {
+        return;
+    }
+    let _ = frame_metrics_start();
+    let us = dt.as_micros().min(u128::from(u64::MAX)) as u64;
+
+    FRAME_METRICS.frames.fetch_add(1, Ordering::Relaxed);
+    FRAME_METRICS
+        .interval_sum_us
+        .fetch_add(us, Ordering::Relaxed);
+    let clamped = us.min(1_000_000);
+    FRAME_METRICS
+        .interval_sq_sum
+        .fetch_add(clamped.saturating_mul(clamped), Ordering::Relaxed);
+    FRAME_METRICS
+        .interval_min_us
+        .fetch_min(us, Ordering::Relaxed);
+    FRAME_METRICS
+        .interval_max_us
+        .fetch_max(us, Ordering::Relaxed);
+
+    let index = FRAME_BUCKET_BOUNDS_US
+        .iter()
+        .position(|bound| us < *bound)
+        .unwrap_or(FRAME_BUCKET_BOUNDS_US.len());
+    FRAME_METRICS.buckets[index].fetch_add(1, Ordering::Relaxed);
+}
+
+fn record_host_wake() {
+    if frame_metrics_enabled() {
+        FRAME_METRICS.wakes.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Logs a report if one is due. Call this from somewhere that is **not**
+/// holding the app state lock -- it does real I/O.
+fn maybe_report_frame_metrics() {
+    if !frame_metrics_enabled() {
+        return;
+    }
+    let frames = FRAME_METRICS.frames.load(Ordering::Relaxed);
+    let every = frame_metrics_report_every();
+    if frames == 0 || frames % every != 0 {
+        return;
+    }
+
+    let elapsed = frame_metrics_start().elapsed().as_secs_f64();
+    let sum_us = FRAME_METRICS.interval_sum_us.load(Ordering::Relaxed);
+    let sq_sum = FRAME_METRICS.interval_sq_sum.load(Ordering::Relaxed);
+    let min_us = FRAME_METRICS.interval_min_us.load(Ordering::Relaxed);
+    let max_us = FRAME_METRICS.interval_max_us.load(Ordering::Relaxed);
+    let wakes = FRAME_METRICS.wakes.load(Ordering::Relaxed);
+
+    let mean_us = sum_us as f64 / frames as f64;
+    let variance = (sq_sum as f64 / frames as f64) - (mean_us * mean_us);
+    let stddev_us = if variance > 0.0 { variance.sqrt() } else { 0.0 };
+
+    let counts: Vec<u64> = FRAME_METRICS
+        .buckets
+        .iter()
+        .map(|bucket| bucket.load(Ordering::Relaxed))
+        .collect();
+    let pct = |target: f64| -> String {
+        let want = (frames as f64 * target).ceil() as u64;
+        let mut running = 0u64;
+        for (index, count) in counts.iter().enumerate() {
+            running += count;
+            if running >= want {
+                return match FRAME_BUCKET_BOUNDS_US.get(index) {
+                    Some(bound) => format!("<{:.1}ms", *bound as f64 / 1000.0),
+                    None => format!(">={:.1}ms", FRAME_BUCKET_BOUNDS_US[12] as f64 / 1000.0),
+                };
+            }
+        }
+        "n/a".to_string()
+    };
+
+    android_log_info(&format!(
+        "[loadngo-frame] frames={frames} elapsed={elapsed:.1}s fps={:.1} \
+         interval mean={:.2}ms stddev={:.2}ms min={:.2}ms max={:.2}ms \
+         p50={} p95={} p99={} wakes={wakes}",
+        frames as f64 / elapsed.max(f64::EPSILON),
+        mean_us / 1000.0,
+        stddev_us / 1000.0,
+        min_us as f64 / 1000.0,
+        max_us as f64 / 1000.0,
+        pct(0.50),
+        pct(0.95),
+        pct(0.99),
+    ));
+}
+
 fn advance_frame_clock() {
     let mut state = app_state().lock().expect("android app state poisoned");
     let now = Instant::now();
     let dt = now.duration_since(state.last_tick).as_secs_f32();
+    record_frame_interval(now.duration_since(state.last_tick));
     state.last_tick = now;
     state.timing = FrameTiming {
         delta_seconds: if dt > 0.0 { dt } else { 1.0 / 60.0 },
