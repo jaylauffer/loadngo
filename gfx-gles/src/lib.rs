@@ -824,6 +824,18 @@ mod android {
                 return Err(last_egl_error("eglInitialize"));
             }
 
+            // No alpha channel on the window surface itself: EGL_ALPHA_SIZE=8
+            // here would make ANativeWindow's buffer format RGBA_8888, and
+            // SurfaceFlinger treats that as a window it may need to
+            // composite against whatever is behind the app. Our own
+            // in-frame blending (glBlendFunc(GL_SRC_ALPHA,
+            // GL_ONE_MINUS_SRC_ALPHA)) reads source alpha from the fragment
+            // output, not from a stored destination alpha, so it draws
+            // correctly with or without this bit — but leaving it in meant
+            // every translucent draw also lowered the *window's* alpha,
+            // and the compositor blended that region against the home
+            // screen/wallpaper behind the app instead of showing our own
+            // opaque scene underneath.
             let attribs = [
                 EGL_SURFACE_TYPE,
                 EGL_WINDOW_BIT,
@@ -836,7 +848,7 @@ mod android {
                 EGL_BLUE_SIZE,
                 8,
                 EGL_ALPHA_SIZE,
-                8,
+                0,
                 EGL_NONE,
             ];
             let mut config: EglConfig = ptr::null_mut();
