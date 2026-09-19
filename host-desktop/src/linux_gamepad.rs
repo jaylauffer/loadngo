@@ -48,6 +48,33 @@ const BTN_DPAD_DOWN: u16 = 0x221;
 const BTN_DPAD_LEFT: u16 = 0x222;
 const BTN_DPAD_RIGHT: u16 = 0x223;
 
+// The legacy `BTN_JOYSTICK` range (kernel's own name for 0x120..0x12f),
+// still what cheap generic-chipset pads report instead of `BTN_GAMEPAD`
+// (0x130+) above. Unlike the gamepad range, these names carry no positional
+// meaning of their own -- they're literally "trigger", "thumb button 2",
+// "fourth base button" -- so there is no way to get the mapping right from
+// the kernel header alone. This one is calibrated against a real device
+// (USB vendor:product 0810:0001, "Dual PSX Adaptor" chipset, sold under
+// various gamepad brands including Nubwo): every code below was confirmed
+// by reading raw evdev events while pressing each physical button in turn.
+// A different pad on the same chipset family is likely to match, but this
+// is empirical, not a spec -- if a future pad's face buttons come out
+// rotated, recalibrate rather than assume this table is universal.
+const BTN_TRIGGER: u16 = 0x120;
+const BTN_THUMB: u16 = 0x121;
+const BTN_THUMB2: u16 = 0x122;
+const BTN_TOP: u16 = 0x123;
+const BTN_TOP2: u16 = 0x124;
+const BTN_PINKIE: u16 = 0x125;
+const BTN_BASE3: u16 = 0x128;
+const BTN_BASE4: u16 = 0x129;
+const BTN_BASE5: u16 = 0x12a;
+const BTN_BASE6: u16 = 0x12b;
+// `BTN_BASE`/`BTN_BASE2` (0x126/0x127) are this device's L2/R2 -- left
+// unmapped for the same reason `BTN_TL2`/`BTN_TR2` are above: this pad's
+// capabilities also include `ABS_Z`/`ABS_RZ`, which already carry L2/R2
+// continuously. Mapping both would duplicate one control as two signals.
+
 const ABS_X: u16 = 0x00;
 const ABS_Y: u16 = 0x01;
 const ABS_Z: u16 = 0x02;
@@ -82,7 +109,20 @@ fn button_for_code(code: u16) -> Option<GamepadButton> {
         BTN_DPAD_DOWN => GamepadButton::DPadDown,
         BTN_DPAD_LEFT => GamepadButton::DPadLeft,
         BTN_DPAD_RIGHT => GamepadButton::DPadRight,
-        // `BTN_TL2`/`BTN_TR2` are deliberately unmapped: they are the digital
+        // Legacy `BTN_JOYSTICK`-range codes, calibrated per-device -- see
+        // the constants' own doc comment above for which device and how.
+        BTN_TRIGGER => GamepadButton::North,
+        BTN_THUMB => GamepadButton::East,
+        BTN_THUMB2 => GamepadButton::South,
+        BTN_TOP => GamepadButton::West,
+        BTN_TOP2 => GamepadButton::LeftShoulder,
+        BTN_PINKIE => GamepadButton::RightShoulder,
+        BTN_BASE3 => GamepadButton::Select,
+        BTN_BASE4 => GamepadButton::Start,
+        BTN_BASE5 => GamepadButton::LeftStick,
+        BTN_BASE6 => GamepadButton::RightStick,
+        // `BTN_TL2`/`BTN_TR2` (and this device's `BTN_BASE`/`BTN_BASE2`
+        // equivalents) are deliberately unmapped: they are the digital
         // shadow of the analog triggers, which are already reported
         // continuously through `ABS_Z`/`ABS_RZ`. Publishing both would
         // duplicate one physical control as two signals, against
@@ -99,6 +139,18 @@ struct AbsRange {
 }
 
 impl AbsRange {
+    /// Whether this axis actually has span to report anything with.
+    ///
+    /// `EVIOCGABS` can succeed while still describing a non-axis: on the
+    /// device `right_stick_on_z_rz` is calibrated against, querying
+    /// `ABS_RX`/`ABS_RY` (axes it does not physically have) returns
+    /// `min=0, max=0` rather than failing the ioctl outright. A caller that
+    /// only checks "did `read_abs_range` return `Some`" sees those as
+    /// present axes and never falls back to the ones that are real.
+    fn is_real(self) -> bool {
+        self.maximum > self.minimum
+    }
+
     /// Maps a raw reading onto `-1.0..=1.0`.
     ///
     /// No y-flip anywhere in this module: evdev already reports "up" as the
@@ -176,15 +228,32 @@ fn capability_bit_set(path: &Path, bit: usize) -> bool {
 
 /// Whether an `/dev/input/eventN` node is a gamepad.
 ///
-/// Tests for `BTN_SOUTH`, which is what separates a pad from the *other*
-/// nodes a modern controller publishes. A DualSense alone exposes four:
-/// the gamepad, its motion sensors, its touchpad, and a headset jack. A scan
+/// Tests for `BTN_SOUTH` (modern `BTN_GAMEPAD` range) or `BTN_TRIGGER`
+/// (legacy `BTN_JOYSTICK` range, what cheap generic-chipset pads report
+/// instead) -- either is what separates a pad from the *other* nodes a
+/// modern controller publishes. A DualSense alone exposes four: the
+/// gamepad, its motion sensors, its touchpad, and a headset jack. A scan
 /// that opened every node would happily treat the touchpad as a second pad.
 fn is_gamepad(event_name: &str) -> bool {
     let capabilities = PathBuf::from("/sys/class/input")
         .join(event_name)
         .join("device/capabilities/key");
     capability_bit_set(&capabilities, BTN_SOUTH as usize)
+        || capability_bit_set(&capabilities, BTN_TRIGGER as usize)
+}
+
+/// Whether `ABS_Z`/`ABS_RZ` should be read as the right stick instead of
+/// triggers, from whatever axis ranges were actually queried off the
+/// device. See `PadState::right_stick_on_z_rz`'s doc comment for the real
+/// hardware this exists for, and `AbsRange::is_real` for why "present in
+/// `ranges`" alone is not the right test -- a degenerate `min=0, max=0`
+/// range for an axis the device doesn't have is a successful ioctl, not a
+/// missing one.
+fn detect_right_stick_on_z_rz(ranges: &HashMap<u16, AbsRange>) -> bool {
+    !ranges.get(&ABS_RX).is_some_and(|range| range.is_real())
+        && !ranges.get(&ABS_RY).is_some_and(|range| range.is_real())
+        && ranges.get(&ABS_Z).is_some_and(|range| range.is_real())
+        && ranges.get(&ABS_RZ).is_some_and(|range| range.is_real())
 }
 
 /// One pad's accumulated state, and the whole decode of evdev's event
@@ -198,6 +267,20 @@ fn is_gamepad(event_name: &str) -> bool {
 #[derive(Default)]
 struct PadState {
     ranges: HashMap<u16, AbsRange>,
+    /// True when this device has no *functional* `ABS_RX`/`ABS_RY` (the
+    /// conventional right-stick axes -- see `AbsRange::is_real`, since
+    /// `EVIOCGABS` can succeed with a degenerate `min=0, max=0` for an axis
+    /// the device doesn't actually have) but does have real `ABS_Z`/
+    /// `ABS_RZ`. The generic-chipset PSX adapter this module was calibrated
+    /// against (see `BTN_TRIGGER`'s doc comment) has exactly this shape: it
+    /// has two real analog sticks, but its firmware reports the second one
+    /// on `ABS_Z`/`ABS_RZ` instead of `ABS_RX`/`ABS_RY`, because L2/R2 are
+    /// purely digital (`BTN_BASE`/`BTN_BASE2`) and it never needed a true
+    /// trigger axis. A device with a real `ABS_RX`/`ABS_RY` right stick
+    /// (the common case) always takes priority; this is a fallback, not a
+    /// preference, and only applies when there is nowhere else for a right
+    /// stick's axes to be.
+    right_stick_on_z_rz: bool,
     left_stick: PointF,
     right_stick: PointF,
     left_trigger: f32,
@@ -226,12 +309,14 @@ impl GamepadDevice {
                 ranges.insert(code, range);
             }
         }
+        let right_stick_on_z_rz = detect_right_stick_on_z_rz(&ranges);
         Some(Self {
             id,
             path,
             file,
             state: PadState {
                 ranges,
+                right_stick_on_z_rz,
                 ..PadState::default()
             },
         })
@@ -309,6 +394,20 @@ impl PadState {
                         ABS_Y => self.left_stick.y = signed,
                         ABS_RX => self.right_stick.x = signed,
                         _ => self.right_stick.y = signed,
+                    }
+                }
+                ABS_Z | ABS_RZ if self.right_stick_on_z_rz => {
+                    let Some(range) = self.ranges.get(&code).copied() else {
+                        return;
+                    };
+                    // Same y-down convention as ABS_Y: no flip needed here
+                    // either, for the same reason documented on
+                    // `AbsRange::to_signed`.
+                    let signed = range.to_signed(value);
+                    if code == ABS_Z {
+                        self.right_stick.y = signed;
+                    } else {
+                        self.right_stick.x = signed;
                     }
                 }
                 ABS_Z | ABS_RZ => {
@@ -467,10 +566,13 @@ impl GamepadTracker {
 #[cfg(test)]
 mod tests {
     use super::{
-        button_for_code, capability_bit_set, AbsRange, PadState, ABS_HAT0X, ABS_HAT0Y, ABS_RZ,
-        ABS_Y, BTN_SOUTH, BTN_TR, EV_ABS, EV_KEY,
+        button_for_code, capability_bit_set, detect_right_stick_on_z_rz, AbsRange, PadState,
+        ABS_HAT0X, ABS_HAT0Y, ABS_RX, ABS_RY, ABS_RZ, ABS_X, ABS_Y, ABS_Z, BTN_BASE3, BTN_BASE4,
+        BTN_BASE5, BTN_BASE6, BTN_PINKIE, BTN_SOUTH, BTN_THUMB, BTN_THUMB2, BTN_TOP, BTN_TOP2,
+        BTN_TR, BTN_TRIGGER, EV_ABS, EV_KEY,
     };
     use loadngo_host_core::GamepadButton;
+    use std::collections::HashMap;
 
     /// Byte layout of one `input_event` on this target, matching what
     /// `GamepadTracker` computes at runtime.
@@ -499,6 +601,25 @@ mod tests {
     fn byte_ranged_pad() -> PadState {
         let mut pad = PadState::default();
         for code in [0x00, 0x01, 0x02, 0x03, 0x04, 0x05] {
+            pad.ranges.insert(
+                code,
+                AbsRange {
+                    minimum: 0,
+                    maximum: 255,
+                },
+            );
+        }
+        pad
+    }
+
+    /// A pad with no `ABS_RX`/`ABS_RY` -- the shape `right_stick_on_z_rz`
+    /// detects, matching what `GamepadDevice::open` would compute for it.
+    fn byte_ranged_pad_without_right_stick_axes() -> PadState {
+        let mut pad = PadState {
+            right_stick_on_z_rz: true,
+            ..PadState::default()
+        };
+        for code in [ABS_X, ABS_Y, ABS_Z, ABS_RZ] {
             pad.ranges.insert(
                 code,
                 AbsRange {
@@ -583,6 +704,106 @@ mod tests {
     }
 
     #[test]
+    fn a_device_with_no_rx_ry_reports_its_right_stick_on_z_and_rz_instead_of_triggers() {
+        // Empirically confirmed on the same real device as the button
+        // calibration: it has two genuine analog sticks, but its firmware
+        // reports the right one's Y on ABS_Z and X on ABS_RZ, because L2/R2
+        // are purely digital and it never needed a true trigger axis.
+        let mut pad = byte_ranged_pad_without_right_stick_axes();
+        feed(&mut pad, &[(EV_ABS, ABS_Z, 0)]);
+        assert!(pad.snapshot(0).right_stick.raw.y < -0.9);
+        assert!((pad.snapshot(0).right_trigger.raw).abs() < 0.01);
+
+        feed(&mut pad, &[(EV_ABS, ABS_RZ, 255)]);
+        assert!(pad.snapshot(0).right_stick.raw.x > 0.9);
+        assert!((pad.snapshot(0).right_trigger.raw).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_device_with_rx_ry_still_reports_z_rz_as_triggers() {
+        // The common case -- a pad with a real ABS_RX/ABS_RY right stick --
+        // must not have its trigger axes reinterpreted just because it also
+        // has ABS_Z/ABS_RZ. byte_ranged_pad() has all six axes, so
+        // right_stick_on_z_rz must be false on it.
+        let mut pad = byte_ranged_pad();
+        assert!(!pad.right_stick_on_z_rz);
+        feed(&mut pad, &[(EV_ABS, ABS_RZ, 255)]);
+        let snapshot = pad.snapshot(0);
+        assert!((snapshot.right_trigger.raw - 1.0).abs() < 0.01);
+        assert!(snapshot.right_stick.raw.x.abs() < 0.01);
+    }
+
+    #[test]
+    fn detects_the_right_stick_on_z_rz_even_when_rx_ry_ioctls_succeed_but_are_degenerate() {
+        // The actual bug found on real hardware: EVIOCGABS for ABS_RX/ABS_RY
+        // on this device doesn't fail -- it succeeds with min=0, max=0,
+        // because the driver answers for any valid axis code regardless of
+        // whether the device has it. A detector that only checks "is this
+        // code present in `ranges`" sees ABS_RX/ABS_RY as present and never
+        // falls back, which is exactly what made the right stick do
+        // nothing at all (not even act as a trigger) on the real pad.
+        let mut ranges = HashMap::new();
+        ranges.insert(
+            ABS_X,
+            AbsRange {
+                minimum: 0,
+                maximum: 255,
+            },
+        );
+        ranges.insert(
+            ABS_Y,
+            AbsRange {
+                minimum: 0,
+                maximum: 255,
+            },
+        );
+        ranges.insert(
+            ABS_RX,
+            AbsRange {
+                minimum: 0,
+                maximum: 0,
+            },
+        );
+        ranges.insert(
+            ABS_RY,
+            AbsRange {
+                minimum: 0,
+                maximum: 0,
+            },
+        );
+        ranges.insert(
+            ABS_Z,
+            AbsRange {
+                minimum: 0,
+                maximum: 255,
+            },
+        );
+        ranges.insert(
+            ABS_RZ,
+            AbsRange {
+                minimum: 0,
+                maximum: 255,
+            },
+        );
+        assert!(detect_right_stick_on_z_rz(&ranges));
+    }
+
+    #[test]
+    fn does_not_fall_back_when_rx_ry_are_genuinely_functional() {
+        let mut ranges = HashMap::new();
+        for code in [ABS_X, ABS_Y, ABS_RX, ABS_RY, ABS_Z, ABS_RZ] {
+            ranges.insert(
+                code,
+                AbsRange {
+                    minimum: 0,
+                    maximum: 255,
+                },
+            );
+        }
+        assert!(!detect_right_stick_on_z_rz(&ranges));
+    }
+
+    #[test]
     fn several_events_in_one_read_are_all_applied() {
         // The kernel delivers a burst per read; decoding only the first
         // would look like a laggy pad rather than a broken one.
@@ -643,6 +864,44 @@ mod tests {
         assert!(button_for_code(0x139).is_none());
         assert_eq!(button_for_code(0x130), Some(GamepadButton::South));
         assert_eq!(button_for_code(0x134), Some(GamepadButton::West));
+    }
+
+    #[test]
+    fn a_generic_psx_adapter_chipsets_legacy_codes_map_to_the_calibrated_positions() {
+        // Empirically verified against a real device (USB 0810:0001, "Dual
+        // PSX Adaptor" chipset, sold under gamepad brands including Nubwo):
+        // its face buttons come out rotated relative to a naive reading of
+        // the kernel's BTN_TRIGGER/BTN_THUMB/BTN_THUMB2/BTN_TOP names.
+        assert_eq!(button_for_code(BTN_TRIGGER), Some(GamepadButton::North));
+        assert_eq!(button_for_code(BTN_THUMB), Some(GamepadButton::East));
+        assert_eq!(button_for_code(BTN_THUMB2), Some(GamepadButton::South));
+        assert_eq!(button_for_code(BTN_TOP), Some(GamepadButton::West));
+        assert_eq!(button_for_code(BTN_TOP2), Some(GamepadButton::LeftShoulder));
+        assert_eq!(
+            button_for_code(BTN_PINKIE),
+            Some(GamepadButton::RightShoulder)
+        );
+        assert_eq!(button_for_code(BTN_BASE3), Some(GamepadButton::Select));
+        assert_eq!(button_for_code(BTN_BASE4), Some(GamepadButton::Start));
+        assert_eq!(button_for_code(BTN_BASE5), Some(GamepadButton::LeftStick));
+        assert_eq!(button_for_code(BTN_BASE6), Some(GamepadButton::RightStick));
+        // BTN_BASE/BTN_BASE2 (this device's L2/R2) are deliberately
+        // unmapped, same reasoning as BTN_TL2/BTN_TR2 above.
+        assert!(button_for_code(0x126).is_none());
+        assert!(button_for_code(0x127).is_none());
+    }
+
+    #[test]
+    fn is_gamepad_recognizes_the_legacy_joystick_button_range_too() {
+        let directory = std::env::temp_dir().join("loadngo-gamepad-legacy-caps-test");
+        std::fs::create_dir_all(&directory).expect("temp dir");
+        let path = directory.join("key");
+        // BTN_TRIGGER is bit 288: word 4, bit 32 (following
+        // capability_words_are_read_most_significant_first's convention).
+        std::fs::write(&path, "100000000 0 0 0 0\n").expect("write caps");
+        assert!(capability_bit_set(&path, BTN_TRIGGER as usize));
+        assert!(!capability_bit_set(&path, BTN_SOUTH as usize));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
