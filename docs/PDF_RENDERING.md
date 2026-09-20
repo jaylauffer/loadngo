@@ -52,19 +52,44 @@ Scope of the stop-gap, as built:
   only caller today.
 - No PDF *editing*, form-filling, or text extraction beyond what a preview
   needs.
-- loadngo does not bundle or download the pdfium library itself. It is
-  located at runtime via `LOADNGO_PDFIUM_LIBRARY` (a directory containing a
-  prebuilt `libpdfium.dylib`/`.so`/`pdfium.dll`) or the OS's normal library
-  search path; see [`ARCHIVE_CAS_BROWSER.md`](ARCHIVE_CAS_BROWSER.md)'s
-  Preview section for exactly how to get one. Without a library present,
-  the Preview action reports that clearly instead of failing to build.
-- On the Mac mini, a `pdfium-mac-arm64` build from
-  [`bblanchon/pdfium-binaries`](https://github.com/bblanchon/pdfium-binaries)
-  (`chromium/8057`) is already downloaded to
-  `~/.loadngo/vendor/pdfium-mac-arm64/lib` -- not checked into any repo, a
-  local machine artifact like the PQ signing keys under `~/.loadngo/keys`.
-  Set `LOADNGO_PDFIUM_LIBRARY=~/.loadngo/vendor/pdfium-mac-arm64/lib` to use
-  it.
+
+### Required library: pdfium from bblanchon/pdfium-binaries
+
+**loadngo does not bundle or download the pdfium library itself — you must
+install one by hand before PDF preview can render anything.** The `pdfium-render`
+Rust crate is only bindings; it has no PDF engine of its own.
+
+The required prebuilt library comes from
+**[`bblanchon/pdfium-binaries`](https://github.com/bblanchon/pdfium-binaries)**
+(not Google's own pdfium repo, which doesn't publish binaries) — a
+community project that packages Google's pdfium as Developer-ID-signed,
+Apache-2.0/BSD-licensed downloads for every platform loadngo targets.
+
+**Install:**
+
+1. Download the archive for your platform from that repo's
+   [Releases page](https://github.com/bblanchon/pdfium-binaries/releases)
+   (or `gh release download <tag> --repo bblanchon/pdfium-binaries --pattern
+   'pdfium-<platform>.tgz'`) — e.g. `pdfium-mac-arm64.tgz` for Apple
+   Silicon, `pdfium-linux-x64.tgz` for x86_64 Linux, `pdfium-win-x64.zip`
+   for 64-bit Windows.
+2. Extract it somewhere outside any git checkout — e.g.
+   `~/.loadngo/vendor/pdfium-<platform>/` (a local machine artifact, the
+   same convention as the PQ signing keys under `~/.loadngo/keys`; never
+   commit it to a repo).
+3. Point `LOADNGO_PDFIUM_LIBRARY` at the **directory** containing the
+   platform library file (`lib/libpdfium.dylib` on macOS,
+   `lib/libpdfium.so` on Linux, `bin/pdfium.dll` on Windows — check the
+   archive's exact layout, it varies slightly by platform) before running
+   `archive_cas_browser` built with `--features pdf-preview`. Without a
+   library at that path (or found on the OS's normal library search path,
+   the fallback if the variable is unset), the Preview action reports the
+   missing library clearly instead of crashing.
+
+**Already done on the Mac mini**: `pdfium-mac-arm64` (`chromium/8057`) is
+downloaded and extracted to `~/.loadngo/vendor/pdfium-mac-arm64/lib`.
+Run with `LOADNGO_PDFIUM_LIBRARY=~/.loadngo/vendor/pdfium-mac-arm64/lib` to
+use it — nothing further to install there.
 
 **Verified end to end on 2026-09-20**, not just compiled: rendered a real
 multi-paragraph PDF (`/System/Library/ProductDocuments/ProductGuides/ENERGY

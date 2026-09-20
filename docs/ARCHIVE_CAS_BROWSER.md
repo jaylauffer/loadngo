@@ -86,17 +86,15 @@ Nothing is written to disk and nothing is handed to an external viewer.
 - **PNG and JPEG** decode unconditionally, via the `image` crate already
   used for texture loading elsewhere in loadngo.
 - **PDF** (first page only) requires this binary to be built with
-  `--features pdf-preview`, and requires a real pdfium library to be
-  available at runtime -- loadngo does not bundle or download one. Set
-  `LOADNGO_PDFIUM_LIBRARY` to the directory holding a prebuilt
-  `libpdfium.dylib`/`libpdfium.so`/`pdfium.dll` (see
-  [`bblanchon/pdfium-binaries`](https://github.com/bblanchon/pdfium-binaries)),
-  or install one where the OS library loader finds it and omit the
-  variable. Without either, a `.pdf` entry's Preview action reports the
-  missing library instead of failing to build or crashing. This is an
-  explicit, temporary stop-gap; see
-  [`PDF_RENDERING.md`](PDF_RENDERING.md) for the destination (a native Rust
-  PDF renderer) and why pdfium was chosen for the interim.
+  `--features pdf-preview`, **and** requires a real pdfium library
+  installed at runtime -- loadngo does not bundle or download one itself.
+  See [`PDF_RENDERING.md`](PDF_RENDERING.md)'s "Required library" section
+  for exactly which library (`bblanchon/pdfium-binaries`), how to install
+  it, and how to point `LOADNGO_PDFIUM_LIBRARY` at it -- that doc also
+  covers why pdfium was chosen and the destination (a native Rust PDF
+  renderer) this is a stop-gap for. Without a library present, a `.pdf`
+  entry's Preview action reports that clearly instead of failing to build
+  or crashing.
 - Any other extension has no Preview action offered at all.
 
 A file larger than 64 MiB is refused with a clear message rather than
