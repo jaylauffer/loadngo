@@ -17,6 +17,13 @@ native-desktop-audio = []
 # Its dependencies sit behind this feature so the games that depend on this
 # crate never compile the CAS, its signature code, or pqcrypto's C sources.
 archive-cas-browser = ["dep:anyhow", "dep:data", "dep:loadngo-pq-crypto", "dep:serde_json"]
+# Native PDF page rendering for archive_cas_browser's file preview, via
+# pdfium (Google's PDF engine) through FFI -- an explicit, temporary
+# stop-gap until loadngo has its own native Rust PDF renderer. See
+# docs/PDF_RENDERING.md. Off by default and independent of every game: no
+# sng-* game enables this, and it is a Cargo feature specifically so that
+# stays true without anyone having to remember it.
+pdf-preview = ["dep:pdfium-render"]
 
 [[bin]]
 name = "archive_cas_browser"
@@ -31,6 +38,7 @@ loadngo-host-core = { path = "../host-core" }
 loadngo-persistence = { path = "../persistence" }
 loadngo-pq-crypto = { path = "../pq-crypto", optional = true }
 loadngo-renderer = { path = "../renderer" }
+pdfium-render = { version = "0.9.4", default-features = false, features = ["pdfium_latest"], optional = true }
 ron.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, optional = true }

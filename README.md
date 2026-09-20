@@ -108,6 +108,10 @@ function rather than in per-backend arms — see
 - [`docs/AUDIO_IO.md`](docs/AUDIO_IO.md): live audio-input tooling -- pitch detection and desktop input-to-output monitoring, for tuners and live-amplifier-style features.
 - [`docs/PQ_AUTHENTICATOR.md`](docs/PQ_AUTHENTICATOR.md): repo-owned post-quantum authenticator model for signed challenge tokens.
 - [`docs/PUDDING_CAS_PQ_MODEL.md`](docs/PUDDING_CAS_PQ_MODEL.md): native pudding CAS repository model design.
+- [`docs/ARCHIVE_CAS.md`](docs/ARCHIVE_CAS.md): local-preservation CAS layer for full disks and art source; command reference.
+- [`docs/ARCHIVE_CAS_BROWSER.md`](docs/ARCHIVE_CAS_BROWSER.md): native GUI browser for Archive CAS manifests, including no-`--cas-root` storage discovery.
+- [`docs/CLI_CONVENTIONS.md`](docs/CLI_CONVENTIONS.md): the `--help`/no-args/error-message convention every loadngo tool and harness follows.
+- [`docs/PDF_RENDERING.md`](docs/PDF_RENDERING.md): intent for a native Rust PDF renderer as a core capability, and the pdfium-via-FFI stop-gap until it exists.
 - [`docs/FIELD_NETWORK_BACKLOG.md`](docs/FIELD_NETWORK_BACKLOG.md): network and replication considerations.
 - [`docs/TASK_OFFER_PROTOCOL.md`](docs/TASK_OFFER_PROTOCOL.md): submitter/worker task coordination protocol over multicast discovery and direct unicast follow-up.
 - [`docs/TASK_EXECUTION_TEST_PLAN.md`](docs/TASK_EXECUTION_TEST_PLAN.md): lab validation plan for correlation, worker selection, status cadence, and reward closure.

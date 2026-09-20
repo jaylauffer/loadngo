@@ -1,12 +1,17 @@
 //! A local, metadata-only browser for loadngo Archive CAS manifests.
 //!
-//! The browser deliberately reads only canonical manifest JSON. It does not
-//! open, preview, upload, or otherwise inspect archive blob payloads.
+//! The browser deliberately reads only canonical manifest JSON: it does not
+//! upload data or write anything besides the manifest edits its own actions
+//! make. The one exception is the Preview action (see the `preview`
+//! module), which reads and verifies a single selected file's blob bytes
+//! to decode and display it in-window -- it never writes those bytes back
+//! out or hands them to an external process.
 
 use anyhow::{anyhow, bail, Context, Result};
-use data::archive_cas::{ArchiveCasStorage, ArchiveEntry, ArchiveManifest};
+use data::archive_cas::{ArchiveCasStorage, ArchiveEntry, ArchiveManifest, ArchiveObject};
 use data::cas::CasHash;
-use loadngo_host_core::{FrameDemand, HostKey, InputSnapshot, WindowDescriptor};
+use data::cli::{discover, ArgDoc, Usage};
+use loadngo_host_core::{DecodedImage, FrameDemand, HostKey, InputSnapshot, WindowDescriptor};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fs;
@@ -351,6 +356,294 @@ mod device_info {
     }
 }
 
+/// Decodes a well-known file format's verified bytes into an RGBA bitmap
+/// for the Preview action, without ever writing them back to disk or
+/// handing them to an external viewer. PNG/JPEG go through the `image`
+/// crate (already a workspace dependency used for texture loading
+/// elsewhere). PDF goes through the `pdf` submodule (pdfium via FFI, an
+/// explicit temporary stop-gap -- see `docs/PDF_RENDERING.md`) only when
+/// this binary is built with `--features pdf-preview`; without that
+/// feature, a `.pdf` entry simply has no Preview action offered.
+mod preview {
+    use super::DecodedImage;
+    use anyhow::{Context, Result};
+
+    /// The largest side, in pixels, a preview is ever decoded or rendered
+    /// at. Bounds every preview's memory and texture-upload cost
+    /// regardless of the source file's own resolution or PDF page size.
+    const MAX_PREVIEW_DIMENSION: u32 = 1600;
+
+    /// Refuses to preview a file larger than this. Loading and decoding
+    /// happens synchronously on the UI thread, matching every other action
+    /// in this browser (sign, remove, refresh) -- this is a hard ceiling
+    /// against a multi-second freeze on an accidentally huge file, not a
+    /// format-specific limit.
+    pub const MAX_PREVIEW_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum PreviewKind {
+        Raster,
+        #[cfg(feature = "pdf-preview")]
+        Pdf,
+    }
+
+    /// The preview kind for a manifest-relative path, by extension, or
+    /// `None` if this build offers no preview for it.
+    pub fn kind_for_path(path: &str) -> Option<PreviewKind> {
+        let extension = std::path::Path::new(path)
+            .extension()
+            .and_then(|extension| extension.to_str())?
+            .to_ascii_lowercase();
+        match extension.as_str() {
+            "png" | "jpg" | "jpeg" => Some(PreviewKind::Raster),
+            #[cfg(feature = "pdf-preview")]
+            "pdf" => Some(PreviewKind::Pdf),
+            _ => None,
+        }
+    }
+
+    pub fn decode(kind: PreviewKind, bytes: &[u8]) -> Result<DecodedImage> {
+        match kind {
+            PreviewKind::Raster => decode_raster(bytes),
+            #[cfg(feature = "pdf-preview")]
+            PreviewKind::Pdf => pdf::render_first_page(bytes, MAX_PREVIEW_DIMENSION),
+        }
+    }
+
+    fn decode_raster(bytes: &[u8]) -> Result<DecodedImage> {
+        let decoded = image::load_from_memory(bytes).context("not a readable PNG/JPEG image")?;
+        let (width, height) =
+            downscaled_dimensions(decoded.width(), decoded.height(), MAX_PREVIEW_DIMENSION);
+        let decoded = if (width, height) != (decoded.width(), decoded.height()) {
+            decoded.resize(width, height, image::imageops::FilterType::Triangle)
+        } else {
+            decoded
+        };
+        let rgba = decoded.to_rgba8();
+        Ok(DecodedImage::new(
+            rgba.width(),
+            rgba.height(),
+            rgba.into_raw(),
+        ))
+    }
+
+    fn downscaled_dimensions(width: u32, height: u32, max_dimension: u32) -> (u32, u32) {
+        if width <= max_dimension && height <= max_dimension {
+            return (width.max(1), height.max(1));
+        }
+        let scale = (max_dimension as f32 / width.max(height) as f32).min(1.0);
+        (
+            ((width as f32 * scale).round() as u32).max(1),
+            ((height as f32 * scale).round() as u32).max(1),
+        )
+    }
+
+    /// Native PDF page rendering via pdfium (Google's PDF engine), through
+    /// FFI. This is a deliberate, temporary stop-gap: loadngo's destination
+    /// is its own native Rust PDF renderer. See `docs/PDF_RENDERING.md` for
+    /// the full plan, the license/prebuilt-binary reasoning for choosing
+    /// pdfium over mupdf/poppler, and the native renderer's milestone 1
+    /// scope. loadngo does not bundle or download pdfium itself.
+    #[cfg(feature = "pdf-preview")]
+    mod pdf {
+        use super::DecodedImage;
+        use anyhow::{anyhow, Context, Result};
+        use pdfium_render::prelude::*;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        thread_local! {
+            // `pdfium-render`'s own binding functions are backed by a
+            // process-wide singleton and return an error if called a
+            // second time, even to reload the same library -- so this
+            // binds once per process (lazily, on the first preview) and
+            // reuses the result for every later one, success or failure.
+            static PDFIUM: RefCell<Option<Result<Rc<Pdfium>, String>>> =
+                const { RefCell::new(None) };
+        }
+
+        fn shared_pdfium() -> Result<Rc<Pdfium>, String> {
+            PDFIUM.with(|cell| {
+                cell.borrow_mut()
+                    .get_or_insert_with(|| {
+                        bind().map(Rc::new).map_err(|error| format!("{error:#}"))
+                    })
+                    .clone()
+            })
+        }
+
+        /// Where to find the pdfium dynamic library: an explicit directory
+        /// via `LOADNGO_PDFIUM_LIBRARY`, or the system library search path
+        /// as a fallback.
+        fn bind() -> Result<Pdfium> {
+            let bindings = if let Ok(dir) = std::env::var("LOADNGO_PDFIUM_LIBRARY") {
+                Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(&dir))
+                    .with_context(|| {
+                        format!(
+                            "failed to load the pdfium library from LOADNGO_PDFIUM_LIBRARY={dir}"
+                        )
+                    })?
+            } else {
+                Pdfium::bind_to_system_library().map_err(|error| {
+                    anyhow!(
+                        "no pdfium library found: set LOADNGO_PDFIUM_LIBRARY to the directory \
+                         holding a prebuilt pdfium (see docs/PDF_RENDERING.md), or install one \
+                         where the OS library loader can find it ({error})"
+                    )
+                })?
+            };
+            Ok(Pdfium::new(bindings))
+        }
+
+        pub fn render_first_page(bytes: &[u8], max_dimension: u32) -> Result<DecodedImage> {
+            let pdfium = shared_pdfium().map_err(|error| anyhow!(error))?;
+            let document = pdfium
+                .load_pdf_from_byte_slice(bytes, None)
+                .context("not a readable PDF (or it is password-protected)")?;
+            let page = document
+                .pages()
+                .get(0)
+                .context("PDF has no pages to preview")?;
+            // Deliberately not `scale_page_to_display_size`: it
+            // auto-rotates a landscape page 90 degrees to favor a portrait
+            // display, which is exactly wrong for a preview -- a wide page
+            // should stay wide. `set_target_width` plus `set_maximum_height`
+            // fits the page within `max_dimension` on both sides while
+            // preserving its own orientation.
+            let config = PdfRenderConfig::new()
+                .set_target_width(max_dimension as Pixels)
+                .set_maximum_height(max_dimension as Pixels);
+            let bitmap = page
+                .render_with_config(&config)
+                .context("failed to render the PDF's first page")?;
+            let width =
+                u32::try_from(bitmap.width()).context("PDF page rendered at an invalid width")?;
+            let height =
+                u32::try_from(bitmap.height()).context("PDF page rendered at an invalid height")?;
+            Ok(DecodedImage::new(width, height, bitmap.as_rgba_bytes()))
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::io::Cursor;
+
+        fn synthetic_png(width: u32, height: u32) -> Vec<u8> {
+            let mut pixels = image::RgbaImage::new(width, height);
+            for (x, y, pixel) in pixels.enumerate_pixels_mut() {
+                *pixel = image::Rgba([(x % 256) as u8, (y % 256) as u8, 128, 255]);
+            }
+            let mut bytes = Vec::new();
+            image::DynamicImage::ImageRgba8(pixels)
+                .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
+                .unwrap();
+            bytes
+        }
+
+        #[test]
+        fn kind_for_path_recognizes_raster_extensions_case_insensitively() {
+            assert_eq!(kind_for_path("photo.PNG"), Some(PreviewKind::Raster));
+            assert_eq!(kind_for_path("photo.jpg"), Some(PreviewKind::Raster));
+            assert_eq!(kind_for_path("photo.JPEG"), Some(PreviewKind::Raster));
+            assert_eq!(kind_for_path("no/extension/at/all"), None);
+            assert_eq!(kind_for_path("readme.md"), None);
+        }
+
+        #[test]
+        fn decode_raster_reads_a_real_png_at_its_own_size_when_under_the_cap() {
+            let bytes = synthetic_png(32, 16);
+            let decoded = decode_raster(&bytes).unwrap();
+            assert_eq!((decoded.width, decoded.height), (32, 16));
+            decoded.validate_rgba8().unwrap();
+        }
+
+        #[test]
+        fn decode_raster_downscales_an_oversized_image_and_keeps_aspect_ratio() {
+            let bytes = synthetic_png(MAX_PREVIEW_DIMENSION * 2, MAX_PREVIEW_DIMENSION);
+            let decoded = decode_raster(&bytes).unwrap();
+            assert_eq!(decoded.width, MAX_PREVIEW_DIMENSION);
+            assert_eq!(decoded.height, MAX_PREVIEW_DIMENSION / 2);
+            decoded.validate_rgba8().unwrap();
+        }
+
+        #[test]
+        fn decode_raster_rejects_bytes_that_are_not_an_image() {
+            assert!(decode_raster(b"not a png").is_err());
+        }
+
+        #[test]
+        fn downscaled_dimensions_leaves_a_small_image_untouched() {
+            assert_eq!(downscaled_dimensions(800, 600, 1600), (800, 600));
+        }
+
+        #[test]
+        fn downscaled_dimensions_scales_the_longer_side_down_to_the_cap() {
+            assert_eq!(downscaled_dimensions(3200, 1600, 1600), (1600, 800));
+            assert_eq!(downscaled_dimensions(1600, 3200, 1600), (800, 1600));
+        }
+
+        /// A hand-assembled, minimal single-page PDF (no external
+        /// dependency on any file on disk): one Catalog, one Pages tree,
+        /// one blank 200x100pt Page, with a byte-exact xref table computed
+        /// as it's written rather than hardcoded.
+        #[cfg(feature = "pdf-preview")]
+        fn minimal_one_page_pdf() -> Vec<u8> {
+            let objects = [
+                "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+                "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+                "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << >> >>\nendobj\n",
+            ];
+            let mut buffer = b"%PDF-1.4\n".to_vec();
+            let mut offsets = Vec::new();
+            for object in objects {
+                offsets.push(buffer.len());
+                buffer.extend_from_slice(object.as_bytes());
+            }
+            let xref_offset = buffer.len();
+            buffer.extend_from_slice(format!("xref\n0 {}\n", objects.len() + 1).as_bytes());
+            buffer.extend_from_slice(b"0000000000 65535 f \n");
+            for offset in &offsets {
+                buffer.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+            }
+            buffer.extend_from_slice(
+                format!(
+                    "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF",
+                    objects.len() + 1,
+                    xref_offset
+                )
+                .as_bytes(),
+            );
+            buffer
+        }
+
+        /// Exercises the real pdfium library end to end, not just this
+        /// module's own glue code. Ignored by default: it depends on
+        /// `LOADNGO_PDFIUM_LIBRARY` pointing at a real prebuilt pdfium on
+        /// whatever machine runs it, which `cargo test` cannot provide --
+        /// see docs/PDF_RENDERING.md for where to get one. Run explicitly
+        /// with `cargo test --features pdf-preview -- --ignored
+        /// render_first_page_produces_a_bitmap_from_a_real_pdfium_library`.
+        #[cfg(feature = "pdf-preview")]
+        #[test]
+        #[ignore]
+        fn render_first_page_produces_a_bitmap_from_a_real_pdfium_library() {
+            let bytes = minimal_one_page_pdf();
+            let decoded =
+                pdf::render_first_page(&bytes, 400).expect("pdfium render should succeed");
+            decoded.validate_rgba8().unwrap();
+            // A 200x100pt page is wider than tall; the render should keep
+            // that shape.
+            assert!(
+                decoded.width > decoded.height,
+                "expected a landscape render, got {}x{}",
+                decoded.width,
+                decoded.height
+            );
+        }
+    }
+}
+
 fn window_descriptor() -> WindowDescriptor {
     WindowDescriptor {
         title: "loadngo Archive CAS browser".to_string(),
@@ -377,7 +670,12 @@ impl Args {
         let mut public_key = None;
         let mut private_key = None;
         let mut signer_identity = None;
-        let mut args = std::env::args().skip(1);
+        // Launching with no --cas-root at all is a legitimate way to start
+        // this browser -- it scans attached storage instead of failing --
+        // so an empty argv must not be mistaken for a request to see the
+        // docs. --help/-h still always works.
+        let args = data::cli::read_args(&usage(), false);
+        let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 // Repeatable: one browser window can show every CAS root at
@@ -392,16 +690,19 @@ impl Args {
                 "--public-key" => public_key = args.next().map(PathBuf::from),
                 "--private-key" => private_key = args.next().map(PathBuf::from),
                 "--signer-identity" => signer_identity = args.next(),
-                "--help" | "-h" => {
-                    print_usage();
-                    std::process::exit(0);
-                }
-                other => bail!("unknown argument: {other}"),
+                other => bail!("unknown argument: {other}\n{}", usage().hint()),
             }
         }
         if cas_roots.is_empty() {
-            bail!("at least one --cas-root <directory> is required");
+            cas_roots = discover_cas_root_or_bail()?;
         }
+        // Two `--cas-root` values that resolve to the same real directory
+        // (a literal repeat, a relative vs. absolute spelling, or a
+        // symlink alias) must show as one device, not two identical
+        // banners -- see `data::cli::discover`'s doc comment on the
+        // `Macintosh HD -> /` symlink for the discovery-side version of
+        // this same bug.
+        let cas_roots = data::cli::dedup_by_canonical_path(cas_roots);
         Ok(Self {
             cas_roots,
             manifest,
@@ -436,10 +737,78 @@ impl Args {
     }
 }
 
-fn print_usage() {
-    eprintln!(
-        "Usage: cargo run -p loadngo-host-desktop --bin archive_cas_browser -- \\\n  --cas-root <archive-directory> [--cas-root <another-archive-directory> ...] \\\n  [--manifest <archive-manifest.json>] \\\n  [--public-key <hex-file> --private-key <hex-file> --signer-identity <name>]\n\n--cas-root may be repeated to show several CAS roots in one window, each\nlabeled with the physical device/volume it's mounted from. The key\narguments are optional; without them the browser is read/edit-only and a\nmanifest change still needs `archive_cas_sign` run separately. With them, an\nunsigned manifest gets a \"Sign this manifest\" action in the GUI."
+fn usage() -> Usage {
+    const ARGS: &[ArgDoc] = &[
+        ArgDoc::repeated(
+            "--cas-root",
+            "<archive-directory>",
+            "an Archive CAS root to show, labeled with the device/volume it's mounted from; repeat to show several roots in one window. Omit entirely to scan attached storage instead",
+        ),
+        ArgDoc::optional(
+            "--manifest",
+            "<archive-manifest.json>",
+            "manifest to select on launch; defaults to the newest manifest found",
+        ),
+        ArgDoc::optional(
+            "--public-key",
+            "<hex-file>",
+            "Dilithium2 public key; with --private-key and --signer-identity, adds a \"Sign this manifest\" action in the GUI",
+        ),
+        ArgDoc::optional("--private-key", "<hex-file>", "Dilithium2 private key matching --public-key"),
+        ArgDoc::optional(
+            "--signer-identity",
+            "<name>",
+            "identity to sign as; required together with --public-key and --private-key",
+        ),
+    ];
+    const EXAMPLES: &[&str] = &[
+        "cargo run -p loadngo-host-desktop --bin archive_cas_browser --",
+        "cargo run -p loadngo-host-desktop --bin archive_cas_browser -- --cas-root /Volumes/Backup/loadngo-archive-cas --cas-root \"/Volumes/Zhoenus II/pudding-cas\"",
+    ];
+    const NOTES: &[&str] = &[
+        "With no --cas-root at all, scans attached storage for existing Archive CAS roots and opens every one it finds.",
+        "The key arguments are optional; without them the browser is read/edit-only and a manifest change still needs archive_cas_sign run separately.",
+        "Reads only canonical manifest JSON; it never opens, previews, or uploads archive blob payloads.",
+    ];
+    Usage {
+        bin: "archive_cas_browser",
+        invocation: "cargo run -p loadngo-host-desktop --bin archive_cas_browser --",
+        about: "a local, metadata-only GUI browser for loadngo Archive CAS manifests",
+        args: ARGS,
+        examples: EXAMPLES,
+        notes: NOTES,
+    }
+}
+
+/// Scans attached storage for existing Archive CAS roots when the caller
+/// gave no `--cas-root` at all, printing what it found (or didn't) so a
+/// terminal launch explains itself instead of silently guessing. This is
+/// deliberately not an interactive picker: the browser already renders one
+/// device-labeled banner row per CAS root side by side (see
+/// `ArchiveListRow::Device`), so handing it every discovered root reuses
+/// that existing view instead of building a second selection UI.
+fn discover_cas_root_or_bail() -> Result<Vec<PathBuf>> {
+    println!(
+        "archive_cas_browser: no --cas-root given; scanning attached storage for an Archive CAS..."
     );
+    let mount_points = discover::candidate_mount_points();
+    let found = discover::scan_for_cas_roots();
+    if found.is_empty() {
+        bail!(
+            "no Archive CAS root found under {} attached volume(s)\n\n\
+             Insert or mount the drive that holds it, then rerun, or pass\n\
+             --cas-root <archive-directory> directly. A fresh, empty\n\
+             directory also works: archive_cas_ingest creates the CAS\n\
+             layout the first time it writes to it.\n\n{}",
+            mount_points.len(),
+            usage().hint()
+        );
+    }
+    println!("Found {} Archive CAS root(s):", found.len());
+    for root in &found {
+        println!("  {}", root.display());
+    }
+    Ok(found)
 }
 
 #[derive(Debug, Clone)]
@@ -844,6 +1213,26 @@ struct PendingRemoval {
     label: String,
 }
 
+/// The Preview action's outcome for one manifest path -- kept until the
+/// selection changes (see `BrowserApp::preview`'s doc comment).
+#[derive(Debug, Clone)]
+struct PreviewState {
+    path: String,
+    outcome: std::result::Result<PreviewImage, String>,
+}
+
+/// A successfully decoded and texture-uploaded preview image.
+#[derive(Debug, Clone)]
+struct PreviewImage {
+    /// The fixed registered-image key every preview is uploaded under (see
+    /// `BrowserApp::open_preview`) -- reusing one key means each new
+    /// preview replaces the last one's registered texture instead of the
+    /// registry growing by one entry per file ever previewed in a session.
+    image_key: String,
+    width: f32,
+    height: f32,
+}
+
 #[derive(Debug)]
 struct BrowserApp {
     cas_roots: Vec<PathBuf>,
@@ -879,6 +1268,12 @@ struct BrowserApp {
     /// about the view had even changed. See `ensure_children_cache`.
     children_cache: Vec<BrowserItem>,
     children_cache_key: Option<(usize, Option<String>)>,
+    /// The Preview action's outcome for whatever file it was last run
+    /// against. Cleared on every navigation/selection change (see
+    /// `select_archive`, `navigate_to`, and the explorer click handler in
+    /// `handle_input`) so a stale image or error can never linger against a
+    /// newly selected file.
+    preview: Option<PreviewState>,
 }
 
 impl BrowserApp {
@@ -905,6 +1300,7 @@ impl BrowserApp {
             signing,
             children_cache: Vec::new(),
             children_cache_key: None,
+            preview: None,
         }
     }
 
@@ -925,7 +1321,11 @@ impl BrowserApp {
         loop {
             let frame = loadngo_host_desktop::capture_frame();
             if frame.input.key_pressed(HostKey::Escape) {
-                if self.pending_removal.take().is_some() {
+                if self.preview.take().is_some() {
+                    // Nothing to announce in `self.message` -- unlike a
+                    // cancelled removal, closing a preview has no
+                    // consequence worth a status line.
+                } else if self.pending_removal.take().is_some() {
                     self.message = Some("Removal cancelled.".to_string());
                 } else {
                     break;
@@ -971,6 +1371,7 @@ impl BrowserApp {
             self.child_scroll = 0;
             self.pending_removal = None;
             self.checked.clear();
+            self.preview = None;
         }
     }
 
@@ -979,6 +1380,7 @@ impl BrowserApp {
         self.selected_path = None;
         self.child_scroll = 0;
         self.pending_removal = None;
+        self.preview = None;
     }
 
     fn refresh(&mut self) {
@@ -1000,6 +1402,7 @@ impl BrowserApp {
                 self.child_scroll = 0;
                 self.pending_removal = None;
                 self.checked.clear();
+                self.preview = None;
                 self.message = Some("Manifest index reloaded; blobs were not read.".to_string());
             }
             Err(error) => self.message = Some(format!("Refresh failed: {error:#}")),
@@ -1030,6 +1433,94 @@ impl BrowserApp {
             .iter()
             .find(|entry| entry.path() == path)
             .map(entry_kind)
+    }
+
+    /// The archive object backing a regular-file manifest entry at exactly
+    /// this path, if any. `None` for a path that is a folder, symlink,
+    /// unreadable, or excluded entry -- none of those have a blob to read.
+    fn manifest_file_object(&self, path: &str) -> Option<ArchiveObject> {
+        self.selected()
+            .manifest
+            .entries
+            .iter()
+            .find_map(|entry| match entry {
+                ArchiveEntry::File {
+                    path: entry_path,
+                    object,
+                    ..
+                } if entry_path == path => Some(*object),
+                _ => None,
+            })
+    }
+
+    /// Whether the Preview action should be offered for the current
+    /// selection at all -- a previewable file kind exists for its
+    /// extension, and it is actually the regular-file entry that kind of
+    /// path implies (never a folder, symlink, or excluded/unreadable
+    /// stand-in that happens to share the extension).
+    fn preview_available(&self) -> bool {
+        self.selected_item().is_some_and(|item| {
+            preview::kind_for_path(&item.path).is_some()
+                && self.manifest_file_object(&item.path).is_some()
+        })
+    }
+
+    /// Reads, verifies, and decodes the selected file's blob, then uploads
+    /// it as a texture for `paint_preview` to show. Re-running this against
+    /// the same path that is already showing (successfully or not) is a
+    /// no-op -- the outcome does not change without a different file being
+    /// selected, and there is nothing to gain from re-verifying and
+    /// re-decoding the same bytes on every click.
+    fn open_preview(&mut self) {
+        let Some(item) = self.selected_item() else {
+            return;
+        };
+        if self
+            .preview
+            .as_ref()
+            .is_some_and(|state| state.path == item.path)
+        {
+            return;
+        }
+        let Some(kind) = preview::kind_for_path(&item.path) else {
+            return;
+        };
+        let outcome = (|| -> std::result::Result<PreviewImage, String> {
+            let object = self.manifest_file_object(&item.path).ok_or_else(|| {
+                "selected entry is not a regular file in this manifest".to_string()
+            })?;
+            if object.size > preview::MAX_PREVIEW_SOURCE_BYTES {
+                return Err(format!(
+                    "file is {} -- larger than the {} preview limit",
+                    format_bytes(object.size),
+                    format_bytes(preview::MAX_PREVIEW_SOURCE_BYTES)
+                ));
+            }
+            let store = ArchiveCasStorage::new(&self.selected().cas_root)
+                .map_err(|error| format!("{error:#}"))?;
+            store
+                .verify_object(object)
+                .map_err(|error| format!("archive object failed verification: {error:#}"))?;
+            let bytes = store
+                .read_range(object.hash, 0, object.size as usize)
+                .map_err(|error| format!("{error:#}"))?;
+            let decoded = preview::decode(kind, &bytes).map_err(|error| format!("{error:#}"))?;
+            let image_key = "archive_cas_browser_preview".to_string();
+            loadngo_host_desktop::upload_texture_with_image_key(Some(&image_key), &decoded)?;
+            Ok(PreviewImage {
+                image_key,
+                width: decoded.width as f32,
+                height: decoded.height as f32,
+            })
+        })();
+        self.preview = Some(PreviewState {
+            path: item.path,
+            outcome,
+        });
+    }
+
+    fn close_preview(&mut self) {
+        self.preview = None;
     }
 
     /// Requests removal of the current candidates (checked set, or the
@@ -1188,6 +1679,19 @@ impl BrowserApp {
             x: input.mouse_x,
             y: input.mouse_y,
         };
+        if self.preview.is_some() {
+            let layout = AppLayout::new(width, height);
+            if input.mouse_pressed && layout.up_button.contains(self.pointer) {
+                self.close_preview();
+            }
+            // Escape is handled in `run()`. Every other input is ignored
+            // while a preview is showing, same as a pending removal --
+            // repurposing `up_button`'s corner as the close hit target (it
+            // has no meaning of its own while the explorer panel is
+            // replaced by the preview) rather than adding a second
+            // always-reserved layout region just for this.
+            return;
+        }
         if self.pending_removal.is_some() {
             if input.key_pressed(HostKey::Enter) || input.key_pressed(HostKey::Y) {
                 self.confirm_removal();
@@ -1214,6 +1718,10 @@ impl BrowserApp {
         }
         if input.key_pressed(HostKey::S) && self.signing.is_some() && !self.selected_is_signed() {
             self.sign_selected_manifest();
+            return;
+        }
+        if input.key_pressed(HostKey::V) && self.preview_available() {
+            self.open_preview();
             return;
         }
         // Shift+Backspace, not plain Delete/Backspace: a Mac keyboard's key
@@ -1329,6 +1837,10 @@ impl BrowserApp {
             self.sign_selected_manifest();
             return;
         }
+        if layout.preview_button.contains(pointer) && self.preview_available() {
+            self.open_preview();
+            return;
+        }
         if layout.explorer_list.contains(pointer) {
             let visible_index =
                 ((pointer.y - layout.explorer_list.y) / ROW_HEIGHT).floor() as usize;
@@ -1347,6 +1859,7 @@ impl BrowserApp {
                     self.navigate_to(item.path.clone());
                 } else {
                     self.selected_path = Some(item.path.clone());
+                    self.preview = None;
                 }
             }
         }
@@ -1473,9 +1986,9 @@ impl BrowserApp {
             HorizontalAlign::Left,
         );
         let hotkeys = if self.signing.is_some() {
-            "R refresh   Home root   Backspace up   Shift+Backspace remove   S sign   Esc close/cancel"
+            "R refresh   Home root   Backspace up   Shift+Backspace remove   S sign   V preview   Esc close/cancel"
         } else {
-            "R refresh   Home root   Backspace up   Shift+Backspace remove   Esc close/cancel"
+            "R refresh   Home root   Backspace up   Shift+Backspace remove   V preview   Esc close/cancel"
         };
         paint_text(
             scene,
@@ -1492,7 +2005,10 @@ impl BrowserApp {
         );
 
         self.paint_archives(scene, &layout);
-        self.paint_explorer(scene, &layout, children, scroll, visible_rows);
+        match &self.preview {
+            Some(preview) => self.paint_preview_pane(scene, &layout, preview),
+            None => self.paint_explorer(scene, &layout, children, scroll, visible_rows),
+        }
         self.paint_inspector(scene, &layout, record, children);
 
         if let Some(message) = self.message.as_deref() {
@@ -1871,6 +2387,63 @@ impl BrowserApp {
         }
     }
 
+    /// Replaces the path explorer's panel content with the Preview action's
+    /// result for `preview`, while the archives and inspector panels either
+    /// side stay exactly as they always are -- previewing one file never
+    /// loses your place in the archive list or the selection metadata.
+    fn paint_preview_pane(
+        &self,
+        scene: &mut Vec<ui_core::PaintOp>,
+        layout: &AppLayout,
+        preview: &PreviewState,
+    ) {
+        paint_panel(scene, layout.explorer, PANEL_BACKGROUND);
+        paint_text(
+            scene,
+            "Preview",
+            layout.explorer_title,
+            SECTION_FONT,
+            TEXT,
+            HorizontalAlign::Left,
+        );
+        // Reuses `up_button`'s rect as the close hit target (see
+        // `handle_input`) -- it has no "navigate up a folder" meaning of
+        // its own while this pane has replaced the explorer.
+        paint_button(
+            scene,
+            layout.up_button,
+            "Close",
+            true,
+            layout.up_button.contains(self.pointer),
+        );
+        paint_text(
+            scene,
+            &preview.path,
+            layout.breadcrumb,
+            CAPTION_FONT,
+            MUTED,
+            HorizontalAlign::Left,
+        );
+        match &preview.outcome {
+            Ok(image) => {
+                let fit = fit_within(image.width, image.height, layout.explorer_list);
+                scene.push(ui_core::PaintOp::BlitImage {
+                    rect: fit,
+                    image_key: image.image_key.clone(),
+                });
+            }
+            Err(error) => {
+                paint_multiline(
+                    scene,
+                    &format!("Couldn't preview this file:\n{error}"),
+                    layout.explorer_list,
+                    BODY_FONT,
+                    DANGER,
+                );
+            }
+        }
+    }
+
     fn paint_inspector(
         &self,
         scene: &mut Vec<ui_core::PaintOp>,
@@ -2225,6 +2798,25 @@ impl BrowserApp {
                 !signed && layout.sign_button.contains(self.pointer),
             );
         }
+
+        if self.preview_available() {
+            let already_open = self
+                .preview
+                .as_ref()
+                .zip(self.selected_item())
+                .is_some_and(|(state, item)| state.path == item.path);
+            paint_button(
+                scene,
+                layout.preview_button,
+                if already_open {
+                    "Previewing (V)"
+                } else {
+                    "Preview (V)"
+                },
+                !already_open,
+                !already_open && layout.preview_button.contains(self.pointer),
+            );
+        }
     }
 }
 
@@ -2257,6 +2849,7 @@ struct AppLayout {
     action_confirm: Rect,
     action_cancel: Rect,
     sign_button: Rect,
+    preview_button: Rect,
 }
 
 impl AppLayout {
@@ -2346,7 +2939,13 @@ impl AppLayout {
             x: inspector.x + PANEL_INSET,
             y: inspector.y + 61.0,
             width: inspector.width - PANEL_INSET * 2.0,
-            height: (inspector.height - 75.0 - (ACTION_BAND_HEIGHT + PANEL_GAP) * 2.0).max(0.0),
+            height: (inspector.height - 75.0 - (ACTION_BAND_HEIGHT + PANEL_GAP) * 3.0).max(0.0),
+        };
+        let preview_button = Rect {
+            x: inspector.x + PANEL_INSET,
+            y: inspector.bottom() - PANEL_INSET - ACTION_BAND_HEIGHT * 3.0 - PANEL_GAP * 2.0,
+            width: inspector.width - PANEL_INSET * 2.0,
+            height: ACTION_BAND_HEIGHT,
         };
         let sign_button = Rect {
             x: inspector.x + PANEL_INSET,
@@ -2390,11 +2989,31 @@ impl AppLayout {
             action_confirm,
             action_cancel,
             sign_button,
+            preview_button,
         }
     }
 
     fn explorer_visible_rows(self) -> usize {
         (self.explorer_list.height / ROW_HEIGHT).floor().max(1.0) as usize
+    }
+}
+
+/// The largest centered rect with the given aspect ratio that fits
+/// entirely inside `bounds`, preserving aspect ratio (never stretching).
+fn fit_within(natural_width: f32, natural_height: f32, bounds: Rect) -> Rect {
+    if natural_width <= 0.0 || natural_height <= 0.0 {
+        return bounds;
+    }
+    let scale = (bounds.width / natural_width)
+        .min(bounds.height / natural_height)
+        .max(0.001);
+    let width = natural_width * scale;
+    let height = natural_height * scale;
+    Rect {
+        x: bounds.x + (bounds.width - width) / 2.0,
+        y: bounds.y + (bounds.height - height) / 2.0,
+        width,
+        height,
     }
 }
 
@@ -2614,10 +3233,45 @@ fn format_timestamp(timestamp: Option<u64>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        directory_children, format_bytes, format_number, summarize_manifest, BrowserEntryKind,
+        directory_children, fit_within, format_bytes, format_number, summarize_manifest,
+        BrowserEntryKind, Rect,
     };
     use data::archive_cas::{ArchiveEntry, ArchiveManifest, ArchiveObject};
     use data::cas::CasHash;
+
+    #[test]
+    fn fit_within_centers_and_preserves_aspect_ratio_when_wider_than_tall() {
+        let bounds = Rect {
+            x: 100.0,
+            y: 100.0,
+            width: 400.0,
+            height: 200.0,
+        };
+        // 800x200 is wider (aspect-wise) than the 400x200 bounds, so width
+        // is the limiting dimension: scale = 400/800 = 0.5, giving 800x100,
+        // vertically centered.
+        let fit = fit_within(800.0, 200.0, bounds);
+        assert_eq!((fit.width, fit.height), (400.0, 100.0));
+        assert_eq!(fit.x, 100.0);
+        assert_eq!(fit.y, 150.0);
+    }
+
+    #[test]
+    fn fit_within_centers_and_preserves_aspect_ratio_when_taller_than_wide() {
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 400.0,
+        };
+        // 200x800 is taller (aspect-wise) than the 200x400 bounds, so
+        // height is the limiting dimension: scale = 400/800 = 0.5, giving
+        // 100x400, horizontally centered.
+        let fit = fit_within(200.0, 800.0, bounds);
+        assert_eq!((fit.width, fit.height), (100.0, 400.0));
+        assert_eq!(fit.x, 50.0);
+        assert_eq!(fit.y, 0.0);
+    }
 
     fn object(bytes: &[u8], size: u64) -> ArchiveObject {
         ArchiveObject {
