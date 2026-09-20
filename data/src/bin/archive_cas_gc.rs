@@ -12,6 +12,7 @@
 use anyhow::{Context, Result};
 use data::archive_cas::ArchiveCasStorage;
 use data::cas::CasHash;
+use data::cli::{ArgDoc, Usage};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -133,31 +134,59 @@ impl Args {
     fn parse() -> Result<Self> {
         let mut cas_root = None;
         let mut execute = false;
-        let mut args = std::env::args().skip(1);
+        let mut args = data::cli::read_args(&usage(), true).into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--cas-root" => cas_root = args.next().map(PathBuf::from),
                 "--execute" => execute = true,
                 "--dry-run" => execute = false,
-                "--help" | "-h" => {
-                    print_usage();
-                    std::process::exit(0);
+                other => {
+                    return Err(anyhow::anyhow!(
+                        "unknown argument: {other}\n{}",
+                        usage().hint()
+                    ))
                 }
-                other => return Err(anyhow::anyhow!("unknown argument: {other}")),
             }
         }
         Ok(Self {
-            cas_root: cas_root
-                .ok_or_else(|| anyhow::anyhow!("missing --cas-root <archive-directory>"))?,
+            cas_root: cas_root.ok_or_else(|| {
+                anyhow::anyhow!("missing --cas-root <archive-directory>\n{}", usage().hint())
+            })?,
             execute,
         })
     }
 }
 
-fn print_usage() {
-    eprintln!(
-        "Usage: cargo run -p data --bin archive_cas_gc -- --cas-root <archive-directory> [--execute]\n\nDry-run by default; reports blob objects no manifest in the CAS root\nreferences. Pass --execute to actually delete them."
-    );
+fn usage() -> Usage {
+    const ARGS: &[ArgDoc] = &[
+        ArgDoc::required(
+            "--cas-root",
+            "<archive-directory>",
+            "Archive CAS root to sweep",
+        ),
+        ArgDoc::switch(
+            "--execute",
+            "actually delete orphaned objects; without it, only reports them",
+        ),
+        ArgDoc::switch("--dry-run", "explicit no-op; this is already the default"),
+    ];
+    const EXAMPLES: &[&str] = &[
+        "cargo run -p data --bin archive_cas_gc -- --cas-root /Volumes/Backup/loadngo-archive-cas",
+        "cargo run -p data --bin archive_cas_gc -- --cas-root /Volumes/Backup/loadngo-archive-cas --execute",
+    ];
+    const NOTES: &[&str] = &[
+        "Dry-run by default; reports blob objects no manifest in the CAS root references.",
+        "Scans every manifest still on disk, not just one archive id, before treating anything as orphaned.",
+        "The only step in the delete/GC toolchain that frees disk space, and the only irreversible one -- run archive_cas_verify on anything you still care about first if in doubt.",
+    ];
+    Usage {
+        bin: "archive_cas_gc",
+        invocation: "cargo run -p data --bin archive_cas_gc --",
+        about: "sweep blob objects that no manifest in the CAS root references",
+        args: ARGS,
+        examples: EXAMPLES,
+        notes: NOTES,
+    }
 }
 
 fn format_bytes(bytes: u64) -> String {

@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use data::archive_cas::{ArchiveCasStorage, ArchiveEntry, ArchiveObject};
+use data::cli::{ArgDoc, Usage};
 use std::fs;
 use std::path::PathBuf;
 
@@ -108,7 +109,7 @@ impl Args {
         let mut manifest = None;
         let mut destination = None;
         let mut paths = Vec::new();
-        let mut args = std::env::args().skip(1);
+        let mut args = data::cli::read_args(&usage(), true).into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--cas-root" => cas_root = args.next().map(PathBuf::from),
@@ -120,30 +121,67 @@ impl Args {
                         .ok_or_else(|| anyhow!("missing value after --path"))?;
                     paths.push(path);
                 }
-                "--help" | "-h" => {
-                    print_usage();
-                    std::process::exit(0);
-                }
-                other => return Err(anyhow!("unknown argument: {other}")),
+                other => return Err(anyhow!("unknown argument: {other}\n{}", usage().hint())),
             }
         }
         if paths.is_empty() {
-            bail!("supply at least one --path <manifest-file-path>");
+            bail!(
+                "supply at least one --path <manifest-file-path>\n{}",
+                usage().hint()
+            );
         }
         paths.sort();
         paths.dedup();
         Ok(Self {
-            cas_root: cas_root.ok_or_else(|| anyhow!("missing --cas-root <directory>"))?,
-            manifest: manifest.ok_or_else(|| anyhow!("missing --manifest <file>"))?,
-            destination: destination
-                .ok_or_else(|| anyhow!("missing --destination <new-directory>"))?,
+            cas_root: cas_root
+                .ok_or_else(|| anyhow!("missing --cas-root <directory>\n{}", usage().hint()))?,
+            manifest: manifest
+                .ok_or_else(|| anyhow!("missing --manifest <file>\n{}", usage().hint()))?,
+            destination: destination.ok_or_else(|| {
+                anyhow!("missing --destination <new-directory>\n{}", usage().hint())
+            })?,
             paths,
         })
     }
 }
 
-fn print_usage() {
-    eprintln!(
-        "Usage: cargo run -p data --bin archive_cas_restore -- --cas-root <archive-directory> --manifest <archive-manifest.json> --destination <new-directory> --path <relative-file-path> [--path <relative-file-path> ...]"
-    );
+fn usage() -> Usage {
+    const ARGS: &[ArgDoc] = &[
+        ArgDoc::required(
+            "--cas-root",
+            "<archive-directory>",
+            "Archive CAS root that holds the manifest and its objects",
+        ),
+        ArgDoc::required(
+            "--manifest",
+            "<archive-manifest.json>",
+            "manifest to restore files from",
+        ),
+        ArgDoc::required(
+            "--destination",
+            "<new-directory>",
+            "output directory; must not already exist",
+        ),
+        ArgDoc::repeated(
+            "--path",
+            "<relative-file-path>",
+            "manifest-relative regular-file path to restore",
+        ),
+    ];
+    const EXAMPLES: &[&str] = &[
+        "cargo run -p data --bin archive_cas_restore -- --cas-root /Volumes/Backup/loadngo-archive-cas --manifest /Volumes/Backup/loadngo-archive-cas/manifests/<archive>.json --destination /tmp/restore-drill --path relative/path/to/one-file",
+    ];
+    const NOTES: &[&str] = &[
+        "Refuses an existing destination root and any existing output file.",
+        "Restores selected regular-file paths only; it does not recreate symlinks or reapply timestamps/ownership.",
+        "Each output is copied through a temporary sibling, then BLAKE3-checked against its archive object before being published.",
+    ];
+    Usage {
+        bin: "archive_cas_restore",
+        invocation: "cargo run -p data --bin archive_cas_restore --",
+        about: "restore a deliberately selected set of regular files from an archive manifest into a new directory",
+        args: ARGS,
+        examples: EXAMPLES,
+        notes: NOTES,
+    }
 }

@@ -14,6 +14,7 @@ pub mod action;
 pub mod archive_cas;
 pub mod archive_cas_sign;
 pub mod cas;
+pub mod cli;
 pub mod clipboard;
 pub mod config;
 pub mod crypto;

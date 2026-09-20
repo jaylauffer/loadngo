@@ -71,6 +71,13 @@ on cleanup as a separate, explicitly authorized maintenance operation.
 
 ## Commands
 
+Every command below, and `archive_cas_sign` and `archive_cas_browser`, prints
+its full flag reference -- with a description and required/optional marker
+for every argument, plus at least one worked example -- when run with
+`--help`/`-h`, or with no arguments at all if it has any required argument.
+See [`CLI_CONVENTIONS.md`](CLI_CONVENTIONS.md) for the convention every
+loadngo tool follows; the examples here are the short version.
+
 Create an archive from a mounted read-only directory:
 
 ```sh

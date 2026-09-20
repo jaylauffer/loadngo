@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use data::archive_cas::{ArchiveCasStorage, ArchiveObject};
+use data::cli::{ArgDoc, Usage};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -80,7 +81,7 @@ impl Args {
         let mut path = None;
         let mut reason = None;
         let mut only_unreadable = false;
-        let mut args = std::env::args().skip(1);
+        let mut args = data::cli::read_args(&usage(), true).into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--cas-root" => cas_root = args.next().map(PathBuf::from),
@@ -88,21 +89,24 @@ impl Args {
                 "--path" => path = args.next(),
                 "--only-unreadable" => only_unreadable = true,
                 "--reason" => reason = args.next(),
-                "--help" | "-h" => {
-                    print_usage();
-                    std::process::exit(0);
-                }
-                other => return Err(anyhow!("unknown argument: {other}")),
+                other => return Err(anyhow!("unknown argument: {other}\n{}", usage().hint())),
             }
         }
-        let reason = reason.ok_or_else(|| anyhow!("missing --reason <text>"))?;
+        let reason =
+            reason.ok_or_else(|| anyhow!("missing --reason <text>\n{}", usage().hint()))?;
         if reason.trim().is_empty() {
             bail!("--reason must not be empty");
         }
         Ok(Self {
-            cas_root: cas_root.ok_or_else(|| anyhow!("missing --cas-root <archive-directory>"))?,
-            manifest: manifest
-                .ok_or_else(|| anyhow!("missing --manifest <archive-manifest.json>"))?,
+            cas_root: cas_root.ok_or_else(|| {
+                anyhow!("missing --cas-root <archive-directory>\n{}", usage().hint())
+            })?,
+            manifest: manifest.ok_or_else(|| {
+                anyhow!(
+                    "missing --manifest <archive-manifest.json>\n{}",
+                    usage().hint()
+                )
+            })?,
             path,
             only_unreadable,
             reason,
@@ -110,10 +114,48 @@ impl Args {
     }
 }
 
-fn print_usage() {
-    eprintln!(
-        "Usage: cargo run -p data --bin archive_cas_exclude -- --cas-root <archive-directory> --manifest <archive-manifest.json> (--path <unreadable-manifest-path> | --only-unreadable) --reason <owner-approved-scope-reason>"
-    );
+fn usage() -> Usage {
+    const ARGS: &[ArgDoc] = &[
+        ArgDoc::required(
+            "--cas-root",
+            "<archive-directory>",
+            "Archive CAS root that holds the manifest",
+        ),
+        ArgDoc::required(
+            "--manifest",
+            "<archive-manifest.json>",
+            "manifest with the unresolved unreadable entry to exclude",
+        ),
+        ArgDoc::optional(
+            "--path",
+            "<unreadable-manifest-path>",
+            "the specific manifest-relative path to exclude; required when the manifest has more than one unresolved entry",
+        ),
+        ArgDoc::switch(
+            "--only-unreadable",
+            "exclude the manifest's one unresolved unreadable entry; fails if there is more than one",
+        ),
+        ArgDoc::required(
+            "--reason",
+            "<owner-approved-scope-reason>",
+            "non-empty, human-readable justification recorded in the new manifest",
+        ),
+    ];
+    const EXAMPLES: &[&str] = &[
+        "cargo run -p data --bin archive_cas_exclude -- --cas-root /Volumes/Backup/loadngo-archive-cas --manifest /Volumes/Backup/loadngo-archive-cas/manifests/<unresolved>.json --only-unreadable --reason \"owner-approved source exclusion\"",
+    ];
+    const NOTES: &[&str] = &[
+        "Exactly one of --path or --only-unreadable is required, never both.",
+        "Writes a new, successor manifest linked to the original; it never edits or deletes the source receipt.",
+    ];
+    Usage {
+        bin: "archive_cas_exclude",
+        invocation: "cargo run -p data --bin archive_cas_exclude --",
+        about: "record an owner-approved exclusion for one already-recorded unreadable source entry, without rereading the source",
+        args: ARGS,
+        examples: EXAMPLES,
+        notes: NOTES,
+    }
 }
 
 fn unix_now() -> Result<u64> {

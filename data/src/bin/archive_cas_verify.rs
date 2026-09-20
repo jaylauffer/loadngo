@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use data::archive_cas::{ArchiveCasStorage, ArchiveEntry, ArchiveObject};
+use data::cli::{ArgDoc, Usage};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -100,27 +101,49 @@ impl Args {
     fn parse() -> Result<Self> {
         let mut cas_root = None;
         let mut manifest = None;
-        let mut args = std::env::args().skip(1);
+        let mut args = data::cli::read_args(&usage(), true).into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--cas-root" => cas_root = args.next().map(PathBuf::from),
                 "--manifest" => manifest = args.next().map(PathBuf::from),
-                "--help" | "-h" => {
-                    print_usage();
-                    std::process::exit(0);
-                }
-                other => return Err(anyhow!("unknown argument: {other}")),
+                other => return Err(anyhow!("unknown argument: {other}\n{}", usage().hint())),
             }
         }
         Ok(Self {
-            cas_root: cas_root.ok_or_else(|| anyhow!("missing --cas-root <directory>"))?,
-            manifest: manifest.ok_or_else(|| anyhow!("missing --manifest <file>"))?,
+            cas_root: cas_root
+                .ok_or_else(|| anyhow!("missing --cas-root <directory>\n{}", usage().hint()))?,
+            manifest: manifest
+                .ok_or_else(|| anyhow!("missing --manifest <file>\n{}", usage().hint()))?,
         })
     }
 }
 
-fn print_usage() {
-    eprintln!(
-        "Usage: cargo run -p data --bin archive_cas_verify -- --cas-root <archive-directory> --manifest <archive-manifest.json>"
-    );
+fn usage() -> Usage {
+    const ARGS: &[ArgDoc] = &[
+        ArgDoc::required(
+            "--cas-root",
+            "<archive-directory>",
+            "Archive CAS root that holds the manifest and its objects",
+        ),
+        ArgDoc::required(
+            "--manifest",
+            "<archive-manifest.json>",
+            "manifest to verify, from <cas-root>/manifests/",
+        ),
+    ];
+    const EXAMPLES: &[&str] = &[
+        "cargo run -p data --bin archive_cas_verify -- --cas-root /Volumes/Backup/loadngo-archive-cas --manifest /Volumes/Backup/loadngo-archive-cas/manifests/photos-20260920-<hash>.json",
+    ];
+    const NOTES: &[&str] = &[
+        "Re-hashes every distinct object once, so this reads the entire unique archive content from the volume.",
+        "Exits non-zero if the manifest records any unreadable source entry, even though every present blob still verifies.",
+    ];
+    Usage {
+        bin: "archive_cas_verify",
+        invocation: "cargo run -p data --bin archive_cas_verify --",
+        about: "re-hash and confirm every object an archive manifest references, and report whether the capture is complete",
+        args: ARGS,
+        examples: EXAMPLES,
+        notes: NOTES,
+    }
 }

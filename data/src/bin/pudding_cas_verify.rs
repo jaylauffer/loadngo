@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use data::cas::{CasHash, CasStorage};
+use data::cli::{ArgDoc, Usage};
 use data::pudding::{
     DigestAlgorithm, DigestRef, SignedRootManifest, WorkspaceManifest, ROOT_MANIFEST_FORMAT_V1,
     SIGNED_ROOT_MANIFEST_FORMAT_V1, WORKSPACE_MANIFEST_FORMAT_V1,
@@ -52,12 +53,13 @@ struct Args {
 
 impl Args {
     fn parse() -> Result<Self> {
-        let mut args = std::env::args().skip(1);
         let mut signed_root = None;
         let mut cas_root = None;
         let mut expect_signer = None;
         let mut trusted_public_key = None;
         let mut manifest_only = false;
+        let args = data::cli::read_args(&usage(), true);
+        let mut args = args.into_iter();
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -66,17 +68,15 @@ impl Args {
                 "--expect-signer" => expect_signer = args.next(),
                 "--trusted-public-key" => trusted_public_key = args.next().map(PathBuf::from),
                 "--manifest-only" => manifest_only = true,
-                "--help" | "-h" => {
-                    print_usage();
-                    std::process::exit(0);
-                }
-                other => return Err(anyhow!("unknown argument: {other}")),
+                other => return Err(anyhow!("unknown argument: {other}\n{}", usage().hint())),
             }
         }
 
         Ok(Self {
-            signed_root: signed_root.ok_or_else(|| anyhow!("missing --signed-root <path>"))?,
-            cas_root: cas_root.ok_or_else(|| anyhow!("missing --cas-root <path>"))?,
+            signed_root: signed_root
+                .ok_or_else(|| anyhow!("missing --signed-root <path>\n{}", usage().hint()))?,
+            cas_root: cas_root
+                .ok_or_else(|| anyhow!("missing --cas-root <path>\n{}", usage().hint()))?,
             expect_signer,
             trusted_public_key,
             manifest_only,
@@ -84,10 +84,46 @@ impl Args {
     }
 }
 
-fn print_usage() {
-    eprintln!(
-        "Usage: cargo run -p data --bin pudding_cas_verify -- --signed-root <pudding-root-signed.json> --cas-root <path> [--expect-signer <name>] [--trusted-public-key <path>] [--manifest-only]"
-    );
+fn usage() -> Usage {
+    const ARGS: &[ArgDoc] = &[
+        ArgDoc::required(
+            "--signed-root",
+            "<pudding-root-signed.json>",
+            "signed root manifest to verify",
+        ),
+        ArgDoc::required(
+            "--cas-root",
+            "<path>",
+            "CAS root the signed root's workspace manifest and files were ingested into",
+        ),
+        ArgDoc::optional(
+            "--expect-signer",
+            "<name>",
+            "fail unless the signature's identity matches exactly",
+        ),
+        ArgDoc::optional(
+            "--trusted-public-key",
+            "<path>",
+            "public key the signature must verify against; without it, the signature's own embedded key is trusted on faith",
+        ),
+        ArgDoc::switch(
+            "--manifest-only",
+            "skip re-hashing every workspace file's bytes; only check the manifest structure and signature",
+        ),
+    ];
+    const EXAMPLES: &[&str] = &[
+        "cargo run -p data --bin pudding_cas_verify -- --signed-root build_tmp/pudding-cas-manifests/pudding-root-signed.json --cas-root .loadngo-cas --trusted-public-key ~/.loadngo/keys/jay-macmini.dilithium2.pub",
+    ];
+    const NOTES: &[&str] =
+        &["See docs/PUDDING_CAS_PQ_MODEL.md for the manifest/signature model this checks."];
+    Usage {
+        bin: "pudding_cas_verify",
+        invocation: "cargo run -p data --bin pudding_cas_verify --",
+        about: "verify a signed pudding workspace root manifest and, by default, every file it declares",
+        args: ARGS,
+        examples: EXAMPLES,
+        notes: NOTES,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

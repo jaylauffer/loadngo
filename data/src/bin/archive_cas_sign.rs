@@ -10,6 +10,7 @@ use data::archive_cas::ArchiveCasStorage;
 use data::archive_cas_sign::{
     read_private_key, read_public_key, sign_manifest_and_write, verify_signature, SignedArchiveRoot,
 };
+use data::cli::{ArgDoc, Usage};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -22,19 +23,23 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    let mut args = std::env::args().skip(1);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        usage().print();
+        return Ok(());
+    }
+    let mut args = args.into_iter();
     let command = args.next().unwrap_or_default();
     let flags: Vec<String> = args.collect();
     match command.as_str() {
         "sign" => command_sign(&flags),
         "verify" => command_verify(&flags),
-        "--help" | "-h" | "help" => {
-            print_usage();
+        "help" => {
+            usage().print();
             Ok(())
         }
         other => {
-            print_usage();
-            bail!("unknown command {other:?}")
+            bail!("unknown command {other:?}\n{}", usage().hint())
         }
     }
 }
@@ -43,7 +48,7 @@ fn command_sign(flags: &[String]) -> Result<()> {
     let cas_root = required(flags, "--cas-root")?;
     let manifest_path = required(flags, "--manifest")?;
     let signer_identity = flag(flags, "--signer-identity")
-        .ok_or_else(|| anyhow!("missing --signer-identity <name>"))?;
+        .ok_or_else(|| anyhow!("missing --signer-identity <name>\n{}", usage().hint()))?;
     let public_key = read_public_key(&required(flags, "--public-key")?)?;
     let private_key = read_private_key(&required(flags, "--private-key")?)?;
 
@@ -125,11 +130,63 @@ fn flag<'a>(flags: &'a [String], name: &str) -> Option<&'a str> {
 fn required(flags: &[String], name: &str) -> Result<PathBuf> {
     flag(flags, name)
         .map(PathBuf::from)
-        .ok_or_else(|| anyhow!("missing {name} <path>"))
+        .ok_or_else(|| anyhow!("missing {name} <path>\n{}", usage().hint()))
 }
 
-fn print_usage() {
-    eprintln!(
-        "Usage:\n  archive_cas_sign sign --cas-root <dir> --manifest <manifest.json> --signer-identity <name> --public-key <hex-file> --private-key <hex-file>\n  archive_cas_sign verify --cas-root <dir> --signature <signature.json> --trusted-public-key <hex-file>"
-    );
+fn usage() -> Usage {
+    const ARGS: &[ArgDoc] = &[
+        ArgDoc::required(
+            "sign --cas-root",
+            "<dir>",
+            "Archive CAS root that holds the manifest",
+        ),
+        ArgDoc::required("sign --manifest", "<manifest.json>", "manifest to sign"),
+        ArgDoc::required(
+            "sign --signer-identity",
+            "<name>",
+            "identity recorded as the signer",
+        ),
+        ArgDoc::required(
+            "sign --public-key",
+            "<hex-file>",
+            "Dilithium2 public key matching --private-key",
+        ),
+        ArgDoc::required(
+            "sign --private-key",
+            "<hex-file>",
+            "Dilithium2 private key to sign with",
+        ),
+        ArgDoc::required(
+            "verify --cas-root",
+            "<dir>",
+            "Archive CAS root that holds the signed manifest",
+        ),
+        ArgDoc::required(
+            "verify --signature",
+            "<signature.json>",
+            "signature file to check",
+        ),
+        ArgDoc::required(
+            "verify --trusted-public-key",
+            "<hex-file>",
+            "public key the signature must verify against",
+        ),
+    ];
+    const EXAMPLES: &[&str] = &[
+        "archive_cas_sign sign --cas-root /Volumes/Backup/loadngo-archive-cas --manifest /Volumes/Backup/loadngo-archive-cas/manifests/<archive>.json --signer-identity jay-macmini --public-key ~/.loadngo/keys/jay-macmini.dilithium2.pub --private-key ~/.loadngo/keys/jay-macmini.dilithium2.key",
+        "archive_cas_sign verify --cas-root /Volumes/Backup/loadngo-archive-cas --signature /Volumes/Backup/loadngo-archive-cas/manifests/<archive>.signature.json --trusted-public-key ~/.loadngo/keys/jay-macmini.dilithium2.pub",
+    ];
+    const NOTES: &[&str] = &[
+        "Two subcommands, sign and verify; run `archive_cas_sign help` (or with no arguments) to see this text.",
+        "verify only checks the signature and that the manifest object is present and hash-verified; it does not re-verify every blob -- run archive_cas_verify for that.",
+    ];
+    Usage {
+        bin: "archive_cas_sign",
+        invocation: "cargo run -p data --bin archive_cas_sign --",
+        about:
+            "sign an Archive CAS manifest root with a post-quantum key, or verify such a signature",
+        args: ARGS,
+        examples: EXAMPLES,
+        notes: NOTES,
+    }
 }

@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use data::archive_cas::{ArchiveCasStorage, ArchiveEntry, ArchiveManifest};
+use data::cli::{ArgDoc, Usage};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -76,7 +77,8 @@ impl Args {
         let mut cas_root = None;
         let mut archive_id = None;
         let mut source_label = None;
-        let mut args = std::env::args().skip(1);
+        let args = data::cli::read_args(&usage(), true);
+        let mut args = args.into_iter();
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -84,28 +86,62 @@ impl Args {
                 "--cas-root" => cas_root = args.next().map(PathBuf::from),
                 "--archive-id" => archive_id = args.next(),
                 "--source-label" => source_label = args.next(),
-                "--help" | "-h" => {
-                    print_usage();
-                    std::process::exit(0);
-                }
-                other => return Err(anyhow!("unknown argument: {other}")),
+                other => return Err(anyhow!("unknown argument: {other}\n{}", usage().hint())),
             }
         }
 
-        let archive_id = archive_id.ok_or_else(|| anyhow!("missing --archive-id <id>"))?;
+        let archive_id =
+            archive_id.ok_or_else(|| anyhow!("missing --archive-id <id>\n{}", usage().hint()))?;
         Ok(Self {
-            source: source.ok_or_else(|| anyhow!("missing --source <directory>"))?,
-            cas_root: cas_root.ok_or_else(|| anyhow!("missing --cas-root <directory>"))?,
+            source: source
+                .ok_or_else(|| anyhow!("missing --source <directory>\n{}", usage().hint()))?,
+            cas_root: cas_root
+                .ok_or_else(|| anyhow!("missing --cas-root <directory>\n{}", usage().hint()))?,
             source_label: source_label.unwrap_or_else(|| archive_id.clone()),
             archive_id,
         })
     }
 }
 
-fn print_usage() {
-    eprintln!(
-        "Usage: cargo run -p data --bin archive_cas_ingest -- --source <read-only-directory> --cas-root <archive-directory> --archive-id <lowercase-id> [--source-label <label>]"
-    );
+fn usage() -> Usage {
+    const ARGS: &[ArgDoc] = &[
+        ArgDoc::required(
+            "--source",
+            "<read-only-directory>",
+            "directory to capture; never modified",
+        ),
+        ArgDoc::required(
+            "--cas-root",
+            "<archive-directory>",
+            "Archive CAS root to write into (created if it does not exist)",
+        ),
+        ArgDoc::required(
+            "--archive-id",
+            "<lowercase-id>",
+            "stable id for this archive; rerun with the same id to resume an interrupted capture",
+        ),
+        ArgDoc::optional(
+            "--source-label",
+            "<label>",
+            "human-readable label stored in the manifest; defaults to --archive-id",
+        ),
+    ];
+    const EXAMPLES: &[&str] = &[
+        "cargo run -p data --bin archive_cas_ingest -- --source /Volumes/Old/Photos --cas-root /Volumes/Backup/loadngo-archive-cas --archive-id photos-20260920 --source-label \"Old external photo drive\"",
+    ];
+    const NOTES: &[&str] = &[
+        "Prints the manifest path and archive-root hash on success.",
+        "If interrupted, rerun the identical command; matching partial files resume after prefix verification.",
+        "Run archive_cas_verify afterward to confirm every blob is present and re-hashes correctly.",
+    ];
+    Usage {
+        bin: "archive_cas_ingest",
+        invocation: "cargo run -p data --bin archive_cas_ingest --",
+        about: "capture a read-only source directory into an Archive CAS root, resuming a prior interrupted run by archive id",
+        args: ARGS,
+        examples: EXAMPLES,
+        notes: NOTES,
+    }
 }
 
 #[derive(Debug, Default)]

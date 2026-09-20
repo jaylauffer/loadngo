@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use data::cas::CasStorage;
+use data::cli::{ArgDoc, Usage};
 use data::pudding::{
     DigestRef, FileSnapshotState, RootManifest, SignedRootManifest, WorkspaceChildInclude,
     WorkspaceConfig, WorkspaceFileManifestEntry, WorkspaceManifest, WorkspaceRepoState,
@@ -181,7 +182,11 @@ struct SigningArgs {
 
 impl Args {
     fn parse() -> Result<Self> {
-        let mut args = std::env::args().skip(1);
+        // Every flag here has a working default, so an empty invocation is
+        // a legitimate "ingest this workspace with defaults" -- only
+        // --help/-h shows the usage text, not a bare empty argv.
+        let args = data::cli::read_args(&usage(), false);
+        let mut args = args.into_iter();
         let mut workspace_root = None;
         let mut cas_root = None;
         let mut manifest_dir = None;
@@ -199,11 +204,7 @@ impl Args {
                 "--signer-identity" => signer_identity = args.next(),
                 "--public-key" => public_key = args.next().map(PathBuf::from),
                 "--private-key" => private_key = args.next().map(PathBuf::from),
-                "--help" | "-h" => {
-                    print_usage();
-                    std::process::exit(0);
-                }
-                other => return Err(anyhow!("unknown argument: {other}")),
+                other => return Err(anyhow!("unknown argument: {other}\n{}", usage().hint())),
             }
         }
 
@@ -226,10 +227,52 @@ impl Args {
     }
 }
 
-fn print_usage() {
-    eprintln!(
-        "Usage: cargo run -p data --bin pudding_cas_ingest -- [--workspace-root <path>] [--cas-root <path>] [--manifest-dir <path>] [--workspace-config <path>] [--signer-identity <name> --public-key <path> --private-key <path>]"
-    );
+fn usage() -> Usage {
+    const ARGS: &[ArgDoc] = &[
+        ArgDoc::optional(
+            "--workspace-root",
+            "<path>",
+            "pudding workspace root to ingest; defaults to the directory holding --workspace-config, or the current directory",
+        ),
+        ArgDoc::optional(
+            "--cas-root",
+            "<path>",
+            "CAS root to write into; defaults to <workspace-root>/.loadngo-cas",
+        ),
+        ArgDoc::optional(
+            "--manifest-dir",
+            "<path>",
+            "where to write the workspace/root manifests; defaults to <workspace-root>/build_tmp/pudding-cas-manifests",
+        ),
+        ArgDoc::optional(
+            "--workspace-config",
+            "<path>",
+            "pudding.workspace.ron to read; defaults to <workspace-root>/pudding.workspace.ron",
+        ),
+        ArgDoc::optional(
+            "--signer-identity",
+            "<name>",
+            "sign the root manifest as this identity; requires --public-key and --private-key",
+        ),
+        ArgDoc::optional("--public-key", "<path>", "Dilithium2 public key matching --private-key"),
+        ArgDoc::optional("--private-key", "<path>", "Dilithium2 private key to sign the root manifest with"),
+    ];
+    const EXAMPLES: &[&str] = &[
+        "cargo run -p data --bin pudding_cas_ingest --",
+        "cargo run -p data --bin pudding_cas_ingest -- --signer-identity jay-macmini --public-key ~/.loadngo/keys/jay-macmini.dilithium2.pub --private-key ~/.loadngo/keys/jay-macmini.dilithium2.key",
+    ];
+    const NOTES: &[&str] = &[
+        "Every flag is optional; running with none ingests the current pudding workspace using its defaults.",
+        "See docs/PUDDING_CAS_PQ_MODEL.md for what gets emitted and how signing works.",
+    ];
+    Usage {
+        bin: "pudding_cas_ingest",
+        invocation: "cargo run -p data --bin pudding_cas_ingest --",
+        about: "capture a pudding workspace's tracked files into a CAS and emit a (optionally signed) root manifest",
+        args: ARGS,
+        examples: EXAMPLES,
+        notes: NOTES,
+    }
 }
 
 fn resolve_workspace_root(

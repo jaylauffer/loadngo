@@ -6,6 +6,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use data::archive_cas::{ArchiveCasStorage, ArchiveObject};
+use data::cli::{ArgDoc, Usage};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -70,7 +71,7 @@ impl Args {
         let mut paths = Vec::new();
         let mut reason = None;
         let mut actor = None;
-        let mut args = std::env::args().skip(1);
+        let mut args = data::cli::read_args(&usage(), true).into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--cas-root" => cas_root = args.next().map(PathBuf::from),
@@ -81,28 +82,31 @@ impl Args {
                 ),
                 "--reason" => reason = args.next(),
                 "--actor" => actor = args.next(),
-                "--help" | "-h" => {
-                    print_usage();
-                    std::process::exit(0);
-                }
-                other => return Err(anyhow!("unknown argument: {other}")),
+                other => return Err(anyhow!("unknown argument: {other}\n{}", usage().hint())),
             }
         }
-        let reason = reason.ok_or_else(|| anyhow!("missing --reason <text>"))?;
+        let reason =
+            reason.ok_or_else(|| anyhow!("missing --reason <text>\n{}", usage().hint()))?;
         if reason.trim().is_empty() {
             bail!("--reason must not be empty");
         }
-        let actor = actor.ok_or_else(|| anyhow!("missing --actor <name>"))?;
+        let actor = actor.ok_or_else(|| anyhow!("missing --actor <name>\n{}", usage().hint()))?;
         if actor.trim().is_empty() {
             bail!("--actor must not be empty");
         }
         if paths.is_empty() {
-            bail!("at least one --path is required");
+            bail!("at least one --path is required\n{}", usage().hint());
         }
         Ok(Self {
-            cas_root: cas_root.ok_or_else(|| anyhow!("missing --cas-root <archive-directory>"))?,
-            manifest: manifest
-                .ok_or_else(|| anyhow!("missing --manifest <archive-manifest.json>"))?,
+            cas_root: cas_root.ok_or_else(|| {
+                anyhow!("missing --cas-root <archive-directory>\n{}", usage().hint())
+            })?,
+            manifest: manifest.ok_or_else(|| {
+                anyhow!(
+                    "missing --manifest <archive-manifest.json>\n{}",
+                    usage().hint()
+                )
+            })?,
             paths,
             reason,
             actor,
@@ -110,10 +114,42 @@ impl Args {
     }
 }
 
-fn print_usage() {
-    eprintln!(
-        "Usage: cargo run -p data --bin archive_cas_remove -- \\\n  --cas-root <archive-directory> --manifest <archive-manifest.json> \\\n  --path <manifest-path> [--path <manifest-path> ...] \\\n  --reason <why> --actor <who>\n\nA directory path also removes everything nested under it."
-    );
+fn usage() -> Usage {
+    const ARGS: &[ArgDoc] = &[
+        ArgDoc::required(
+            "--cas-root",
+            "<archive-directory>",
+            "Archive CAS root that holds the manifest",
+        ),
+        ArgDoc::required(
+            "--manifest",
+            "<archive-manifest.json>",
+            "manifest to remove entries from",
+        ),
+        ArgDoc::repeated(
+            "--path",
+            "<manifest-path>",
+            "manifest-relative path to remove; a directory path also removes everything nested under it",
+        ),
+        ArgDoc::required("--reason", "<why>", "non-empty justification recorded in the delete log"),
+        ArgDoc::required("--actor", "<who>", "non-empty name of the person or agent removing these paths"),
+    ];
+    const EXAMPLES: &[&str] = &[
+        "cargo run -p data --bin archive_cas_remove -- --cas-root /Volumes/Backup/loadngo-archive-cas --manifest /Volumes/Backup/loadngo-archive-cas/manifests/<archive>.json --path some/private/file.txt --reason \"owner-requested removal\" --actor jay",
+    ];
+    const NOTES: &[&str] = &[
+        "Writes a new, superseding manifest plus a delete-log sidecar; never touches blob objects, other manifests, or signatures.",
+        "Reclaiming the freed disk space is a separate step: archive_cas_gc.",
+        "The superseding manifest is unsigned; sign it with archive_cas_sign before treating it as the archive of record.",
+    ];
+    Usage {
+        bin: "archive_cas_remove",
+        invocation: "cargo run -p data --bin archive_cas_remove --",
+        about: "remove named paths from an archive manifest, producing a new manifest that supersedes the old one",
+        args: ARGS,
+        examples: EXAMPLES,
+        notes: NOTES,
+    }
 }
 
 fn unix_now() -> Result<u64> {
