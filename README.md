@@ -3,6 +3,13 @@ A lifetime of work, love, and imagination.
 
 Rust workspace for the `loadngo` GUI/runtime stack plus data/network/task crates.
 
+# for humans
+There's a large amount of AI slop in this README, it helps the 'agents' function
+however avoid wasting time reading it all, know that, we're working to clean this up
+and we're making some progress. If you want a reliable proactor pattern for your 
+software application that will avoid sleeps and CPU spikes, this is what we're providing
+written in rust for reliability and performance, platform agnostic.
+
 ## Workspace crates
 - `ui-core`: platform-agnostic UI model layer (widgets, geometry, input, paint ops).
 - `host-core` (`loadngo-host-core`): host/backend contracts (window descriptors, frame/input snapshots, render ops, image decode/registry, texture/font seams).
