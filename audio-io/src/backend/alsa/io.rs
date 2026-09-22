@@ -39,6 +39,15 @@ use super::{devices, ffi, DEFAULT_PERIOD_FRAMES};
 /// is what a PCM built on a permanently broken slave would otherwise cost.
 const STALLED_RECOVERY_BUDGET: Duration = Duration::from_millis(500);
 
+/// Whether continuous read/write failure-and-recovery with no successful
+/// frame since `failing_since` has gone on long enough, as of `now`, to stop
+/// retrying rather than keep going at whatever rate the hardware allows.
+/// Pulled out of `run` as a pure function of its inputs so the threshold
+/// itself is tested without needing a real (or fake) PCM.
+fn recovery_has_stalled(failing_since: Instant, now: Instant, budget: Duration) -> bool {
+    now.saturating_duration_since(failing_since) >= budget
+}
+
 pub(crate) struct Stream {
     stop: Arc<AtomicBool>,
     failure: Arc<Mutex<Option<String>>>,
@@ -215,8 +224,9 @@ fn run(
         }
         // SAFETY: `pcm` is this thread's open handle.
         let recovered = unsafe { ffi::snd_pcm_recover(pcm.0, code, 1) };
-        let stalled = recovered >= 0
-            && failing_since.get_or_insert_with(Instant::now).elapsed() >= STALLED_RECOVERY_BUDGET;
+        let since = *failing_since.get_or_insert_with(Instant::now);
+        let stalled =
+            recovered >= 0 && recovery_has_stalled(since, Instant::now(), STALLED_RECOVERY_BUDGET);
         if recovered < 0 || stalled {
             let reason = if code == -ffi::ENODEV {
                 "the audio device was disconnected".to_string()
@@ -237,4 +247,61 @@ fn run(
     }
     // SAFETY: stopping from the thread that owns the handle.
     unsafe { ffi::snd_pcm_drop(pcm.0) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{recovery_has_stalled, STALLED_RECOVERY_BUDGET};
+    use std::time::{Duration, Instant};
+
+    // The bug this guards: a PCM built on a broken slave (ALSA's `asym`
+    // type with an undefined capture leg) fails every readi/writei
+    // immediately while `snd_pcm_recover` keeps reporting success, so
+    // nothing here can be exercised without real (or faked) libasound
+    // calls except the one piece that actually decides when to stop: how
+    // long "failing and recovering with no data" has to go on. These test
+    // that threshold directly, the same way `pcm.rs`'s tests cover format
+    // conversion without opening a real device.
+
+    #[test]
+    fn does_not_stall_before_the_budget_elapses() {
+        let failing_since = Instant::now();
+        let almost_there = failing_since + STALLED_RECOVERY_BUDGET - Duration::from_millis(1);
+        assert!(!recovery_has_stalled(
+            failing_since,
+            almost_there,
+            STALLED_RECOVERY_BUDGET
+        ));
+    }
+
+    #[test]
+    fn stalls_the_instant_the_budget_is_reached() {
+        let failing_since = Instant::now();
+        let at_budget = failing_since + STALLED_RECOVERY_BUDGET;
+        assert!(recovery_has_stalled(
+            failing_since,
+            at_budget,
+            STALLED_RECOVERY_BUDGET
+        ));
+    }
+
+    #[test]
+    fn stays_stalled_well_past_the_budget() {
+        let failing_since = Instant::now();
+        let long_after = failing_since + STALLED_RECOVERY_BUDGET * 10;
+        assert!(recovery_has_stalled(
+            failing_since,
+            long_after,
+            STALLED_RECOVERY_BUDGET
+        ));
+    }
+
+    #[test]
+    fn a_single_instant_with_zero_elapsed_time_has_not_stalled() {
+        // The first failure in a streak: `failing_since` was just set to
+        // `now` (see `run`'s `get_or_insert_with(Instant::now)`), so this
+        // must never immediately read as stalled on the very first retry.
+        let now = Instant::now();
+        assert!(!recovery_has_stalled(now, now, STALLED_RECOVERY_BUDGET));
+    }
 }
