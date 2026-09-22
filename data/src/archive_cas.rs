@@ -257,18 +257,16 @@ impl ArchiveManifest {
             .collect();
         let drop_exact: std::collections::BTreeSet<&str> =
             paths.iter().map(String::as_str).collect();
+        let is_removed = |path: &str| {
+            drop_exact.contains(path)
+                || directory_prefixes
+                    .iter()
+                    .any(|prefix| path.starts_with(prefix.as_str()))
+        };
         let remaining: Vec<ArchiveEntry> = self
             .entries
             .iter()
-            .filter(|entry| {
-                let path = entry.path();
-                if drop_exact.contains(path) {
-                    return false;
-                }
-                !directory_prefixes
-                    .iter()
-                    .any(|prefix| path.starts_with(prefix.as_str()))
-            })
+            .filter(|entry| !is_removed(entry.path()))
             .cloned()
             .collect();
         if remaining.len() == self.entries.len() {
@@ -277,8 +275,9 @@ impl ArchiveManifest {
         let removed_paths: Vec<String> = self
             .entries
             .iter()
-            .map(|entry| entry.path().to_string())
-            .filter(|path| !remaining.iter().any(|kept| kept.path() == path))
+            .map(|entry| entry.path())
+            .filter(|path| is_removed(path))
+            .map(str::to_string)
             .collect();
 
         let base_root = self.digest()?;
