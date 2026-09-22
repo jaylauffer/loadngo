@@ -185,6 +185,11 @@ jobs:
         shell: cmd
     env:
       REPO_DIR: C:\pudding\loadngo
+      QCOIN_DIR: C:\pudding\qcoin
+      # qcoin-types is a path dependency: syncing only Loadngo leaves an old
+      # sibling manifest free to invalidate Cargo.lock before Clippy starts.
+      # Advance this pin deliberately with dependency/lockfile changes.
+      QCOIN_REV: 6579c0a54635ef913806922a88049a6b5e68e840
       # Metal is macOS-only and proactor-harness stays out for build time, as
       # in the other jobs. gui and gui-win32 do not compile against the
       # current `windows` crate at all (imports that crate no longer exports
@@ -211,6 +216,24 @@ jobs:
           git fetch github %GITHUB_SHA% || exit /b 1
           git reset --hard %GITHUB_SHA% || exit /b 1
           git clean -fd || exit /b 1
+
+      - name: Sync the pinned QCoin sibling
+        # This is the dedicated CI clone, not an interactive checkout. Never
+        # reset/clean it: surface unexpected local work instead of losing it.
+        # Log both revisions so a dependency mismatch is diagnosable remotely.
+        run: |
+          git config --global --get-all safe.directory | findstr /x /c:"C:/pudding/qcoin" >nul || git config --global --add safe.directory C:/pudding/qcoin || exit /b 1
+          cd /d "%QCOIN_DIR%" || exit /b 1
+          git log -1 --oneline || exit /b 1
+          git status --porcelain --untracked-files=all > "%RUNNER_TEMP%\loadngo-qcoin-status.txt" || exit /b 1
+          for %%F in ("%RUNNER_TEMP%\loadngo-qcoin-status.txt") do if %%~zF GTR 0 (
+            type "%RUNNER_TEMP%\loadngo-qcoin-status.txt"
+            echo QCoin has local changes; refusing to overwrite them.
+            exit /b 1
+          )
+          git fetch --no-tags https://github.com/jaylauffer/qcoin.git %QCOIN_REV% || exit /b 1
+          git checkout --detach %QCOIN_REV% || exit /b 1
+          git log -1 --oneline || exit /b 1
 
       - name: Toolchain
         run: |
