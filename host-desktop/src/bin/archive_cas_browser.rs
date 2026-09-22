@@ -947,7 +947,11 @@ impl ArchiveRecord {
         if bytes != canonical {
             bail!("manifest is not canonical JSON");
         }
-        let summary = summarize_manifest(&manifest)?;
+        // canonical_bytes() clones and re-serializes every entry, so reuse
+        // the bytes already computed above instead of letting
+        // summarize_manifest recompute them a second time via digest().
+        let root = CasHash::digest(&canonical);
+        let summary = summarize_manifest(&manifest, root)?;
         Ok(Self {
             manifest_path: path.to_path_buf(),
             cas_root,
@@ -971,9 +975,9 @@ struct ArchiveSummary {
     unique_object_bytes: u64,
 }
 
-fn summarize_manifest(manifest: &ArchiveManifest) -> Result<ArchiveSummary> {
+fn summarize_manifest(manifest: &ArchiveManifest, root: CasHash) -> Result<ArchiveSummary> {
     let mut summary = ArchiveSummary {
-        root: manifest.digest()?.to_hex(),
+        root: root.to_hex(),
         directories: 0,
         files: 0,
         symlinks: 0,
@@ -3314,7 +3318,8 @@ mod tests {
         )
         .unwrap();
 
-        let summary = summarize_manifest(&manifest).unwrap();
+        let root = manifest.digest().unwrap();
+        let summary = summarize_manifest(&manifest, root).unwrap();
         assert_eq!(summary.directories, 1);
         assert_eq!(summary.files, 2);
         assert_eq!(summary.symlinks, 1);
