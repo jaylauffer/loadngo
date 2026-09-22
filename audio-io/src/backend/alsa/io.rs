@@ -11,11 +11,19 @@
 //!
 //! Xruns are recovered with `snd_pcm_recover` and counted; a device that has
 //! gone away (`-ENODEV`) ends the thread and is reported through `failure`.
+//! `snd_pcm_recover` reporting success does not mean the *next* read or write
+//! will work: a PCM built on a broken slave (ALSA's `asym` type with an
+//! undefined capture leg, seen on a real Pi 5 as a `pcm_asym.c: capture slave
+//! is not defined` `default`) can recover-and-fail every single period with
+//! no blocking in between, since the failing state itself makes the blocking
+//! read/write return immediately. `run` bounds how long it will do that
+//! before giving up, rather than spinning at the retry rate forever.
 
 use std::ffi::c_int;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use crate::backend::{Direction, InputCallback, OutputCallback, StreamFormat};
 use crate::error::AudioIoError;
@@ -23,6 +31,13 @@ use crate::error::AudioIoError;
 use super::pcm::{self, Configured, Pcm};
 
 use super::{devices, ffi, DEFAULT_PERIOD_FRAMES};
+
+/// How long `run` tolerates a read/write failing, recovering, and failing
+/// again with no successful frame in between before it gives up on the
+/// device. Generous next to one real period (tens of ms) so a genuine xrun
+/// burst under system load has room to clear; short next to "forever", which
+/// is what a PCM built on a permanently broken slave would otherwise cost.
+const STALLED_RECOVERY_BUDGET: Duration = Duration::from_millis(500);
 
 pub(crate) struct Stream {
     stop: Arc<AtomicBool>,
@@ -164,6 +179,7 @@ fn run(
     let mut bytes = vec![0u8; frames * channels * configured.format.bytes()];
     let mut samples: Vec<f32> = vec![0.0; frames * channels];
     let mut callback = callback;
+    let mut failing_since: Option<Instant> = None;
 
     while !stop.load(Ordering::Relaxed) {
         let result = match &mut callback {
@@ -190,6 +206,7 @@ fn run(
         };
 
         if result >= 0 {
+            failing_since = None;
             continue;
         }
         let code = result as c_int;
@@ -198,9 +215,17 @@ fn run(
         }
         // SAFETY: `pcm` is this thread's open handle.
         let recovered = unsafe { ffi::snd_pcm_recover(pcm.0, code, 1) };
-        if recovered < 0 {
+        let stalled = recovered >= 0
+            && failing_since.get_or_insert_with(Instant::now).elapsed() >= STALLED_RECOVERY_BUDGET;
+        if recovered < 0 || stalled {
             let reason = if code == -ffi::ENODEV {
                 "the audio device was disconnected".to_string()
+            } else if stalled {
+                format!(
+                    "audio I/O kept failing and recovering with no data for over {}ms: {}",
+                    STALLED_RECOVERY_BUDGET.as_millis(),
+                    ffi::error_text(code)
+                )
             } else {
                 format!("audio I/O failed: {}", ffi::error_text(code))
             };
