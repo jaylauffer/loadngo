@@ -18,7 +18,7 @@ use loadngo_host_core::{
     RenderTextStyle, RenderTextVerticalAlign, RenderTextVerticalMetricMode, SurfaceInfo,
     TextMetrics, WindowDescriptor, WindowIconSet,
 };
-use loadngo_proactor::{CompletionKind, IoUringPort};
+use loadngo_proactor::{CompletionKind, CompletionPort, EpollPort, IoUringPort, PollEvent};
 use loadngo_renderer::{FrameCommand, ImageRequest, Renderer, RendererConfig, TextRequest};
 use softbuffer::{Context, Surface};
 use ui_core::{
@@ -300,7 +300,61 @@ static HOST_SHARED: OnceLock<LinuxHostShared> = OnceLock::new();
 static DEFAULT_FONT: OnceLock<DesktopFont> = OnceLock::new();
 static FONT_CACHE: OnceLock<Mutex<HashMap<String, DesktopFont>>> = OnceLock::new();
 static TRACE_ENABLED: OnceLock<bool> = OnceLock::new();
-static PROACTOR: OnceLock<HostProactor<IoUringPort>> = OnceLock::new();
+static PROACTOR: OnceLock<HostProactor<LinuxPort>> = OnceLock::new();
+
+/// `io_uring`, with an `epoll` fallback for whenever `IoUringPort::new()`
+/// fails -- an old kernel (pre-5.1), a hardened/security-conscious distro
+/// with `io_uring` disabled (a real, actively-recommended hardening step
+/// given its CVE history), or a sandboxed environment (a container's
+/// default seccomp profile, some Flatpak confinement) that blocks the
+/// `io_uring_*` syscalls outright. Without this, any of those completely
+/// ordinary desktop configurations hard-panics the whole game at launch
+/// with no visible error to a player who just double-clicked it. Mirrors
+/// how Android already handles this (`android.rs`'s `EpollPort`, needed
+/// there because `io_uring` is seccomp-blocked for `untrusted_app`) --
+/// this just applies the same fallback to desktop Linux instead of
+/// assuming `io_uring` always works.
+enum LinuxPort {
+    Uring(Box<IoUringPort>),
+    Epoll(Box<EpollPort>),
+}
+
+impl CompletionPort for LinuxPort {
+    fn post(&self, envelope: loadngo_proactor::CompletionEnvelope) -> std::io::Result<()> {
+        match self {
+            LinuxPort::Uring(port) => port.post(envelope),
+            LinuxPort::Epoll(port) => port.post(envelope),
+        }
+    }
+
+    fn poll(&self, timeout: Option<std::time::Duration>) -> std::io::Result<PollEvent> {
+        match self {
+            LinuxPort::Uring(port) => port.poll(timeout),
+            LinuxPort::Epoll(port) => port.poll(timeout),
+        }
+    }
+
+    fn wake(&self) -> std::io::Result<()> {
+        match self {
+            LinuxPort::Uring(port) => port.wake(),
+            LinuxPort::Epoll(port) => port.wake(),
+        }
+    }
+
+    fn begin_shutdown(&self) {
+        match self {
+            LinuxPort::Uring(port) => port.begin_shutdown(),
+            LinuxPort::Epoll(port) => port.begin_shutdown(),
+        }
+    }
+
+    fn shutdown_complete(&self) -> bool {
+        match self {
+            LinuxPort::Uring(port) => port.shutdown_complete(),
+            LinuxPort::Epoll(port) => port.shutdown_complete(),
+        }
+    }
+}
 
 fn shared() -> &'static LinuxHostShared {
     HOST_SHARED.get().expect("linux host not initialized")
@@ -310,7 +364,7 @@ fn lock_state() -> std::sync::MutexGuard<'static, HostSharedState> {
     shared().state.lock().expect("linux host state poisoned")
 }
 
-fn proactor() -> &'static HostProactor<IoUringPort> {
+fn proactor() -> &'static HostProactor<LinuxPort> {
     PROACTOR.get().expect("linux proactor not initialized")
 }
 
@@ -450,9 +504,16 @@ pub fn launch(
         state: Arc::new(Mutex::new(HostSharedState::default())),
     };
     let _ = HOST_SHARED.set(shared.clone());
-    let _ = PROACTOR.set(HostProactor::new(
-        IoUringPort::new().expect("failed to create Linux io_uring proactor"),
-    ));
+    let port = match IoUringPort::new() {
+        Ok(port) => LinuxPort::Uring(Box::new(port)),
+        Err(err) => {
+            eprintln!("[loadngo/linux] io_uring unavailable ({err}), falling back to epoll");
+            LinuxPort::Epoll(Box::new(
+                EpollPort::new().expect("failed to create Linux epoll proactor (fallback)"),
+            ))
+        }
+    };
+    let _ = PROACTOR.set(HostProactor::new(port));
 
     let event_loop = EventLoop::<LinuxUserEvent>::with_user_event()
         .build()
@@ -504,7 +565,7 @@ pub async fn next_frame(demand: FrameDemand) {
     // stored directly in `HostSharedState::next_frame_wakers` and woken in
     // place wherever `advance_frame_clock` already runs (`resumed`, the
     // timer below, `wake_host()`), and the delay itself is a deferred
-    // completion on the shared `loadngo_proactor::Proactor<IoUringPort>`
+    // completion on the shared `loadngo_proactor::Proactor<LinuxPort>`
     // (see `proactor()`/`schedule_frame_timer`), driven by
     // `ControlFlow::WaitUntil` in `LinuxApp::about_to_wait` -- no thread at
     // all.

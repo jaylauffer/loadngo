@@ -1,10 +1,11 @@
 mod channel;
 mod deferred;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 mod epoll;
 mod error;
 #[cfg(any(
     target_os = "android",
+    target_os = "linux",
     target_os = "macos",
     target_os = "ios",
     target_os = "freebsd",
@@ -42,7 +43,7 @@ use std::time::{Duration, Instant};
 use std::{collections::HashMap, os::fd::RawFd};
 
 pub use channel::ChannelPort;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 pub use epoll::EpollPort;
 pub use error::ProactorError;
 pub use io_port::{
