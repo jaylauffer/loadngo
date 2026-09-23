@@ -19,6 +19,30 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// `kevent`'s `filter` field is `i16` on macOS/FreeBSD/OpenBSD/DragonFly but
+/// `u32` on NetBSD -- matches how the `libc` crate itself types
+/// `EVFILT_READ`/`EVFILT_WRITE` per platform, which is what actually
+/// surfaces this: a literal like `EVFILT_READ` already carries the right
+/// type for its own platform, but `register_io_wait`'s `filter` parameter
+/// needs an explicit type that also varies.
+#[cfg(target_os = "netbsd")]
+type KEventFilter = u32;
+#[cfg(not(target_os = "netbsd"))]
+type KEventFilter = i16;
+
+/// `kevent`'s `udata` field is a pointer-sized opaque tag on
+/// macOS/FreeBSD/OpenBSD/DragonFly (`*mut c_void`) but a plain `isize` on
+/// NetBSD -- this hides that so call sites can just pass the numeric tag
+/// they want to carry (or `0` for "no tag").
+#[cfg(target_os = "netbsd")]
+fn encode_udata(value: usize) -> isize {
+    value as isize
+}
+#[cfg(not(target_os = "netbsd"))]
+fn encode_udata(value: usize) -> *mut libc::c_void {
+    value as *mut _
+}
+
 const QUEUE_IDENT: usize = 1;
 const WAKE_IDENT: usize = 2;
 /// Same tagging scheme as `uring.rs`'s `IO_OP_TAG` -- see that constant's
@@ -197,14 +221,14 @@ impl KqueuePort {
     /// Registers a one-shot readiness wait for `filter` (`EVFILT_READ` or
     /// `EVFILT_WRITE`) tagged with `op_id`, picked up later by `poll()`'s
     /// `resolve_io_readiness`.
-    fn register_io_wait(&self, fd: RawFd, filter: i16, op_id: IoOpId) -> io::Result<()> {
+    fn register_io_wait(&self, fd: RawFd, filter: KEventFilter, op_id: IoOpId) -> io::Result<()> {
         let change = kevent {
             ident: fd as _,
             filter,
             flags: (EV_ADD | EV_ONESHOT | EV_RECEIPT) as _,
             fflags: 0,
             data: 0,
-            udata: op_id.0 as usize as *mut _,
+            udata: encode_udata(op_id.0 as usize),
         };
         let mut receipt = Self::empty_event();
         let result = unsafe { kevent(self.kq, &change, 1, &mut receipt, 1, ptr::null()) };
@@ -244,7 +268,7 @@ impl KqueuePort {
             flags: flags.into() as _,
             fflags,
             data: 0,
-            udata: ptr::null_mut(),
+            udata: encode_udata(0),
         }
     }
 
@@ -456,7 +480,7 @@ impl KqueuePort {
             flags: flags.into() as _,
             fflags: 0,
             data: 0,
-            udata: token as usize as *mut _,
+            udata: encode_udata(token as usize),
         }
     }
 
@@ -940,7 +964,7 @@ impl IoPort for KqueuePort {
             flags: (EV_DELETE | EV_RECEIPT) as _,
             fflags: 0,
             data: 0,
-            udata: ptr::null_mut(),
+            udata: encode_udata(0),
         };
         let mut receipt = Self::empty_event();
         unsafe {
