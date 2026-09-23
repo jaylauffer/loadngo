@@ -1,5 +1,5 @@
 //! `epoll`-backed `CompletionPort`/`ReadinessPort`/`IoPort`, for
-//! `target_os = "android"`. Confirmed the *only* viable kernel-async-I/O
+//! Linux and Android. Confirmed the *only* viable kernel-async-I/O
 //! mechanism available to a real Android app process — `io_uring` is
 //! seccomp-blocked for `untrusted_app` on real hardware (Android 14,
 //! kernel 5.4.289-qgki), tested directly, see
@@ -589,9 +589,14 @@ impl EpollPort {
                 fds.get(&fd).and_then(|entry| entry.read)
             };
             if let Some(side) = side {
-                self.clear_read(fd)?;
                 return Ok(match side {
-                    ReadSide::IoOp(op_id) => self.resolve_io_op(op_id),
+                    ReadSide::IoOp(op_id) => {
+                        self.clear_read(fd)?;
+                        self.resolve_io_op(op_id)
+                    }
+                    // Readiness registrations live until explicit deregistration.
+                    // Only buffer-owning IoPort operations are one-shot; removing
+                    // this interest would strand every subsequent datagram.
                     ReadSide::Readiness(token) => PollEvent::Readiness(ReadinessEvent { token }),
                 });
             }

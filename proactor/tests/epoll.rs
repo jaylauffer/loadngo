@@ -1,4 +1,4 @@
-#![cfg(target_os = "android")]
+#![cfg(any(target_os = "android", target_os = "linux"))]
 
 use loadngo_proactor::{
     AcceptResult, Completion, CompletionKind, EpollPort, IoBuf, IoResult, PeerAddr, Proactor,
@@ -6,8 +6,11 @@ use loadngo_proactor::{
 };
 use std::io;
 use std::net::{TcpListener, UdpSocket};
+#[cfg(target_os = "android")]
 use std::os::android::net::SocketAddrExt;
 use std::os::fd::AsRawFd;
+#[cfg(target_os = "linux")]
+use std::os::linux::net::SocketAddrExt;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -84,6 +87,47 @@ fn epoll_dispatches_registered_readiness() {
         libc::close(pipe_fds[0]);
         libc::close(pipe_fds[1]);
     }
+}
+
+#[test]
+fn epoll_readiness_survives_multiple_drained_datagrams_until_deregistered() {
+    use loadngo_proactor::{CompletionPort, PollEvent, ReadinessPort};
+
+    let port = EpollPort::new().unwrap();
+    let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+    receiver.set_nonblocking(true).unwrap();
+    let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+    port.register_readable(receiver.as_raw_fd(), 77).unwrap();
+
+    for value in 0..3u8 {
+        sender
+            .send_to(&[value], receiver.local_addr().unwrap())
+            .unwrap();
+        match port.poll(Some(Duration::from_secs(1))).unwrap() {
+            PollEvent::Readiness(event) => assert_eq!(event.token, 77),
+            _ => panic!("datagram {value} lost its persistent readiness registration"),
+        }
+        let mut buf = [0];
+        assert_eq!(receiver.recv(&mut buf).unwrap(), 1);
+        assert_eq!(buf, [value]);
+        assert_eq!(
+            receiver.recv(&mut buf).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert!(matches!(
+            port.poll(Some(Duration::ZERO)).unwrap(),
+            PollEvent::Timeout
+        ));
+    }
+
+    port.deregister(receiver.as_raw_fd()).unwrap();
+    sender
+        .send_to(&[99], receiver.local_addr().unwrap())
+        .unwrap();
+    assert!(matches!(
+        port.poll(Some(Duration::from_millis(20))).unwrap(),
+        PollEvent::Timeout
+    ));
 }
 
 #[test]
