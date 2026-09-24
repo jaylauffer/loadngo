@@ -130,14 +130,18 @@ memory it has read recently. Cycling through about 5,000 distinct surfaces (26 G
 about as much as converting into a few reused surfaces. Call count was never the cost:
 the time goes to streaming weights at 15-25 GB/s.
 
-So `DenseEngine::run_bf16` takes a list of products and pipelines them:
+So `DenseEngine::run` takes a list of products and pipelines them:
 
 - weight tiles alternate between two surfaces per shape;
 - a scoped helper thread converts tile n+1 while tile n predicts;
 - the engine waits for the helper before returning, so no surface is left locked
   after an error.
 
-`matmul_bf16` is `run_bf16` with one product. A single-tile product has nothing to
+Job weights are `dense::Weight::Bf16` or `Weight::Mxfp4` (OCP MX v1.0 codes and scales,
+expanded to fp16 on the same helper thread); both may be mixed in one call. Kimi
+Linear's resident MXFP4 experts go through this path: decode 1.75 -> 2.61 tokens/s,
+639-token prompt 58 -> 21.5 s (kimi-k3-in-rust `docs/KIMI_LINEAR.md`).
+`matmul_bf16` and `matmul_mxfp4` are `run` with one product. A single-tile product has nothing to
 overlap with, so it is converted in line with no thread.
 
 ### Verification

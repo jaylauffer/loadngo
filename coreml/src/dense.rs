@@ -10,7 +10,7 @@
 //! falls for tiles above ~12288, so matrices are tiled to [`TILE`]: row tiles are
 //! independent, column tiles are summed in fp32 here.
 //!
-//! [`DenseEngine::run_bf16`] takes several products at once and converts the next
+//! [`DenseEngine::run`] takes several products at once and converts the next
 //! weight tile on a helper thread while the Neural Engine computes the current one, so a
 //! caller that knows its next products (a model layer) pays for conversion only where it
 //! is slower than the prediction it overlaps. Measured alternatives on an expert-sized
@@ -80,7 +80,7 @@ pub struct DenseStats {
     pub convert_s: f64,
     /// Time inside Core ML predictions, including reading the fp16 result back.
     pub predict_s: f64,
-    /// bf16 weight bytes consumed.
+    /// Weight bytes consumed, in their stored format.
     pub weight_bytes: u64,
 }
 
@@ -222,7 +222,7 @@ pub struct DenseEngine {
     dir: PathBuf,
     models: HashMap<(usize, usize, usize), Loaded>,
     /// Weight surfaces by (outputs, inputs, parity): consecutive tiles of a
-    /// [`DenseEngine::run_bf16`] alternate parity, so one is filled while the other runs.
+    /// [`DenseEngine::run`] alternate parity, so one is filled while the other runs.
     weights: HashMap<(usize, usize, usize), Surface>,
     inputs: HashMap<(usize, usize), Surface>,
     staging: Vec<f32>,
@@ -371,14 +371,45 @@ unsafe fn mxfp4_block_neon(dst: *mut u16, packed: *const u8, k: i32) {
     }
 }
 
+/// A weight matrix `[outputs][inputs]` in the format it is stored in.
+#[derive(Clone, Copy, Debug)]
+pub enum Weight<'a> {
+    /// bf16 words.
+    Bf16(&'a [u16]),
+    /// OCP MX v1.0 MXFP4: `packed` is `[outputs][inputs / 2]` E2M1 codes, the even
+    /// element in the low nibble; `scales` is `[outputs][inputs / 32]` E8M0 bytes.
+    Mxfp4 { packed: &'a [u8], scales: &'a [u8] },
+}
+
+impl Weight<'_> {
+    /// Whether the buffers hold an `outputs x inputs` matrix.
+    fn fits(&self, inputs: usize, outputs: usize) -> bool {
+        match *self {
+            Self::Bf16(w) => w.len() >= inputs * outputs,
+            Self::Mxfp4 { packed, scales } => {
+                inputs.is_multiple_of(MX_BLOCK)
+                    && packed.len() >= outputs * inputs / 2
+                    && scales.len() >= outputs * inputs / MX_BLOCK
+            }
+        }
+    }
+
+    const fn bytes(&self, inputs: usize, outputs: usize) -> usize {
+        match self {
+            Self::Bf16(_) => inputs * outputs * 2,
+            Self::Mxfp4 { .. } => inputs * outputs / 2 + inputs * outputs / MX_BLOCK,
+        }
+    }
+}
+
 /// Products that share one input: for each part `(w, outputs, y)`,
-/// `y[r][o] = sum_i w[o][i] * x[r][i]`, with `w` bf16 words `[outputs][inputs]`, `x`
+/// `y[r][o] = sum_i w[o][i] * x[r][i]`, with `w` `[outputs][inputs]`, `x`
 /// `[rows][inputs]` and `y` `[rows][outputs]`.
 pub struct Job<'a> {
     pub x: &'a [f32],
     pub rows: usize,
     pub inputs: usize,
-    pub parts: Vec<(&'a [u16], usize, &'a mut [f32])>,
+    pub parts: Vec<(Weight<'a>, usize, &'a mut [f32])>,
 }
 
 /// One weight tile of a [`Job`] part, in prediction order.
@@ -395,15 +426,34 @@ struct Unit {
 /// Converts one unit's tile of `w` (`inputs` wide) into a locked weight surface.
 fn convert_unit(
     unit: &Unit,
-    (w, inputs): (&[u16], usize),
+    (w, inputs): (Weight<'_>, usize),
     view: &mut View,
     staging: &mut Vec<f32>,
-) -> bool {
-    (0..unit.ot).all(|r| {
-        let at = (unit.o0 + r) * inputs + unit.i0;
+) -> Result<(), String> {
+    for r in 0..unit.ot {
+        let row = unit.o0 + r;
         // SAFETY: `r < unit.ot`, the surface's row count; one row slice at a time.
-        bf16_to_f16(unsafe { view.row(r) }, &w[at..at + unit.it], staging)
-    })
+        let dst = unsafe { view.row(r) };
+        match w {
+            Weight::Bf16(w) => {
+                let at = row * inputs + unit.i0;
+                if !bf16_to_f16(dst, &w[at..at + unit.it], staging) {
+                    return Err("weight outside fp16 range".into());
+                }
+            }
+            Weight::Mxfp4 { packed, scales } => {
+                // Tiles start on multiples of 32 (checked by `run`), so `i0` is too.
+                let p = row * inputs / 2 + unit.i0 / 2;
+                let s = row * inputs / MX_BLOCK + unit.i0 / MX_BLOCK;
+                mxfp4_to_f16(
+                    dst,
+                    &packed[p..p + unit.it / 2],
+                    &scales[s..s + unit.it / MX_BLOCK],
+                )?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn f32_to_f16(dst: &mut [u16], src: &[f32]) -> bool {
@@ -501,20 +551,22 @@ impl DenseEngine {
         inputs: usize,
         outputs: usize,
     ) -> Result<(), String> {
-        self.run_bf16(&mut [Job {
+        self.run(&mut [Job {
             x,
             rows,
             inputs,
-            parts: vec![(w, outputs, y)],
+            parts: vec![(Weight::Bf16(w), outputs, y)],
         }])
     }
 
     /// Runs every product of `jobs`, one prediction per weight tile and [`MAX_ROWS`]
     /// rows, converting the next tile on a helper thread while the current one runs.
+    /// bf16 and MXFP4 weights may be mixed.
     ///
     /// # Errors
-    /// As [`Self::matmul_bf16`], with every `y` in an unspecified state.
-    pub fn run_bf16(&mut self, jobs: &mut [Job<'_>]) -> Result<(), String> {
+    /// As [`Self::matmul_bf16`], with every `y` in an unspecified state; also for an
+    /// MXFP4 weight whose width, or this engine's tile, is not a multiple of 32.
+    pub fn run(&mut self, jobs: &mut [Job<'_>]) -> Result<(), String> {
         let tile = self.tile;
         let mut units = Vec::new();
         let mut sources = Vec::new();
@@ -527,14 +579,17 @@ impl DenseEngine {
                     || outputs == 0
                     || job.x.len() < rows * inputs
                     || y.len() < rows * outputs
-                    || w.len() < inputs * outputs
+                    || !w.fits(inputs, outputs)
                 {
                     return Err(format!(
-                        "matmul {rows}x{inputs} -> {outputs}: buffers {}/{}/{} are too small",
-                        w.len(),
+                        "matmul {rows}x{inputs} -> {outputs}: buffers {}/{} or the weight \
+                         do not match (MXFP4 needs inputs % 32 == 0)",
                         job.x.len(),
                         y.len()
                     ));
+                }
+                if matches!(w, Weight::Mxfp4 { .. }) && !tile.is_multiple_of(MX_BLOCK) {
+                    return Err(format!("tile {tile} is not a multiple of {MX_BLOCK}"));
                 }
                 for o0 in (0..outputs).step_by(tile) {
                     for i0 in (0..inputs).step_by(tile) {
@@ -560,14 +615,14 @@ impl DenseEngine {
         }
         let result = std::thread::scope(|scope| -> Result<(), String> {
             let (request, requests) = sync_channel::<(usize, View)>(1);
-            let (report, reports) = sync_channel::<bool>(1);
+            let (report, reports) = sync_channel::<Result<(), String>>(1);
             if units.len() > 1 {
                 let (units, sources) = (&units, &sources);
                 scope.spawn(move || {
                     let mut staging = Vec::new();
                     for (u, mut view) in requests {
-                        let ok = convert_unit(&units[u], sources[u], &mut view, &mut staging);
-                        if report.send(ok).is_err() {
+                        let done = convert_unit(&units[u], sources[u], &mut view, &mut staging);
+                        if report.send(done).is_err() {
                             break;
                         }
                     }
@@ -579,13 +634,11 @@ impl DenseEngine {
             let surface = &self.weights[&(first.ot, first.it, 0)];
             let mut view = surface.lock()?;
             let mut staging = std::mem::take(&mut self.staging);
-            let ok = convert_unit(&first, sources[0], &mut view, &mut staging);
+            let first_done = convert_unit(&first, sources[0], &mut view, &mut staging);
             self.staging = staging;
             surface.unlock();
             self.stats.convert_s += start.elapsed().as_secs_f64();
-            if !ok {
-                return Err("weight outside fp16 range".into());
-            }
+            first_done?;
             for (u, unit) in units.iter().enumerate() {
                 let next = units.get(u + 1).map(|n| (n.ot, n.it, (u + 1) % 2));
                 if let Some(key) = next {
@@ -619,13 +672,13 @@ impl DenseEngine {
                     // Wait for the next tile even after a failed prediction, so no
                     // surface is left locked or written to after returning.
                     let start = Instant::now();
-                    let converted = reports.recv().unwrap_or(false);
+                    let converted = reports
+                        .recv()
+                        .unwrap_or_else(|_| Err("conversion thread stopped".into()));
                     self.weights[&key].unlock();
                     self.stats.convert_s += start.elapsed().as_secs_f64();
                     predicted?;
-                    if !converted {
-                        return Err("weight outside fp16 range".into());
-                    }
+                    converted?;
                 } else {
                     predicted?;
                 }
@@ -634,9 +687,9 @@ impl DenseEngine {
         });
         result?;
         for job in jobs.iter() {
-            for (_, outputs, _) in &job.parts {
+            for (w, outputs, _) in &job.parts {
                 self.stats.calls += 1;
-                self.stats.weight_bytes += (job.inputs * outputs * 2) as u64;
+                self.stats.weight_bytes += w.bytes(job.inputs, *outputs) as u64;
             }
         }
         Ok(())
@@ -662,96 +715,12 @@ impl DenseEngine {
         inputs: usize,
         outputs: usize,
     ) -> Result<(), String> {
-        if !inputs.is_multiple_of(MX_BLOCK)
-            || packed.len() < outputs * inputs / 2
-            || scales.len() < outputs * inputs / MX_BLOCK
-        {
-            return Err(format!(
-                "MXFP4 {outputs}x{inputs}: needs inputs % 32 == 0 and {} packed / {} scale bytes, got {} / {}",
-                outputs * inputs / 2,
-                outputs * inputs / MX_BLOCK,
-                packed.len(),
-                scales.len()
-            ));
-        }
-        self.matmul(x, y, rows, inputs, outputs, MX_BLOCK, |row, i0, dst| {
-            let p = row * inputs / 2 + i0 / 2;
-            let s = row * inputs / MX_BLOCK + i0 / MX_BLOCK;
-            mxfp4_to_f16(
-                dst,
-                &packed[p..p + dst.len() / 2],
-                &scales[s..s + dst.len() / MX_BLOCK],
-            )
-        })?;
-        self.stats.weight_bytes += (inputs * outputs / 2 + outputs * inputs / MX_BLOCK) as u64;
-        Ok(())
-    }
-
-    /// Tiles `y = x . W^T` and runs every tile; `fill(row, i0, dst)` writes weight row
-    /// `row`, columns `i0..i0 + dst.len()`, as fp16 bits. Column tiles start on
-    /// multiples of `align`.
-    #[allow(clippy::too_many_arguments)]
-    fn matmul(
-        &mut self,
-        x: &[f32],
-        y: &mut [f32],
-        rows: usize,
-        inputs: usize,
-        outputs: usize,
-        align: usize,
-        mut fill: impl FnMut(usize, usize, &mut [u16]) -> Result<(), String>,
-    ) -> Result<(), String> {
-        if rows == 0
-            || inputs == 0
-            || outputs == 0
-            || x.len() < rows * inputs
-            || y.len() < rows * outputs
-        {
-            return Err(format!(
-                "matmul {rows}x{inputs} -> {outputs}: buffers {}/{} are too small",
-                x.len(),
-                y.len()
-            ));
-        }
-        if !self.tile.is_multiple_of(align) {
-            return Err(format!("tile {} is not a multiple of {align}", self.tile));
-        }
-        let tile = self.tile;
-        for o0 in (0..outputs).step_by(tile) {
-            let ot = tile.min(outputs - o0);
-            for i0 in (0..inputs).step_by(tile) {
-                let it = tile.min(inputs - i0);
-                let start = Instant::now();
-                let surface = match self.weights.entry((ot, it, 0)) {
-                    std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-                    std::collections::hash_map::Entry::Vacant(e) => e.insert(Surface::new(ot, it)?),
-                };
-                let mut status = Ok(());
-                surface.fill(|r, dst| {
-                    if status.is_ok() {
-                        status = fill(o0 + r, i0, dst);
-                    }
-                })?;
-                status?;
-                self.stats.convert_s += start.elapsed().as_secs_f64();
-                let weight = surface.array.clone();
-                for r0 in (0..rows).step_by(MAX_ROWS) {
-                    let rt = MAX_ROWS.min(rows - r0);
-                    self.predict_tile(
-                        x,
-                        y,
-                        &weight,
-                        (r0, rt),
-                        (i0, it),
-                        (o0, ot),
-                        inputs,
-                        outputs,
-                    )?;
-                }
-            }
-        }
-        self.stats.calls += 1;
-        Ok(())
+        self.run(&mut [Job {
+            x,
+            rows,
+            inputs,
+            parts: vec![(Weight::Mxfp4 { packed, scales }, outputs, y)],
+        }])
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1121,18 +1090,21 @@ mod tests {
             let mut yc = vec![f32::NAN; 5 * 40];
             let mut engine = DenseEngine::with_tile(policy, 64).unwrap();
             engine
-                .run_bf16(&mut [
+                .run(&mut [
                     Job {
                         x: &x0,
                         rows: 3,
                         inputs: 100,
-                        parts: vec![(&a, 150, &mut ya), (&b, 24, &mut yb)],
+                        parts: vec![
+                            (Weight::Bf16(&a), 150, &mut ya),
+                            (Weight::Bf16(&b), 24, &mut yb),
+                        ],
                     },
                     Job {
                         x: &x1,
                         rows: 5,
                         inputs: 24,
-                        parts: vec![(&c, 40, &mut yc)],
+                        parts: vec![(Weight::Bf16(&c), 40, &mut yc)],
                     },
                 ])
                 .unwrap();
@@ -1150,26 +1122,78 @@ mod tests {
     }
 
     #[test]
+    fn bf16_and_mxfp4_products_pipeline_together() {
+        // One input, a bf16 weight then an MXFP4 weight whose values are the same numbers.
+        let (inputs, outputs) = (64, 48);
+        let codes: Vec<u8> = (0..outputs * inputs).map(|i| (i * 7 % 16) as u8).collect();
+        let packed: Vec<u8> = codes.chunks(2).map(|c| c[0] | (c[1] << 4)).collect();
+        let scales: Vec<u8> = (0..outputs * inputs / MX_BLOCK)
+            .map(|i| 122 + (i % 3) as u8)
+            .collect();
+        let bf16_same: Vec<u16> = codes
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| {
+                bf16(E2M1[usize::from(c)] * 2f32.powi(i32::from(scales[i / MX_BLOCK]) - 127))
+            })
+            .collect();
+        let x: Vec<f32> = (0..2 * inputs).map(|i| sample(i, 12)).collect();
+        let (mut a, mut b) = (vec![f32::NAN; 2 * outputs], vec![f32::NAN; 2 * outputs]);
+        let mut engine = DenseEngine::with_tile(ComputePolicy::CpuAndNpu, 32).unwrap();
+        engine
+            .run(&mut [Job {
+                x: &x,
+                rows: 2,
+                inputs,
+                parts: vec![
+                    (Weight::Bf16(&bf16_same), outputs, &mut a),
+                    (
+                        Weight::Mxfp4 {
+                            packed: &packed,
+                            scales: &scales,
+                        },
+                        outputs,
+                        &mut b,
+                    ),
+                ],
+            }])
+            .unwrap();
+        // Both formats expand to the same fp16 surfaces, so the products are identical.
+        assert_eq!(
+            a.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            b.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+        );
+        assert!(rel_rms(&a, &reference(&bf16_same, &x, 2, inputs, outputs)) < 2e-3);
+    }
+
+    #[test]
     fn a_bad_weight_later_in_a_pipeline_is_refused() {
         let good = matrix(8, 4, 1);
         let bad = vec![bf16(1.0e6); 32];
         let x = [0.5_f32; 8];
         let (mut y0, mut y1, mut y2) = (vec![0.0; 4], vec![0.0; 4], vec![0.0; 4]);
         let mut engine = DenseEngine::new(ComputePolicy::CpuOnly).unwrap();
-        let result = engine.run_bf16(&mut [Job {
+        let result = engine.run(&mut [Job {
             x: &x,
             rows: 1,
             inputs: 8,
-            parts: vec![(&good, 4, &mut y0), (&bad, 4, &mut y1), (&good, 4, &mut y2)],
+            parts: vec![
+                (Weight::Bf16(&good), 4, &mut y0),
+                (Weight::Bf16(&bad), 4, &mut y1),
+                (Weight::Bf16(&good), 4, &mut y2),
+            ],
         }]);
         assert!(result.is_err());
         // The engine is still usable afterwards: no surface was left locked.
         engine
-            .run_bf16(&mut [Job {
+            .run(&mut [Job {
                 x: &x,
                 rows: 1,
                 inputs: 8,
-                parts: vec![(&good, 4, &mut y0), (&good, 4, &mut y2)],
+                parts: vec![
+                    (Weight::Bf16(&good), 4, &mut y0),
+                    (Weight::Bf16(&good), 4, &mut y2),
+                ],
             }])
             .unwrap();
         assert!(rel_rms(&y2, &reference(&good, &x, 1, 8, 4)) < 2e-3);
@@ -1192,14 +1216,20 @@ mod tests {
             let start = Instant::now();
             let rounds = distinct / batch;
             for round in 0..rounds {
-                let mut parts: Vec<(&[u16], usize, &mut [f32])> = ys
+                let mut parts: Vec<(Weight<'_>, usize, &mut [f32])> = ys
                     .iter_mut()
                     .enumerate()
-                    .map(|(k, y)| (&weights[round * batch + k][..], outputs, &mut y[..]))
+                    .map(|(k, y)| {
+                        (
+                            Weight::Bf16(&weights[round * batch + k]),
+                            outputs,
+                            &mut y[..],
+                        )
+                    })
                     .collect();
                 if pipelined {
                     engine
-                        .run_bf16(&mut [Job {
+                        .run(&mut [Job {
                             x: &x,
                             rows: 1,
                             inputs,
@@ -1208,6 +1238,7 @@ mod tests {
                         .unwrap();
                 } else {
                     for (w, out, y) in &mut parts {
+                        let Weight::Bf16(w) = *w else { unreachable!() };
                         engine.matmul_bf16(w, &x, y, 1, inputs, *out).unwrap();
                     }
                 }
