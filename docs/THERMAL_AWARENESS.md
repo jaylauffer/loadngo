@@ -2,8 +2,21 @@
 
 ## Status
 
-Proposed Loadngo contract. This document defines the API and implementation
-boundaries; it does not claim that every platform provider exists yet.
+Loadngo contract, partly implemented. This document defines the API and
+implementation boundaries; it does not claim that every platform provider exists yet.
+
+Implemented 2026-09-24 (Claude Code, Jay: "we need to remain cool"): the
+`loadngo-thermal` crate with the portable types, the governor (immediate escalation;
+recovery after three lower samples and a 15 s dwell; unavailable never reported as
+nominal), `FakeProvider`, `UnavailableProvider`, and the macOS/iOS `NativeProvider`
+over `NSProcessInfo.thermalState` (sequence steps 1 and the macOS part of 4). Linux
+sysfs, Android, host ownership (step 3) and the other steps are not built.
+
+First consumer: the Kimi `k3` CLI samples at each token boundary (no timer), prints
+transitions, pauses at `Serious` while re-sampling every 2 s through a loadngo proactor
+deadline, and stops before the next token at `Critical`. Verified with fake-provider
+tests of the pause/stop logic and a live run reporting `nominal` on this Mac mini; no
+throttling episode has been observed yet, so the pause path has not met real heat.
 
 The goal is not to keep every device at one arbitrary temperature. Loadngo
 must react to the best pressure signal each operating system can provide,

@@ -23,6 +23,7 @@ members = [
     "weights",
     "inference",
     "coreml",
+    "thermal",
     "pq-crypto",
     "anchor",
 ]
@@ -45,6 +46,7 @@ default-members = [
     "weights",
     "inference",
     "coreml",
+    "thermal",
     "pq-crypto",
     "anchor",
 ]
