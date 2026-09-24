@@ -46,6 +46,67 @@ an application policy:
   paced frame;
 - a static scene should remain idle until an event or deadline requires work.
 
+## Allocation churn in hot paths is not acceptable
+
+Completion I/O hands a buffer to the kernel and gets it back with the completion. The
+buffer is the caller's to reuse. Allocating a fresh large buffer for every request, then
+freeing it once the data has been copied elsewhere, looks harmless in the source code
+but costs the kernel a page fault for every page touched. A path that does this per
+request, per frame, per token or per cache miss breaks this contract as surely as a
+polling loop does. It burns CPU time and energy in the kernel, and it heats the machine
+while the application's own profile shows nothing wrong.
+
+**The case that set this rule** (Kimi Linear 48B on the Mac mini, 2026-09-24,
+`kimi-k3-in-rust` `kimi-k3-core::linear`). Every routed-expert cache miss did two
+things:
+
+- read three 4.7 MB tensors into freshly allocated `Vec<u8>` buffers;
+- copied each into a freshly allocated `Vec<u16>`, and dropped the evicted expert's
+  buffers.
+
+A 639-token prompt misses about 6,000 experts, which is 86 GB of reads. That pass
+measured:
+
+| Measure | Value |
+|---|---|
+| Minor page faults (`page reclaims` in `/usr/bin/time -l`) | 14,028,682, about 230 GB of freshly faulted memory |
+| System (kernel) time | 49 s |
+| Wall time | 73.5 s |
+
+The fix changed only where memory comes from:
+
+- read buffers come from a pool and go back to it after each batch;
+- misses are read in fixed batches of 32 experts, so the pool stays bounded at about
+  450 MB;
+- the evicted expert's buffers become the new expert's storage in place.
+
+After it, the same pass measured about 7 million faults, 27-28 s of system time and
+58-59 s of wall time (two runs). The remaining faults come from filling the cache for the first time and from
+the kernel copying pages in for `pread`. The bytes read did not change.
+
+**How to recognise it:**
+
+- System time that is a large share of user time in `/usr/bin/time -l`, on a workload
+  that is not doing I/O syscalls in proportion to it.
+- Many `page reclaims` relative to the bytes the workload actually needs.
+- `sample <pid>` showing the time in a copy or `collect` of freshly allocated memory,
+  or in `_kernelrpc_mach_vm_deallocate_trap`, `madvise` or `__bzero`.
+- A copy loop that benchmarks fast on its own (the repacking loop above ran at
+  15-20 GB/s by itself) while the whole path runs far slower.
+
+**What to do instead:**
+
+- Take completion buffers from a bounded pool and return them to it when their data
+  has been consumed.
+- Batch requests in fixed chunks, so the pool has a hard size and the I/O queue stays
+  deep.
+- When something is evicted, write the incoming data into its storage in place instead
+  of dropping one allocation and making another.
+- Keep per-call scratch buffers alive across calls when they are large or the call is
+  frequent.
+- Record the fault count and system time next to the wall-clock result when you claim
+  a path is fixed.
+
 ## Current Position
 
 The core now supplies queued work, deadline ordering, wakeups, cancellation,
