@@ -171,6 +171,7 @@ The minimum meaningful field run is:
 That run is enough to prove that correlation, concurrency, timeout policy, and
 reward gating are coherent before automating the full lifecycle.
 
-For `gretta`, the assigned task should respect a Pi 3B+ capability ceiling and
-still be meaningful, for example a qcoin validator receipt, radio/multicast
-reachability receipt, or bounded repo/service diagnostic.
+For `gretta`, the assigned task should respect its Raspberry Pi 3 Model B
+Rev 1.2 capability ceiling (~930 MiB usable RAM; identity verified 2026-09-23,
+not a Model B+) and still be meaningful, for example a qcoin validator receipt,
+radio/multicast reachability receipt, or bounded repo/service diagnostic.

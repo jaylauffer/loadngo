@@ -21,6 +21,8 @@ members = [
     "audio-io",
     "camera",
     "weights",
+    "inference",
+    "coreml",
     "pq-crypto",
     "anchor",
 ]
@@ -41,6 +43,8 @@ default-members = [
     "audio-io",
     "camera",
     "weights",
+    "inference",
+    "coreml",
     "pq-crypto",
     "anchor",
 ]

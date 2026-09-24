@@ -1,5 +1,11 @@
 # Audio Backends
 
+**2026-09-23 desktop playback update:** native PipeWire session playback is
+being added in Rust to preserve Linux desktop volume/routing, independently
+of direct ALSA capture/monitoring. See [LINUX_DESKTOP_AUDIO.md](LINUX_DESKTOP_AUDIO.md)
+for the new contract, scope and evidence gates. The historical ALSA results
+below do not establish desktop-mixer integration.
+
 Status: **decided 2026-09-11** -- `loadngo-audio-io` replaces `cpal` with
 loadngo-owned platform backends, one platform at a time. CoreAudio (macOS)
 and ALSA (Linux) are in; Windows stays on `cpal` behind the same seam until

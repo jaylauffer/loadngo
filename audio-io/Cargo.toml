@@ -27,6 +27,11 @@ coreaudio-sys = { version = "0.2", default-features = false, features = ["core_a
 # host to install, so `cargo check --target aarch64-unknown-linux-gnu` works
 # from a Mac.
 
+# Desktop playback loads PipeWire's public ABI at runtime. No ALSA bridge,
+# development headers, pkg-config or generated C code are required.
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = "0.8.9"
+
 # Windows stays on `cpal` until a WASAPI backend lands, which waits for a real
 # Windows machine to verify it on (`docs/AUDIO_BACKENDS.md`).
 [target.'cfg(target_os = "windows")'.dependencies]

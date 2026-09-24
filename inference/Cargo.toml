@@ -1,0 +1,9 @@
+[package]
+name = "loadngo-inference"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Bounded local inference conversations, cooperative generation, and UTF-8 streaming"
+
+[dependencies]

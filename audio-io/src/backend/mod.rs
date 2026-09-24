@@ -19,6 +19,11 @@ pub(crate) mod alsa;
 #[cfg(target_os = "linux")]
 pub(crate) use alsa as platform;
 
+// Desktop playback must participate in session volume/routing. Direct ALSA
+// remains the hardware-oriented monitor/capture backend, not a fallback.
+#[cfg(target_os = "linux")]
+pub(crate) mod pipewire;
+
 #[cfg(target_os = "windows")]
 pub(crate) mod cpal_host;
 #[cfg(target_os = "windows")]

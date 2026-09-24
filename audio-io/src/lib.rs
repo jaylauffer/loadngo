@@ -20,6 +20,8 @@ mod backend;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod capabilities;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+mod desktop;
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod devices;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod error;
@@ -38,6 +40,8 @@ pub use capabilities::{
     InputCapabilities, ResolutionSource, SampleEncoding, SampleResolution,
     STANDARD_SAMPLE_RATES_HZ,
 };
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+pub use desktop::{open_desktop_output_stream, DesktopOutputOptions, DesktopOutputStream};
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub use devices::{list_input_devices, list_output_devices, AudioDeviceInfo};
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]

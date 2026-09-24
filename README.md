@@ -26,6 +26,7 @@ written in rust for reliability and performance, platform agnostic.
 - `network`: networking primitives and protocol tests.
 - `task`: app surface for Task planning features.
 - `proactor` (`loadngo-proactor`): async I/O and event processing primitives.
+- `inference` (`loadngo-inference`): bounded local conversation state, cooperative generation and UTF-8 streaming; [scope and limits](docs/LOCAL_INFERENCE.md).
 - `touch` (`loadngo-touch`): touch input handling components.
 - `audio-io` (`loadngo-audio-io`): pitch detection plus (desktop) live
   audio-input device enumeration and low-latency input-to-output
