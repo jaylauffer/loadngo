@@ -7,3 +7,9 @@ license.workspace = true
 description = "Bounded local inference conversations, cooperative generation, and UTF-8 streaming"
 
 [dependencies]
+serde_json.workspace = true
+# `cas` feature: tools over a signed Archive CAS snapshot (pulls in data + PQ crypto).
+data = { path = "../data", optional = true }
+
+[features]
+cas = ["dep:data"]

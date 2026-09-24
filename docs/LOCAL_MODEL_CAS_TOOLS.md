@@ -1,23 +1,27 @@
-# Local models read through the loadngo CAS: plan
+# File access for local models: the local drive and the loadngo CAS
 
-Status: plan, 2026-09-24 (Claude Code). Jay: "We should enable Kimi to leverage the loadngo
-CAS, that should be her default capability." Nothing here is built yet.
+Status, 2026-09-24 (Claude Code): **built and used live** by Kimi Linear 48B-A3B. Jay:
+"Kimi needs both basic file system access so she can read files on the local drive and
+CAS capabilities"; the CAS is her default capability alongside ordinary read access.
 
-## The idea
+## Two tool families, both read-only
 
-A local model (Kimi Linear today, K3 later) gets read access to files, but never to the
-live filesystem. Its only view is a **signed Archive CAS snapshot**: a manifest mapping
-paths to BLAKE3 object hashes, whose root hash carries Jay's Dilithium signature. That
-gives, for free, what an agent's file access otherwise lacks:
+- **Local drive (`fs_*`, `loadngo-inference::tools::FsTools`)**: ordinary read access,
+  the established norm for coding agents. Relative paths start at `--fs-base` (the pudding
+  folder from the launcher); absolute paths anywhere the user can read. Refused: key and
+  credential stores (`~/.ssh`, `~/.gnupg`, `~/.loadngo/keys`, `~/.aws`, `~/.config/gh`,
+  `~/Library/Keychains`) and files that look like private keys (`*.key`, `*.pem`, `id_*`,
+  `.env`), checked after resolving symlinks. Walks skip `.git`, `target`, `node_modules`.
+- **Signed snapshot (`cas_*`, `loadngo-inference::cas_tools` over
+  `data::archive_view::ArchiveView`)**: the same kinds of reads against a signed Archive
+  CAS snapshot, with provenance the live drive cannot give:
+  - every file is BLAKE3-verified against the manifest before a byte reaches the model;
+  - every result names the snapshot's signed root and signer, and `cas_read`/`cas_find`
+    name each file's object hash, so any claim about a file can be checked by anyone
+    holding the public key (`COLLABORATION.md` rule 5 applied to a model);
+  - it answers about one identified state, not a checkout mid-edit.
 
-- **Nothing to damage.** Reads come from immutable objects; there is no write path and
-  no path outside the manifest.
-- **Every quote is checkable.** Each tool result names the path, the object hash and the
-  signed root, so a claim like "`foo.rs` line 40 does X" can be verified by anyone holding
-  the public key, the same standard the workspace applies to agents' status claims
-  (`COLLABORATION.md` rule 5).
-- **A known state.** The model answers about one identified snapshot, not whatever the
-  checkout happens to hold mid-edit.
+Nothing in either family writes, deletes, executes or uses the network.
 
 ## What already exists (verified in `data/`)
 
@@ -33,7 +37,7 @@ gives, for free, what an agent's file access otherwise lacks:
 
 That snapshot predates this week's work, so refreshing it (below) is part of the plan.
 
-## Tools the model gets
+## CAS tools
 
 Declared through the model's own tool format: Kimi Linear's `chat_template.jinja`
 has a `tool_declare` system message, `<|tool_calls_section_begin|>` / `<|tool_call_begin|>`
@@ -42,39 +46,46 @@ tokens as single ids (163595-163599). All read-only, all bounded:
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `cas_list` | `path` (directory) | children with kind, size, object hash; at most 200 entries per call |
+| `cas_list` | `path` (directory) | children with kind and size (hashes via `cas_read`/`cas_find`, to keep listings short); at most 200 entries |
 | `cas_find` | `pattern` (path glob) | matching paths from the manifest; at most 100 |
 | `cas_read` | `path`, optional `line_start`, `line_count` | UTF-8 text, at most 16 KiB per call; binaries report size and hash only |
 | `cas_grep` | `pattern` (literal), optional `path_prefix` | matching lines with path:line, scanning at most 32 MiB of text per call |
 
-Every result starts with `root <hex> (signed by jay-macmini)`, `path` and `object <hex>`.
-Each blob is BLAKE3-verified before any byte of it reaches the model.
+Every result starts with `snapshot <id> root <hex> signed by <signer>`. The local tools
+mirror them: `fs_list`, `fs_read` (16 KiB, line windows), `fs_find` (glob), `fs_grep`
+(literal, 32 MiB scanned, 100 matches).
 
-## Where the code goes
+## Where the code is
 
-- **loadngo (BSD-3), `data`:** a read-only `ArchiveView`: open a root, check the
-  signature against a trusted key, build a path index once, and serve list/find/read/grep
-  with the bounds above. No model knowledge.
-- **loadngo, `inference`:** a model-independent tool loop in the chat session: detect a
-  completed tool call in the generated tokens, execute it (bounded, cancellable), append
-  the result turn, and continue generation. Undo/reset/continue keep their current
-  meaning.
-- **kimi-k3-in-rust (Apache), `chat.rs`:** the Kimi Linear tool-call encoding and parsing
-  (the `<|tool_*|>` tokens), and the tool declaration in the system turn. K3's XTML tool
-  format later, from `encoding_k3.py`.
-- **Launcher:** `--cas-root` (default: the newest snapshot that verifies against the
-  trusted key); chat refuses to start tools on an unsigned or mismatched root and says so.
+- loadngo `inference/src/tools.rs`: `Tool`, `Toolbox` (JSON function declarations, calls
+  by name), `FsTools`, glob and text helpers. No new dependencies beyond `serde_json`.
+- loadngo `inference/src/cas_tools.rs` behind the `cas` feature, and
+  `data/src/archive_view.rs`: a snapshot is trusted only when its signature verifies
+  against the trusted key, the manifest it names is an intact CAS object, and that
+  object's digest is the signed root. Unsigned manifests are never opened.
+- kimi-k3-in-rust `crates/kimi-k3-cli/src/chat.rs`: Kimi Linear's `tool_declare` message,
+  `<|tool_call_begin|>id<|tool_call_argument_begin|>args<|tool_call_end|>` parsing, results
+  as `## Return of <id>` tool messages, at most 8 tool rounds per question, results
+  shortened to fit the context. `k3` flags `--fs-base`, `--cas-root`, `--cas-key`,
+  `--no-tools`; the launcher passes the pudding folder, the Zhoenus II snapshot when
+  mounted, and the public key from `~/.loadngo/keys` (never the copy on the archive drive).
 
-## Default behaviour
+## Evidence, 2026-09-24
 
-- Tools on by default in chat when a verified snapshot is found; `--no-tools` turns them
-  off. Without a verified snapshot, chat still works, without tools, and prints why.
-- Tool calls execute automatically (they are side-effect free) and are echoed in the
-  terminal as they happen: `[cas_read kimi-k3-in-rust/crates/kimi-k3-core/src/linear.rs
-  1-80 -> object 3fa1...]`.
-- No writes. A later step could let the model *propose* changes as new CAS objects and a
-  candidate manifest that only Jay signs, which fits `PUDDING_CAS_PQ_MODEL.md`, but that is
-  out of scope here.
+- Unit tests: filesystem read/find/grep with bounds, secret refusal, malformed calls;
+  archive view refuses a tampered blob, an untrusted key and an unsigned root.
+- Real snapshot: `pudding-20260917` root `d8ec110f...` (157,874 files) opens and
+  verifies in 0.79-0.86 s; `cas_read` returns `loadngo/proactor/src/lib.rs` verified.
+- Real tokenizer: a two-call reply parses to the exact ids and arguments.
+- Live chat through the launcher: asked for the first lines of `launch-kimi-k3.sh`, Kimi
+  called `fs_read {"path": "launch-kimi-k3.sh", "line_start": 1, "line_count": 5}` and
+  answered "zsh ... the shebang line `#!/usr/bin/env zsh`". Asked about the snapshot,
+  she called `cas_list {"path": ""}` and named real top-level repositories (loadngo,
+  loadngo-cpp, kimi-k3-in-c, qcoin, sng-rusty, ...); her one-line descriptions of them
+  were guesses, not read.
+- Cost: the replies took 104-570 s. The 5 KB listing added ~2,400 prompt tokens at about
+  0.2 s each (listings have since been shortened), and the tool declarations cost ~800
+  prompt tokens at the start of each conversation.
 
 ## Keeping the snapshot current
 
@@ -95,11 +106,12 @@ are usable in earnest only after faster prompt processing (`METAL_COMPUTE_PLAN.m
 Building the tools first is still worthwhile: the loop, bounds and provenance can be
 tested with small reads now.
 
-## Phases and gates
+## Still open
 
-| Phase | Work | Gate |
-|---|---|---|
-| C0 | `ArchiveView` in `data` with list/find/read/grep and signature checking | unit tests on a scratch signed root: tampered manifest, wrong key and tampered blob are all refused; bounds enforced |
-| C1 | Tool loop in `inference`; Kimi Linear tool encoding in kimi | fake-model tests of call parsing, execution, cancellation and undo; the real tokenizer's tool tokens are single ids |
-| C2 | Live: Kimi Linear answers a question that needs a file, from the signed snapshot | transcript recorded with each result's path, object and root; the answer checked against the file |
-| C3 | Scoped code snapshot on Jarraya, signed by Jay; measured ingest time | root verifies; model can read this week's code |
+- **Speed.** Prompt processing (~0.2 s per token measured here) makes file-heavy questions
+  take minutes; that is `METAL_COMPUTE_PLAN.md`'s work, plus caching the tool-declaration
+  prefix across conversations.
+- **A current snapshot.** `pudding-20260917` predates this week; a code-only snapshot on
+  Jarraya, signed by Jay, would let the CAS tools see current code.
+- K3's own tool format (XTML, `encoding_k3.py`); K3 chat has no tools yet.
+- Proposals as new CAS objects that Jay signs, if writing is ever wanted.

@@ -13,6 +13,7 @@ pub use types::{Atom, Duration, Id, Ip, TimeStamp};
 pub mod action;
 pub mod archive_cas;
 pub mod archive_cas_sign;
+pub mod archive_view;
 pub mod cas;
 pub mod cli;
 pub mod clipboard;

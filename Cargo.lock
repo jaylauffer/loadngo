@@ -1523,6 +1523,10 @@ dependencies = [
 [[package]]
 name = "loadngo-inference"
 version = "0.1.0"
+dependencies = [
+ "data",
+ "serde_json",
+]
 
 [[package]]
 name = "loadngo-localization"
