@@ -106,13 +106,46 @@ at P=1 and P=4 alike, so per-prediction overhead is small next to weight bandwid
 
 Predictions are synchronous from the model's compute loop, which would otherwise be
 running the same product on the CPU; nothing runs inside a proactor completion handler or
-UI callback. Overlapping conversion of the next tile with the current prediction (the
-async API) is the next refinement, not yet built.
+UI callback.
+
+### Per-token conversion and call count, measured (2026-09-24)
+
+Jay asked to remove Kimi Linear's two per-token costs:
+
+- converting 6.4 GB of resident bf16 weights to fp16 on every token;
+- about 1,000 Core ML predictions per token.
+
+Three designs were measured with `DenseEngine` tests on a 1024x2304 expert-sized
+weight, then in the real model.
+
+| Design | Per product | Real model | Result |
+|---|---|---|---|
+| Convert on every call (before) | 0.40-0.46 ms | 1.17-1.29 tok/s | the baseline |
+| fp16 held in its own surface, converted once | 0.25 ms with 1-16 surfaces, 0.36 ms with 600 | no faster: prediction time rose from 9.1 s to 15.8 s over 24 tokens, with 4 s more kernel time | rejected |
+| Several products per prediction | 0.31-0.48 ms each; worse above ~28 MB of weights per prediction | slower: 1.02 tok/s | rejected |
+| Convert the next weight on a helper thread while the current one runs | 0.25-0.26 ms | 1.68-1.75 tok/s over 48 tokens | built |
+
+Prepared surfaces lose in the real model because the Neural Engine is fast only on
+memory it has read recently. Cycling through about 5,000 distinct surfaces (26 GB) costs
+about as much as converting into a few reused surfaces. Call count was never the cost:
+the time goes to streaming weights at 15-25 GB/s.
+
+So `DenseEngine::run_bf16` takes a list of products and pipelines them:
+
+- weight tiles alternate between two surfaces per shape;
+- a scoped helper thread converts tile n+1 while tile n predicts;
+- the engine waits for the helper before returning, so no surface is left locked
+  after an error.
+
+`matmul_bf16` is `run_bf16` with one product. A single-tile product has nothing to
+overlap with, so it is converted in line with no thread.
 
 ### Verification
 
-`cargo test -p loadngo-coreml` on this Mac: 8 tests, including exhaustive checks that the
-bf16 conversion matches hardware rounding for all 65,536 bf16 patterns (both the vector
+`cargo test -p loadngo-coreml` on this Mac: 10 tests. The two newest check pipelined
+jobs across tiles and shapes against f64 references on the CPU and the ANE, and that a
+bad weight later in a pipeline is refused without leaving a surface locked. The others
+include exhaustive checks that the bf16 conversion matches hardware rounding for all 65,536 bf16 patterns (both the vector
 and the scalar path) and that MXFP4 expansion matches it for every code and every finite
 scale; tiled bf16 and MXFP4 products against f64 references on the real ANE; refusal of
 out-of-range values. Strict Clippy passes for macOS, aarch64 Linux and x86_64 Windows
@@ -124,7 +157,8 @@ Kimi K3 results on the released checkpoint are recorded in
 ### Still open
 
 - Windows/Android NPU backends: none. The `compute` API has one real backend.
-- Async double-buffering (convert tile n+1 while tile n predicts).
+- The first tile of each `run_bf16` call is still converted without overlap. Keeping one
+  weight ahead across calls would need the caller to announce the next step's weights.
 - No int8/int4 weight path: Core ML palettized weights need baked models.
 - No hardware execution trace; placement evidence is the compute plan plus the fp16
   error signature and timing, not an ANE counter.

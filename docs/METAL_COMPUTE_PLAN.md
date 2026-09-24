@@ -21,8 +21,8 @@ weights can be read, not by arithmetic. Measured on Kimi Linear 48B-A3B with
 
 | Cost per token | Measured | Cause |
 |---|---|---|
-| ~980 synchronous Core ML predictions | ~0.37 s | one call per matrix per layer; small expert matrices are dominated by fixed call overhead |
-| bf16 -> fp16 conversion of 6.4 GB | ~0.23 s | the ANE takes fp16, so resident bf16 weights are converted again every token |
+| ~980 synchronous Core ML predictions | ~0.37 s | the ANE streaming weights at 15-25 GB/s; measured later, call overhead is not the cost (`NPU_ACCELERATION.md`) |
+| bf16 -> fp16 conversion of 6.4 GB | ~0.23 s | the ANE takes fp16; now mostly hidden by converting on a helper thread during the previous prediction (1.31 -> 1.68 tok/s) |
 | the rest | ~0.15 s | single-threaded scalar CPU attention/routing, expert reads from disk |
 
 Two structural limits sit under that: the ANE streamed weights at 24-29 GB/s in every

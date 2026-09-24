@@ -10,6 +10,16 @@
 //! falls for tiles above ~12288, so matrices are tiled to [`TILE`]: row tiles are
 //! independent, column tiles are summed in fp32 here.
 //!
+//! [`DenseEngine::run_bf16`] takes several products at once and converts the next
+//! weight tile on a helper thread while the Neural Engine computes the current one, so a
+//! caller that knows its next products (a model layer) pays for conversion only where it
+//! is slower than the prediction it overlaps. Measured alternatives on an expert-sized
+//! 1024x2304 weight (2026-09-24): converting every call 0.40-0.46 ms per product; fp16
+//! prepared once into its own surface 0.25 ms while few surfaces are in use, rising to
+//! 0.36 ms with hundreds and no faster than converting across a real model's ~5,000,
+//! with more kernel time; several products in one prediction 0.31-0.48 ms each. The
+//! device is limited by streaming weights it has not read recently, not by call count.
+//!
 //! Numerics are fp16 on the device: inputs are rounded to fp16, and a bf16 weight is
 //! exact in fp16 except below fp16's normal range (flushed toward zero). A value outside
 //! fp16's finite range is refused with an error, never saturated, so the caller can
@@ -45,6 +55,7 @@ use std::{
     path::PathBuf,
     ptr::NonNull,
     sync::atomic::{AtomicU64, Ordering},
+    sync::mpsc::sync_channel,
     time::Instant,
 };
 
@@ -148,6 +159,58 @@ impl Surface {
     }
 }
 
+/// A locked surface's rows, written by the conversion thread. The engine holds the lock
+/// from [`Surface::lock`] until that thread reports back, then calls [`Surface::unlock`].
+struct View {
+    base: *mut u16,
+    stride: usize,
+    cols: usize,
+}
+
+// SAFETY: a view is created for a locked surface, handed to exactly one thread, and the
+// surface is unlocked only after that thread has finished writing through it.
+unsafe impl Send for View {}
+
+impl View {
+    /// # Safety
+    /// `r` must be below the locked surface's row count, and no other row slice from
+    /// this view may be alive.
+    unsafe fn row(&mut self, r: usize) -> &mut [u16] {
+        std::slice::from_raw_parts_mut(self.base.add(r * self.stride), self.cols)
+    }
+}
+
+impl Surface {
+    fn lock(&self) -> Result<View, String> {
+        // SAFETY: public CoreVideo calls on a buffer this surface owns; on failure the
+        // lock is released before returning.
+        unsafe {
+            let status = CVPixelBufferLockBaseAddress(&self.buffer, CVPixelBufferLockFlags(0));
+            if status != 0 {
+                return Err(format!("CVPixelBufferLockBaseAddress failed: {status}"));
+            }
+            let base = CVPixelBufferGetBaseAddress(&self.buffer).cast::<u16>();
+            let stride = CVPixelBufferGetBytesPerRow(&self.buffer) / 2;
+            if base.is_null() || stride < self.cols {
+                CVPixelBufferUnlockBaseAddress(&self.buffer, CVPixelBufferLockFlags(0));
+                return Err("pixel buffer has no usable base address".into());
+            }
+            Ok(View {
+                base,
+                stride,
+                cols: self.cols,
+            })
+        }
+    }
+
+    fn unlock(&self) {
+        // SAFETY: pairs with a successful `lock`.
+        unsafe {
+            CVPixelBufferUnlockBaseAddress(&self.buffer, CVPixelBufferLockFlags(0));
+        }
+    }
+}
+
 struct Loaded {
     model: Retained<MLModel>,
     compiled: Retained<NSURL>,
@@ -158,7 +221,9 @@ pub struct DenseEngine {
     tile: usize,
     dir: PathBuf,
     models: HashMap<(usize, usize, usize), Loaded>,
-    weights: HashMap<(usize, usize), Surface>,
+    /// Weight surfaces by (outputs, inputs, parity): consecutive tiles of a
+    /// [`DenseEngine::run_bf16`] alternate parity, so one is filled while the other runs.
+    weights: HashMap<(usize, usize, usize), Surface>,
     inputs: HashMap<(usize, usize), Surface>,
     staging: Vec<f32>,
     stats: DenseStats,
@@ -306,6 +371,41 @@ unsafe fn mxfp4_block_neon(dst: *mut u16, packed: *const u8, k: i32) {
     }
 }
 
+/// Products that share one input: for each part `(w, outputs, y)`,
+/// `y[r][o] = sum_i w[o][i] * x[r][i]`, with `w` bf16 words `[outputs][inputs]`, `x`
+/// `[rows][inputs]` and `y` `[rows][outputs]`.
+pub struct Job<'a> {
+    pub x: &'a [f32],
+    pub rows: usize,
+    pub inputs: usize,
+    pub parts: Vec<(&'a [u16], usize, &'a mut [f32])>,
+}
+
+/// One weight tile of a [`Job`] part, in prediction order.
+#[derive(Clone, Copy)]
+struct Unit {
+    job: usize,
+    part: usize,
+    o0: usize,
+    ot: usize,
+    i0: usize,
+    it: usize,
+}
+
+/// Converts one unit's tile of `w` (`inputs` wide) into a locked weight surface.
+fn convert_unit(
+    unit: &Unit,
+    (w, inputs): (&[u16], usize),
+    view: &mut View,
+    staging: &mut Vec<f32>,
+) -> bool {
+    (0..unit.ot).all(|r| {
+        let at = (unit.o0 + r) * inputs + unit.i0;
+        // SAFETY: `r < unit.ot`, the surface's row count; one row slice at a time.
+        bf16_to_f16(unsafe { view.row(r) }, &w[at..at + unit.it], staging)
+    })
+}
+
 fn f32_to_f16(dst: &mut [u16], src: &[f32]) -> bool {
     if !src.iter().all(|v| v.abs() <= FP16_MAX) {
         return false;
@@ -401,21 +501,144 @@ impl DenseEngine {
         inputs: usize,
         outputs: usize,
     ) -> Result<(), String> {
-        if w.len() < inputs * outputs {
-            return Err(format!("bf16 weight {} < {outputs}x{inputs}", w.len()));
-        }
-        let mut staging = std::mem::take(&mut self.staging);
-        let result = self.matmul(x, y, rows, inputs, outputs, 1, |row, i0, dst| {
-            let at = row * inputs + i0;
-            if bf16_to_f16(dst, &w[at..at + dst.len()], &mut staging) {
-                Ok(())
-            } else {
-                Err("weight outside fp16 range".into())
+        self.run_bf16(&mut [Job {
+            x,
+            rows,
+            inputs,
+            parts: vec![(w, outputs, y)],
+        }])
+    }
+
+    /// Runs every product of `jobs`, one prediction per weight tile and [`MAX_ROWS`]
+    /// rows, converting the next tile on a helper thread while the current one runs.
+    ///
+    /// # Errors
+    /// As [`Self::matmul_bf16`], with every `y` in an unspecified state.
+    pub fn run_bf16(&mut self, jobs: &mut [Job<'_>]) -> Result<(), String> {
+        let tile = self.tile;
+        let mut units = Vec::new();
+        let mut sources = Vec::new();
+        for (j, job) in jobs.iter().enumerate() {
+            let (rows, inputs) = (job.rows, job.inputs);
+            for (k, (w, outputs, y)) in job.parts.iter().enumerate() {
+                let outputs = *outputs;
+                if rows == 0
+                    || inputs == 0
+                    || outputs == 0
+                    || job.x.len() < rows * inputs
+                    || y.len() < rows * outputs
+                    || w.len() < inputs * outputs
+                {
+                    return Err(format!(
+                        "matmul {rows}x{inputs} -> {outputs}: buffers {}/{}/{} are too small",
+                        w.len(),
+                        job.x.len(),
+                        y.len()
+                    ));
+                }
+                for o0 in (0..outputs).step_by(tile) {
+                    for i0 in (0..inputs).step_by(tile) {
+                        units.push(Unit {
+                            job: j,
+                            part: k,
+                            o0,
+                            ot: tile.min(outputs - o0),
+                            i0,
+                            it: tile.min(inputs - i0),
+                        });
+                        sources.push((*w, inputs));
+                    }
+                }
             }
+        }
+        for (u, unit) in units.iter().enumerate() {
+            if let std::collections::hash_map::Entry::Vacant(e) =
+                self.weights.entry((unit.ot, unit.it, u % 2))
+            {
+                e.insert(Surface::new(unit.ot, unit.it)?);
+            }
+        }
+        let result = std::thread::scope(|scope| -> Result<(), String> {
+            let (request, requests) = sync_channel::<(usize, View)>(1);
+            let (report, reports) = sync_channel::<bool>(1);
+            if units.len() > 1 {
+                let (units, sources) = (&units, &sources);
+                scope.spawn(move || {
+                    let mut staging = Vec::new();
+                    for (u, mut view) in requests {
+                        let ok = convert_unit(&units[u], sources[u], &mut view, &mut staging);
+                        if report.send(ok).is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            // The first tile has nothing to overlap with.
+            let start = Instant::now();
+            let first = units[0];
+            let surface = &self.weights[&(first.ot, first.it, 0)];
+            let mut view = surface.lock()?;
+            let mut staging = std::mem::take(&mut self.staging);
+            let ok = convert_unit(&first, sources[0], &mut view, &mut staging);
+            self.staging = staging;
+            surface.unlock();
+            self.stats.convert_s += start.elapsed().as_secs_f64();
+            if !ok {
+                return Err("weight outside fp16 range".into());
+            }
+            for (u, unit) in units.iter().enumerate() {
+                let next = units.get(u + 1).map(|n| (n.ot, n.it, (u + 1) % 2));
+                if let Some(key) = next {
+                    request
+                        .send((u + 1, self.weights[&key].lock()?))
+                        .map_err(|_| "conversion thread stopped")?;
+                }
+                let weight = self.weights[&(unit.ot, unit.it, u % 2)].array.clone();
+                let job = &mut jobs[unit.job];
+                let (x, rows, inputs) = (job.x, job.rows, job.inputs);
+                let (_, outputs, y) = &mut job.parts[unit.part];
+                let outputs = *outputs;
+                let mut predicted = Ok(());
+                for r0 in (0..rows).step_by(MAX_ROWS) {
+                    let rt = MAX_ROWS.min(rows - r0);
+                    predicted = self.predict_tile(
+                        x,
+                        y,
+                        &weight,
+                        (r0, rt),
+                        (unit.i0, unit.it),
+                        (unit.o0, unit.ot),
+                        inputs,
+                        outputs,
+                    );
+                    if predicted.is_err() {
+                        break;
+                    }
+                }
+                if let Some(key) = next {
+                    // Wait for the next tile even after a failed prediction, so no
+                    // surface is left locked or written to after returning.
+                    let start = Instant::now();
+                    let converted = reports.recv().unwrap_or(false);
+                    self.weights[&key].unlock();
+                    self.stats.convert_s += start.elapsed().as_secs_f64();
+                    predicted?;
+                    if !converted {
+                        return Err("weight outside fp16 range".into());
+                    }
+                } else {
+                    predicted?;
+                }
+            }
+            Ok(())
         });
-        self.staging = staging;
         result?;
-        self.stats.weight_bytes += (inputs * outputs * 2) as u64;
+        for job in jobs.iter() {
+            for (_, outputs, _) in &job.parts {
+                self.stats.calls += 1;
+                self.stats.weight_bytes += (job.inputs * outputs * 2) as u64;
+            }
+        }
         Ok(())
     }
 
@@ -499,7 +722,7 @@ impl DenseEngine {
             for i0 in (0..inputs).step_by(tile) {
                 let it = tile.min(inputs - i0);
                 let start = Instant::now();
-                let surface = match self.weights.entry((ot, it)) {
+                let surface = match self.weights.entry((ot, it, 0)) {
                     std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
                     std::collections::hash_map::Entry::Vacant(e) => e.insert(Surface::new(ot, it)?),
                 };
@@ -511,9 +734,19 @@ impl DenseEngine {
                 })?;
                 status?;
                 self.stats.convert_s += start.elapsed().as_secs_f64();
+                let weight = surface.array.clone();
                 for r0 in (0..rows).step_by(MAX_ROWS) {
                     let rt = MAX_ROWS.min(rows - r0);
-                    self.predict_tile(x, y, (r0, rt), (i0, it), (o0, ot), inputs, outputs)?;
+                    self.predict_tile(
+                        x,
+                        y,
+                        &weight,
+                        (r0, rt),
+                        (i0, it),
+                        (o0, ot),
+                        inputs,
+                        outputs,
+                    )?;
                 }
             }
         }
@@ -526,6 +759,7 @@ impl DenseEngine {
         &mut self,
         x: &[f32],
         y: &mut [f32],
+        weight: &MLMultiArray,
         (r0, rt): (usize, usize),
         (i0, it): (usize, usize),
         (o0, ot): (usize, usize),
@@ -551,7 +785,6 @@ impl DenseEngine {
             return Err("activation outside fp16 range".into());
         }
         let x_array = input.array.clone();
-        let w_array = self.weights[&(ot, it)].array.clone();
         self.stats.convert_s += start.elapsed().as_secs_f64();
         let start = Instant::now();
         let model = self.model(bucket, it, ot)?.model.clone();
@@ -561,7 +794,7 @@ impl DenseEngine {
         let result = autoreleasepool(|_| unsafe {
             let keys = [NSString::from_str("x"), NSString::from_str("w")];
             let x_value = MLFeatureValue::featureValueWithMultiArray(&x_array);
-            let w_value = MLFeatureValue::featureValueWithMultiArray(&w_array);
+            let w_value = MLFeatureValue::featureValueWithMultiArray(weight);
             let objects: [&AnyObject; 2] = [&x_value, &w_value];
             let dict = NSDictionary::from_slices(&[&*keys[0], &*keys[1]], &objects);
             let provider = MLDictionaryFeatureProvider::initWithDictionary_error(
@@ -843,6 +1076,148 @@ mod tests {
             "mxfp4->fp16: {:.1} G elements/s",
             src.len() as f64 / s / 1e9
         );
+    }
+
+    fn reference(w: &[u16], x: &[f32], rows: usize, inputs: usize, outputs: usize) -> Vec<f64> {
+        let mut y = vec![0.0_f64; rows * outputs];
+        for r in 0..rows {
+            for o in 0..outputs {
+                y[r * outputs + o] = (0..inputs)
+                    .map(|i| {
+                        f64::from(f16::from_f32(x[r * inputs + i]).to_f32())
+                            * f64::from(f32::from_bits(u32::from(w[o * inputs + i]) << 16))
+                    })
+                    .sum();
+            }
+        }
+        y
+    }
+
+    fn rel_rms(got: &[f32], want: &[f64]) -> f64 {
+        let (mut num, mut den) = (0.0, 0.0);
+        for (g, r) in got.iter().zip(want) {
+            num += (f64::from(*g) - r).powi(2);
+            den += r * r;
+        }
+        (num / den).sqrt()
+    }
+
+    fn matrix(inputs: usize, outputs: usize, seed: u32) -> Vec<u16> {
+        (0..inputs * outputs)
+            .map(|i| bf16(sample(i, seed) / 16.0))
+            .collect()
+    }
+
+    #[test]
+    fn pipelined_jobs_match_reference_across_tiles_and_shapes() {
+        for policy in [ComputePolicy::CpuOnly, ComputePolicy::CpuAndNpu] {
+            // Job 0: one input for two weights, the first 3 x 2 tiles of 64; job 1: a
+            // different width and row count. Consecutive tiles alternate surfaces.
+            let (a, b, c) = (matrix(100, 150, 1), matrix(100, 24, 2), matrix(24, 40, 3));
+            let x0: Vec<f32> = (0..3 * 100).map(|i| sample(i, 4)).collect();
+            let x1: Vec<f32> = (0..5 * 24).map(|i| sample(i, 5)).collect();
+            let mut ya = vec![f32::NAN; 3 * 150];
+            let mut yb = vec![f32::NAN; 3 * 24];
+            let mut yc = vec![f32::NAN; 5 * 40];
+            let mut engine = DenseEngine::with_tile(policy, 64).unwrap();
+            engine
+                .run_bf16(&mut [
+                    Job {
+                        x: &x0,
+                        rows: 3,
+                        inputs: 100,
+                        parts: vec![(&a, 150, &mut ya), (&b, 24, &mut yb)],
+                    },
+                    Job {
+                        x: &x1,
+                        rows: 5,
+                        inputs: 24,
+                        parts: vec![(&c, 40, &mut yc)],
+                    },
+                ])
+                .unwrap();
+            assert_eq!(engine.stats().predictions, 6 + 2 + 1);
+            assert_eq!(engine.stats().calls, 3);
+            for (got, w, x, rows, inputs, outputs) in [
+                (&ya, &a, &x0, 3, 100, 150),
+                (&yb, &b, &x0, 3, 100, 24),
+                (&yc, &c, &x1, 5, 24, 40),
+            ] {
+                let rel = rel_rms(got, &reference(w, x, rows, inputs, outputs));
+                assert!(rel < 2e-3, "{policy:?} {outputs}x{inputs}: rel RMS {rel}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_bad_weight_later_in_a_pipeline_is_refused() {
+        let good = matrix(8, 4, 1);
+        let bad = vec![bf16(1.0e6); 32];
+        let x = [0.5_f32; 8];
+        let (mut y0, mut y1, mut y2) = (vec![0.0; 4], vec![0.0; 4], vec![0.0; 4]);
+        let mut engine = DenseEngine::new(ComputePolicy::CpuOnly).unwrap();
+        let result = engine.run_bf16(&mut [Job {
+            x: &x,
+            rows: 1,
+            inputs: 8,
+            parts: vec![(&good, 4, &mut y0), (&bad, 4, &mut y1), (&good, 4, &mut y2)],
+        }]);
+        assert!(result.is_err());
+        // The engine is still usable afterwards: no surface was left locked.
+        engine
+            .run_bf16(&mut [Job {
+                x: &x,
+                rows: 1,
+                inputs: 8,
+                parts: vec![(&good, 4, &mut y0), (&good, 4, &mut y2)],
+            }])
+            .unwrap();
+        assert!(rel_rms(&y2, &reference(&good, &x, 1, 8, 4)) < 2e-3);
+    }
+
+    /// Per-product cost on one expert-sized shape, converting in line against
+    /// converting the next weight while the current one runs.
+    /// `cargo test --release -p loadngo-coreml -- --ignored --nocapture pipelined_conversion_rate`
+    #[test]
+    #[ignore = "timing only; allocates ~2.8 GB"]
+    fn pipelined_conversion_rate() {
+        let (inputs, outputs, distinct, batch) = (2304, 1024, 600, 18);
+        let weights: Vec<Vec<u16>> = (0..distinct)
+            .map(|k| matrix(inputs, outputs, k as u32))
+            .collect();
+        let x: Vec<f32> = (0..inputs).map(|i| sample(i, 10)).collect();
+        let mut ys = vec![vec![0.0_f32; outputs]; batch];
+        let mut engine = DenseEngine::new(ComputePolicy::CpuAndNpu).unwrap();
+        for pipelined in [false, true, false, true] {
+            let start = Instant::now();
+            let rounds = distinct / batch;
+            for round in 0..rounds {
+                let mut parts: Vec<(&[u16], usize, &mut [f32])> = ys
+                    .iter_mut()
+                    .enumerate()
+                    .map(|(k, y)| (&weights[round * batch + k][..], outputs, &mut y[..]))
+                    .collect();
+                if pipelined {
+                    engine
+                        .run_bf16(&mut [Job {
+                            x: &x,
+                            rows: 1,
+                            inputs,
+                            parts,
+                        }])
+                        .unwrap();
+                } else {
+                    for (w, out, y) in &mut parts {
+                        engine.matmul_bf16(w, &x, y, 1, inputs, *out).unwrap();
+                    }
+                }
+            }
+            println!(
+                "{}: {:.3} ms per product",
+                if pipelined { "pipelined" } else { "in line  " },
+                start.elapsed().as_secs_f64() * 1e3 / (rounds * batch) as f64
+            );
+        }
     }
 
     #[test]
