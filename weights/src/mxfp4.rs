@@ -42,6 +42,67 @@ pub fn e8m0(byte: u8) -> f32 {
     }
 }
 
+/// `emax_elem` for E2M1: the largest magnitude, 6, is `1.5 * 2^2`.
+const E2M1_EMAX: i32 = 2;
+
+/// Converts one block of at most [`BLOCK_SIZE`] values to MXFP4 by OCP MX v1.0 section
+/// 6.3: the shared scale is `2^(floor(log2(max |v|)) - emax_elem)`, clamped to E8M0's
+/// range, and each element is `v / scale` rounded to nearest even at E2M1, clamped to
+/// +-6. Writes the codes two per byte, the even element in the low nibble, into
+/// `packed` (`values.len().div_ceil(2)` bytes) and returns the scale byte.
+///
+/// # Panics
+/// On a NaN or infinite value, which MXFP4 elements cannot hold, or a block longer than
+/// [`BLOCK_SIZE`] or a `packed` shorter than it needs.
+pub fn quantize_block(values: &[f32], packed: &mut [u8]) -> u8 {
+    assert!(values.len() <= BLOCK_SIZE && packed.len() >= values.len().div_ceil(2));
+    assert!(
+        values.iter().all(|v| v.is_finite()),
+        "MXFP4 elements must be finite"
+    );
+    let max = values.iter().fold(0.0_f32, |m, v| m.max(v.abs()));
+    // floor(log2(max)) from the bit pattern, exact for subnormals too.
+    let exponent = if max == 0.0 {
+        -127
+    } else {
+        let bits = max.to_bits();
+        let biased = (bits >> 23) as i32;
+        if biased == 0 {
+            -127 - (bits.leading_zeros() as i32 - 9)
+        } else {
+            biased - 127
+        }
+    };
+    let shared = (exponent - E2M1_EMAX).clamp(-127, 127);
+    let byte = (shared + 127) as u8;
+    // The scale is a power of two in 2^-127..=2^127, so its reciprocal is exact and
+    // multiplying by it rounds nothing.
+    let inverse = 1.0 / e8m0(byte);
+    packed[..values.len().div_ceil(2)].fill(0);
+    for (i, &v) in values.iter().enumerate() {
+        let code = e2m1_code(v * inverse);
+        packed[i / 2] |= if i % 2 == 0 { code } else { code << 4 };
+    }
+    byte
+}
+
+/// The nearest E2M1 code to `v`, ties to the even code, saturating at +-6; a value
+/// that rounds to zero keeps its sign. Branchless: the code is the number of rounding
+/// thresholds the magnitude passes, `>` where a tie goes down to the even code and `>=`
+/// where it goes up.
+#[inline]
+fn e2m1_code(v: f32) -> u8 {
+    let m = v.abs();
+    let code = u8::from(m > 0.25)
+        + u8::from(m >= 0.75)
+        + u8::from(m > 1.25)
+        + u8::from(m >= 1.75)
+        + u8::from(m > 2.5)
+        + u8::from(m >= 3.5)
+        + u8::from(m > 5.0);
+    code | (u8::from(v.is_sign_negative()) << 3)
+}
+
 /// A row-major MXFP4 matrix borrowed from packed element and scale bytes.
 #[derive(Clone, Copy, Debug)]
 pub struct Mxfp4Matrix<'a> {
@@ -258,6 +319,108 @@ mod tests {
                 .sum();
             let rel = (f64::from(got) - want).abs() / want.abs().max(f64::MIN_POSITIVE);
             assert!(rel < 1e-6, "row {r}: {got} vs {want}");
+        }
+    }
+
+    #[test]
+    fn quantizing_rounds_to_nearest_even_and_saturates() {
+        // Scale 2^0: max |v| is 6 (floor(log2 6) = 2, minus emax 2).
+        let values = [
+            6.0, 0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0, 5.1, -0.1, -2.9, 0.0,
+        ];
+        let mut packed = [0_u8; 6];
+        let byte = quantize_block(&values, &mut packed);
+        assert_eq!(byte, 127);
+        let codes: Vec<u8> = (0..values.len())
+            .map(|i| (packed[i / 2] >> (4 * (i % 2))) & 0xF)
+            .collect();
+        let decoded: Vec<f32> = codes.iter().map(|&c| e2m1(c)).collect();
+        assert_eq!(
+            decoded,
+            [6.0, 0.0, 1.0, 1.0, 2.0, 2.0, 4.0, 4.0, 6.0, -0.0, -3.0, 0.0]
+        );
+        assert_eq!(
+            codes[9], 0x8,
+            "a negative value rounding to zero keeps its sign"
+        );
+        // 7.9 has floor(log2) = 2 as well, so it clips to 6 rather than rescaling.
+        assert_eq!(quantize_block(&[7.9], &mut packed), 127);
+        assert_eq!(e2m1(packed[0] & 0xF), 6.0);
+    }
+
+    /// Reference for [`e2m1_code`]: the nearest E2M1 code to `v`, ties to the even code, saturating at +-6. `v` must not
+    /// be NaN. A value that rounds to zero keeps its sign (code 8 for negative values).
+    fn e2m1_nearest(v: f32) -> u8 {
+        // Midpoints between consecutive magnitudes; at a midpoint the even code wins.
+        const MIDPOINTS: [f32; 7] = [0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0];
+        let magnitude = v.abs();
+        let mut code = 0_u8;
+        for (i, &mid) in MIDPOINTS.iter().enumerate() {
+            let upper = i as u8 + 1;
+            if magnitude > mid || (magnitude == mid && upper.is_multiple_of(2)) {
+                code = upper;
+            } else {
+                break;
+            }
+        }
+        if v.is_sign_negative() {
+            code | 0x8
+        } else {
+            code
+        }
+    }
+
+    #[test]
+    fn branchless_codes_match_nearest_even_everywhere_that_matters() {
+        // Every threshold, its neighbours one ulp either side, and a dense sweep.
+        let mut probes = vec![0.0_f32, -0.0, 6.0, 7.99, 100.0];
+        for mid in [0.25_f32, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0] {
+            probes.extend([
+                mid,
+                f32::from_bits(mid.to_bits() - 1),
+                f32::from_bits(mid.to_bits() + 1),
+            ]);
+        }
+        probes.extend((0..=8000_u16).map(|i| f32::from(i) / 1000.0));
+        for v in probes {
+            for v in [v, -v] {
+                assert_eq!(e2m1_code(v), e2m1_nearest(v), "{v}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_representable_block_round_trips_exactly() {
+        for byte in [1_u8, 100, 127, 130, 200, 252] {
+            let scale = e8m0(byte);
+            // The largest magnitude sets the scale; the rest are any codes.
+            let codes: Vec<u8> = (0..BLOCK_SIZE as u8)
+                .map(|i| if i == 0 { 7 } else { i % 16 })
+                .collect();
+            let values: Vec<f32> = codes.iter().map(|&c| e2m1(c) * scale).collect();
+            let mut packed = [0_u8; BLOCK_SIZE / 2];
+            assert_eq!(quantize_block(&values, &mut packed), byte);
+            for (i, &v) in values.iter().enumerate() {
+                let code = (packed[i / 2] >> (4 * (i % 2))) & 0xF;
+                assert_eq!(e2m1(code) * scale, v, "scale byte {byte}, element {i}");
+            }
+        }
+        let mut packed = [0xAA_u8; 2];
+        assert_eq!(quantize_block(&[0.0; 4], &mut packed), 0);
+        assert_eq!(packed, [0, 0]);
+    }
+
+    #[test]
+    fn quantizing_error_is_bounded_by_half_a_step_or_the_clip() {
+        let values: Vec<f32> = (0..BLOCK_SIZE)
+            .map(|i| ((i as f32) * 0.37).sin() * 0.02)
+            .collect();
+        let mut packed = [0_u8; BLOCK_SIZE / 2];
+        let scale = e8m0(quantize_block(&values, &mut packed));
+        for (i, &v) in values.iter().enumerate() {
+            let q = e2m1((packed[i / 2] >> (4 * (i % 2))) & 0xF) * scale;
+            // Steps are at most 2 * scale apart (4 -> 6), or the clip from < 8 to 6.
+            assert!((q - v).abs() <= 2.0 * scale, "{v} -> {q}");
         }
     }
 
