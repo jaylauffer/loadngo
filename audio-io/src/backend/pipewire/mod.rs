@@ -326,7 +326,7 @@ unsafe extern "C" fn process(data: *mut c_void) {
                 chunk.flags = 0;
                 if let Some(frames) = frame_count(plane.maxsize, (*buffer).requested) {
                     if !plane.data.is_null()
-                        && (plane.data as usize) % std::mem::align_of::<f32>() == 0
+                        && is_f32_aligned(plane.data as usize)
                         && plane.flags & 2 != 0
                     {
                         let samples =
@@ -386,9 +386,23 @@ static EVENTS: ffi::Events = ffi::Events {
     trigger_done: None,
 };
 
+/// Whether a buffer address can be viewed as `f32` samples.
+fn is_f32_aligned(address: usize) -> bool {
+    address.is_multiple_of(std::mem::align_of::<f32>())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn f32_alignment_check_rejects_misaligned_addresses() {
+        assert!(is_f32_aligned(0x1000));
+        assert!(is_f32_aligned(0x1004));
+        assert!(!is_f32_aligned(0x1001));
+        assert!(!is_f32_aligned(0x1002));
+    }
+
     #[test]
     fn version_gate_protects_requested_buffer_field() {
         assert!(!supported_version("0.3.48"));
