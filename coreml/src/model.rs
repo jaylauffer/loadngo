@@ -1,6 +1,8 @@
 //! Minimal encoder of Apple's published Core ML protobuf schema (BSD-3-Clause).
 //! Field numbers: coremltools/mlmodel/format/{Model,FeatureTypes,NeuralNetwork}.proto.
-//! A 1x1 convolution implements Y[o,t] = sum_i W[o,i] X[i,t]. No bias.
+//! [`encode_dense`]: a 1x1 convolution with baked weights, Y[o,t] = sum_i W[o,i] X[i,t].
+//! [`encode_dynamic_matmul`]: the weight is a runtime input, Y[r,o] = sum_i X[r,i] W[o,i],
+//! so one compiled model serves every streamed matrix of the same shape.
 use prost::Message;
 
 #[derive(Clone, Copy, Debug)]
@@ -59,6 +61,67 @@ pub fn encode_dense(shape: DenseShape, weights: Vec<f32>) -> Result<Vec<u8>, Str
                     valid: Some(Empty {}),
                     weights: Some(Weights { values: weights }),
                 }),
+                ..Layer::default()
+            }],
+            exact_shape: 1,
+        }),
+    };
+    Ok(model.encode_to_vec())
+}
+
+/// Largest dimension the Neural Engine accepts for this layer on the M4 Pro (measured
+/// 2026-09-24: 16384 is planned onto the ANE, 16385 falls back to the CPU). Callers tile.
+pub const ANE_MAX_DIM: usize = 16384;
+
+/// `ArrayFeatureType.ArrayDataType.FLOAT16` (Core ML specification version 7+).
+const FLOAT16: i32 = 65552;
+
+/// One dynamic-weight matmul: inputs `x [rows, inputs]` and `w [outputs, inputs]`, both
+/// fp16, output `y [rows, outputs]` fp16, via `BatchedMatMul` with `transposeB`.
+pub fn encode_dynamic_matmul(
+    rows: usize,
+    inputs: usize,
+    outputs: usize,
+) -> Result<Vec<u8>, String> {
+    if rows == 0
+        || inputs == 0
+        || outputs == 0
+        || rows > ANE_MAX_DIM
+        || inputs > ANE_MAX_DIM
+        || outputs > ANE_MAX_DIM
+    {
+        return Err(format!(
+            "dynamic matmul {rows}x{inputs} -> {outputs} is outside 1..={ANE_MAX_DIM} per dimension"
+        ));
+    }
+    let feature = |name: &str, dims: [usize; 2]| Feature {
+        name: name.into(),
+        kind: Some(FeatureType {
+            array: Some(Array {
+                shape: dims.iter().map(|&d| d as i64).collect(),
+                dtype: FLOAT16,
+            }),
+        }),
+    };
+    let model = Model {
+        version: 7,
+        description: Some(Description {
+            inputs: vec![
+                feature("x", [rows, inputs]),
+                feature("w", [outputs, inputs]),
+            ],
+            outputs: vec![feature("y", [rows, outputs])],
+        }),
+        network: Some(Network {
+            layers: vec![Layer {
+                name: "dynamic_matmul".into(),
+                inputs: vec!["x".into(), "w".into()],
+                outputs: vec!["y".into()],
+                batched_matmul: Some(BatchedMatMul {
+                    transpose_b: true,
+                    ..BatchedMatMul::default()
+                }),
+                ..Layer::default()
             }],
             exact_shape: 1,
         }),
@@ -118,6 +181,15 @@ struct Layer {
     outputs: Vec<String>,
     #[prost(message, optional, tag = "100")]
     convolution: Option<Conv>,
+    #[prost(message, optional, tag = "1045")]
+    batched_matmul: Option<BatchedMatMul>,
+}
+#[derive(Clone, PartialEq, Message)]
+struct BatchedMatMul {
+    #[prost(bool, tag = "1")]
+    transpose_a: bool,
+    #[prost(bool, tag = "2")]
+    transpose_b: bool,
 }
 #[derive(Clone, PartialEq, Message)]
 struct Conv {
@@ -180,5 +252,33 @@ mod tests {
         );
         assert!(encode_dense(shape, vec![]).is_err());
         assert!(encode_dense(shape, vec![f32::NAN; 6]).is_err());
+    }
+
+    #[test]
+    fn dynamic_matmul_declares_fp16_weight_input_and_transposed_b() {
+        let decoded = Model::decode(encode_dynamic_matmul(8, 3, 5).unwrap().as_slice()).unwrap();
+        let description = decoded.description.unwrap();
+        let shapes: Vec<_> = description
+            .inputs
+            .iter()
+            .chain(&description.outputs)
+            .map(|f| {
+                (
+                    f.name.clone(),
+                    f.kind.as_ref().unwrap().array.as_ref().unwrap().clone(),
+                )
+            })
+            .collect();
+        assert_eq!(shapes[0].0, "x");
+        assert_eq!(shapes[0].1.shape, [8, 3]);
+        assert_eq!(shapes[1].0, "w");
+        assert_eq!(shapes[1].1.shape, [5, 3]);
+        assert_eq!(shapes[2].1.shape, [8, 5]);
+        assert!(shapes.iter().all(|(_, a)| a.dtype == FLOAT16));
+        let layer = &decoded.network.unwrap().layers[0];
+        assert!(layer.batched_matmul.as_ref().unwrap().transpose_b);
+        assert!(layer.convolution.is_none());
+        assert!(encode_dynamic_matmul(1, ANE_MAX_DIM + 1, 4).is_err());
+        assert!(encode_dynamic_matmul(0, 4, 4).is_err());
     }
 }

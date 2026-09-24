@@ -112,7 +112,10 @@ impl CompiledModel {
     }
 }
 
-unsafe fn plan(url: &NSURL, config: &MLModelConfiguration) -> Result<Vec<Placement>, String> {
+pub(crate) unsafe fn plan(
+    url: &NSURL,
+    config: &MLModelConfiguration,
+) -> Result<Vec<Placement>, String> {
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     let callback = RcBlock::new(move |plan: *mut MLComputePlan, err: *mut NSError| {
         // SAFETY: Core ML owns these nullable pointers for the callback duration.
