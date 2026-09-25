@@ -211,6 +211,11 @@ struct AndroidAppState {
     default_font: Option<SoftwareFont>,
     presented_frames: u64,
     gles_backend: Option<GlesBackend>,
+    /// GLES failed on the current window (bind, unsupported frame or render
+    /// error), so frames go to the software renderer until the window is
+    /// replaced. Sticky because once the software path has locked the window
+    /// for CPU rendering, EGL cannot connect to it again.
+    gles_unavailable: bool,
     last_backend_used: DesktopRenderBackendKind,
     backend_detail: String,
     control_messages: VecDeque<ReactorMessage>,
@@ -261,6 +266,7 @@ impl Default for AndroidAppState {
             default_font: None,
             presented_frames: 0,
             gles_backend: None,
+            gles_unavailable: false,
             last_backend_used: DesktopRenderBackendKind::Unavailable,
             backend_detail: "Android host waiting for the first frame".to_string(),
             control_messages: VecDeque::new(),
@@ -881,6 +887,7 @@ fn process_control_messages() -> (bool, bool) {
                     .map(|ptr| unsafe { NativeWindow::clone_from_ptr(ptr) });
                 let mut state = app_state().lock().expect("android app state poisoned");
                 state.window = window;
+                state.gles_unavailable = false;
                 if let Some(window) = state.window.as_ref() {
                     state.surface = logical_surface_info(window, state.display_scale);
                 }
@@ -893,6 +900,7 @@ fn process_control_messages() -> (bool, bool) {
                     height: 0.0,
                 };
                 state.gles_backend = None;
+                state.gles_unavailable = false;
             }
             ReactorMessage::InputQueueCreated(queue_ptr) => {
                 if !start_input_thread_if_needed() {
@@ -979,8 +987,22 @@ fn pump_main_thread_reactor(frame_tick: bool) {
     let _ = should_continue;
 }
 
+/// GLES, unless `LOADNGO_DESKTOP_BACKEND=software` asks for the software
+/// renderer (as on Linux; on a device `adb shell setprop
+/// debug.loadngo_desktop_backend software`). Read once per process.
 fn requested_render_backend() -> DesktopRenderBackendKind {
-    DesktopRenderBackendKind::Gles
+    static REQUESTED: OnceLock<DesktopRenderBackendKind> = OnceLock::new();
+    *REQUESTED.get_or_init(|| {
+        match crate::debug_config_value("LOADNGO_DESKTOP_BACKEND")
+            .as_deref()
+            .map(str::trim)
+        {
+            Some(value) if value.eq_ignore_ascii_case("software") => {
+                DesktopRenderBackendKind::Software
+            }
+            _ => DesktopRenderBackendKind::Gles,
+        }
+    })
 }
 
 fn unsupported_platform_detail() -> &'static str {
@@ -1596,6 +1618,7 @@ unsafe extern "C" fn on_native_window_destroyed(
         height: 0.0,
     };
     state.gles_backend = None;
+    state.gles_unavailable = false;
     if state.reactor_running {
         state
             .control_messages
@@ -2187,7 +2210,7 @@ fn flush_queued_frame() {
     if requested == DesktopRenderBackendKind::Gles {
         let gles_result = {
             let mut state = app_state().lock().expect("android app state poisoned");
-            if state.gles_backend.is_none() {
+            if state.gles_backend.is_none() && !state.gles_unavailable {
                 android_log_info(&format!(
                     "Android GLES backend attempting native-window bind {}x{}",
                     window.width(),
@@ -2202,9 +2225,12 @@ fn flush_queued_frame() {
                         );
                     }
                     Err(err) => {
+                        state.gles_unavailable = true;
                         update_backend_detail(
                             &mut state,
-                            format!("Android GLES backend unavailable: {err}"),
+                            format!(
+                                "Android GLES backend unavailable: {err}; using the software renderer"
+                            ),
                         );
                     }
                 }
@@ -2259,9 +2285,13 @@ fn flush_queued_frame() {
                             Some(Ok(()))
                         }
                         Err(err) => {
+                            state.gles_backend = None;
+                            state.gles_unavailable = true;
                             update_backend_detail(
                                 &mut state,
-                                format!("Android GLES backend render failed: {err}"),
+                                format!(
+                                    "Android GLES backend render failed: {err}; using the software renderer"
+                                ),
                             );
                             Some(Err(err))
                         }
@@ -2272,10 +2302,11 @@ fn flush_queued_frame() {
                     update_backend_detail(
                         &mut state,
                         format!(
-                            "Android GLES backend rejected queued frame: unsupported command {unsupported}"
+                            "Android GLES backend rejected queued frame: unsupported command {unsupported}; using the software renderer"
                         ),
                     );
                     state.gles_backend = None;
+                    state.gles_unavailable = true;
                     None
                 }
             } else {
@@ -2293,18 +2324,9 @@ fn flush_queued_frame() {
         }
     }
 
+    // Software is the fallback: it draws whatever GLES did not (no GLES on this
+    // window, or LOADNGO_DESKTOP_BACKEND=software).
     if !rendered {
-        if requested == DesktopRenderBackendKind::Gles {
-            let mut state = app_state().lock().expect("android app state poisoned");
-            if state.backend_detail.is_empty() {
-                update_backend_detail(
-                    &mut state,
-                    "Android GLES backend did not render the queued frame",
-                );
-            }
-            return;
-        }
-
         if let Err(err) = software_present(&window, &commands, &textures, current_font.as_ref()) {
             android_log_error(&format!("Android software present failed: {err}"));
             let mut state = app_state().lock().expect("android app state poisoned");

@@ -248,6 +248,16 @@ ignored, an out-of-bounds blit on Linux/Windows). Change software drawing
 there, not in a host. Text is still drawn by each host, through the
 `draw_command` text closure, because each host owns its fonts.
 
+Software is the fallback, never the default: Linux and Android draw with GLES
+and hand a frame to the software renderer only when GLES cannot draw it (no
+EGL binding, an unsupported command, a render error), or when
+`LOADNGO_DESKTOP_BACKEND=software` asks for it (on Android,
+`adb shell setprop debug.loadngo_desktop_backend software`). Linux decides per
+frame. Android, since 2026-09-25, stays on software for the rest of that window
+once GLES fails, because EGL cannot reconnect to a window the software path has
+locked; a new window tries GLES again. Before that, Android had no fallback and
+drew nothing when GLES failed.
+
 ### Metal: large geometry used to abort the process (fixed 2026-09-11)
 
 Metal's `setVertexBytes` is documented for data under 4 KB, and the AGX

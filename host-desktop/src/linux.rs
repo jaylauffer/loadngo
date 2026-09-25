@@ -1129,7 +1129,11 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
                 width: size.width as f32,
                 height: size.height as f32,
             };
-            update_backend_detail(&mut state, "Linux software renderer active");
+            // With GLES requested, the lines below report whether it bound;
+            // software then only draws what GLES cannot.
+            if !matches!(requested_render_backend(), DesktopRenderBackendKind::Gles) {
+                update_backend_detail(&mut state, "Linux software renderer active");
+            }
         }
 
         if matches!(requested_render_backend(), DesktopRenderBackendKind::Gles) {
