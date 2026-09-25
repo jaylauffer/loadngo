@@ -48,6 +48,13 @@ patch is opt-in on purpose. A permanent one (for example in
 every local build. Those rewrites would be committed by accident and fail
 CI.
 
+The Android and iOS packaging scripts (`android_packager.sh`,
+`ios_device_build.sh`, `ios_simulator_build.sh`) bundle loadngo's
+`assets/` (the fonts the Android and iOS hosts load). They find the pinned
+checkout under `~/.cargo/git` through `cargo metadata`, and fail if it has
+no `assets/fonts/manifest.ron`. Set `LOADNGO_DIR=../loadngo` to package
+local assets instead.
+
 For a change that spans loadngo and a game:
 
 1. Edit both, and test the game through `with-local-loadngo.sh`.
