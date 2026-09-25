@@ -2514,6 +2514,94 @@ fn rasterize_text_command(
     Some(surface.into_texture())
 }
 
+#[allow(dead_code)] // only caller (append_rasterized_polyline_textures below) is itself not yet wired into the render dispatch - preserved, not removed, pending that wiring; matches linux.rs and windows.rs
+fn rasterize_line_command(
+    from: ui_core::geometry::Point,
+    to: ui_core::geometry::Point,
+    color: UiColor,
+    thickness: i32,
+    index: usize,
+) -> Option<(String, UiRect, SoftwareTexture)> {
+    let thickness = thickness.max(1);
+    let thickness_f = thickness as f32;
+    let min_x = from.x.min(to.x) - thickness_f;
+    let min_y = from.y.min(to.y) - thickness_f;
+    let max_x = from.x.max(to.x) + thickness_f;
+    let max_y = from.y.max(to.y) + thickness_f;
+    let rect = UiRect {
+        x: min_x,
+        y: min_y,
+        width: (max_x - min_x).max(1.0),
+        height: (max_y - min_y).max(1.0),
+    };
+    let mut surface =
+        OwnedSoftwareSurface::new(rect.width.ceil() as usize, rect.height.ceil() as usize);
+    surface.line(
+        ui_core::geometry::Point {
+            x: from.x - rect.x,
+            y: from.y - rect.y,
+        },
+        ui_core::geometry::Point {
+            x: to.x - rect.x,
+            y: to.y - rect.y,
+        },
+        color,
+        thickness,
+    );
+    Some((
+        format!("generated://line/{index}"),
+        rect,
+        surface.into_texture(),
+    ))
+}
+
+#[allow(dead_code)] // implemented polyline-to-rasterized-texture fallback, not yet called from the render dispatch; matches linux.rs and windows.rs
+fn append_rasterized_polyline_textures(
+    commands: &mut Vec<FrameCommand>,
+    textures: &mut HashMap<String, SoftwareTexture>,
+    points: &[ui_core::geometry::Point],
+    color: UiColor,
+    thickness: i32,
+    closed: bool,
+    generated_index: &mut usize,
+) {
+    if points.len() < 2 {
+        return;
+    }
+    for segment in points.windows(2) {
+        if let Some((image_key, rect, texture)) =
+            rasterize_line_command(segment[0], segment[1], color, thickness, *generated_index)
+        {
+            *generated_index += 1;
+            textures.insert(image_key.clone(), texture);
+            commands.push(FrameCommand::Image(ImageRequest {
+                rect,
+                clip_rect: None,
+                image_key,
+                alpha: 1.0,
+            }));
+        }
+    }
+    if closed {
+        if let Some((image_key, rect, texture)) = rasterize_line_command(
+            *points.last().unwrap_or(&points[0]),
+            points[0],
+            color,
+            thickness,
+            *generated_index,
+        ) {
+            *generated_index += 1;
+            textures.insert(image_key.clone(), texture);
+            commands.push(FrameCommand::Image(ImageRequest {
+                rect,
+                clip_rect: None,
+                image_key,
+                alpha: 1.0,
+            }));
+        }
+    }
+}
+
 struct OwnedSoftwareSurface {
     width: usize,
     height: usize,
@@ -2653,6 +2741,68 @@ impl OwnedSoftwareSurface {
                 cursor_x += metrics.advance_width;
             }
         }
+    }
+
+    #[allow(dead_code)] // used only by the preserved rasterize_line_command
+    fn line(
+        &mut self,
+        from: ui_core::geometry::Point,
+        to: ui_core::geometry::Point,
+        color: UiColor,
+        thickness: i32,
+    ) {
+        let thickness = thickness.max(1) as f32;
+        let mut x0 = from.x.round();
+        let mut y0 = from.y.round();
+        let x1 = to.x.round();
+        let y1 = to.y.round();
+        let dx = (x1 - x0).abs();
+        let sx = if x0 < x1 { 1.0 } else { -1.0 };
+        let dy = -(y1 - y0).abs();
+        let sy = if y0 < y1 { 1.0 } else { -1.0 };
+        let mut err = dx + dy;
+
+        loop {
+            let half = thickness * 0.5;
+            self.fill_rect(
+                UiRect {
+                    x: x0 - half,
+                    y: y0 - half,
+                    width: thickness,
+                    height: thickness,
+                },
+                color,
+            );
+            if x0 == x1 && y0 == y1 {
+                break;
+            }
+            let e2 = err * 2.0;
+            if e2 >= dy {
+                err += dy;
+                x0 += sx;
+            }
+            if e2 <= dx {
+                err += dx;
+                y0 += sy;
+            }
+        }
+    }
+
+    #[allow(dead_code)] // used only by the preserved line rasterizer
+    fn fill_rect(&mut self, rect: UiRect, color: UiColor) {
+        let Some((x0, y0, x1, y1)) = self.clip_rect(rect) else {
+            return;
+        };
+        for y in y0..y1 {
+            for x in x0..x1 {
+                self.write_pixel(x, y, color, 1.0);
+            }
+        }
+    }
+
+    #[allow(dead_code)] // used only by the preserved line rasterizer
+    fn clip_rect(&self, rect: UiRect) -> Option<(i32, i32, i32, i32)> {
+        clip_rect_to_surface(rect, self.width, self.height)
     }
 
     fn write_pixel(&mut self, x: i32, y: i32, color: UiColor, extra_alpha: f32) {
