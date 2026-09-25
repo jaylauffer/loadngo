@@ -210,6 +210,7 @@ impl GlesBackend {
                     | FrameCommand::Circle { .. }
                     | FrameCommand::Polyline { .. }
                     | FrameCommand::Arc { .. }
+                    | FrameCommand::ParticleBatch { .. }
                     | FrameCommand::Image(_)
             )
         })
@@ -1125,7 +1126,32 @@ mod android {
                         image_batch_texture = Some(texture);
                         push_image(&mut image_batch, width, height, request);
                     }
-                    FrameCommand::ParticleBatch { .. } => {}
+                    FrameCommand::ParticleBatch { particles } => {
+                        // Batched into the same solid-geometry buffer as `Circle`,
+                        // so a whole effect is one draw call, not a texture per particle.
+                        ensure_solid_pipeline(solid_program, solid_vbo)?;
+                        if let Some(texture) = image_batch_texture.take() {
+                            flush_image_batch(
+                                *textured_program,
+                                *textured_vbo,
+                                texture,
+                                &mut image_batch,
+                            )?;
+                        }
+                        for particle in particles {
+                            if particle.color.a == 0 {
+                                continue;
+                            }
+                            push_circle(
+                                &mut solid_batch,
+                                width,
+                                height,
+                                particle.center,
+                                particle.radius.max(1.0),
+                                particle.color,
+                            );
+                        }
+                    }
                     FrameCommand::Text(_) => {}
                     // Clipping is resolved by the renderer before commands
                     // reach a backend (see `docs/CLIP_AND_SCISSOR.md`), so

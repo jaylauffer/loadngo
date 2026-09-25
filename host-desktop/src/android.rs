@@ -2368,7 +2368,6 @@ fn prepare_gles_frame(
     let mut next_commands = Vec::with_capacity(commands.len());
     let mut next_textures = textures.clone();
     let mut next_generated_cache = HashMap::new();
-    let mut generated_index = 0usize;
 
     for command in commands {
         match command {
@@ -2410,12 +2409,9 @@ fn prepare_gles_frame(
             FrameCommand::Circle { .. } => next_commands.push(command.clone()),
             FrameCommand::Arc { .. } => next_commands.push(command.clone()),
             FrameCommand::Polyline { .. } => next_commands.push(command.clone()),
-            FrameCommand::ParticleBatch { particles } => append_rasterized_particle_textures(
-                &mut next_commands,
-                &mut next_textures,
-                particles,
-                &mut generated_index,
-            ),
+            // The GPU backend draws particles as batched geometry; see
+            // `ParticleBatch` in `gfx-gles`/`gfx-dx12`.
+            FrameCommand::ParticleBatch { .. } => next_commands.push(command.clone()),
             _ => next_commands.push(command.clone()),
         }
     }
@@ -2518,144 +2514,6 @@ fn rasterize_text_command(
     Some(surface.into_texture())
 }
 
-fn rasterize_line_command(
-    from: ui_core::geometry::Point,
-    to: ui_core::geometry::Point,
-    color: UiColor,
-    thickness: i32,
-    index: usize,
-) -> Option<(String, UiRect, SoftwareTexture)> {
-    let thickness = thickness.max(1);
-    let thickness_f = thickness as f32;
-    let min_x = from.x.min(to.x) - thickness_f;
-    let min_y = from.y.min(to.y) - thickness_f;
-    let max_x = from.x.max(to.x) + thickness_f;
-    let max_y = from.y.max(to.y) + thickness_f;
-    let rect = UiRect {
-        x: min_x,
-        y: min_y,
-        width: (max_x - min_x).max(1.0),
-        height: (max_y - min_y).max(1.0),
-    };
-    let mut surface =
-        OwnedSoftwareSurface::new(rect.width.ceil() as usize, rect.height.ceil() as usize);
-    surface.line(
-        ui_core::geometry::Point {
-            x: from.x - rect.x,
-            y: from.y - rect.y,
-        },
-        ui_core::geometry::Point {
-            x: to.x - rect.x,
-            y: to.y - rect.y,
-        },
-        color,
-        thickness,
-    );
-    Some((
-        format!("generated://line/{index}"),
-        rect,
-        surface.into_texture(),
-    ))
-}
-
-fn rasterize_circle_command(
-    center: ui_core::geometry::Point,
-    radius: f32,
-    color: UiColor,
-    index: usize,
-) -> Option<(String, UiRect, SoftwareTexture)> {
-    if radius <= 0.0 {
-        return None;
-    }
-    let rect = UiRect {
-        x: center.x - radius,
-        y: center.y - radius,
-        width: radius * 2.0,
-        height: radius * 2.0,
-    };
-    let mut surface = OwnedSoftwareSurface::new(
-        rect.width.max(1.0).ceil() as usize,
-        rect.height.max(1.0).ceil() as usize,
-    );
-    surface.circle(radius, radius, radius, color);
-    Some((
-        format!("generated://circle/{index}"),
-        rect,
-        surface.into_texture(),
-    ))
-}
-
-fn append_rasterized_polyline_textures(
-    commands: &mut Vec<FrameCommand>,
-    textures: &mut HashMap<String, SoftwareTexture>,
-    points: &[ui_core::geometry::Point],
-    color: UiColor,
-    thickness: i32,
-    closed: bool,
-    generated_index: &mut usize,
-) {
-    if points.len() < 2 {
-        return;
-    }
-    for segment in points.windows(2) {
-        if let Some((image_key, rect, texture)) =
-            rasterize_line_command(segment[0], segment[1], color, thickness, *generated_index)
-        {
-            *generated_index += 1;
-            textures.insert(image_key.clone(), texture);
-            commands.push(FrameCommand::Image(ImageRequest {
-                rect,
-                clip_rect: None,
-                image_key,
-                alpha: 1.0,
-            }));
-        }
-    }
-    if closed {
-        if let Some((image_key, rect, texture)) = rasterize_line_command(
-            *points.last().unwrap_or(&points[0]),
-            points[0],
-            color,
-            thickness,
-            *generated_index,
-        ) {
-            *generated_index += 1;
-            textures.insert(image_key.clone(), texture);
-            commands.push(FrameCommand::Image(ImageRequest {
-                rect,
-                clip_rect: None,
-                image_key,
-                alpha: 1.0,
-            }));
-        }
-    }
-}
-
-fn append_rasterized_particle_textures(
-    commands: &mut Vec<FrameCommand>,
-    textures: &mut HashMap<String, SoftwareTexture>,
-    particles: &[ui_core::Particle],
-    generated_index: &mut usize,
-) {
-    for particle in particles {
-        if let Some((image_key, rect, texture)) = rasterize_circle_command(
-            particle.center,
-            particle.radius.max(1.0),
-            particle.color,
-            *generated_index,
-        ) {
-            *generated_index += 1;
-            textures.insert(image_key.clone(), texture);
-            commands.push(FrameCommand::Image(ImageRequest {
-                rect,
-                clip_rect: None,
-                image_key,
-                alpha: 1.0,
-            }));
-        }
-    }
-}
-
 struct OwnedSoftwareSurface {
     width: usize,
     height: usize,
@@ -2673,10 +2531,6 @@ impl OwnedSoftwareSurface {
             stride: width,
             bytes: vec![0; width * height * 4],
         }
-    }
-
-    fn is_blank(&self) -> bool {
-        self.bytes.iter().all(|byte| *byte == 0)
     }
 
     fn into_texture(self) -> SoftwareTexture {
@@ -2799,82 +2653,6 @@ impl OwnedSoftwareSurface {
                 cursor_x += metrics.advance_width;
             }
         }
-    }
-
-    fn line(
-        &mut self,
-        from: ui_core::geometry::Point,
-        to: ui_core::geometry::Point,
-        color: UiColor,
-        thickness: i32,
-    ) {
-        let thickness = thickness.max(1) as f32;
-        let mut x0 = from.x.round();
-        let mut y0 = from.y.round();
-        let x1 = to.x.round();
-        let y1 = to.y.round();
-        let dx = (x1 - x0).abs();
-        let sx = if x0 < x1 { 1.0 } else { -1.0 };
-        let dy = -(y1 - y0).abs();
-        let sy = if y0 < y1 { 1.0 } else { -1.0 };
-        let mut err = dx + dy;
-
-        loop {
-            let half = thickness * 0.5;
-            self.fill_rect(
-                UiRect {
-                    x: x0 - half,
-                    y: y0 - half,
-                    width: thickness,
-                    height: thickness,
-                },
-                color,
-            );
-            if x0 == x1 && y0 == y1 {
-                break;
-            }
-            let e2 = err * 2.0;
-            if e2 >= dy {
-                err += dy;
-                x0 += sx;
-            }
-            if e2 <= dx {
-                err += dx;
-                y0 += sy;
-            }
-        }
-    }
-
-    fn circle(&mut self, center_x: f32, center_y: f32, radius: f32, color: UiColor) {
-        if radius <= 0.0 {
-            return;
-        }
-        let radius_i = radius.ceil() as i32;
-        let r2 = radius * radius;
-        let cx = center_x.round() as i32;
-        let cy = center_y.round() as i32;
-        for y in -radius_i..=radius_i {
-            for x in -radius_i..=radius_i {
-                if (x * x + y * y) as f32 <= r2 {
-                    self.write_pixel(cx + x, cy + y, color, 1.0);
-                }
-            }
-        }
-    }
-
-    fn fill_rect(&mut self, rect: UiRect, color: UiColor) {
-        let Some((x0, y0, x1, y1)) = self.clip_rect(rect) else {
-            return;
-        };
-        for y in y0..y1 {
-            for x in x0..x1 {
-                self.write_pixel(x, y, color, 1.0);
-            }
-        }
-    }
-
-    fn clip_rect(&self, rect: UiRect) -> Option<(i32, i32, i32, i32)> {
-        clip_rect_to_surface(rect, self.width, self.height)
     }
 
     fn write_pixel(&mut self, x: i32, y: i32, color: UiColor, extra_alpha: f32) {

@@ -1770,7 +1770,6 @@ fn prepare_gles_frame(
     let mut next_commands = Vec::with_capacity(commands.len());
     let mut next_textures = textures.clone();
     let mut next_generated_cache = TextureCache::new();
-    let mut generated_index = 0usize;
 
     for command in commands {
         match command {
@@ -1804,14 +1803,9 @@ fn prepare_gles_frame(
             FrameCommand::Circle { .. } => next_commands.push(command.clone()),
             FrameCommand::Arc { .. } => next_commands.push(command.clone()),
             FrameCommand::Polyline { .. } => next_commands.push(command.clone()),
-            FrameCommand::ParticleBatch { particles } => {
-                append_rasterized_particle_images(
-                    &mut next_commands,
-                    &mut next_textures,
-                    particles,
-                    &mut generated_index,
-                );
-            }
+            // The GPU backend draws particles as batched geometry; see
+            // `ParticleBatch` in `gfx-gles`/`gfx-dx12`.
+            FrameCommand::ParticleBatch { .. } => next_commands.push(command.clone()),
             _ => next_commands.push(command.clone()),
         }
     }
@@ -1954,43 +1948,7 @@ fn rasterize_line_command(
     ))
 }
 
-fn rasterize_circle_command(
-    center: Point,
-    radius: f32,
-    color: UiColor,
-    index: usize,
-) -> Option<(String, UiRect, DecodedImage)> {
-    if radius <= 0.0 {
-        return None;
-    }
-    let rect = UiRect {
-        x: center.x - radius,
-        y: center.y - radius,
-        width: radius * 2.0,
-        height: radius * 2.0,
-    };
-    let tex_width = rect.width.max(1.0).ceil() as usize;
-    let tex_height = rect.height.max(1.0).ceil() as usize;
-    let mut rgba = vec![0u8; tex_width * tex_height * 4];
-    fill_circle_rgba(
-        &mut rgba,
-        tex_width,
-        tex_height,
-        Point {
-            x: radius,
-            y: radius,
-        },
-        radius,
-        color,
-    );
-    Some((
-        format!("generated://circle/{index}"),
-        rect,
-        DecodedImage::new(tex_width as u32, tex_height as u32, rgba),
-    ))
-}
-
-#[allow(dead_code)] // implemented polyline-to-rasterized-image fallback (mirrors append_rasterized_particle_images below), not yet called from the render dispatch
+#[allow(dead_code)] // implemented polyline-to-rasterized-image fallback, not yet called from the render dispatch
 fn append_rasterized_polyline_images(
     commands: &mut Vec<FrameCommand>,
     textures: &mut HashMap<String, Arc<DecodedImage>>,
@@ -2023,31 +1981,6 @@ fn append_rasterized_polyline_images(
             points[0],
             color,
             thickness,
-            *generated_index,
-        ) {
-            *generated_index += 1;
-            textures.insert(image_key.clone(), Arc::new(image));
-            commands.push(FrameCommand::Image(ImageRequest {
-                rect,
-                clip_rect: None,
-                image_key,
-                alpha: 1.0,
-            }));
-        }
-    }
-}
-
-fn append_rasterized_particle_images(
-    commands: &mut Vec<FrameCommand>,
-    textures: &mut HashMap<String, Arc<DecodedImage>>,
-    particles: &[ui_core::Particle],
-    generated_index: &mut usize,
-) {
-    for particle in particles {
-        if let Some((image_key, rect, image)) = rasterize_circle_command(
-            particle.center,
-            particle.radius.max(1.0),
-            particle.color,
             *generated_index,
         ) {
             *generated_index += 1;

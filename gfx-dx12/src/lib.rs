@@ -273,6 +273,7 @@ mod windows_backend {
                         | FrameCommand::Circle { .. }
                         | FrameCommand::Polyline { .. }
                         | FrameCommand::Arc { .. }
+                        | FrameCommand::ParticleBatch { .. }
                         | FrameCommand::Image(_)
                 )
             })
@@ -774,6 +775,33 @@ mod windows_backend {
                         if vertex_count > 0 {
                             draws.push(DrawItem {
                                 first_vertex: vertices.len() as u32 - vertex_count,
+                                vertex_count,
+                                pipeline: PipelineKind::Solid,
+                                descriptor_index: 0,
+                                scissor: full_scissor,
+                            });
+                        }
+                    }
+                    // One draw item for the whole batch (vertices carry their
+                    // own color), not a texture per particle.
+                    FrameCommand::ParticleBatch { particles } => {
+                        let first_vertex = vertices.len() as u32;
+                        for particle in particles {
+                            if particle.color.a == 0 {
+                                continue;
+                            }
+                            append_solid_vertices(
+                                &mut vertices,
+                                circle_triangle_points(particle.center, particle.radius.max(1.0)),
+                                particle.color,
+                                self.surface_width,
+                                self.surface_height,
+                            );
+                        }
+                        let vertex_count = vertices.len() as u32 - first_vertex;
+                        if vertex_count > 0 {
+                            draws.push(DrawItem {
+                                first_vertex,
                                 vertex_count,
                                 pipeline: PipelineKind::Solid,
                                 descriptor_index: 0,

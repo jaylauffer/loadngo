@@ -14,6 +14,7 @@ pub mod list_row;
 pub mod overlay_layout;
 pub mod paint;
 pub mod panel;
+pub mod particles;
 pub mod scroll;
 pub mod scroll_container;
 pub mod slider;
@@ -52,6 +53,7 @@ pub use paint::{
     TextVerticalMetricMode, VerticalAlign,
 };
 pub use panel::{Panel, PanelModel};
+pub use particles::{Emission, ParticleEmitter, ParticleEmitterConfig};
 pub use scroll::{
     ScrollRegionModel, ScrollThumbDragState, ScrollbarAxis, ScrollbarDragState, ScrollbarModel,
 };

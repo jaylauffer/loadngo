@@ -708,17 +708,6 @@ impl MetalBackend {
                     *thickness,
                     *closed,
                 ),
-                FrameCommand::ParticleBatch { particles } => {
-                    for particle in particles {
-                        if let Some(image) = rasterize_circle(
-                            particle.center,
-                            particle.radius.max(1.0),
-                            particle.color,
-                        ) {
-                            images.push(image);
-                        }
-                    }
-                }
                 _ => {}
             }
         }
@@ -906,14 +895,21 @@ impl MetalBackend {
                     *thickness,
                     *closed,
                 ),
+                // Drawn as the same triangle-fan geometry as `Circle`, not as
+                // CPU-rasterized textures: a thruster or spark effect puts
+                // hundreds of particles on screen every frame, and a texture
+                // upload per particle per frame is exactly the churn
+                // `PROACTOR_ENGINE_ADOPTION.md` rules out.
                 FrameCommand::ParticleBatch { particles } => {
                     for particle in particles {
-                        if let Some(image) = rasterize_circle(
-                            particle.center,
-                            particle.radius.max(1.0),
+                        if particle.color.a == 0 {
+                            continue;
+                        }
+                        if let Some(geometry) = solid_geometry_from_points(
+                            circle_triangle_points(particle.center, particle.radius.max(1.0)),
                             particle.color,
                         ) {
-                            visuals.push(FrameVisual::GeneratedImage(image));
+                            visuals.push(FrameVisual::SolidGeometry(geometry));
                         }
                     }
                 }

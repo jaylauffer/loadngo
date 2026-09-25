@@ -112,6 +112,7 @@ function rather than in per-backend arms — see
 - [`docs/INPUT_PHILOSOPHY.md`](docs/INPUT_PHILOSOPHY.md): the values framing (energy as currency of exchange, healthy engagement) behind input-surface design decisions.
 - [`docs/PROACTOR_ENGINE_ADOPTION.md`](docs/PROACTOR_ENGINE_ADOPTION.md): active proactor-first host-runtime adoption and evidence plan.
 - [`docs/RENDERER_ROADMAP.md`](docs/RENDERER_ROADMAP.md): macOS-first renderer ownership plan and multilingual requirements.
+- [`docs/PARTICLE_EFFECTS.md`](docs/PARTICLE_EFFECTS.md): `ParticleEmitter` and how each backend draws `ParticleBatch`.
 - [`docs/AUDIO.md`](docs/AUDIO.md): music/voice separation and the reusable overlapping sound-effect controller contract.
 - [`docs/AUDIO_IO.md`](docs/AUDIO_IO.md): live audio-input tooling -- pitch detection and desktop input-to-output monitoring, for tuners and live-amplifier-style features.
 - [`docs/PQ_AUTHENTICATOR.md`](docs/PQ_AUTHENTICATOR.md): repo-owned post-quantum authenticator model for signed challenge tokens.
