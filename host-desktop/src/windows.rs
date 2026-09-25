@@ -21,6 +21,7 @@ use loadngo_host_core::{
     TextMetrics, WindowDescriptor, WindowIconSet,
 };
 use loadngo_proactor::{CompletionKind, IocpPort};
+use loadngo_renderer::software::{intersect_rects, rasterize_line, RgbaCanvas, RgbaImage};
 use loadngo_renderer::{FrameCommand, ImageRequest, Renderer, RendererConfig, TextRequest};
 use softbuffer::{Context, Surface};
 use ui_core::{
@@ -1498,133 +1499,14 @@ fn present(
         .buffer_mut()
         .expect("failed to lock Windows surface buffer");
     let mut rgba = vec![0u8; width as usize * height as usize * 4];
-
-    fill_rect_rgba(
-        &mut rgba,
-        width as usize,
-        height as usize,
-        UiRect {
-            x: 0.0,
-            y: 0.0,
-            width: width as f32,
-            height: height as f32,
-        },
-        clear_color,
-    );
-
-    for command in commands {
-        match command {
-            FrameCommand::Clear { color } => fill_rect_rgba(
-                &mut rgba,
-                width as usize,
-                height as usize,
-                UiRect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: width as f32,
-                    height: height as f32,
-                },
-                color,
-            ),
-            FrameCommand::FillRect { rect, color } => {
-                fill_rect_rgba(&mut rgba, width as usize, height as usize, rect, color);
-            }
-            FrameCommand::StrokeRect {
-                rect,
-                color,
-                thickness,
-            } => {
-                stroke_rect_rgba(
-                    &mut rgba,
-                    width as usize,
-                    height as usize,
-                    rect,
-                    color,
-                    thickness.max(1) as usize,
-                );
-            }
-            FrameCommand::Line {
-                from,
-                to,
-                color,
-                thickness,
-            } => draw_line_rgba(
-                &mut rgba,
-                width as usize,
-                height as usize,
-                from,
-                to,
-                color,
-                thickness.max(1),
-            ),
-            FrameCommand::Circle {
-                center,
-                radius,
-                color,
-            } => fill_circle_rgba(
-                &mut rgba,
-                width as usize,
-                height as usize,
-                center,
-                radius.max(1.0),
-                color,
-            ),
-            FrameCommand::Polyline {
-                points,
-                color,
-                thickness,
-                closed,
-            } => draw_polyline_rgba(
-                &mut rgba,
-                width as usize,
-                height as usize,
-                points.as_slice(),
-                color,
-                thickness.max(1),
-                closed,
-            ),
-            FrameCommand::Arc {
-                center,
-                radius,
-                start_angle,
-                sweep_angle,
-                color,
-                thickness,
-            } => {
-                let points = approximate_arc_points(center, radius, start_angle, sweep_angle);
-                draw_polyline_rgba(
-                    &mut rgba,
-                    width as usize,
-                    height as usize,
-                    points.as_slice(),
-                    color,
-                    thickness.max(1),
-                    false,
-                );
-            }
-            FrameCommand::ParticleBatch { particles } => {
-                for particle in particles {
-                    fill_circle_rgba(
-                        &mut rgba,
-                        width as usize,
-                        height as usize,
-                        particle.center,
-                        particle.radius.max(1.0),
-                        particle.color,
-                    );
-                }
-            }
-            FrameCommand::Text(request) => {
-                draw_text_request(&mut rgba, width as usize, height as usize, &request)
-            }
-            FrameCommand::Image(request) => {
-                if let Some(image) = textures.get(&request.image_key) {
-                    blit_image_rgba(&mut rgba, width as usize, height as usize, image, &request);
-                }
-            }
-            // Clipping is resolved while encoding -- nothing to do here.
-            FrameCommand::PushClip { .. } | FrameCommand::PopClip => {}
-        }
+    let mut canvas = RgbaCanvas::new(&mut rgba, width as usize, height as usize);
+    canvas.clear(clear_color);
+    for command in commands.iter() {
+        canvas.draw_command(
+            command,
+            |key| textures.get(key).map(|image| RgbaImage::from(&**image)),
+            draw_text_request,
+        );
     }
 
     for (dst, chunk) in buffer.iter_mut().zip(rgba.as_chunks::<4>().0) {
@@ -1869,25 +1751,6 @@ fn rasterized_text_draw_rect(
     loadngo_renderer::text_texture_draw_rect(request.rect, texture_width, texture_height)
 }
 
-fn intersect_rects(a: UiRect, b: UiRect) -> Option<UiRect> {
-    let x0 = a.x.max(b.x);
-    let y0 = a.y.max(b.y);
-    let x1 = (a.x + a.width).min(b.x + b.width);
-    let y1 = (a.y + a.height).min(b.y + b.height);
-    let width = x1 - x0;
-    let height = y1 - y0;
-    if width <= 0.0 || height <= 0.0 {
-        None
-    } else {
-        Some(UiRect {
-            x: x0,
-            y: y0,
-            width,
-            height,
-        })
-    }
-}
-
 fn rasterize_text_command(request: &TextRequest) -> Option<(UiRect, DecodedImage)> {
     let font = resolve_text_request_font(request);
     let measured = measure_text_impl(&request.text, &font, request.style.font_size, 1.0);
@@ -1920,7 +1783,10 @@ fn rasterize_text_command(request: &TextRequest) -> Option<(UiRect, DecodedImage
     // them eats real text. The clip is applied when the texture is placed,
     // via `text_texture_clip_rect`.
     local_request.clip_rect = None;
-    draw_text_request(&mut rgba, tex_width, tex_height, &local_request);
+    draw_text_request(
+        &mut RgbaCanvas::new(&mut rgba, tex_width, tex_height),
+        &local_request,
+    );
     Some((
         rasterized_text_draw_rect(request, tex_width as f32, tex_height as f32),
         DecodedImage::new(tex_width as u32, tex_height as u32, rgba),
@@ -1934,40 +1800,11 @@ fn rasterize_line_command(
     thickness: i32,
     index: usize,
 ) -> Option<(String, UiRect, DecodedImage)> {
-    let thickness = thickness.max(1);
-    let thickness_f = thickness as f32;
-    let min_x = from.x.min(to.x) - thickness_f;
-    let min_y = from.y.min(to.y) - thickness_f;
-    let max_x = from.x.max(to.x) + thickness_f;
-    let max_y = from.y.max(to.y) + thickness_f;
-    let rect = UiRect {
-        x: min_x,
-        y: min_y,
-        width: (max_x - min_x).max(1.0),
-        height: (max_y - min_y).max(1.0),
-    };
-    let tex_width = rect.width.ceil() as usize;
-    let tex_height = rect.height.ceil() as usize;
-    let mut rgba = vec![0u8; tex_width * tex_height * 4];
-    draw_line_rgba(
-        &mut rgba,
-        tex_width,
-        tex_height,
-        Point {
-            x: from.x - rect.x,
-            y: from.y - rect.y,
-        },
-        Point {
-            x: to.x - rect.x,
-            y: to.y - rect.y,
-        },
-        color,
-        thickness,
-    );
+    let raster = rasterize_line(from, to, color, thickness)?;
     Some((
         format!("generated://line/{index}"),
-        rect,
-        DecodedImage::new(tex_width as u32, tex_height as u32, rgba),
+        raster.rect,
+        DecodedImage::new(raster.width as u32, raster.height as u32, raster.pixels),
     ))
 }
 
@@ -2017,205 +1854,7 @@ fn append_rasterized_polyline_images(
     }
 }
 
-fn approximate_arc_points(
-    center: Point,
-    radius: f32,
-    start_angle: f32,
-    sweep_angle: f32,
-) -> Vec<Point> {
-    if radius <= 0.0 || sweep_angle.abs() <= f32::EPSILON {
-        return Vec::new();
-    }
-    let segment_count = ((radius.abs() * sweep_angle.abs()) / 10.0)
-        .ceil()
-        .clamp(8.0, 96.0) as usize;
-    (0..=segment_count)
-        .map(|index| {
-            let t = index as f32 / segment_count as f32;
-            let angle = start_angle + sweep_angle * t;
-            Point {
-                x: center.x + radius * angle.cos(),
-                y: center.y + radius * angle.sin(),
-            }
-        })
-        .collect()
-}
-
-fn fill_rect_rgba(buffer: &mut [u8], width: usize, height: usize, rect: UiRect, color: UiColor) {
-    let x0 = rect.x.max(0.0) as usize;
-    let y0 = rect.y.max(0.0) as usize;
-    let x1 = (rect.x + rect.width).max(0.0).min(width as f32) as usize;
-    let y1 = (rect.y + rect.height).max(0.0).min(height as f32) as usize;
-    for y in y0..y1 {
-        for x in x0..x1 {
-            blend_pixel(buffer, width, x, y, color, 1.0);
-        }
-    }
-}
-
-fn stroke_rect_rgba(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    rect: UiRect,
-    color: UiColor,
-    thickness: usize,
-) {
-    let thickness_f = thickness as f32;
-    fill_rect_rgba(
-        buffer,
-        width,
-        height,
-        UiRect {
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: thickness_f,
-        },
-        color,
-    );
-    fill_rect_rgba(
-        buffer,
-        width,
-        height,
-        UiRect {
-            x: rect.x,
-            y: rect.y + rect.height - thickness_f,
-            width: rect.width,
-            height: thickness_f,
-        },
-        color,
-    );
-    fill_rect_rgba(
-        buffer,
-        width,
-        height,
-        UiRect {
-            x: rect.x,
-            y: rect.y,
-            width: thickness_f,
-            height: rect.height,
-        },
-        color,
-    );
-    fill_rect_rgba(
-        buffer,
-        width,
-        height,
-        UiRect {
-            x: rect.x + rect.width - thickness_f,
-            y: rect.y,
-            width: thickness_f,
-            height: rect.height,
-        },
-        color,
-    );
-}
-
-fn draw_line_rgba(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    from: Point,
-    to: Point,
-    color: UiColor,
-    thickness: i32,
-) {
-    let mut x0 = from.x.round() as i32;
-    let mut y0 = from.y.round() as i32;
-    let x1 = to.x.round() as i32;
-    let y1 = to.y.round() as i32;
-    let dx = (x1 - x0).abs();
-    let sx = if x0 < x1 { 1 } else { -1 };
-    let dy = -(y1 - y0).abs();
-    let sy = if y0 < y1 { 1 } else { -1 };
-    let mut err = dx + dy;
-
-    loop {
-        for oy in -(thickness / 2)..=(thickness / 2) {
-            for ox in -(thickness / 2)..=(thickness / 2) {
-                let px = x0 + ox;
-                let py = y0 + oy;
-                if px >= 0 && py >= 0 && (px as usize) < width && (py as usize) < height {
-                    blend_pixel(buffer, width, px as usize, py as usize, color, 1.0);
-                }
-            }
-        }
-        if x0 == x1 && y0 == y1 {
-            break;
-        }
-        let e2 = 2 * err;
-        if e2 >= dy {
-            err += dy;
-            x0 += sx;
-        }
-        if e2 <= dx {
-            err += dx;
-            y0 += sy;
-        }
-    }
-}
-
-fn draw_polyline_rgba(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    points: &[Point],
-    color: UiColor,
-    thickness: i32,
-    closed: bool,
-) {
-    if points.len() < 2 {
-        return;
-    }
-    for segment in points.windows(2) {
-        draw_line_rgba(
-            buffer, width, height, segment[0], segment[1], color, thickness,
-        );
-    }
-    if closed {
-        draw_line_rgba(
-            buffer,
-            width,
-            height,
-            *points.last().unwrap_or(&points[0]),
-            points[0],
-            color,
-            thickness,
-        );
-    }
-}
-
-fn fill_circle_rgba(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    center: Point,
-    radius: f32,
-    color: UiColor,
-) {
-    let radius = radius.max(1.0);
-    let radius_i = radius.round() as i32;
-    let center_x = center.x.round() as i32;
-    let center_y = center.y.round() as i32;
-    let r2 = radius * radius;
-    for y in (center_y - radius_i)..=(center_y + radius_i) {
-        for x in (center_x - radius_i)..=(center_x + radius_i) {
-            let dx = x - center_x;
-            let dy = y - center_y;
-            if (dx * dx + dy * dy) as f32 <= r2
-                && x >= 0
-                && y >= 0
-                && (x as usize) < width
-                && (y as usize) < height
-            {
-                blend_pixel(buffer, width, x as usize, y as usize, color, 1.0);
-            }
-        }
-    }
-}
-
-fn draw_text_request(buffer: &mut [u8], width: usize, height: usize, request: &TextRequest) {
+fn draw_text_request(canvas: &mut RgbaCanvas<'_>, request: &TextRequest) {
     let font = resolve_text_request_font(request);
     let clip_rect = request
         .clip_rect
@@ -2268,9 +1907,7 @@ fn draw_text_request(buffer: &mut [u8], width: usize, height: usize, request: &T
         };
         let baseline_y = origin_y + line_index as f32 * line_step + baseline_offset;
         draw_text_line(
-            buffer,
-            width,
-            height,
+            canvas,
             &rendered,
             start_x,
             baseline_y,
@@ -2323,9 +1960,7 @@ fn apply_overflow(
 
 #[allow(clippy::too_many_arguments)] // private software-raster helper; params are the real independent glyph inputs
 fn draw_text_line(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
+    canvas: &mut RgbaCanvas<'_>,
     text: &str,
     x: i32,
     baseline_y: f32,
@@ -2351,94 +1986,13 @@ fn draw_text_line(
                         && (py as f32) >= clip.y
                         && (py as f32) < clip.y + clip.height
                 });
-                if inside_clip
-                    && px >= 0
-                    && py >= 0
-                    && (px as usize) < width
-                    && (py as usize) < height
-                {
-                    blend_pixel(buffer, width, px as usize, py as usize, color, alpha);
+                if inside_clip {
+                    canvas.blend_pixel(px, py, color, alpha);
                 }
             }
         }
         pen_x += metrics.advance_width;
     }
-}
-
-fn blit_image_rgba(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    image: &DecodedImage,
-    request: &ImageRequest,
-) {
-    let x0 = request.rect.x.max(0.0) as usize;
-    let y0 = request.rect.y.max(0.0) as usize;
-    let x1 = (request.rect.x + request.rect.width)
-        .max(0.0)
-        .min(width as f32) as usize;
-    let y1 = (request.rect.y + request.rect.height)
-        .max(0.0)
-        .min(height as f32) as usize;
-
-    let dst_w = (x1.saturating_sub(x0)).max(1);
-    let dst_h = (y1.saturating_sub(y0)).max(1);
-    for dy in 0..dst_h {
-        let sy = dy * image.height as usize / dst_h;
-        for dx in 0..dst_w {
-            let sx = dx * image.width as usize / dst_w;
-            let src_idx = (sy * image.width as usize + sx) * 4;
-            let color = UiColor::rgba(
-                image.rgba8[src_idx],
-                image.rgba8[src_idx + 1],
-                image.rgba8[src_idx + 2],
-                image.rgba8[src_idx + 3],
-            );
-            blend_pixel(
-                buffer,
-                width,
-                x0 + dx,
-                y0 + dy,
-                color,
-                request.alpha.clamp(0.0, 1.0),
-            );
-        }
-    }
-}
-
-fn blend_pixel(buffer: &mut [u8], width: usize, x: usize, y: usize, color: UiColor, alpha: f32) {
-    let idx = (y * width + x) * 4;
-    let src_a = (color.a as f32 / 255.0) * alpha.clamp(0.0, 1.0);
-    if src_a <= 0.0 {
-        return;
-    }
-    let dst_a = buffer[idx + 3] as f32 / 255.0;
-    let out_a = src_a + dst_a * (1.0 - src_a);
-    let src_r = color.r as f32 / 255.0;
-    let src_g = color.g as f32 / 255.0;
-    let src_b = color.b as f32 / 255.0;
-    let dst_r = buffer[idx] as f32 / 255.0;
-    let dst_g = buffer[idx + 1] as f32 / 255.0;
-    let dst_b = buffer[idx + 2] as f32 / 255.0;
-    let out_r = if out_a > 0.0 {
-        (src_r * src_a + dst_r * dst_a * (1.0 - src_a)) / out_a
-    } else {
-        0.0
-    };
-    let out_g = if out_a > 0.0 {
-        (src_g * src_a + dst_g * dst_a * (1.0 - src_a)) / out_a
-    } else {
-        0.0
-    };
-    let out_b = if out_a > 0.0 {
-        (src_b * src_a + dst_b * dst_a * (1.0 - src_a)) / out_a
-    } else {
-        0.0
-    };
-    buffer[idx] = (out_r * 255.0).round().clamp(0.0, 255.0) as u8;
-    buffer[idx + 1] = (out_g * 255.0).round().clamp(0.0, 255.0) as u8;
-    buffer[idx + 2] = (out_b * 255.0).round().clamp(0.0, 255.0) as u8;
-    buffer[idx + 3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
 }
 
 #[cfg(test)]
@@ -2525,7 +2079,7 @@ mod tests {
         let width = 240usize;
         let height = 48usize;
         let mut rgba = vec![0u8; width * height * 4];
-        draw_text_request(&mut rgba, width, height, &request);
+        draw_text_request(&mut RgbaCanvas::new(&mut rgba, width, height), &request);
 
         let left_alpha: usize = rgba
             .as_chunks::<4>()

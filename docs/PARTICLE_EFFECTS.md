@@ -40,7 +40,7 @@ uses for `Circle`:
 | Metal (macOS, iOS) | one `SolidGeometry` per particle |
 | GLES (Android, Linux) | pushed into the shared solid batch, so one draw call per run |
 | DX12 (Windows) | one `DrawItem` for the whole batch (vertices carry color) |
-| Software fallbacks | `fill_circle` per particle, as before |
+| Software fallbacks | `fill_circle` per particle in the shared `loadngo_renderer::software::RgbaCanvas` |
 
 Until 2026-09-25, every host rasterized each particle on the CPU into its
 own texture, every frame. GLES then dropped the batch entirely

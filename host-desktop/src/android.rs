@@ -25,6 +25,7 @@ use loadngo_host_core::{
     WindowIconSet,
 };
 use loadngo_proactor::EpollPort;
+use loadngo_renderer::software::{rasterize_line, RgbaCanvas, RgbaImage};
 use loadngo_renderer::{FrameCommand, ImageRequest, Renderer, RendererConfig};
 use ndk::asset::AssetManager;
 use ndk::hardware_buffer_format::HardwareBufferFormat;
@@ -105,10 +106,6 @@ impl SoftwareTexture {
             height: image.height as usize,
             rgba8: Arc::from(image.rgba8.clone()),
         }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.width == 0 || self.height == 0 || self.rgba8.is_empty()
     }
 
     fn to_gles_resource(&self) -> loadngo_gfx_gles::GlesImageResource {
@@ -2522,36 +2519,15 @@ fn rasterize_line_command(
     thickness: i32,
     index: usize,
 ) -> Option<(String, UiRect, SoftwareTexture)> {
-    let thickness = thickness.max(1);
-    let thickness_f = thickness as f32;
-    let min_x = from.x.min(to.x) - thickness_f;
-    let min_y = from.y.min(to.y) - thickness_f;
-    let max_x = from.x.max(to.x) + thickness_f;
-    let max_y = from.y.max(to.y) + thickness_f;
-    let rect = UiRect {
-        x: min_x,
-        y: min_y,
-        width: (max_x - min_x).max(1.0),
-        height: (max_y - min_y).max(1.0),
-    };
-    let mut surface =
-        OwnedSoftwareSurface::new(rect.width.ceil() as usize, rect.height.ceil() as usize);
-    surface.line(
-        ui_core::geometry::Point {
-            x: from.x - rect.x,
-            y: from.y - rect.y,
-        },
-        ui_core::geometry::Point {
-            x: to.x - rect.x,
-            y: to.y - rect.y,
-        },
-        color,
-        thickness,
-    );
+    let raster = rasterize_line(from, to, color, thickness)?;
     Some((
         format!("generated://line/{index}"),
-        rect,
-        surface.into_texture(),
+        raster.rect,
+        SoftwareTexture {
+            width: raster.width,
+            height: raster.height,
+            rgba8: Arc::from(raster.pixels),
+        },
     ))
 }
 
@@ -2743,68 +2719,6 @@ impl OwnedSoftwareSurface {
         }
     }
 
-    #[allow(dead_code)] // used only by the preserved rasterize_line_command
-    fn line(
-        &mut self,
-        from: ui_core::geometry::Point,
-        to: ui_core::geometry::Point,
-        color: UiColor,
-        thickness: i32,
-    ) {
-        let thickness = thickness.max(1) as f32;
-        let mut x0 = from.x.round();
-        let mut y0 = from.y.round();
-        let x1 = to.x.round();
-        let y1 = to.y.round();
-        let dx = (x1 - x0).abs();
-        let sx = if x0 < x1 { 1.0 } else { -1.0 };
-        let dy = -(y1 - y0).abs();
-        let sy = if y0 < y1 { 1.0 } else { -1.0 };
-        let mut err = dx + dy;
-
-        loop {
-            let half = thickness * 0.5;
-            self.fill_rect(
-                UiRect {
-                    x: x0 - half,
-                    y: y0 - half,
-                    width: thickness,
-                    height: thickness,
-                },
-                color,
-            );
-            if x0 == x1 && y0 == y1 {
-                break;
-            }
-            let e2 = err * 2.0;
-            if e2 >= dy {
-                err += dy;
-                x0 += sx;
-            }
-            if e2 <= dx {
-                err += dx;
-                y0 += sy;
-            }
-        }
-    }
-
-    #[allow(dead_code)] // used only by the preserved line rasterizer
-    fn fill_rect(&mut self, rect: UiRect, color: UiColor) {
-        let Some((x0, y0, x1, y1)) = self.clip_rect(rect) else {
-            return;
-        };
-        for y in y0..y1 {
-            for x in x0..x1 {
-                self.write_pixel(x, y, color, 1.0);
-            }
-        }
-    }
-
-    #[allow(dead_code)] // used only by the preserved line rasterizer
-    fn clip_rect(&self, rect: UiRect) -> Option<(i32, i32, i32, i32)> {
-        clip_rect_to_surface(rect, self.width, self.height)
-    }
-
     fn write_pixel(&mut self, x: i32, y: i32, color: UiColor, extra_alpha: f32) {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
             return;
@@ -2843,37 +2757,6 @@ fn point_inside_clip(clip: Option<UiRect>, x: i32, y: i32) -> bool {
             && (y as f32) >= clip.y
             && (y as f32) < clip.y + clip.height
     })
-}
-
-fn clip_rect_to_surface(rect: UiRect, width: usize, height: usize) -> Option<(i32, i32, i32, i32)> {
-    let x0 = rect.x.max(0.0).floor().min(width as f32) as i32;
-    let y0 = rect.y.max(0.0).floor().min(height as f32) as i32;
-    let x1 = rect.right().max(0.0).ceil().min(width as f32) as i32;
-    let y1 = rect.bottom().max(0.0).ceil().min(height as f32) as i32;
-    if x1 <= x0 || y1 <= y0 {
-        None
-    } else {
-        Some((x0, y0, x1, y1))
-    }
-}
-
-fn intersect_rects(a: UiRect, b: UiRect) -> Option<UiRect> {
-    let x0 = a.x.max(b.x);
-    let y0 = a.y.max(b.y);
-    let x1 = a.right().min(b.right());
-    let y1 = a.bottom().min(b.bottom());
-    let width = x1 - x0;
-    let height = y1 - y0;
-    if width <= 0.0 || height <= 0.0 {
-        None
-    } else {
-        Some(UiRect {
-            x: x0,
-            y: y0,
-            width,
-            height,
-        })
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3693,459 +3576,143 @@ fn software_present(
         return Err("Android native window buffer format is unsupported".to_string());
     };
     let bytes = unsafe { std::slice::from_raw_parts_mut(raw.as_mut_ptr().cast::<u8>(), raw.len()) };
-    let mut framebuffer = SoftwareFramebuffer {
-        width: buffer.width(),
-        height: buffer.height(),
-        stride: buffer.stride(),
-        bytes,
-    };
-    framebuffer.ensure_initialized();
+    // A freshly created window buffer is all zeros (transparent); start it
+    // opaque black, as the compositor would otherwise show through.
+    let blank = bytes.iter().all(|byte| *byte == 0);
+    let (width, height, stride) = (buffer.width(), buffer.height(), buffer.stride());
+    let mut canvas = RgbaCanvas::with_stride(bytes, width, height, stride);
+    if blank {
+        canvas.clear(UiColor::rgba(0, 0, 0, 255));
+    }
     for command in commands {
-        framebuffer.execute(command, textures, current_font);
+        canvas.draw_command(
+            command,
+            |key| {
+                textures.get(key).map(|texture| RgbaImage {
+                    width: texture.width,
+                    height: texture.height,
+                    pixels: &texture.rgba8,
+                })
+            },
+            |canvas, request| draw_software_text(canvas, request, current_font),
+        );
     }
     Ok(())
 }
 
-struct SoftwareFramebuffer<'a> {
-    width: usize,
-    height: usize,
-    stride: usize,
-    bytes: &'a mut [u8],
-}
-
-impl<'a> SoftwareFramebuffer<'a> {
-    fn ensure_initialized(&mut self) {
-        for byte in self.bytes.iter_mut() {
-            if *byte != 0 {
-                return;
-            }
+fn draw_software_text(
+    canvas: &mut RgbaCanvas<'_>,
+    request: &loadngo_renderer::TextRequest,
+    current_font: Option<&SoftwareFont>,
+) {
+    let Some(font) = current_font else {
+        return;
+    };
+    let layout = software_text_line_layout(Some(font), request.style.font_size, 1.0);
+    let px = layout.px;
+    let measured_line_height = layout.line_height.max(1) as f32;
+    let line_box_height = single_line_text_box_height(request.style.font_size);
+    let line_step = multiline_line_step(request.style.font_size);
+    let baseline_offset =
+        layout.baseline_offset as f32 + (line_box_height - measured_line_height).max(0.0) * 0.5;
+    let normalized_text = match request.style.layout_mode {
+        loadngo_host_core::RenderTextLayoutMode::SingleLine => request.text.replace('\n', " "),
+        loadngo_host_core::RenderTextLayoutMode::MultiLine => request.text.clone(),
+    };
+    // Idempotent: already applied when the texture was sized, but this
+    // path is also reached directly, and a line must never be drawn
+    // wider than the rect that asked for it.
+    let normalized_text = fit_text_lines(
+        &normalized_text,
+        font,
+        request.style.font_size,
+        request.rect.width,
+        &request.style.overflow,
+    );
+    let lines: Vec<&str> = normalized_text.split('\n').collect();
+    let mut total_height = match request.style.layout_mode {
+        loadngo_host_core::RenderTextLayoutMode::SingleLine => line_box_height,
+        loadngo_host_core::RenderTextLayoutMode::MultiLine => {
+            line_box_height + line_step * lines.len().saturating_sub(1) as f32
         }
-        self.clear(UiColor::rgba(0, 0, 0, 255));
+    };
+    if total_height <= 0.0 {
+        total_height = line_box_height;
     }
 
-    fn execute(
-        &mut self,
-        command: &FrameCommand,
-        textures: &HashMap<String, SoftwareTexture>,
-        current_font: Option<&SoftwareFont>,
-    ) {
-        match command {
-            FrameCommand::Clear { color } => self.clear(*color),
-            FrameCommand::FillRect { rect, color } => self.fill_rect(*rect, *color),
-            FrameCommand::StrokeRect {
-                rect,
-                color,
-                thickness,
-            } => self.stroke_rect(*rect, *color, *thickness),
-            FrameCommand::Line {
-                from,
-                to,
-                color,
-                thickness,
-            } => self.line(*from, *to, *color, *thickness),
-            FrameCommand::Circle {
-                center,
-                radius,
-                color,
-            } => self.circle(center.x, center.y, *radius, *color),
-            FrameCommand::Arc {
-                center,
-                radius,
-                start_angle,
-                sweep_angle,
-                color,
-                thickness,
-            } => {
-                let points = approximate_arc_points(*center, *radius, *start_angle, *sweep_angle);
-                self.polyline(points.as_slice(), *color, *thickness, false);
-            }
-            FrameCommand::Polyline {
-                points,
-                color,
-                thickness,
-                closed,
-            } => self.polyline(points.as_slice(), *color, *thickness, *closed),
-            FrameCommand::ParticleBatch { particles } => {
-                for particle in particles {
-                    self.circle(
-                        particle.center.x,
-                        particle.center.y,
-                        particle.radius.max(1.0),
-                        particle.color,
-                    );
-                }
-            }
-            FrameCommand::Image(request) => self.blit_image(request, textures),
-            FrameCommand::Text(request) => self.draw_text(request, current_font),
-            // See `docs/CLIP_AND_SCISSOR.md`: clipping is applied while
-            // encoding, so nothing reaches here needing it.
-            FrameCommand::PushClip { .. } | FrameCommand::PopClip => {}
+    let mut origin_y = request.rect.y;
+    origin_y += match request.style.vertical_align {
+        loadngo_host_core::RenderTextVerticalAlign::Top => 0.0,
+        loadngo_host_core::RenderTextVerticalAlign::Middle => {
+            (request.rect.height - total_height).max(0.0) * 0.5
         }
-    }
-
-    fn clear(&mut self, color: UiColor) {
-        for y in 0..self.height as i32 {
-            for x in 0..self.width as i32 {
-                self.write_pixel(x, y, color, 1.0);
-            }
+        loadngo_host_core::RenderTextVerticalAlign::Bottom => {
+            (request.rect.height - total_height).max(0.0)
         }
-    }
+    };
 
-    fn fill_rect(&mut self, rect: UiRect, color: UiColor) {
-        let Some((x0, y0, x1, y1)) = self.clip_rect(rect) else {
-            return;
-        };
-        for y in y0..y1 {
-            for x in x0..x1 {
-                self.write_pixel(x, y, color, 1.0);
-            }
-        }
-    }
-
-    fn stroke_rect(&mut self, rect: UiRect, color: UiColor, thickness: i32) {
-        let thickness = thickness.max(1) as f32;
-        self.fill_rect(
-            UiRect {
-                x: rect.x,
-                y: rect.y,
-                width: rect.width,
-                height: thickness,
-            },
-            color,
-        );
-        self.fill_rect(
-            UiRect {
-                x: rect.x,
-                y: rect.bottom() - thickness,
-                width: rect.width,
-                height: thickness,
-            },
-            color,
-        );
-        self.fill_rect(
-            UiRect {
-                x: rect.x,
-                y: rect.y,
-                width: thickness,
-                height: rect.height,
-            },
-            color,
-        );
-        self.fill_rect(
-            UiRect {
-                x: rect.right() - thickness,
-                y: rect.y,
-                width: thickness,
-                height: rect.height,
-            },
-            color,
-        );
-    }
-
-    fn polyline(
-        &mut self,
-        points: &[ui_core::geometry::Point],
-        color: UiColor,
-        thickness: i32,
-        closed: bool,
-    ) {
-        if points.len() < 2 {
-            return;
-        }
-        for segment in points.windows(2) {
-            self.line(segment[0], segment[1], color, thickness);
-        }
-        if closed {
-            self.line(
-                *points.last().unwrap_or(&points[0]),
-                points[0],
-                color,
-                thickness,
-            );
-        }
-    }
-
-    fn line(
-        &mut self,
-        from: ui_core::geometry::Point,
-        to: ui_core::geometry::Point,
-        color: UiColor,
-        thickness: i32,
-    ) {
-        let thickness = thickness.max(1) as f32;
-        let mut x0 = from.x.round();
-        let mut y0 = from.y.round();
-        let x1 = to.x.round();
-        let y1 = to.y.round();
-        let dx = (x1 - x0).abs();
-        let sx = if x0 < x1 { 1.0 } else { -1.0 };
-        let dy = -(y1 - y0).abs();
-        let sy = if y0 < y1 { 1.0 } else { -1.0 };
-        let mut err = dx + dy;
-
-        loop {
-            let half = thickness * 0.5;
-            self.fill_rect(
-                UiRect {
-                    x: x0 - half,
-                    y: y0 - half,
-                    width: thickness,
-                    height: thickness,
-                },
-                color,
-            );
-            if x0 == x1 && y0 == y1 {
-                break;
-            }
-            let e2 = err * 2.0;
-            if e2 >= dy {
-                err += dy;
-                x0 += sx;
-            }
-            if e2 <= dx {
-                err += dx;
-                y0 += sy;
-            }
-        }
-    }
-
-    fn circle(&mut self, center_x: f32, center_y: f32, radius: f32, color: UiColor) {
-        if radius <= 0.0 {
-            return;
-        }
-        let radius = radius.max(1.0);
-        let radius_i = radius.round() as i32;
-        let r2 = radius * radius;
-        let cx = center_x.round() as i32;
-        let cy = center_y.round() as i32;
-        for y in -radius_i..=radius_i {
-            for x in -radius_i..=radius_i {
-                if (x * x + y * y) as f32 <= r2 {
-                    self.write_pixel(cx + x, cy + y, color, 1.0);
-                }
-            }
-        }
-    }
-
-    fn blit_image(&mut self, request: &ImageRequest, textures: &HashMap<String, SoftwareTexture>) {
-        let Some(texture) = textures.get(request.image_key.as_str()) else {
-            return;
-        };
-        self.blit_software_texture(texture, request.rect, request.clip_rect, request.alpha);
-    }
-
-    fn draw_text(
-        &mut self,
-        request: &loadngo_renderer::TextRequest,
-        current_font: Option<&SoftwareFont>,
-    ) {
-        let Some(font) = current_font else {
-            return;
-        };
-        let layout = software_text_line_layout(Some(font), request.style.font_size, 1.0);
-        let px = layout.px;
-        let measured_line_height = layout.line_height.max(1) as f32;
-        let line_box_height = single_line_text_box_height(request.style.font_size);
-        let line_step = multiline_line_step(request.style.font_size);
-        let baseline_offset =
-            layout.baseline_offset as f32 + (line_box_height - measured_line_height).max(0.0) * 0.5;
-        let normalized_text = match request.style.layout_mode {
-            loadngo_host_core::RenderTextLayoutMode::SingleLine => request.text.replace('\n', " "),
-            loadngo_host_core::RenderTextLayoutMode::MultiLine => request.text.clone(),
-        };
-        // Idempotent: already applied when the texture was sized, but this
-        // path is also reached directly, and a line must never be drawn
-        // wider than the rect that asked for it.
-        let normalized_text = fit_text_lines(
-            &normalized_text,
-            font,
+    for (line_index, line) in lines.iter().enumerate() {
+        let line_metrics = font_text_metrics(
+            line,
+            Some(&DesktopFont {
+                source_path: None,
+                software_font: Some(font.clone()),
+            }),
             request.style.font_size,
-            request.rect.width,
-            &request.style.overflow,
+            1.0,
         );
-        let lines: Vec<&str> = normalized_text.split('\n').collect();
-        let mut total_height = match request.style.layout_mode {
-            loadngo_host_core::RenderTextLayoutMode::SingleLine => line_box_height,
-            loadngo_host_core::RenderTextLayoutMode::MultiLine => {
-                line_box_height + line_step * lines.len().saturating_sub(1) as f32
+        let mut cursor_x = request.rect.x;
+        cursor_x += match request.style.horizontal_align {
+            loadngo_host_core::RenderTextHorizontalAlign::Left => 0.0,
+            loadngo_host_core::RenderTextHorizontalAlign::Center => {
+                (request.rect.width - line_metrics.width).max(0.0) * 0.5
+            }
+            loadngo_host_core::RenderTextHorizontalAlign::Right => {
+                (request.rect.width - line_metrics.width).max(0.0)
             }
         };
-        if total_height <= 0.0 {
-            total_height = line_box_height;
-        }
-
-        let mut origin_y = request.rect.y;
-        origin_y += match request.style.vertical_align {
-            loadngo_host_core::RenderTextVerticalAlign::Top => 0.0,
-            loadngo_host_core::RenderTextVerticalAlign::Middle => {
-                (request.rect.height - total_height).max(0.0) * 0.5
+        let baseline_y = origin_y + line_index as f32 * line_step + baseline_offset;
+        for ch in line.chars() {
+            if ch == ' ' {
+                let metrics = font.inner.metrics(ch, px);
+                cursor_x += metrics.advance_width.max(px * 0.3);
+                continue;
             }
-            loadngo_host_core::RenderTextVerticalAlign::Bottom => {
-                (request.rect.height - total_height).max(0.0)
-            }
-        };
-
-        for (line_index, line) in lines.iter().enumerate() {
-            let line_metrics = font_text_metrics(
-                line,
-                Some(&DesktopFont {
-                    source_path: None,
-                    software_font: Some(font.clone()),
-                }),
-                request.style.font_size,
-                1.0,
-            );
-            let mut cursor_x = request.rect.x;
-            cursor_x += match request.style.horizontal_align {
-                loadngo_host_core::RenderTextHorizontalAlign::Left => 0.0,
-                loadngo_host_core::RenderTextHorizontalAlign::Center => {
-                    (request.rect.width - line_metrics.width).max(0.0) * 0.5
-                }
-                loadngo_host_core::RenderTextHorizontalAlign::Right => {
-                    (request.rect.width - line_metrics.width).max(0.0)
-                }
-            };
-            let baseline_y = origin_y + line_index as f32 * line_step + baseline_offset;
-            for ch in line.chars() {
-                if ch == ' ' {
-                    let metrics = font.inner.metrics(ch, px);
-                    cursor_x += metrics.advance_width.max(px * 0.3);
-                    continue;
-                }
-                let (metrics, bitmap) = font.inner.rasterize(ch, px);
-                if metrics.width == 0 || metrics.height == 0 || bitmap.is_empty() {
-                    cursor_x += metrics.advance_width;
-                    continue;
-                }
-                let glyph_x = cursor_x + metrics.xmin as f32;
-                let glyph_y = baseline_y - metrics.height as f32 - metrics.ymin as f32;
-                for row in 0..metrics.height {
-                    for col in 0..metrics.width {
-                        let coverage = bitmap[row * metrics.width + col];
-                        if coverage == 0 {
-                            continue;
-                        }
-                        let px = (glyph_x + col as f32).round() as i32;
-                        let py = (glyph_y + row as f32).round() as i32;
-                        // Honor the request's clip rect per pixel, the same
-                        // way the Linux software rasterizer does. Without
-                        // this, text drawn inside a scroll viewport spills
-                        // past it -- which is exactly what a real Android
-                        // device showed once clipping landed.
-                        if !point_inside_clip(request.clip_rect, px, py) {
-                            continue;
-                        }
-                        let color = UiColor::rgba(
-                            request.style.color.r,
-                            request.style.color.g,
-                            request.style.color.b,
-                            coverage,
-                        );
-                        self.write_pixel(px, py, color, 1.0);
-                    }
-                }
+            let (metrics, bitmap) = font.inner.rasterize(ch, px);
+            if metrics.width == 0 || metrics.height == 0 || bitmap.is_empty() {
                 cursor_x += metrics.advance_width;
+                continue;
             }
-        }
-    }
-
-    fn blit_software_texture(
-        &mut self,
-        texture: &SoftwareTexture,
-        rect: UiRect,
-        clip_rect: Option<UiRect>,
-        alpha: f32,
-    ) {
-        if texture.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
-            return;
-        }
-        let draw_rect = if let Some(clip_rect) = clip_rect {
-            let Some(draw_rect) = intersect_rects(rect, clip_rect) else {
-                return;
-            };
-            draw_rect
-        } else {
-            rect
-        };
-        let Some((x0, y0, x1, y1)) = self.clip_rect(draw_rect) else {
-            return;
-        };
-
-        for y in y0..y1 {
-            let src_y = (((y as f32 - rect.y) / rect.height) * texture.height as f32)
-                .floor()
-                .clamp(0.0, (texture.height - 1) as f32) as usize;
-            for x in x0..x1 {
-                let src_x = (((x as f32 - rect.x) / rect.width) * texture.width as f32)
-                    .floor()
-                    .clamp(0.0, (texture.width - 1) as f32) as usize;
-                let src_index = (src_y * texture.width + src_x) * 4;
-                let color = UiColor::rgba(
-                    texture.rgba8[src_index],
-                    texture.rgba8[src_index + 1],
-                    texture.rgba8[src_index + 2],
-                    texture.rgba8[src_index + 3],
-                );
-                self.write_pixel(x, y, color, alpha);
+            let glyph_x = cursor_x + metrics.xmin as f32;
+            let glyph_y = baseline_y - metrics.height as f32 - metrics.ymin as f32;
+            for row in 0..metrics.height {
+                for col in 0..metrics.width {
+                    let coverage = bitmap[row * metrics.width + col];
+                    if coverage == 0 {
+                        continue;
+                    }
+                    let px = (glyph_x + col as f32).round() as i32;
+                    let py = (glyph_y + row as f32).round() as i32;
+                    // Honor the request's clip rect per pixel, the same
+                    // way the Linux software rasterizer does. Without
+                    // this, text drawn inside a scroll viewport spills
+                    // past it -- which is exactly what a real Android
+                    // device showed once clipping landed.
+                    if !point_inside_clip(request.clip_rect, px, py) {
+                        continue;
+                    }
+                    let color = UiColor::rgba(
+                        request.style.color.r,
+                        request.style.color.g,
+                        request.style.color.b,
+                        coverage,
+                    );
+                    canvas.blend_pixel(px, py, color, 1.0);
+                }
             }
+            cursor_x += metrics.advance_width;
         }
     }
-
-    fn clip_rect(&self, rect: UiRect) -> Option<(i32, i32, i32, i32)> {
-        clip_rect_to_surface(rect, self.width, self.height)
-    }
-
-    fn write_pixel(&mut self, x: i32, y: i32, color: UiColor, extra_alpha: f32) {
-        if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
-            return;
-        }
-        let index = (y as usize * self.stride + x as usize) * 4;
-        if index + 3 >= self.bytes.len() {
-            return;
-        }
-        let alpha = ((color.a as f32 / 255.0) * extra_alpha.clamp(0.0, 1.0)).clamp(0.0, 1.0);
-        if alpha <= 0.0 {
-            return;
-        }
-        if alpha >= 1.0 {
-            self.bytes[index] = color.r;
-            self.bytes[index + 1] = color.g;
-            self.bytes[index + 2] = color.b;
-            self.bytes[index + 3] = 255;
-            return;
-        }
-        let inv = 1.0 - alpha;
-        self.bytes[index] = (color.r as f32 * alpha + self.bytes[index] as f32 * inv).round() as u8;
-        self.bytes[index + 1] =
-            (color.g as f32 * alpha + self.bytes[index + 1] as f32 * inv).round() as u8;
-        self.bytes[index + 2] =
-            (color.b as f32 * alpha + self.bytes[index + 2] as f32 * inv).round() as u8;
-        self.bytes[index + 3] = 255;
-    }
-}
-
-fn approximate_arc_points(
-    center: ui_core::geometry::Point,
-    radius: f32,
-    start_angle: f32,
-    sweep_angle: f32,
-) -> Vec<ui_core::geometry::Point> {
-    if radius <= 0.0 || sweep_angle.abs() <= f32::EPSILON {
-        return Vec::new();
-    }
-    let segment_count = ((radius.abs() * sweep_angle.abs()) / 10.0)
-        .ceil()
-        .clamp(8.0, 96.0) as usize;
-    (0..=segment_count)
-        .map(|index| {
-            let t = index as f32 / segment_count as f32;
-            let angle = start_angle + sweep_angle * t;
-            ui_core::geometry::Point {
-                x: center.x + radius * angle.cos(),
-                y: center.y + radius * angle.sin(),
-            }
-        })
-        .collect()
 }
 
 pub fn render_text_lines(

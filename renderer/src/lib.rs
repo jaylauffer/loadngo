@@ -10,6 +10,8 @@ use ui_core::{
     paint::{PaintOp, Particle},
 };
 
+pub mod software;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextDirection {
     Auto,
@@ -760,7 +762,7 @@ impl Renderer {
                     color,
                     thickness,
                 } => commands.push(FrameCommand::Polyline {
-                    points: approximate_arc_points(*center, *radius, 0.0, TAU),
+                    points: software::arc_points(*center, *radius, 0.0, TAU),
                     color: *color,
                     thickness: *thickness,
                     closed: true,
@@ -941,30 +943,6 @@ impl Renderer {
             language: self.config.default_language.clone(),
         }
     }
-}
-
-fn approximate_arc_points(
-    center: Point,
-    radius: f32,
-    start_angle: f32,
-    sweep_angle: f32,
-) -> Vec<Point> {
-    if radius <= 0.0 || sweep_angle.abs() <= f32::EPSILON {
-        return Vec::new();
-    }
-    let segment_count = ((radius.abs() * sweep_angle.abs()) / 10.0)
-        .ceil()
-        .clamp(8.0, 96.0) as usize;
-    (0..=segment_count)
-        .map(|index| {
-            let t = index as f32 / segment_count as f32;
-            let angle = start_angle + sweep_angle * t;
-            Point {
-                x: center.x + radius * angle.cos(),
-                y: center.y + radius * angle.sin(),
-            }
-        })
-        .collect()
 }
 
 fn approximate_quadratic_points(start: Point, control: Point, end: Point) -> Vec<Point> {

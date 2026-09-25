@@ -233,12 +233,20 @@ Status meanings:
 | `FillCircle` | native as `Circle` | native | native | native | native | future |
 | `StrokeCircle` | approx via `Polyline` | approx via `Polyline` | approx via `Polyline` | approx via polyline/host logic | approx via `Polyline` | future |
 | `Polyline` | native | native | native | native | native | future |
-| `Arc` | native | native | native | approx via host draw path | native | future |
+| `Arc` | native | native | native | approx via `software::arc_points` | native | future |
 | `QuadraticBezier` | approx via `Polyline` | rasterized | approx via `Polyline`, then native `Polyline` only where supported | approx via host draw path | unsupported | future |
 | `CubicBezier` | approx via `Polyline` | rasterized | approx via `Polyline`, then native `Polyline` only where supported | approx via host draw path | unsupported | future |
-| `ParticleBatch` | native | rasterized circles/images | rasterized circles/images | native circles | unsupported | future |
+| `ParticleBatch` | native | native (circle geometry) | native (shared solid batch) | native circles | native (one draw item) | future |
 | `Text` | native request | rasterized text image | rasterized text image | native software text path | unsupported | future |
 | `Image` | native | native | native | native | native | future |
+
+"Software host" is one rasterizer, `loadngo_renderer::software::RgbaCanvas`,
+shared by the Linux, Windows and Android software present paths since
+2026-09-25. Before that each host carried its own copy, and the copies had
+drifted apart (even-width lines one pixel too wide, image `clip_rect`
+ignored, an out-of-bounds blit on Linux/Windows). Change software drawing
+there, not in a host. Text is still drawn by each host, through the
+`draw_command` text closure, because each host owns its fonts.
 
 ### Metal: large geometry used to abort the process (fixed 2026-09-11)
 
