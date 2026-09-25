@@ -9,8 +9,20 @@ Implemented 2026-09-24 (Claude Code, Jay: "we need to remain cool"): the
 `loadngo-thermal` crate with the portable types, the governor (immediate escalation;
 recovery after three lower samples and a 15 s dwell; unavailable never reported as
 nominal), `FakeProvider`, `UnavailableProvider`, and the macOS/iOS `NativeProvider`
-over `NSProcessInfo.thermalState` (sequence steps 1 and the macOS part of 4). Linux
-sysfs, Android, host ownership (step 3) and the other steps are not built.
+over `NSProcessInfo.thermalState` (sequence steps 1 and the macOS part of 4).
+
+Implemented 2026-09-25: the Linux `ThermalZoneProvider` (the rest of step 4). It
+picks the CPU/SoC thermal zone by type, reads its temperature, and maps it to a band
+through `TripPoints`: the lowest kernel `passive` trip enters `Serious`, the lowest
+`hot`/`critical` trip enters `Critical`, and `Fair` starts 10 C below `Serious`. A
+band is left only 3 C (or the trip's own hysteresis) below its entry point.
+Raspberry Pi 4 and 5 boards are the exception: their firmware throttles (80 C soft,
+85 C hard) while the kernel's only trip is a 110 C shutdown, so they use
+`TripPoints::RASPBERRY_PI_4_5` (70/80/85 C). Firmware throttling itself needs the
+root-only mailbox, so `throttling` stays `None` on Linux. `ThermalPressure::
+sample_interval` gives the polling cadence below. First Linux consumer: the
+`system_monitor` desktop tool (`docs/SYSTEM_MONITOR.md`) on agnes and dolores.
+Android, host ownership (step 3) and the other steps are not built.
 
 First consumer: the Kimi `k3` CLI samples at each token boundary (no timer), prints
 transitions, pauses at `Serious` while re-sampling every 2 s through a loadngo proactor
@@ -236,7 +248,7 @@ display and local status publisher as application behavior.
 | macOS | Native process thermal-pressure state and change notification | Usually unavailable to an unprivileged app | Implement first; no `powermetrics` or privileged helper |
 | iOS | Native process thermal-pressure state and change notification | Not required | Same semantic mapping as macOS |
 | Android | System thermal status listener; current status for startup | Optional/vendor-specific | Map native status to portable bands; avoid sensor polling from the game |
-| Linux | Thermal-zone type, temperature, trip points, and hysteresis from sysfs | Usually available | General provider; select CPU/package zones by type, not fixed index |
+| Linux | Thermal-zone type, temperature, trip points, and hysteresis from sysfs | Usually available | Implemented (`ThermalZoneProvider`); zones chosen by type; Raspberry Pi 4/5 use firmware limits |
 | Windows | Supported OS thermal/power notification if available | Commonly unavailable | Return `Unavailable` until a reliable provider is proven; do not poll WMI or vendor tools |
 | NetBSD | Native environmental sensor interface when implemented | Hardware-dependent | Begin as `Unavailable`; add behind the same provider contract |
 
