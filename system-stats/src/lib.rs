@@ -1,5 +1,5 @@
 //! System load sampling for monitors and work budgets: CPU busy and I/O-wait time per
-//! core, memory, disk, CPU clock, fan, and supply-voltage alarms.
+//! core, GPU busy time, memory, disk, CPU clock, fan, and supply-voltage alarms.
 //!
 //! [`SystemSampler::sample`] fills a caller-owned [`SystemSample`] in place and reuses
 //! one read buffer, so a monitor that samples every few seconds does not allocate in
@@ -119,6 +119,13 @@ pub struct CpuClock {
     pub max_hz: u64,
 }
 
+/// Share of the last interval the GPU was busy, in `0.0..=1.0`: the largest share
+/// any of its queues (binning, rendering, texture, compute) ran.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GpuUsage {
+    pub busy: f32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Fan {
     pub rpm: Option<u32>,
@@ -131,6 +138,9 @@ pub struct Fan {
 pub struct SystemSample {
     /// `None` on the first sample (usage needs two readings) and where unsupported.
     pub cpu: Option<CpuUsage>,
+    /// `None` on the first sample and where the driver keeps no busy-time counters
+    /// (today only Broadcom `v3d`, the Raspberry Pi 4 and 5 GPU, does).
+    pub gpu: Option<GpuUsage>,
     pub memory: Option<MemoryUsage>,
     pub disk: Option<DiskUsage>,
     pub load_average: Option<[f32; 3]>,
@@ -148,6 +158,7 @@ pub struct SystemSampler {
     buf: String,
     previous: Vec<CpuTimes>,
     current: Vec<CpuTimes>,
+    gpu_previous: Option<GpuTimes>,
     #[cfg(target_os = "linux")]
     linux: linux::Paths,
 }
@@ -163,6 +174,7 @@ impl SystemSampler {
             buf: String::with_capacity(4096),
             previous: Vec::new(),
             current: Vec::new(),
+            gpu_previous: None,
             #[cfg(target_os = "linux")]
             linux: linux::Paths::discover(disk_path),
         }
@@ -176,7 +188,27 @@ impl SystemSampler {
         {
             *out = SystemSample::default();
             let _ = (&mut self.buf, &mut self.previous, &mut self.current);
+            let _ = &mut self.gpu_previous;
         }
+    }
+
+    /// The GPU's kernel driver (for example `v3d`), found once at construction.
+    #[must_use]
+    pub fn gpu_driver(&self) -> Option<&str> {
+        #[cfg(target_os = "linux")]
+        {
+            self.linux.gpu_driver.as_deref()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
+        }
+    }
+
+    /// Stores `current` as usage against the previous GPU reading.
+    fn update_gpu(&mut self, current: Option<GpuTimes>) -> Option<GpuUsage> {
+        let previous = std::mem::replace(&mut self.gpu_previous, current);
+        GpuTimes::busy_between(&previous?, &current?).map(|busy| GpuUsage { busy })
     }
 
     /// Stores the newly parsed `current` readings as usage against `previous`,
@@ -202,6 +234,52 @@ impl SystemSampler {
             *out = None;
         }
         std::mem::swap(&mut self.previous, &mut self.current);
+    }
+}
+
+/// Cumulative busy nanoseconds per GPU queue, as v3d's `gpu_stats` reports them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GpuTimes {
+    timestamp_ns: u64,
+    queues: usize,
+    runtime_ns: [u64; 8],
+}
+
+impl GpuTimes {
+    /// Parses v3d `gpu_stats`: a header, then `queue timestamp jobs runtime` rows.
+    fn parse_v3d(text: &str) -> Option<Self> {
+        let mut times = Self {
+            timestamp_ns: 0,
+            queues: 0,
+            runtime_ns: [0; 8],
+        };
+        for line in text.lines().skip(1) {
+            let mut fields = line.split_ascii_whitespace();
+            let (_queue, timestamp, _jobs, runtime) = (
+                fields.next()?,
+                fields.next()?,
+                fields.next()?,
+                fields.next()?,
+            );
+            if times.queues == times.runtime_ns.len() {
+                break;
+            }
+            times.timestamp_ns = timestamp.parse().ok()?;
+            times.runtime_ns[times.queues] = runtime.parse().ok()?;
+            times.queues += 1;
+        }
+        (times.queues > 0).then_some(times)
+    }
+
+    fn busy_between(earlier: &Self, later: &Self) -> Option<f32> {
+        let elapsed = later.timestamp_ns.checked_sub(earlier.timestamp_ns)?;
+        if elapsed == 0 || earlier.queues != later.queues {
+            return None;
+        }
+        let busiest = (0..later.queues)
+            .map(|q| later.runtime_ns[q].saturating_sub(earlier.runtime_ns[q]))
+            .max()?;
+        Some((busiest as f64 / elapsed as f64).min(1.0) as f32)
     }
 }
 
@@ -291,7 +369,7 @@ fn parse_u64(text: &str) -> Option<u64> {
 mod linux {
     use super::{
         parse_loadavg, parse_meminfo, parse_proc_stat, parse_u64, parse_uptime, CpuClock,
-        DiskUsage, Fan, Path, SystemSample, SystemSampler,
+        DiskUsage, Fan, GpuTimes, Path, SystemSample, SystemSampler,
     };
     use std::ffi::CString;
     use std::io::Read;
@@ -305,6 +383,8 @@ mod linux {
         fan_rpm: Option<PathBuf>,
         fan_pwm: Option<PathBuf>,
         voltage_alarms: Vec<PathBuf>,
+        pub(super) gpu_driver: Option<String>,
+        gpu_stats: Option<PathBuf>,
     }
 
     impl Paths {
@@ -316,7 +396,22 @@ mod linux {
                 fan_rpm: None,
                 fan_pwm: None,
                 voltage_alarms: Vec::new(),
+                gpu_driver: None,
+                gpu_stats: None,
             };
+            // The first render node is the GPU that renders; display-only
+            // devices (vc4 on a Pi) have a card node but no render node.
+            if let Some(render) = sorted_entries(Path::new("/sys/class/drm"), "renderD")
+                .into_iter()
+                .next()
+            {
+                let device = render.join("device");
+                paths.gpu_driver = std::fs::read_link(device.join("driver"))
+                    .ok()
+                    .and_then(|driver| Some(driver.file_name()?.to_string_lossy().into_owned()));
+                let stats = device.join("gpu_stats");
+                paths.gpu_stats = stats.exists().then_some(stats);
+            }
             for policy in sorted_entries(Path::new("/sys/devices/system/cpu/cpufreq"), "policy") {
                 let current = policy.join("scaling_cur_freq");
                 let max = policy.join("cpuinfo_max_freq");
@@ -368,6 +463,11 @@ mod linux {
             out.uptime = read_into(&mut self.buf, Path::new("/proc/uptime"))
                 .then(|| parse_uptime(&self.buf))
                 .flatten();
+            let gpu = match self.linux.gpu_stats.as_deref() {
+                Some(path) if read_into(&mut self.buf, path) => GpuTimes::parse_v3d(&self.buf),
+                _ => None,
+            };
+            out.gpu = self.update_gpu(gpu);
             out.disk = self.linux.disk.as_deref().and_then(disk_usage);
             out.clock = self.read_clock();
             out.fan = self.read_fan();
@@ -536,6 +636,43 @@ ctxt 999
             Some(Duration::from_secs_f64(119536.99))
         );
         assert_eq!(parse_uptime("-1 0"), None);
+    }
+
+    // Recorded on dolores (Pi 5) on 2026-09-25.
+    const V3D_GPU_STATS: &str = "\
+queue\ttimestamp\tjobs\truntime
+bin\t661782989550184\t1971412\t141142694696
+render\t661782989550184\t1971412\t1425315226538
+tfu\t661782989550184\t238197\t265510641434
+csd\t661782989550184\t0\t0
+cache_clean\t661782989550184\t0\t0
+cpu\t661782989550184\t0\t0
+";
+
+    #[test]
+    fn gpu_busy_is_the_busiest_queue_share() {
+        let earlier = GpuTimes::parse_v3d(V3D_GPU_STATS).unwrap();
+        assert_eq!(earlier.queues, 6);
+        let mut later = earlier;
+        later.timestamp_ns += 2_000_000_000;
+        later.runtime_ns[0] += 100_000_000; // bin 5%
+        later.runtime_ns[1] += 500_000_000; // render 25%
+        let busy = GpuTimes::busy_between(&earlier, &later).unwrap();
+        assert!((busy - 0.25).abs() < 1e-6);
+        assert_eq!(GpuTimes::busy_between(&later, &earlier), None);
+        assert_eq!(
+            GpuTimes::parse_v3d("queue\ttimestamp\tjobs\truntime\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn first_gpu_reading_has_no_usage() {
+        let mut sampler = SystemSampler::new(Path::new("/"));
+        let reading = GpuTimes::parse_v3d(V3D_GPU_STATS);
+        assert_eq!(sampler.update_gpu(reading), None);
+        assert_eq!(sampler.update_gpu(reading), None); // no time passed
+        assert_eq!(sampler.update_gpu(None), None);
     }
 
     #[cfg(target_os = "linux")]

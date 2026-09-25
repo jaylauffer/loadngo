@@ -1,5 +1,5 @@
 //! A small desktop monitor for the machine it runs on: CPU load (busy and
-//! I/O wait, overall and per core), temperature and thermal pressure, CPU
+//! I/O wait, overall and per core), GPU load, temperature and thermal pressure, CPU
 //! clock, fan, supply voltage, memory, disk and load average.
 //!
 //! It samples every two seconds from a host proactor deadline
@@ -23,7 +23,7 @@ use ui_core::{
 };
 
 const WINDOW_WIDTH: i32 = 320;
-const WINDOW_HEIGHT: i32 = 292;
+const WINDOW_HEIGHT: i32 = 346;
 const SAMPLE_EVERY: Duration = Duration::from_secs(2);
 /// Three minutes of history at one sample every two seconds.
 const HISTORY: usize = 90;
@@ -43,7 +43,7 @@ const CRITICAL: Color = Color::rgba(0xf0, 0x6a, 0x6a, 0xff);
 const IOWAIT: Color = Color::rgba(0xb0, 0x7c, 0xe8, 0xff);
 
 const USAGE: &str = "\
-system_monitor: a small desktop window showing this machine's CPU load,
+system_monitor: a small desktop window showing this machine's CPU and GPU load,
 temperature and thermal pressure, clock, fan, supply voltage, memory, disk
 and load average. Samples every 2 s; repaints only when a sample arrives.
 
@@ -133,6 +133,7 @@ struct Monitor {
     next_thermal_at: Instant,
     busy_history: History,
     iowait_history: History,
+    gpu_history: History,
     temp_history: History,
     scene: Vec<PaintOp>,
 }
@@ -156,6 +157,7 @@ impl Monitor {
             next_thermal_at: Instant::now(),
             busy_history: History::new(),
             iowait_history: History::new(),
+            gpu_history: History::new(),
             temp_history: History::new(),
             scene: Vec::with_capacity(256),
         }
@@ -202,6 +204,9 @@ impl Monitor {
         if let Some(cpu) = &self.sample.cpu {
             self.busy_history.push(cpu.all.busy);
             self.iowait_history.push(cpu.all.iowait);
+        }
+        if let Some(gpu) = self.sample.gpu {
+            self.gpu_history.push(gpu.busy);
         }
         if let Some(temp) = self.observation.temperature_c {
             self.temp_history.push(temp);
@@ -269,7 +274,7 @@ impl Monitor {
             height: 44.0,
         };
         p.fill(cpu_graph, GRAPH_BACKGROUND);
-        p.stacked_bars(cpu_graph, &self.busy_history, &self.iowait_history);
+        p.stacked_bars(cpu_graph, &self.busy_history, Some(&self.iowait_history));
         if let Some(cpu) = &sample.cpu {
             let cores = Rect {
                 x: pad + 230.0,
@@ -280,17 +285,43 @@ impl Monitor {
             p.core_bars(cores, cpu.cores.iter().map(|c| (c.busy, c.iowait)));
         }
 
+        // GPU: busy share and history, driver name.
+        p.text(pad, 110.0, 60.0, "GPU", 13, MUTED, HorizontalAlign::Left);
+        let gpu = sample
+            .gpu
+            .map_or_else(|| "-".to_string(), |g| format!("{:.0}%", g.busy * 100.0));
+        p.text(
+            pad + 44.0,
+            108.0,
+            80.0,
+            &gpu,
+            16,
+            ACCENT,
+            HorizontalAlign::Left,
+        );
+        if let Some(driver) = self.sampler.gpu_driver() {
+            p.text(pad, 111.0, inner, driver, 12, MUTED, HorizontalAlign::Right);
+        }
+        let gpu_graph = Rect {
+            x: pad,
+            y: 132.0,
+            width: inner,
+            height: 24.0,
+        };
+        p.fill(gpu_graph, GRAPH_BACKGROUND);
+        p.stacked_bars(gpu_graph, &self.gpu_history, None);
+
         // Temperature: value and band, clock, graph with the band entry points.
         let snapshot = self.governor.snapshot();
         let band_color = pressure_color(snapshot.pressure);
-        p.text(pad, 112.0, 60.0, "Temp", 13, MUTED, HorizontalAlign::Left);
+        p.text(pad, 166.0, 60.0, "Temp", 13, MUTED, HorizontalAlign::Left);
         let temp = self
             .observation
             .temperature_c
             .map_or_else(|| "-".to_string(), |t| format!("{t:.1} °C"));
         p.text(
             pad + 44.0,
-            110.0,
+            164.0,
             80.0,
             &temp,
             16,
@@ -300,7 +331,7 @@ impl Monitor {
         let band = snapshot.pressure.to_string();
         p.text(
             pad + 118.0,
-            113.0,
+            167.0,
             80.0,
             &band,
             13,
@@ -310,11 +341,11 @@ impl Monitor {
         if let Some(clock) = sample.clock {
             let ghz = |hz: u64| hz as f32 / 1e9;
             let text = format!("{:.1}/{:.1} GHz", ghz(clock.current_hz), ghz(clock.max_hz));
-            p.text(pad, 113.0, inner, &text, 12, MUTED, HorizontalAlign::Right);
+            p.text(pad, 167.0, inner, &text, 12, MUTED, HorizontalAlign::Right);
         }
         let temp_graph = Rect {
             x: pad,
-            y: 134.0,
+            y: 188.0,
             width: inner,
             height: 40.0,
         };
@@ -342,7 +373,7 @@ impl Monitor {
         p.line_graph(temp_graph, &self.temp_history, band_color);
 
         // Fan and supply voltage.
-        let mut y = 184.0;
+        let mut y = 238.0;
         if let Some(fan) = sample.fan {
             let mut text = String::from("Fan");
             if let Some(duty) = fan.duty {
@@ -484,11 +515,13 @@ impl Painter<'_> {
         });
     }
 
-    /// One column per sample: busy from the bottom, I/O wait stacked on top.
-    fn stacked_bars(&mut self, area: Rect, busy: &History, iowait: &History) {
+    /// One column per sample: busy from the bottom, I/O wait (if any) stacked on top.
+    fn stacked_bars(&mut self, area: Rect, busy: &History, iowait: Option<&History>) {
         let column = area.width / HISTORY as f32;
         let offset = HISTORY - busy.len;
-        for (i, (b, w)) in busy.iter().zip(iowait.iter()).enumerate() {
+        let mut waits = iowait.map(History::iter);
+        for (i, b) in busy.iter().enumerate() {
+            let w = waits.as_mut().and_then(Iterator::next).unwrap_or(0.0);
             let x = area.x + (offset + i) as f32 * column;
             let busy_h = area.height * b.clamp(0.0, 1.0);
             let wait_h = (area.height - busy_h) * w.clamp(0.0, 1.0);

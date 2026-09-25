@@ -5,6 +5,7 @@ small loadngo window that shows the machine it runs on:
 
 - CPU load for the last three minutes: busy time (blue) with I/O wait (purple)
   stacked above it, the current value, and one bar per core;
+- GPU load for the last three minutes, with the GPU's kernel driver;
 - temperature, the thermal pressure band, and a three-minute temperature graph
   with faint lines where the band changes (fair, serious, critical);
 - CPU clock (current / maximum);
@@ -20,6 +21,7 @@ It runs on the lab Pis' desktops (agnes, dolores) as a corner widget.
 | Shown | Source | Crate |
 |---|---|---|
 | CPU busy, I/O wait, per core | `/proc/stat`, difference between two samples | `loadngo-system-stats` |
+| GPU busy | v3d `gpu_stats` (cumulative busy time per queue) under the first DRM render node; the busiest queue's share of the interval | `loadngo-system-stats` |
 | Memory | `/proc/meminfo` `MemTotal` / `MemAvailable` | `loadngo-system-stats` |
 | Disk | `statvfs` on the chosen path (space available to users) | `loadngo-system-stats` |
 | Clock | cpufreq `scaling_cur_freq` / `cpuinfo_max_freq` | `loadngo-system-stats` |
@@ -38,13 +40,24 @@ own limits: fair from 70 C, serious from 80 C (the firmware starts capping the
 clock), critical from 85 C. Firmware throttling itself is not visible without
 root, so the widget does not claim it; a low clock under load is the hint.
 
+GPU load needs busy-time counters from the driver. Broadcom `v3d` (Raspberry
+Pi 4 and 5) publishes them world-readable; other drivers show the driver name
+and `-` until a source is added for them.
+
 Everything other platforms cannot provide yet shows as `-` or is left out.
 Nothing is shown as zero because it is unknown.
 
 ## Cost
 
-It samples every two seconds from a host proactor deadline
-(`FrameDemand::After`), reads temperature at the cadence
+It follows the loadngo proactor model for its timing: every two seconds is a
+`FrameDemand::After` deadline, which the Linux host runs as a deferred
+completion on its shared io_uring proactor, with the event loop waiting on it
+(`ControlFlow::WaitUntil`); there is no timer thread, sleep or polling loop.
+The sampling reads themselves (about ten procfs/sysfs files and one
+`statvfs`) are synchronous on that tick. procfs/sysfs contents are generated
+by the kernel on read and do not wait on the disk, but routing them through
+the proactor's file reads would complete the model and is still to do. It
+reads temperature at the cadence
 `ThermalPressure::sample_interval` allows (5 s when nominal), and repaints only
 when a sample arrives or the window is resized. Pointer movement over the
 window wakes it but draws nothing. Sampling reuses its buffers.
