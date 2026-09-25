@@ -114,6 +114,7 @@ function rather than in per-backend arms — see
 - [`docs/RENDERER_ROADMAP.md`](docs/RENDERER_ROADMAP.md): macOS-first renderer ownership plan and multilingual requirements.
 - [`docs/GAME_DEPENDENCIES.md`](docs/GAME_DEPENDENCIES.md): how games pin loadngo by git, local co-development, and the path to crates.io.
 - [`docs/PARTICLE_EFFECTS.md`](docs/PARTICLE_EFFECTS.md): `ParticleEmitter` and how each backend draws `ParticleBatch`.
+- [`docs/SYSTEM_MONITOR.md`](docs/SYSTEM_MONITOR.md): the `system_monitor` desktop widget (CPU, thermal pressure, memory, disk) and installing it on the lab Pis.
 - [`docs/AUDIO.md`](docs/AUDIO.md): music/voice separation and the reusable overlapping sound-effect controller contract.
 - [`docs/AUDIO_IO.md`](docs/AUDIO_IO.md): live audio-input tooling -- pitch detection and desktop input-to-output monitoring, for tuners and live-amplifier-style features.
 - [`docs/PQ_AUTHENTICATOR.md`](docs/PQ_AUTHENTICATOR.md): repo-owned post-quantum authenticator model for signed challenge tokens.

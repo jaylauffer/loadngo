@@ -32,6 +32,7 @@ use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, KeyCode, NamedKey, PhysicalKey};
+use winit::platform::wayland::WindowAttributesExtWayland;
 use winit::platform::x11::WindowAttributesExtX11;
 use winit::raw_window_handle::{
     HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
@@ -1102,7 +1103,11 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
                 self.descriptor.height.unwrap_or(720) as f64,
             ));
         if let Some(class) = self.descriptor.linux_wm_class {
+            // The X11 class and the Wayland app_id: what compositor window rules,
+            // task bars and .desktop files match on.
             attrs = WindowAttributesExtX11::with_name(attrs, class.to_string(), class.to_string());
+            attrs =
+                WindowAttributesExtWayland::with_name(attrs, class.to_string(), class.to_string());
         }
         if let Some(icon) = self.icon.clone().and_then(decode_icon) {
             attrs = attrs.with_window_icon(Some(icon));

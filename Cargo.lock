@@ -1501,6 +1501,8 @@ dependencies = [
  "loadngo-pq-crypto",
  "loadngo-proactor",
  "loadngo-renderer",
+ "loadngo-system-stats",
+ "loadngo-thermal",
  "ndk 0.8.0",
  "ndk-context",
  "ndk-sys 0.5.0+25.2.9519653",
@@ -1589,6 +1591,13 @@ dependencies = [
  "loadngo-host-core",
  "serde",
  "ui-core",
+]
+
+[[package]]
+name = "loadngo-system-stats"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

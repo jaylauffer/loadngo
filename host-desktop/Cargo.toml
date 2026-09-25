@@ -24,10 +24,17 @@ archive-cas-browser = ["dep:anyhow", "dep:data", "dep:loadngo-pq-crypto", "dep:s
 # sng-* game enables this, and it is a Cargo feature specifically so that
 # stays true without anyone having to remember it.
 pdf-preview = ["dep:pdfium-render"]
+# The desktop system monitor (CPU, thermal pressure, memory, disk) the lab Pis
+# show on their desktops; see docs/SYSTEM_MONITOR.md. A tool, not host code.
+system-monitor = ["dep:loadngo-system-stats", "dep:loadngo-thermal"]
 
 [[bin]]
 name = "archive_cas_browser"
 required-features = ["archive-cas-browser"]
+
+[[bin]]
+name = "system_monitor"
+required-features = ["system-monitor"]
 
 [dependencies]
 anyhow = { workspace = true, optional = true }
@@ -38,6 +45,8 @@ loadngo-host-core = { path = "../host-core" }
 loadngo-persistence = { path = "../persistence" }
 loadngo-pq-crypto = { path = "../pq-crypto", optional = true }
 loadngo-renderer = { path = "../renderer" }
+loadngo-system-stats = { path = "../system-stats", optional = true }
+loadngo-thermal = { path = "../thermal", optional = true }
 pdfium-render = { version = "0.9.4", default-features = false, features = ["pdfium_latest"], optional = true }
 ron.workspace = true
 serde.workspace = true

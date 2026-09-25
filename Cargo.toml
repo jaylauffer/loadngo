@@ -24,6 +24,7 @@ members = [
     "inference",
     "coreml",
     "thermal",
+    "system-stats",
     "pq-crypto",
     "anchor",
 ]
@@ -47,6 +48,7 @@ default-members = [
     "inference",
     "coreml",
     "thermal",
+    "system-stats",
     "pq-crypto",
     "anchor",
 ]
