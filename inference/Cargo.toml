@@ -10,6 +10,10 @@ description = "Bounded local inference conversations, cooperative generation, an
 serde_json.workspace = true
 # `cas` feature: tools over a signed Archive CAS snapshot (pulls in data + PQ crypto).
 data = { path = "../data", optional = true }
+# `web` feature: web_search / web_fetch tools (the only tools that leave the machine).
+ureq = { version = "2.12", optional = true }
+url = { version = "2.5", optional = true }
 
 [features]
 cas = ["dep:data"]
+web = ["dep:ureq", "dep:url"]

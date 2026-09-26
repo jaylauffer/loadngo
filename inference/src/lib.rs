@@ -12,6 +12,8 @@ pub mod cas_tools;
 pub mod compute;
 pub mod system_one;
 pub mod tools;
+#[cfg(feature = "web")]
+pub mod web_tools;
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};

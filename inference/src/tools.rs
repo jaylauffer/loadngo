@@ -4,7 +4,8 @@
 //! arguments, returning text for the model to read.
 //!
 //! Everything here is bounded: entries listed, bytes read, bytes scanned, matches
-//! returned. Nothing writes, deletes, executes or touches the network. A failed call
+//! returned. Nothing here writes, deletes, executes or touches the network (the web
+//! tools, behind the `web` feature, are in `web_tools`). A failed call
 //! returns an error message as its result text; it never panics the conversation.
 
 use std::fmt::Write as _;
@@ -149,13 +150,13 @@ pub fn numbered_lines(text: &str, start: usize, count: usize) -> String {
     out
 }
 
-fn str_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
+pub(crate) fn str_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     args.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| format!("missing string argument `{key}`"))
 }
 
-fn usize_arg(args: &Value, key: &str, default: usize) -> usize {
+pub(crate) fn usize_arg(args: &Value, key: &str, default: usize) -> usize {
     args.get(key)
         .and_then(Value::as_u64)
         .and_then(|v| usize::try_from(v).ok())
