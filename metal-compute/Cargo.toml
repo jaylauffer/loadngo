@@ -1,0 +1,23 @@
+[package]
+name = "loadngo-metal-compute"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "GPU compute for local models on Apple Metal: resident weight buffers, bf16 and MXFP4 matrix-vector kernels, completions delivered through loadngo-proactor."
+
+[dependencies]
+loadngo-proactor = { path = "../proactor" }
+thiserror.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-foundation = "0.3.2"
+objc2-metal = "0.3.2"
+block2 = "0.6.2"
+# The CPU reference the benchmark and tests check the GPU against.
+loadngo-weights = { path = "../weights" }
+
+[[bin]]
+name = "metal_gemv_bench"
+path = "src/bin/metal_gemv_bench.rs"

@@ -1,7 +1,8 @@
 # Metal compute backend for local models: plan
 
-Status: plan, 2026-09-24 (Claude Code, at Jay's request). Nothing here is built yet.
-Numbers marked *estimate* are arithmetic from measured sizes, not measurements.
+Status: M0 done 2026-09-26 (crate `metal-compute/`, results below); M1 onward not built.
+Plan written 2026-09-24 (Claude Code, at Jay's request). Numbers marked *estimate* are
+arithmetic from measured sizes, not measurements.
 
 ## What "the Metal backend" means
 
@@ -89,6 +90,62 @@ Each phase lands only with its evidence recorded (commit, run, device session).
 | M3 | Prompt processing: GPU GEMM vs ANE, measured on 64-2048-token prompts | tokens/s for both, pick the faster per size |
 | M4 | Thermal and pacing on this Mac mini (`AGENTS.md`): idle and sustained generation, CPU/GPU utilisation, thermal-pressure state | no thermal warning over a 10-minute generation; nothing runs when idle |
 | M5 | K3 on the same kernels (streamed trunk) | measured; expected to stay disk-bound |
+
+## M0 results (2026-09-26)
+
+Built: crate `loadngo-metal-compute` (`metal-compute/`). `Gpu` opens the default device
+and compiles the kernels from MSL source (safe math mode, so an E8M0 NaN scale stays
+NaN). `Buffer` is shared-storage memory. A `Batch` is one command buffer with one compute
+encoder, serial or concurrent with barriers. It owns its buffers until the GPU finishes.
+`commit` returns at once, and the completion runs as a job on a loadngo proactor, which
+hands the buffers back. There is no `waitUntilCompleted` and no polling. Kernels:
+`gemv_bf16` and `gemv_mxfp4`, each with 1, 2 or 4 rows per simdgroup. A simdgroup's 32
+lanes read each row in 16-byte loads and reuse every loaded slice of `x` for all of their
+rows. Widths that are not a multiple of 8 (bf16) or 32 (MXFP4) take a scalar path.
+
+**Gate met.** `metal_gemv_bench` (random weights in shapes approximating one
+Kimi-Linear-48B-A3B decode step, timed by the command buffer's GPU start and end, median
+of 12 steps, Apple M4 Pro, no thermal warning before or after):
+
+| Workload | Dispatches | GB per step | 1 row | 2 rows | 4 rows |
+|---|---|---|---|---|---|
+| LM head, bf16 163840x2304 | 1 | 0.755 | 234 GB/s | 257 GB/s | 253 GB/s |
+| Trunk, bf16, 27 layers + LM head | 190 | 3.289 | 239 GB/s | 237 GB/s | 238 GB/s |
+| Routed experts, MXFP4, 26 x 8, serial | 624 | 0.782 | 83 GB/s | 100 GB/s | 119 GB/s |
+| Routed experts, MXFP4, concurrent | 624 | 0.782 | 113 GB/s | 147 GB/s | 170 GB/s |
+| Whole step, serial | 814 | 4.071 | 178 GB/s | 184 GB/s | 201 GB/s |
+| Whole step, concurrent + barriers | 814 | 4.071 | 204 GB/s | 220 GB/s | **228 GB/s** |
+
+- 4 rows per simdgroup is fastest overall, and it is the default.
+- The weight reads of one decode step take 17.9 ms. That caps decoding at about 56
+  tokens/s before attention, the KDA recurrence, routing and sampling are added (M1).
+  Today's Neural Engine path does 2.6 tokens/s.
+- Small matrices want concurrency. One expert matrix is 1.2 MB, and in serial order
+  each dispatch waits for the one before it. So the concurrent encoder with a barrier
+  between dependent groups (attention, then gate and up, then down) is the shape for M1.
+- The experts come from a 4.3 GB pool, so no two steps read the same ones. The trunk
+  alone is 3.3 GB. Both are far larger than the GPU's caches, so these are memory reads,
+  not cache hits.
+- **Correctness.** Before timing, every run checks its outputs against `loadngo-weights`
+  (`HalfMatrix::mul_vec`, `Mxfp4Matrix::mul_vec`). The bound per row is the worst-case
+  float32 summation error, `cols * eps * sum |w x|`. 15.9 million rows were checked
+  across the full run.
+- **Tests** (`metal-compute/tests/gemv.rs`):
+  - The vector and scalar paths agree with the CPU reference for all three variants,
+    with partial simdgroups and odd widths.
+  - A NaN scale poisons only its own row.
+  - A barrier orders two dependent products.
+  - Bad dispatches are refused before encoding.
+  - A batch dropped without being committed is harmless.
+  - Swapping the bf16 halves, or the nibble order on the scalar MXFP4 path, fails the
+    tests.
+- **Approximations.** Every layer is modelled with four 4096x2304 projections. The
+  real MLA layers and the KDA gate projections differ a little in shape, and their
+  small matrices are left out. Chrome and WindowServer were using the GPU lightly
+  during the runs.
+
+Rerun: `cargo run --release -p loadngo-metal-compute --bin metal_gemv_bench -- --iterations 12`
+(about 1 minute, 7.6 GB of buffers).
 
 ## Risks
 
