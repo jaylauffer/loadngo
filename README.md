@@ -116,6 +116,7 @@ function rather than in per-backend arms — see
 - [`docs/PARTICLE_EFFECTS.md`](docs/PARTICLE_EFFECTS.md): `ParticleEmitter` and how each backend draws `ParticleBatch`.
 - [`docs/SYSTEM_MONITOR.md`](docs/SYSTEM_MONITOR.md): the `system_monitor` desktop widget (CPU, GPU, Neural Engine power, thermal pressure, memory, disk) and installing it on the lab Pis and macOS.
 - [`docs/METAL_COMPUTE_PLAN.md`](docs/METAL_COMPUTE_PLAN.md): GPU compute for local models on Metal (`metal-compute`): measurements, what runs on the GPU today, and the plan for the rest.
+- [`docs/SYSTEM_ONE.md`](docs/SYSTEM_ONE.md): typed, probabilistic decisions from a local model (System One principles, no hosted service), and Kimi as the model.
 - [`docs/CAS_DRIVE_CLEANUP.md`](docs/CAS_DRIVE_CLEANUP.md): plan for Kimi to free drive space using signed Archive CAS copies, with deterministic verification and Jay's approval per batch.
 - [`docs/AUDIO.md`](docs/AUDIO.md): music/voice separation and the reusable overlapping sound-effect controller contract.
 - [`docs/AUDIO_IO.md`](docs/AUDIO_IO.md): live audio-input tooling -- pitch detection and desktop input-to-output monitoring, for tuners and live-amplifier-style features.
