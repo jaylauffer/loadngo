@@ -1,6 +1,7 @@
 # Phoneme recognition owned by loadngo: plan
 
-Status, 2026-09-27: **plan only. Nothing here is built.** Kimi's `--voice` mode works
+Status, 2026-09-27: **plan, with the weights downloaded. No code is built yet.** Jay
+chose the multilingual checkpoint, for **English, Thai, Mandarin and Sinhala**. Kimi's `--voice` mode works
 today on a stopgap: Apple's on-device recognizer, wrapped in `loadngo-speech`. Jay's
 direction is that loadngo itself should interpret phonemes rather than rely on system
 code. This document is the plan for that. It is meant to be read before any work
@@ -55,7 +56,29 @@ We cannot own the trained weights: training a phoneme model needs thousands of h
 of labelled speech and serious GPU time. As with Kimi, the plan is our own engine
 running open weights.
 
-## Candidate weights (to confirm before any download)
+## The weights (downloaded 2026-09-27)
+
+`facebook/wav2vec2-xlsr-53-espeak-cv-ft` is at
+`/Volumes/Jarraya/wav2vec2-xlsr-53-espeak-cv-ft`:
+
+- **What it is:** Apache-2.0; 424 fp32 tensors, about 316M parameters; 392 phoneme
+  labels, including Mandarin's tone-marked finals and the aspirated stops Thai uses.
+- **Revision:** pinned to `3e836924`, Hugging Face's safetensors conversion (`refs/pr/7`).
+  Its SHA-256 matches the published hash.
+- **Integrity:** all 424 tensors are byte-identical to the raw storages of the original
+  `pytorch_model.bin`, checked without loading any pickle. That file was then deleted.
+- **Record:** `PROVENANCE.md` in that directory.
+
+It was trained for **zero-shot** use: phonemes from languages outside its fine-tuning
+set, through shared articulatory features. English and Mandarin are well covered.
+Thai, and especially Sinhala, may be outside its fine-tuning set, so their accuracy
+is to be measured (P0/P3 gates), not assumed. Test audio:
+
+- **Thai and Mandarin:** the system voices (Kanya, Tingting) for a first check;
+- **Sinhala:** has no macOS voice here, so it needs recordings;
+- **all four:** real speakers, which is the real test.
+
+### Candidates considered
 
 | Model | Size | Output | Notes |
 |---|---|---|---|
@@ -97,7 +120,8 @@ the tools plan), these come with exact reference answers:
 
 ## Decisions for Jay
 
-- **Which checkpoint:** English-heavy or multilingual (Mandarin).
-- **The download:** about 1.2 GB onto Jarraya, once the licence is read.
+- ~~Which checkpoint~~: multilingual, decided 2026-09-27 (English, Thai, Mandarin,
+  Sinhala).
+- ~~The download~~: done 2026-09-27 (above).
 - **Phonemes to words:** a pronunciation dictionary, Kimi reading phonemes, or both
   measured.
