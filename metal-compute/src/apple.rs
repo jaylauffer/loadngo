@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 use std::ptr::NonNull;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use block2::RcBlock;
@@ -72,8 +72,12 @@ pub enum Dispatch {
 pub struct Gpu {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    /// The arena residents are carved from now, and how much of it is used.
+    arena: Mutex<Option<(Arc<Arena>, usize)>>,
     bf16: [Pipeline; 3],
     mxfp4: [Pipeline; 3],
+    gemm_bf16: Pipeline,
+    gemm_mxfp4: Pipeline,
     rows: Rows,
 }
 
@@ -106,7 +110,9 @@ impl Gpu {
             pipeline("gemv_mxfp4_r2")?,
             pipeline("gemv_mxfp4_r4")?,
         ];
-        for p in bf16.iter().chain(&mxfp4) {
+        let gemm_bf16 = pipeline("gemm_bf16")?;
+        let gemm_mxfp4 = pipeline("gemm_mxfp4")?;
+        for p in bf16.iter().chain(&mxfp4).chain([&gemm_bf16, &gemm_mxfp4]) {
             if p.maxTotalThreadsPerThreadgroup() < THREADS_PER_GROUP {
                 return Err(Error::Compile(format!(
                     "kernels need {THREADS_PER_GROUP} threads per threadgroup, the device allows {}",
@@ -117,8 +123,11 @@ impl Gpu {
         Ok(Self {
             device,
             queue,
+            arena: Mutex::new(None),
             bf16,
             mxfp4,
+            gemm_bf16,
+            gemm_mxfp4,
             rows: Rows::default(),
         })
     }
@@ -150,9 +159,74 @@ impl Gpu {
         }
         let raw = self
             .device
-            .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
+            .newBufferWithLength_options(
+                len,
+                // Untracked: ordering comes from ownership (a batch owns its buffers until
+                // the GPU is done; residents are never written) and, within a concurrent
+                // batch, from `Batch::barrier`. Metal's own tracking cost ~20 ms per
+                // submission of a few hundred dispatches.
+                MTLResourceOptions::StorageModeShared
+                    | MTLResourceOptions::HazardTrackingModeUntracked,
+            )
             .ok_or(Error::Alloc(len))?;
         Ok(Buffer { raw, len })
+    }
+
+    /// Read-only memory shared by the CPU and GPU, filled once from `bytes`: model weights
+    /// that many batches read at the same time.
+    pub fn resident(&self, bytes: &[u8]) -> Result<Arc<Resident>, Error> {
+        self.carve(bytes.len(), |dst| dst.copy_from_slice(bytes))
+    }
+
+    /// As [`Gpu::resident`] for 16-bit words (for example bfloat16), stored little-endian.
+    pub fn resident_words(&self, words: &[u16]) -> Result<Arc<Resident>, Error> {
+        self.carve(words.len() * 2, |dst| {
+            for (pair, word) in dst.as_chunks_mut::<2>().0.iter_mut().zip(words) {
+                pair.copy_from_slice(&word.to_le_bytes());
+            }
+        })
+    }
+
+    /// `len` bytes from the current arena (a new one when it is full), filled by `fill`.
+    /// Residents share arenas so a batch reading thousands of weights names a few dozen
+    /// Metal buffers: every buffer a command buffer names costs time at each submission
+    /// (measured: ~17 ms per step with one buffer per weight). An arena is freed when
+    /// its last resident is.
+    fn carve(&self, len: usize, fill: impl FnOnce(&mut [u8])) -> Result<Arc<Resident>, Error> {
+        if len == 0 {
+            return Err(Error::Alloc(0));
+        }
+        let mut current = self.arena.lock().unwrap_or_else(PoisonError::into_inner);
+        let fits = |(arena, used): &(Arc<Arena>, usize)| used + len <= arena.len;
+        let (arena, offset) = match current.as_mut().filter(|c| fits(c)) {
+            Some((arena, used)) => {
+                let offset = *used;
+                *used = (offset + len).div_ceil(ARENA_ALIGN) * ARENA_ALIGN;
+                (Arc::clone(arena), offset)
+            }
+            None => {
+                let buffer = self.buffer(len.max(ARENA_BYTES))?;
+                let arena = Arc::new(Arena {
+                    raw: buffer.raw,
+                    len: buffer.len,
+                });
+                if len < ARENA_BYTES {
+                    *current = Some((Arc::clone(&arena), len.div_ceil(ARENA_ALIGN) * ARENA_ALIGN));
+                }
+                (arena, 0)
+            }
+        };
+        drop(current);
+        // SAFETY: `offset..offset + len` was just carved and is handed out once: no other
+        // resident, and so no GPU work, refers to it yet.
+        let dst = unsafe {
+            std::slice::from_raw_parts_mut(
+                arena.raw.contents().as_ptr().cast::<u8>().add(offset),
+                len,
+            )
+        };
+        fill(dst);
+        Ok(Arc::new(Resident { arena, offset, len }))
     }
 
     /// Starts recording a batch that owns `buffers` until it completes. Dispatches refer
@@ -173,6 +247,7 @@ impl Gpu {
             buffers,
             command,
             encoder,
+            arenas: Vec::new(),
             dispatches: 0,
             ended: false,
         })
@@ -223,7 +298,69 @@ impl Buffer {
     }
 }
 
-/// Bytes `offset..offset + len` of the batch's buffer number `buffer`.
+/// Bytes per arena that residents are carved from; a larger resident gets its own.
+const ARENA_BYTES: usize = 1 << 30;
+/// Start alignment of each resident within its arena.
+const ARENA_ALIGN: usize = 256;
+
+/// One Metal buffer holding many residents.
+struct Arena {
+    raw: Retained<ProtocolObject<dyn MTLBuffer>>,
+    len: usize,
+}
+
+// SAFETY: each byte range of an arena is written once, when its resident is carved and
+// before anything else can refer to it, and only read afterwards; Metal buffers are
+// thread-safe objects.
+unsafe impl Send for Arena {}
+// SAFETY: as above.
+unsafe impl Sync for Arena {}
+
+/// Memory the CPU and GPU share that neither writes after it is filled, so any number of
+/// batches may read it while the CPU does too. Attach it to a batch with
+/// [`Batch::attach`].
+pub struct Resident {
+    arena: Arc<Arena>,
+    offset: usize,
+    len: usize,
+}
+
+impl Resident {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn start(&self) -> *const u8 {
+        // SAFETY: `offset` lies within the arena.
+        unsafe {
+            self.arena
+                .raw
+                .contents()
+                .as_ptr()
+                .cast::<u8>()
+                .add(self.offset)
+        }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: the arena holds `len` bytes from `start` while `self` lives (the `Arc`);
+        // nothing writes them after carving.
+        unsafe { std::slice::from_raw_parts(self.start(), self.len) }
+    }
+
+    /// The contents as 16-bit words (256-byte aligned; a trailing odd byte is left out).
+    pub fn as_words(&self) -> &[u16] {
+        // SAFETY: as for `as_bytes`; the alignment satisfies `u16`.
+        unsafe { std::slice::from_raw_parts(self.start().cast(), self.len / 2) }
+    }
+}
+
+/// Bytes `offset..offset + len` of the batch's buffer number `buffer`: its own buffers
+/// first, then the residents it attached, in order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Slice {
     pub buffer: usize,
@@ -262,6 +399,8 @@ pub struct Completed {
 pub struct Batch<'g> {
     gpu: &'g Gpu,
     buffers: Vec<Buffer>,
+    /// Arenas of attached residents, each named once.
+    arenas: Vec<Arc<Arena>>,
     command: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
     encoder: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>>,
     dispatches: usize,
@@ -284,17 +423,56 @@ struct GemvArgs {
     cols: u32,
 }
 
+#[repr(C)]
+struct GemmArgs {
+    rows: u32,
+    cols: u32,
+    n: u32,
+    x_stride: u32,
+    y_stride: u32,
+}
+
+/// Weight rows per simdgroup in the multi-position kernels (`GEMM_ROWS` in the MSL).
+const GEMM_ROWS: usize = 2;
+
 impl Batch<'_> {
     pub fn dispatches(&self) -> usize {
         self.dispatches
     }
 
+    /// Makes `resident` readable by this batch's dispatches; returns the slice to pass
+    /// for it. Residents sharing an arena share one Metal buffer in the batch.
+    pub fn attach(&mut self, resident: &Arc<Resident>) -> Slice {
+        let index = match self
+            .arenas
+            .iter()
+            .position(|a| Arc::ptr_eq(a, &resident.arena))
+        {
+            Some(i) => i,
+            None => {
+                self.arenas.push(Arc::clone(&resident.arena));
+                self.arenas.len() - 1
+            }
+        };
+        Slice::new(self.buffers.len() + index, resident.offset, resident.len)
+    }
+
+    fn raw(&self, index: usize) -> Option<(&ProtocolObject<dyn MTLBuffer>, usize)> {
+        match self.buffers.get(index) {
+            Some(b) => Some((&*b.raw, b.len)),
+            None => self
+                .arenas
+                .get(index - self.buffers.len())
+                .map(|a| (&*a.raw, a.len)),
+        }
+    }
+
     fn check(&self, what: &str, slice: &Slice, len: usize, align: usize) -> Result<(), Error> {
-        let Some(buffer) = self.buffers.get(slice.buffer) else {
+        let Some((_, buffer_len)) = self.raw(slice.buffer) else {
             return Err(Error::Dispatch(format!(
                 "{what}: no buffer {} (batch has {})",
                 slice.buffer,
-                self.buffers.len()
+                self.buffers.len() + self.arenas.len()
             )));
         };
         if slice.len != len {
@@ -303,11 +481,10 @@ impl Batch<'_> {
                 slice.len
             )));
         }
-        if slice.range().end > buffer.len() {
+        if slice.range().end > buffer_len {
             return Err(Error::Dispatch(format!(
-                "{what}: bytes {:?} outside a {}-byte buffer",
-                slice.range(),
-                buffer.len()
+                "{what}: bytes {:?} outside a {buffer_len}-byte buffer",
+                slice.range()
             )));
         }
         if !slice.offset.is_multiple_of(align) {
@@ -326,39 +503,38 @@ impl Batch<'_> {
         }
     }
 
-    fn check_output(y: &Slice, inputs: &[&Slice]) -> Result<(), Error> {
+    fn check_output(&self, y: &Slice, inputs: &[&Slice]) -> Result<(), Error> {
+        if y.buffer >= self.buffers.len() {
+            return Err(Error::Dispatch(
+                "output is in read-only resident memory".into(),
+            ));
+        }
         if inputs.iter().any(|input| y.overlaps(input)) {
             return Err(Error::Dispatch("output overlaps an input".into()));
         }
         Ok(())
     }
 
-    fn encode(&mut self, pipeline: &Pipeline, slices: &[Slice], args: &GemvArgs, rows: usize) {
-        let per_group = SIMDGROUPS_PER_GROUP * self.gpu.rows.count();
+    fn encode<A>(&mut self, pipeline: &Pipeline, slices: &[Slice], args: &A, groups: usize) {
         let enc = &self.encoder;
         enc.setComputePipelineState(pipeline);
         for (index, slice) in slices.iter().enumerate() {
-            // SAFETY: the slice was checked against its buffer, which this batch owns (and
-            // the command buffer retains) until the GPU has finished.
-            unsafe {
-                enc.setBuffer_offset_atIndex(
-                    Some(&self.buffers[slice.buffer].raw),
-                    slice.offset,
-                    index,
-                );
-            }
+            let (raw, _) = self.raw(slice.buffer).expect("slice checked");
+            // SAFETY: the slice was checked against its buffer, which this batch owns or
+            // holds (and the command buffer retains) until the GPU has finished.
+            unsafe { enc.setBuffer_offset_atIndex(Some(raw), slice.offset, index) };
         }
-        // SAFETY: `GemvArgs` is `repr(C)` and matches the kernel's `constant GemvArgs &`.
+        // SAFETY: `A` is `GemvArgs` or `GemmArgs`, `repr(C)` like the kernel's argument struct.
         unsafe {
             enc.setBytes_length_atIndex(
                 NonNull::from(args).cast(),
-                std::mem::size_of::<GemvArgs>(),
+                std::mem::size_of::<A>(),
                 slices.len(),
             );
         }
         enc.dispatchThreadgroups_threadsPerThreadgroup(
             MTLSize {
-                width: rows.div_ceil(per_group),
+                width: groups,
                 height: 1,
                 depth: 1,
             },
@@ -385,9 +561,10 @@ impl Batch<'_> {
         self.check("weights", &w, rows * cols * 2, 16)?;
         self.check("x", &x, cols * 4, 16)?;
         self.check("y", &y, rows * 4, 4)?;
-        Self::check_output(&y, &[&w, &x])?;
+        self.check_output(&y, &[&w, &x])?;
         let pipeline = self.gpu.bf16[self.gpu.rows.index()].clone();
-        self.encode(&pipeline, &[w, x, y], &args, rows);
+        let groups = rows.div_ceil(SIMDGROUPS_PER_GROUP * self.gpu.rows.count());
+        self.encode(&pipeline, &[w, x, y], &args, groups);
         Ok(())
     }
 
@@ -408,9 +585,90 @@ impl Batch<'_> {
         self.check("scales", &scales, rows * cols.div_ceil(32), 1)?;
         self.check("x", &x, cols * 4, 16)?;
         self.check("y", &y, rows * 4, 4)?;
-        Self::check_output(&y, &[&elements, &scales, &x])?;
+        self.check_output(&y, &[&elements, &scales, &x])?;
         let pipeline = self.gpu.mxfp4[self.gpu.rows.index()].clone();
-        self.encode(&pipeline, &[elements, scales, x, y], &args, rows);
+        let groups = rows.div_ceil(SIMDGROUPS_PER_GROUP * self.gpu.rows.count());
+        self.encode(&pipeline, &[elements, scales, x, y], &args, groups);
+        Ok(())
+    }
+
+    /// Checks the shape of an `n`-position product: `x` holds `n` rows of `cols` floats
+    /// `x_stride` apart (a multiple of 4), `y` `n` rows of `rows` floats `y_stride` apart.
+    fn gemm_args(
+        rows: usize,
+        cols: usize,
+        n: usize,
+        x_stride: usize,
+        y_stride: usize,
+    ) -> Result<(GemmArgs, usize, usize), Error> {
+        let GemvArgs { rows: r, cols: c } = Self::shape(rows, cols)?;
+        if n == 0 || x_stride < cols || y_stride < rows || !x_stride.is_multiple_of(4) {
+            return Err(Error::Dispatch(format!(
+                "{n} positions of {rows}x{cols} with strides {x_stride}/{y_stride}"
+            )));
+        }
+        let fit = |v: usize| u32::try_from(v).map_err(|_| Error::Dispatch("too large".into()));
+        let args = GemmArgs {
+            rows: r,
+            cols: c,
+            n: fit(n)?,
+            x_stride: fit(x_stride)?,
+            y_stride: fit(y_stride)?,
+        };
+        Ok((
+            args,
+            ((n - 1) * x_stride + cols) * 4,
+            ((n - 1) * y_stride + rows) * 4,
+        ))
+    }
+
+    /// `y[p] = W x[p]` for `n` positions with one read of the bfloat16 matrix `w` per
+    /// eight positions. `x` holds `n` rows of `cols` floats `x_stride` floats apart (a
+    /// multiple of 4), `y` `n` rows of `rows` floats `y_stride` apart.
+    #[allow(clippy::too_many_arguments)]
+    pub fn gemm_bf16(
+        &mut self,
+        w: Slice,
+        x: Slice,
+        y: Slice,
+        rows: usize,
+        cols: usize,
+        n: usize,
+        (x_stride, y_stride): (usize, usize),
+    ) -> Result<(), Error> {
+        let (args, x_len, y_len) = Self::gemm_args(rows, cols, n, x_stride, y_stride)?;
+        self.check("weights", &w, rows * cols * 2, 16)?;
+        self.check("x", &x, x_len, 16)?;
+        self.check("y", &y, y_len, 4)?;
+        self.check_output(&y, &[&w, &x])?;
+        let pipeline = self.gpu.gemm_bf16.clone();
+        let groups = rows.div_ceil(SIMDGROUPS_PER_GROUP * GEMM_ROWS);
+        self.encode(&pipeline, &[w, x, y], &args, groups);
+        Ok(())
+    }
+
+    /// As [`Batch::gemm_bf16`] for an MXFP4 matrix (layout as in [`Batch::gemv_mxfp4`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn gemm_mxfp4(
+        &mut self,
+        elements: Slice,
+        scales: Slice,
+        x: Slice,
+        y: Slice,
+        rows: usize,
+        cols: usize,
+        n: usize,
+        (x_stride, y_stride): (usize, usize),
+    ) -> Result<(), Error> {
+        let (args, x_len, y_len) = Self::gemm_args(rows, cols, n, x_stride, y_stride)?;
+        self.check("elements", &elements, rows * cols.div_ceil(2), 16)?;
+        self.check("scales", &scales, rows * cols.div_ceil(32), 1)?;
+        self.check("x", &x, x_len, 16)?;
+        self.check("y", &y, y_len, 4)?;
+        self.check_output(&y, &[&elements, &scales, &x])?;
+        let pipeline = self.gpu.gemm_mxfp4.clone();
+        let groups = rows.div_ceil(SIMDGROUPS_PER_GROUP * GEMM_ROWS);
+        self.encode(&pipeline, &[elements, scales, x, y], &args, groups);
         Ok(())
     }
 
@@ -433,7 +691,9 @@ impl Batch<'_> {
         self.encoder.endEncoding();
         self.ended = true;
         let buffers = std::mem::take(&mut self.buffers);
-        let pending = Mutex::new(Some((buffers, on_done, proactor.clone())));
+        // Residents stay referenced until the GPU is done with them.
+        let residents = std::mem::take(&mut self.arenas);
+        let pending = Mutex::new(Some((buffers, residents, on_done, proactor.clone())));
         let pending = Arc::new(pending);
         let handler = RcBlock::new(
             move |command: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
@@ -449,7 +709,8 @@ impl Batch<'_> {
                     )))
                 };
                 let taken = pending.lock().ok().and_then(|mut slot| slot.take());
-                if let Some((buffers, on_done, proactor)) = taken {
+                if let Some((buffers, residents, on_done, proactor)) = taken {
+                    drop(residents);
                     let _ =
                         proactor.enqueue_work(move |_| on_done(Completed { buffers, gpu_time }));
                 }

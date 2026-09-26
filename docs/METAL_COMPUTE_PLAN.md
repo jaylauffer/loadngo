@@ -1,6 +1,8 @@
 # Metal compute backend for local models: plan
 
-Status: M0 done 2026-09-26 (crate `metal-compute/`, results below); M1 onward not built.
+Status: M0 done 2026-09-26 (crate `metal-compute/`); M1 first stage done 2026-09-26 (Kimi
+Linear's products on the GPU, below); the rest of M1 (attention, KDA and routing on the
+GPU) and M3 onward not built.
 Plan written 2026-09-24 (Claude Code, at Jay's request). Numbers marked *estimate* are
 arithmetic from measured sizes, not measurements.
 
@@ -146,6 +148,65 @@ of 12 steps, Apple M4 Pro, no thermal warning before or after):
 
 Rerun: `cargo run --release -p loadngo-metal-compute --bin metal_gemv_bench -- --iterations 12`
 (about 1 minute, 7.6 GB of buffers).
+
+## M1, first stage (2026-09-26): every product on the GPU
+
+The plan called for the whole decode step on the GPU at once. This first stage moves the
+products only, which are almost all of the bytes, behind Kimi's existing `DenseAccel`
+interface. It is what `--accel gpu` runs today.
+
+Built:
+
+- **`Resident`.** Read-only weight memory that many batches read at once and the CPU
+  reads in place. Residents are carved from 1 GiB arenas, so a batch that touches
+  thousands of weights names only a few dozen Metal buffers. `Batch::attach` returns the
+  slice to use.
+- **Untracked buffers.** Ordering comes from ownership and `Batch::barrier`.
+- **`gemm_bf16` and `gemm_mxfp4`.** Several positions per dispatch, eight positions per
+  weight read.
+- **kimi-k3-in-rust.** `DenseAccel::share_words` and `share_bytes`, plus
+  `LinearModel::share_weights`, move the trunk, the LM head and the resident MXFP4
+  experts into GPU memory once, 28.3 GB in about 5.5 s. The CPU reference reads the same
+  bytes afterwards. Every step's products become one command buffer. See
+  `kimi-k3-in-rust/docs/KIMI_LINEAR.md`.
+
+Measured on the M4 Pro with the 4-bit experts, with no thermal warning at any point:
+
+| | Neural Engine (`--accel ane`) | GPU (`--accel gpu`) |
+|---|---|---|
+| Decode, short context | 2.6 tokens/s | 14-20 tokens/s (0.05 s/token at ~100 tokens of context) |
+| One-sentence chat reply | 6.0 s first, 5.5 s after `/reset` | 8.3 s first, 3.4 s after |
+| 70-token prompt | 5.8 s | 4.6 s |
+| 819-token tool preamble at launch | 29 s | 30 s |
+| Memory footprint | 31.6 GB peak | 30 GB steady, 41 GB peak while loading |
+| Idle at the prompt | | 0% CPU over 20 s |
+
+- **Correctness.** The same text was compared against the CPU reference one position at
+  a time (`--compare decode`) and as a whole-text pass (`--compare cpu`). Top-1
+  agreement was 100%, the KL divergence rounds to 0.00000 at five decimals, and
+  perplexity was identical. The Neural Engine's fp16 path sits at KL 0.012 on the same
+  kind of text.
+- **Prompts are now CPU-bound.** A `sample` taken during the preamble puts about 54% of
+  the main thread in the model's own single-threaded CPU code: MLA attention
+  (quadratic in the prompt, in f64), the router and the KDA recurrence. Only about 19%
+  is spent waiting on the GPU. That is the rest of M1.
+- **Decode will slow down as the context grows.** The MLA attention done on the CPU
+  grows with context length.
+- **Findings from building it:**
+  - The bf16 multi-position kernel reads 8 positions in the time of one (121 us for
+    4096x2304).
+  - The first MXFP4 multi-position kernel was 2-4x slower than one product per position.
+    It re-reads each position's input once per weight row, so Kimi uses per-position
+    products for experts. A threadgroup-staged input is the fix.
+  - The first use of freshly filled arenas costs about 56 ms, once per process.
+  - Hazard tracking and CPU gaps between submissions (about 0.5 ms) were not the cost.
+  - A prompt step still waits about 20 ms beyond its 6 ms of GPU time in Kimi, but not
+    in isolation. This is unexplained.
+- **Memory.** Loading holds the heap and GPU copies of the experts together for a
+  moment, which is the 41 GB peak. Reading experts straight into GPU memory would
+  remove it.
+- `metal-compute/tests/gemm_timing.rs` holds the timing experiments (ignored tests, run
+  by hand).
 
 ## Risks
 

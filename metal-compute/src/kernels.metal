@@ -188,6 +188,191 @@ kernel void gemv_mxfp4(
     }
 }
 
+// Several positions at once: y[p] = W x[p] for n positions, reading each weight row once
+// per N positions instead of once per position. x rows are x_stride floats apart
+// (a multiple of 4, rows 16-byte aligned), y rows y_stride floats apart.
+struct GemmArgs {
+    uint rows;
+    uint cols;
+    uint n;
+    uint x_stride;
+    uint y_stride;
+};
+
+constant constexpr uint GEMM_ROWS = 2;
+constant constexpr uint GEMM_N = 8;
+
+kernel void gemm_bf16(
+    device const uchar *w [[buffer(0)]],
+    device const float *x [[buffer(1)]],
+    device float *y [[buffer(2)]],
+    constant GemmArgs &a [[buffer(3)]],
+    uint tg [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint sgs [[simdgroups_per_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]])
+{
+    const uint first = (tg * sgs + sg) * GEMM_ROWS;
+    if (first >= a.rows) {
+        return;
+    }
+    const uint count = min(GEMM_ROWS, a.rows - first);
+    for (uint p0 = 0; p0 < a.n; p0 += GEMM_N) {
+        const uint np = min(GEMM_N, a.n - p0);
+        float acc[GEMM_ROWS][GEMM_N];
+        for (uint r = 0; r < GEMM_ROWS; ++r) {
+            for (uint p = 0; p < GEMM_N; ++p) {
+                acc[r][p] = 0.0f;
+            }
+        }
+        if ((a.cols & 7) == 0) {
+            const uint chunks = a.cols / 8;
+            device const uint4 *rows4 = (device const uint4 *)w;
+            for (uint c = lane; c < chunks; c += SIMD) {
+                uint4 wv[GEMM_ROWS];
+                for (uint r = 0; r < GEMM_ROWS; ++r) {
+                    wv[r] = r < count ? rows4[(ulong)(first + r) * chunks + c] : uint4(0);
+                }
+                for (uint p = 0; p < GEMM_N; ++p) {
+                    if (p < np) {
+                        device const float4 *xp =
+                            (device const float4 *)(x + (ulong)(p0 + p) * a.x_stride);
+                        const float4 x0 = xp[2 * c];
+                        const float4 x1 = xp[2 * c + 1];
+                        for (uint r = 0; r < GEMM_ROWS; ++r) {
+                            acc[r][p] += dot_bf16x8(wv[r], x0, x1);
+                        }
+                    }
+                }
+            }
+        } else {
+            device const ushort *w16 = (device const ushort *)w;
+            for (uint c = lane; c < a.cols; c += SIMD) {
+                float wc[GEMM_ROWS];
+                for (uint r = 0; r < GEMM_ROWS; ++r) {
+                    wc[r] = r < count
+                        ? as_type<float>(uint(w16[(ulong)(first + r) * a.cols + c]) << 16)
+                        : 0.0f;
+                }
+                for (uint p = 0; p < GEMM_N; ++p) {
+                    if (p < np) {
+                        const float xc = x[(ulong)(p0 + p) * a.x_stride + c];
+                        for (uint r = 0; r < GEMM_ROWS; ++r) {
+                            acc[r][p] += wc[r] * xc;
+                        }
+                    }
+                }
+            }
+        }
+        for (uint r = 0; r < count; ++r) {
+            for (uint p = 0; p < np; ++p) {
+                const float sum = simd_sum(acc[r][p]);
+                if (lane == 0) {
+                    y[(ulong)(p0 + p) * a.y_stride + first + r] = sum;
+                }
+            }
+        }
+    }
+}
+
+kernel void gemm_mxfp4(
+    device const uchar *elements [[buffer(0)]],
+    device const uchar *scales [[buffer(1)]],
+    device const float *x [[buffer(2)]],
+    device float *y [[buffer(3)]],
+    constant GemmArgs &a [[buffer(4)]],
+    uint tg [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint sgs [[simdgroups_per_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]],
+    uint tid [[thread_index_in_threadgroup]])
+{
+    threadgroup float lut[16];
+    if (tid < 16) {
+        lut[tid] = E2M1[tid];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    const uint first = (tg * sgs + sg) * GEMM_ROWS;
+    if (first >= a.rows) {
+        return;
+    }
+    const uint count = min(GEMM_ROWS, a.rows - first);
+    const uint row_bytes = (a.cols + 1) / 2;
+    const uint blocks = (a.cols + 31) / 32;
+    for (uint p0 = 0; p0 < a.n; p0 += GEMM_N) {
+        const uint np = min(GEMM_N, a.n - p0);
+        float acc[GEMM_ROWS][GEMM_N];
+        for (uint r = 0; r < GEMM_ROWS; ++r) {
+            for (uint p = 0; p < GEMM_N; ++p) {
+                acc[r][p] = 0.0f;
+            }
+        }
+        if ((a.cols & 31) == 0) {
+            // Whole blocks: each row's block is decoded once into registers, then dotted
+            // with every position's x.
+            device const uint4 *e4 = (device const uint4 *)elements;
+            for (uint b = lane; b < blocks; b += SIMD) {
+                for (uint r = 0; r < GEMM_ROWS; ++r) {
+                    if (r < count) {
+                        const ulong row = first + r;
+                        const uint4 q = e4[row * blocks + b];
+                        const float scale = e8m0(scales[row * blocks + b]);
+                        float4 wv[8];
+                        for (uint i = 0; i < 4; ++i) {
+                            const uint word = q[i];
+                            wv[2 * i] = float4(lut[word & 15], lut[(word >> 4) & 15],
+                                               lut[(word >> 8) & 15], lut[(word >> 12) & 15]);
+                            wv[2 * i + 1] = float4(lut[(word >> 16) & 15], lut[(word >> 20) & 15],
+                                                   lut[(word >> 24) & 15], lut[word >> 28]);
+                        }
+                        for (uint p = 0; p < GEMM_N; ++p) {
+                            if (p < np) {
+                                device const float4 *xp = (device const float4 *)(
+                                    x + (ulong)(p0 + p) * a.x_stride) + 8 * b;
+                                float block = 0.0f;
+                                for (uint i = 0; i < 8; ++i) {
+                                    block += dot(wv[i], xp[i]);
+                                }
+                                acc[r][p] += block * scale;
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            for (uint b = lane; b < blocks; b += SIMD) {
+                const uint start = b * 32;
+                const uint end = min(start + 32, a.cols);
+                for (uint r = 0; r < count; ++r) {
+                    const ulong row = first + r;
+                    device const uchar *packed = elements + row * row_bytes;
+                    const float scale = e8m0(scales[row * blocks + b]);
+                    for (uint p = 0; p < GEMM_N; ++p) {
+                        if (p < np) {
+                            device const float *xp = x + (ulong)(p0 + p) * a.x_stride;
+                            float block = 0.0f;
+                            for (uint c = start; c < end; ++c) {
+                                const uint byte = packed[c / 2];
+                                block += lut[(c & 1) ? (byte >> 4) : (byte & 15)] * xp[c];
+                            }
+                            acc[r][p] += block * scale;
+                        }
+                    }
+                }
+            }
+        }
+        for (uint r = 0; r < count; ++r) {
+            for (uint p = 0; p < np; ++p) {
+                const float sum = simd_sum(acc[r][p]);
+                if (lane == 0) {
+                    y[(ulong)(p0 + p) * a.y_stride + first + r] = sum;
+                }
+            }
+        }
+    }
+}
+
 #define GEMV_VARIANTS(ROWS) \
     template [[host_name("gemv_bf16_r" #ROWS)]] kernel void gemv_bf16<ROWS>( \
         device const uchar *, device const float *, device float *, constant GemvArgs &, \

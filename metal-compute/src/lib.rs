@@ -19,7 +19,7 @@
 mod apple;
 
 #[cfg(target_os = "macos")]
-pub use apple::{Batch, Buffer, Completed, Dispatch, Gpu, Rows, Slice};
+pub use apple::{Batch, Buffer, Completed, Dispatch, Gpu, Resident, Rows, Slice};
 
 /// Why a GPU operation could not be set up or did not complete.
 #[derive(Debug, thiserror::Error)]

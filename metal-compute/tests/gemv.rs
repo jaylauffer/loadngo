@@ -305,3 +305,121 @@ fn a_batch_dropped_without_commit_is_harmless() {
     drop(batch);
     assert!(matches!(gpu.buffer(0), Err(Error::Alloc(0))));
 }
+
+/// Weights in resident memory: read by a batch without being handed over, readable by the
+/// CPU meanwhile, and refused as an output.
+#[test]
+fn resident_weights_are_read_in_place_and_never_written() {
+    let gpu = Gpu::new().unwrap();
+    let proactor = new_platform_proactor().unwrap();
+    let (rows, cols) = (48, 256);
+    let values = values(41, rows * cols);
+    let words: Vec<u16> = values.iter().map(|v| (v.to_bits() >> 16) as u16).collect();
+    let resident = gpu.resident_words(&words).unwrap();
+    assert_eq!(resident.as_words(), &words[..]);
+    let (elements, scales) = mxfp4_bytes(&values, rows, cols);
+    let packed = gpu.resident(&elements).unwrap();
+    let scale_bytes = gpu.resident(&scales).unwrap();
+    let x = values_x(cols);
+
+    let buffers = vec![upload_f32(&gpu, &x), gpu.buffer(2 * rows * 4).unwrap()];
+    let mut batch = gpu.batch(buffers, Dispatch::Concurrent).unwrap();
+    let w = batch.attach(&resident);
+    let e = batch.attach(&packed);
+    let s = batch.attach(&scale_bytes);
+    let xs = Slice::new(0, 0, cols * 4);
+    assert!(matches!(
+        batch.gemv_bf16(w, xs, Slice::new(w.buffer, 0, rows * 4), rows, cols),
+        Err(Error::Dispatch(_))
+    ));
+    batch
+        .gemv_bf16(w, xs, Slice::new(1, 0, rows * 4), rows, cols)
+        .unwrap();
+    batch
+        .gemv_mxfp4(e, s, xs, Slice::new(1, rows * 4, rows * 4), rows, cols)
+        .unwrap();
+    // The CPU reads the same weights while the GPU does.
+    let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    assert_eq!(resident.as_bytes(), &bytes[..]);
+    let done = run(&proactor, batch);
+    done.gpu_time.unwrap();
+    assert_eq!(done.buffers.len(), 2, "residents are not handed back");
+
+    let y = done.buffers[1].as_f32();
+    let m = HalfMatrix::new(&bytes, rows, cols, HalfFormat::Bf16).unwrap();
+    let mut want = vec![0.0; rows];
+    m.mul_vec(&mut want, &x);
+    assert_close(
+        &y[..rows],
+        &want,
+        &magnitudes(rows, cols, &x, |r, o| m.row_into(r, o)),
+        cols,
+    );
+    let m = Mxfp4Matrix::new(&elements, &scales, rows, cols).unwrap();
+    m.mul_vec(&mut want, &x);
+    let magnitude = magnitudes(rows, cols, &x, |r, o| m.dequantize_row(r, o));
+    assert_close(&y[rows..], &want, &magnitude, cols);
+}
+
+fn values_x(cols: usize) -> Vec<f32> {
+    values(43, cols)
+}
+
+/// Several positions per dispatch: each position's result equals the single-position
+/// product against the CPU reference, across partial groups of eight and padded strides.
+#[test]
+fn multi_position_products_match_the_cpu_reference() {
+    let gpu = Gpu::new().unwrap();
+    let proactor = new_platform_proactor().unwrap();
+    for (rows, cols) in [
+        (37_usize, 2304_usize),
+        (130, 1024),
+        (5, 13),
+        (33, 45),
+        (3, 64),
+    ] {
+        for n in [2, 7, 8, 9, 17] {
+            let x_stride = cols.div_ceil(4) * 4 + 4;
+            let y_stride = rows + 3;
+            let xs = values((rows * 7 + n) as u64, n * x_stride);
+            let weights = values((rows + cols) as u64, rows * cols);
+            let words = bf16_bytes(&weights);
+            let (elements, scales) = mxfp4_bytes(&weights, rows, cols);
+            let y_len = ((n - 1) * y_stride + rows) * 4;
+            let buffers = vec![upload_f32(&gpu, &xs), gpu.buffer(2 * y_len).unwrap()];
+            let mut batch = gpu.batch(buffers, Dispatch::Concurrent).unwrap();
+            let w = batch.attach(&gpu.resident(&words).unwrap());
+            let e = batch.attach(&gpu.resident(&elements).unwrap());
+            let s = batch.attach(&gpu.resident(&scales).unwrap());
+            let x = Slice::new(0, 0, ((n - 1) * x_stride + cols) * 4);
+            let strides = (x_stride, y_stride);
+            batch
+                .gemm_bf16(w, x, Slice::new(1, 0, y_len), rows, cols, n, strides)
+                .unwrap();
+            batch
+                .gemm_mxfp4(e, s, x, Slice::new(1, y_len, y_len), rows, cols, n, strides)
+                .unwrap();
+            let done = run(&proactor, batch);
+            done.gpu_time.unwrap();
+            let y = done.buffers[1].as_f32();
+            let half = HalfMatrix::new(&words, rows, cols, HalfFormat::Bf16).unwrap();
+            let quarter = Mxfp4Matrix::new(&elements, &scales, rows, cols).unwrap();
+            let mut want = vec![0.0; rows];
+            for p in 0..n {
+                let xp = &xs[p * x_stride..p * x_stride + cols];
+                half.mul_vec(&mut want, xp);
+                let got = &y[p * y_stride..p * y_stride + rows];
+                assert_close(
+                    got,
+                    &want,
+                    &magnitudes(rows, cols, xp, |r, o| half.row_into(r, o)),
+                    cols,
+                );
+                quarter.mul_vec(&mut want, xp);
+                let at = y_len / 4 + p * y_stride;
+                let magnitude = magnitudes(rows, cols, xp, |r, o| quarter.dequantize_row(r, o));
+                assert_close(&y[at..at + rows], &want, &magnitude, cols);
+            }
+        }
+    }
+}
