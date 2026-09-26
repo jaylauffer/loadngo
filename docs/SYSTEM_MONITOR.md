@@ -3,9 +3,12 @@
 `system_monitor` (in `host-desktop`, behind the `system-monitor` feature) is a
 small loadngo window that shows the machine it runs on:
 
-- CPU load for the last three minutes: busy time (blue) with I/O wait (purple)
-  stacked above it, the current value, and one bar per core;
-- GPU load for the last three minutes, with the GPU's kernel driver;
+- CPU load for the last three minutes: busy time (blue) with I/O wait (purple,
+  Linux only) stacked above it, the current value, and one bar per core;
+- GPU load for the last three minutes, with the GPU's kernel driver (Linux) or its
+  power draw (macOS);
+- on Apple silicon, the Neural Engine: its power draw now and for the last three
+  minutes (macOS publishes no utilisation for it);
 - temperature, the thermal pressure band, and a three-minute temperature graph
   with faint lines where the band changes (fair, serious, critical);
 - CPU clock (current / maximum);
@@ -14,7 +17,13 @@ small loadngo window that shows the machine it runs on:
 - memory and disk (`/` by default, `--disk PATH` to choose) as used / total;
 - load average.
 
-It runs on the lab Pis' desktops (agnes, dolores) as a corner widget.
+It runs as a corner widget on the lab Pis' desktops (agnes, dolores) and on the Mac
+mini. `--print` prints one reading as text and exits, without a window (useful over
+ssh).
+
+On macOS there is no public temperature, CPU clock or fan reading on Apple silicon, so
+the temperature graph becomes one line: the thermal pressure band (from
+`ProcessInfo.thermalState` through `loadngo-thermal`) and CPU and DRAM power.
 
 ## Where the numbers come from
 
@@ -27,6 +36,25 @@ It runs on the lab Pis' desktops (agnes, dolores) as a corner widget.
 | Clock | cpufreq `scaling_cur_freq` / `cpuinfo_max_freq` | `loadngo-system-stats` |
 | Fan, supply voltage | hwmon `fan1_input` / `pwm1`, `in*_lcrit_alarm` | `loadngo-system-stats` |
 | Temperature, band | CPU thermal zone via `ThermalZoneProvider`, band from `ThermalGovernor` | `loadngo-thermal` |
+
+On macOS:
+
+| Shown | Source | Crate |
+|---|---|---|
+| CPU busy, per core | `host_processor_info` tick counters, difference between two samples | `loadngo-system-stats` |
+| GPU busy | I/O Registry `IOAccelerator` `PerformanceStatistics` "Device Utilization %" | `loadngo-system-stats` |
+| Power: CPU, GPU, Neural Engine, DRAM | IOReport "Energy Model" channels (`CPU Energy`, `GPU Energy`, `ANE`, `DRAM`), energy between two samples over the interval | `loadngo-system-stats` |
+| Neural Engine name | I/O Registry `H11ANEIn` `DeviceProperties` (`ANEDevicePropertyNumANECores`) | `loadngo-system-stats` |
+| Memory | `host_statistics64`: app memory (anonymous, not purgeable) + wired + compressed, as Activity Monitor counts "Memory Used"; total from `hw.memsize` | `loadngo-system-stats` |
+| Disk | `statfs` on the chosen path; on APFS, used is the container's used space | `loadngo-system-stats` |
+| Load, uptime | `getloadavg`, `kern.boottime` | `loadngo-system-stats` |
+| Thermal band | `ProcessInfo.thermalState` | `loadngo-thermal` |
+
+Everything on macOS works without root. IOReport (`/usr/lib/libIOReport.dylib`) is a
+private Apple interface, the one sudo-free monitors use. If it changes, power shows
+`-` and nothing else is affected. It is the only way to see Neural Engine activity
+without root: the Neural Engine's power went from 0 W at idle to about 1.3 W while
+Kimi ran on it (2026-09-26).
 
 I/O wait is time a CPU sat idle while a task waited on I/O. On a Pi that is
 usually the SD card, but a kernel worker stuck in uninterruptible sleep counts
@@ -70,6 +98,11 @@ and `/proc/<pid>/status`:
 | agnes (Pi 4, GLES) | 0.32% | 6.5/s | 2 | 96.8 MB |
 | dolores (Pi 5, GLES) | 0.11% | 5.0/s | 2 | 34.2 MB |
 
+On the Mac mini (M4 Pro, Metal), idle over a minute: 0.6% of one core, 6 threads,
+89 MB resident. About 0.14% of that is IOReport:
+each energy sample costs 2.8 ms of CPU time, whether it subscribes to four
+channels or all 240. The rest is sampling and repainting every two seconds.
+
 RSS grew by under 1.5 MB over the first ten minutes (allocator and driver
 warm-up), then held flat on both Pis for the rest of a 10-minute series: no
 growth from the value strings that change every sample. Most of it is the GL
@@ -85,7 +118,12 @@ cargo build --release -p loadngo-host-desktop --features system-monitor --bin sy
 scripts/install-system-monitor.sh target/release/system_monitor
 ```
 
-The script installs `~/.local/bin/loadngo-system-monitor`, adds a labwc window
+On macOS the same command installs the binary and a LaunchAgent,
+`~/Library/LaunchAgents/com.loadngo.system-monitor.plist`, which starts it now and at
+login. The monitor places its own window: no title bar, one level below ordinary
+windows, on every Space, not in the Dock, top-right of the screen.
+
+On Linux, the script installs `~/.local/bin/loadngo-system-monitor`, adds a labwc window
 rule for app_id `loadngo-system-monitor` (no title bar, not in the task bar or
 Alt-Tab, top-right, below other windows, on every workspace), adds an XDG
 autostart entry, reloads labwc and starts the monitor. It backs up an existing

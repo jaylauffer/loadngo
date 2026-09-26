@@ -1,6 +1,7 @@
 //! A small desktop monitor for the machine it runs on: CPU load (busy and
-//! I/O wait, overall and per core), GPU load, temperature and thermal pressure, CPU
-//! clock, fan, supply voltage, memory, disk and load average.
+//! I/O wait, overall and per core), GPU load, Neural Engine power (Apple silicon),
+//! temperature and thermal pressure, CPU clock, fan, supply voltage, power draw,
+//! memory, disk and load average -- whatever the platform reports.
 //!
 //! It samples every two seconds from a host proactor deadline
 //! (`FrameDemand::After`), reads temperature at the cadence `loadngo-thermal`
@@ -23,7 +24,6 @@ use ui_core::{
 };
 
 const WINDOW_WIDTH: i32 = 320;
-const WINDOW_HEIGHT: i32 = 346;
 const SAMPLE_EVERY: Duration = Duration::from_secs(2);
 /// Three minutes of history at one sample every two seconds.
 const HISTORY: usize = 90;
@@ -44,12 +44,15 @@ const IOWAIT: Color = Color::rgba(0xb0, 0x7c, 0xe8, 0xff);
 
 const USAGE: &str = "\
 system_monitor: a small desktop window showing this machine's CPU and GPU load,
-temperature and thermal pressure, clock, fan, supply voltage, memory, disk
-and load average. Samples every 2 s; repaints only when a sample arrives.
+Neural Engine power (Apple silicon), temperature or thermal pressure, clock,
+fan, supply voltage, power draw, memory, disk and load average, as far as the
+platform reports them. Samples every 2 s; repaints only when a sample arrives.
 
-Usage: system_monitor [--disk PATH]
+Usage: system_monitor [--disk PATH] [--print]
 
   --disk PATH   optional  filesystem whose usage to show (default: /)
+  --print       optional  print one reading (two samples 2 s apart) and exit,
+                          without opening a window
   -h, --help              print this help
 
 Example:
@@ -58,6 +61,7 @@ Example:
 
 fn main() {
     let mut disk = PathBuf::from("/");
+    let mut print = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -65,6 +69,7 @@ fn main() {
                 print!("{USAGE}");
                 return;
             }
+            "--print" => print = true,
             "--disk" => match args.next() {
                 Some(path) => disk = PathBuf::from(path),
                 None => fail("--disk needs a path"),
@@ -73,7 +78,12 @@ fn main() {
         }
     }
     let monitor = Monitor::new(disk);
-    loadngo_host_desktop::launch(window_descriptor(&monitor.host), None, async move {
+    if print {
+        monitor.print_reading();
+        return;
+    }
+    let height = monitor.layout.height();
+    loadngo_host_desktop::launch(window_descriptor(&monitor.host, height), None, async move {
         monitor.run().await;
     });
 }
@@ -83,11 +93,11 @@ fn fail(message: &str) -> ! {
     std::process::exit(2);
 }
 
-fn window_descriptor(host: &str) -> WindowDescriptor {
+fn window_descriptor(host: &str, height: f32) -> WindowDescriptor {
     WindowDescriptor {
         title: format!("{host} system monitor"),
         width: Some(WINDOW_WIDTH),
-        height: Some(WINDOW_HEIGHT),
+        height: Some(height as i32),
         high_dpi: true,
         linux_wm_class: Some("loadngo-system-monitor"),
     }
@@ -120,6 +130,44 @@ impl History {
         let start = (self.next + HISTORY - self.len) % HISTORY;
         (0..self.len).map(move |i| self.values[(start + i) % HISTORY])
     }
+
+    fn max(&self) -> f32 {
+        self.iter().fold(0.0, f32::max)
+    }
+}
+
+/// Which optional sections this machine gets, fixed at start-up so the window keeps
+/// its size: a Neural Engine row where one is named, a temperature graph where a
+/// thermal zone reports temperature (otherwise one line with the pressure band and
+/// power), and a fan/supply row on Linux.
+struct Layout {
+    npu: bool,
+    temp_graph: bool,
+    supply_row: bool,
+}
+
+impl Layout {
+    const NPU: f32 = 56.0;
+    const TEMP_GRAPH: f32 = 72.0;
+    const ROW: f32 = 24.0;
+
+    /// Design-space height: the fixed rows above `166`, the optional sections, then
+    /// memory, disk and load average and a bottom margin.
+    fn height(&self) -> f32 {
+        let mut y = 166.0;
+        if self.npu {
+            y += Self::NPU;
+        }
+        y += if self.temp_graph {
+            Self::TEMP_GRAPH
+        } else {
+            Self::ROW
+        };
+        if self.supply_row {
+            y += Self::ROW;
+        }
+        y + 2.0 * Self::ROW + 36.0
+    }
 }
 
 struct Monitor {
@@ -134,7 +182,9 @@ struct Monitor {
     busy_history: History,
     iowait_history: History,
     gpu_history: History,
+    npu_history: History,
     temp_history: History,
+    layout: Layout,
     scene: Vec<PaintOp>,
 }
 
@@ -146,9 +196,15 @@ impl Monitor {
             Some(zone) => Box::new(zone),
             None => loadngo_thermal::platform_provider(),
         };
+        let sampler = SystemSampler::new(&disk);
+        let layout = Layout {
+            npu: sampler.npu_name().is_some(),
+            temp_graph: trips.is_some(),
+            supply_row: cfg!(target_os = "linux"),
+        };
         Self {
             host: loadngo_system_stats::hostname().unwrap_or_else(|| "this machine".to_string()),
-            sampler: SystemSampler::new(&disk),
+            sampler,
             sample: SystemSample::default(),
             thermal,
             trips,
@@ -158,12 +214,84 @@ impl Monitor {
             busy_history: History::new(),
             iowait_history: History::new(),
             gpu_history: History::new(),
+            npu_history: History::new(),
             temp_history: History::new(),
+            layout,
             scene: Vec::with_capacity(256),
         }
     }
 
+    /// `--print`: two samples two seconds apart (usage needs an interval), as text.
+    fn print_reading(mut self) {
+        let now = Instant::now();
+        self.take_sample(now);
+        std::thread::sleep(SAMPLE_EVERY);
+        self.take_sample(now + SAMPLE_EVERY);
+        let s = &self.sample;
+        let pct = |v: f32| format!("{:.0}%", v * 100.0);
+        let watts = |w: Option<f32>| w.map_or_else(|| "-".to_string(), |w| format!("{w:.2} W"));
+        let power = s.power.unwrap_or_default();
+        println!("host      {}", self.host);
+        if let Some(cpu) = &s.cpu {
+            let cores: Vec<String> = cpu.cores.iter().map(|c| pct(c.busy)).collect();
+            println!(
+                "cpu       {} busy, cores {}",
+                pct(cpu.all.busy),
+                cores.join(" ")
+            );
+            if self.sampler.reports_iowait() {
+                println!("iowait    {}", pct(cpu.all.iowait));
+            }
+        }
+        println!(
+            "gpu       {}{}, {}",
+            s.gpu.map_or_else(|| "-".to_string(), |g| pct(g.busy)),
+            self.sampler
+                .gpu_driver()
+                .map_or_else(String::new, |d| format!(" ({d})")),
+            watts(power.gpu_w)
+        );
+        if let Some(npu) = self.sampler.npu_name() {
+            println!("npu       {}, {npu}", watts(power.npu_w));
+        }
+        println!(
+            "cpu power {}, dram {}",
+            watts(power.cpu_w),
+            watts(power.dram_w)
+        );
+        let snapshot = self.governor.snapshot();
+        println!(
+            "thermal   {}{}",
+            snapshot.pressure,
+            self.observation
+                .temperature_c
+                .map_or_else(String::new, |t| format!(", {t:.1} C"))
+        );
+        if let Some(m) = s.memory {
+            println!(
+                "memory    {} / {}",
+                format_bytes(m.used_bytes()),
+                format_bytes(m.total_bytes)
+            );
+        }
+        if let Some(d) = s.disk {
+            println!(
+                "disk      {} / {}",
+                format_bytes(d.used_bytes()),
+                format_bytes(d.total_bytes)
+            );
+        }
+        if let Some([one, five, fifteen]) = s.load_average {
+            println!("load      {one:.2} {five:.2} {fifteen:.2}");
+        }
+        if let Some(uptime) = s.uptime {
+            println!("uptime    {}", format_uptime(uptime));
+        }
+    }
+
     async fn run(mut self) {
+        #[cfg(target_os = "macos")]
+        loadngo_host_desktop::make_desktop_widget();
         let mut next_sample_at = Instant::now();
         let mut painted_surface = (0.0, 0.0);
         loop {
@@ -208,6 +336,9 @@ impl Monitor {
         if let Some(gpu) = self.sample.gpu {
             self.gpu_history.push(gpu.busy);
         }
+        if let Some(npu) = self.sample.power.and_then(|p| p.npu_w) {
+            self.npu_history.push(npu);
+        }
         if let Some(temp) = self.observation.temperature_c {
             self.temp_history.push(temp);
         }
@@ -215,7 +346,7 @@ impl Monitor {
 
     fn paint(&mut self, width: f32, height: f32) {
         let scale = (width / WINDOW_WIDTH as f32)
-            .min(height / WINDOW_HEIGHT as f32)
+            .min(height / self.layout.height())
             .max(0.25);
         let mut p = Painter {
             scene: &mut self.scene,
@@ -236,6 +367,7 @@ impl Monitor {
         p.text(pad, 36.0, 60.0, "CPU", 13, MUTED, HorizontalAlign::Left);
         match &sample.cpu {
             Some(cpu) => {
+                let reports_iowait = self.sampler.reports_iowait();
                 let busy = format!("{:.0}%", cpu.all.busy * 100.0);
                 p.text(
                     pad + 44.0,
@@ -246,16 +378,18 @@ impl Monitor {
                     ACCENT,
                     HorizontalAlign::Left,
                 );
-                let iowait = format!("I/O wait {:.0}%", cpu.all.iowait * 100.0);
-                p.text(
-                    pad,
-                    37.0,
-                    inner,
-                    &iowait,
-                    12,
-                    IOWAIT,
-                    HorizontalAlign::Right,
-                );
+                if reports_iowait {
+                    let iowait = format!("I/O wait {:.0}%", cpu.all.iowait * 100.0);
+                    p.text(
+                        pad,
+                        37.0,
+                        inner,
+                        &iowait,
+                        12,
+                        IOWAIT,
+                        HorizontalAlign::Right,
+                    );
+                }
             }
             None => p.text(
                 pad + 44.0,
@@ -299,8 +433,14 @@ impl Monitor {
             ACCENT,
             HorizontalAlign::Left,
         );
-        if let Some(driver) = self.sampler.gpu_driver() {
-            p.text(pad, 111.0, inner, driver, 12, MUTED, HorizontalAlign::Right);
+        let power = sample.power.unwrap_or_default();
+        let gpu_note = match (power.gpu_w, self.sampler.gpu_driver()) {
+            (Some(w), _) => Some(format!("{w:.1} W")),
+            (None, Some(driver)) => Some(driver.to_string()),
+            (None, None) => None,
+        };
+        if let Some(note) = gpu_note {
+            p.text(pad, 111.0, inner, &note, 12, MUTED, HorizontalAlign::Right);
         }
         let gpu_graph = Rect {
             x: pad,
@@ -310,102 +450,177 @@ impl Monitor {
         };
         p.fill(gpu_graph, GRAPH_BACKGROUND);
         p.stacked_bars(gpu_graph, &self.gpu_history, None);
+        let mut y = 166.0;
 
-        // Temperature: value and band, clock, graph with the band entry points.
+        // Neural Engine: power (macOS publishes no utilisation for it), history scaled to
+        // the highest draw seen or 2 W.
+        if self.layout.npu {
+            p.text(pad, y, 60.0, "NPU", 13, MUTED, HorizontalAlign::Left);
+            let value = power
+                .npu_w
+                .map_or_else(|| "-".to_string(), |w| format!("{w:.2} W"));
+            p.text(
+                pad + 44.0,
+                y - 2.0,
+                90.0,
+                &value,
+                16,
+                ACCENT,
+                HorizontalAlign::Left,
+            );
+            if let Some(name) = self.sampler.npu_name() {
+                p.text(pad, y + 1.0, inner, name, 12, MUTED, HorizontalAlign::Right);
+            }
+            let graph = Rect {
+                x: pad,
+                y: y + 22.0,
+                width: inner,
+                height: 24.0,
+            };
+            p.fill(graph, GRAPH_BACKGROUND);
+            let full_scale = self.npu_history.max().max(2.0);
+            p.scaled_bars(graph, &self.npu_history, full_scale);
+            y += Layout::NPU;
+        }
+
         let snapshot = self.governor.snapshot();
         let band_color = pressure_color(snapshot.pressure);
-        p.text(pad, 166.0, 60.0, "Temp", 13, MUTED, HorizontalAlign::Left);
-        let temp = self
-            .observation
-            .temperature_c
-            .map_or_else(|| "-".to_string(), |t| format!("{t:.1} °C"));
-        p.text(
-            pad + 44.0,
-            164.0,
-            80.0,
-            &temp,
-            16,
-            band_color,
-            HorizontalAlign::Left,
-        );
         let band = snapshot.pressure.to_string();
-        p.text(
-            pad + 118.0,
-            167.0,
-            80.0,
-            &band,
-            13,
-            band_color,
-            HorizontalAlign::Left,
-        );
-        if let Some(clock) = sample.clock {
-            let ghz = |hz: u64| hz as f32 / 1e9;
-            let text = format!("{:.1}/{:.1} GHz", ghz(clock.current_hz), ghz(clock.max_hz));
-            p.text(pad, 167.0, inner, &text, 12, MUTED, HorizontalAlign::Right);
-        }
-        let temp_graph = Rect {
-            x: pad,
-            y: 188.0,
-            width: inner,
-            height: 40.0,
-        };
-        p.fill(temp_graph, GRAPH_BACKGROUND);
-        if let Some(trips) = self.trips {
-            for (entry, color) in [
-                (trips.fair_c, FAIR),
-                (trips.serious_c, SERIOUS),
-                (Some(trips.critical_c), CRITICAL),
-            ] {
-                if let Some(entry) = entry.filter(|e| (GRAPH_MIN_C..=GRAPH_MAX_C).contains(e)) {
-                    let y = graph_y(temp_graph, entry);
-                    p.fill(
-                        Rect {
-                            x: temp_graph.x,
-                            y,
-                            width: temp_graph.width,
-                            height: 1.0,
-                        },
-                        dim(color),
-                    );
+        if self.layout.temp_graph {
+            // Temperature: value and band, clock, graph with the band entry points.
+            p.text(pad, y, 60.0, "Temp", 13, MUTED, HorizontalAlign::Left);
+            let temp = self
+                .observation
+                .temperature_c
+                .map_or_else(|| "-".to_string(), |t| format!("{t:.1} °C"));
+            p.text(
+                pad + 44.0,
+                y - 2.0,
+                80.0,
+                &temp,
+                16,
+                band_color,
+                HorizontalAlign::Left,
+            );
+            p.text(
+                pad + 118.0,
+                y + 1.0,
+                80.0,
+                &band,
+                13,
+                band_color,
+                HorizontalAlign::Left,
+            );
+            if let Some(clock) = sample.clock {
+                let ghz = |hz: u64| hz as f32 / 1e9;
+                let text = format!("{:.1}/{:.1} GHz", ghz(clock.current_hz), ghz(clock.max_hz));
+                p.text(
+                    pad,
+                    y + 1.0,
+                    inner,
+                    &text,
+                    12,
+                    MUTED,
+                    HorizontalAlign::Right,
+                );
+            }
+            let temp_graph = Rect {
+                x: pad,
+                y: y + 22.0,
+                width: inner,
+                height: 40.0,
+            };
+            p.fill(temp_graph, GRAPH_BACKGROUND);
+            if let Some(trips) = self.trips {
+                for (entry, color) in [
+                    (trips.fair_c, FAIR),
+                    (trips.serious_c, SERIOUS),
+                    (Some(trips.critical_c), CRITICAL),
+                ] {
+                    if let Some(entry) = entry.filter(|e| (GRAPH_MIN_C..=GRAPH_MAX_C).contains(e)) {
+                        let line_y = graph_y(temp_graph, entry);
+                        p.fill(
+                            Rect {
+                                x: temp_graph.x,
+                                y: line_y,
+                                width: temp_graph.width,
+                                height: 1.0,
+                            },
+                            dim(color),
+                        );
+                    }
                 }
             }
+            p.line_graph(temp_graph, &self.temp_history, band_color);
+            y += Layout::TEMP_GRAPH;
+        } else {
+            // No temperature to graph (macOS): the pressure band, and power where known.
+            p.text(pad, y, 60.0, "Thermal", 13, MUTED, HorizontalAlign::Left);
+            p.text(
+                pad + 60.0,
+                y,
+                90.0,
+                &band,
+                13,
+                band_color,
+                HorizontalAlign::Left,
+            );
+            let mut parts = Vec::new();
+            if let Some(w) = power.cpu_w {
+                parts.push(format!("CPU {w:.1} W"));
+            }
+            if let Some(w) = power.dram_w {
+                parts.push(format!("DRAM {w:.1} W"));
+            }
+            if !parts.is_empty() {
+                p.text(
+                    pad,
+                    y + 1.0,
+                    inner,
+                    &parts.join("  "),
+                    12,
+                    MUTED,
+                    HorizontalAlign::Right,
+                );
+            }
+            y += Layout::ROW;
         }
-        p.line_graph(temp_graph, &self.temp_history, band_color);
 
         // Fan and supply voltage.
-        let mut y = 238.0;
-        if let Some(fan) = sample.fan {
-            let mut text = String::from("Fan");
-            if let Some(duty) = fan.duty {
-                text.push_str(&format!(" {:.0}%", duty * 100.0));
+        if self.layout.supply_row {
+            if let Some(fan) = sample.fan {
+                let mut text = String::from("Fan");
+                if let Some(duty) = fan.duty {
+                    text.push_str(&format!(" {:.0}%", duty * 100.0));
+                }
+                if let Some(rpm) = fan.rpm {
+                    text.push_str(&format!("  {rpm} rpm"));
+                }
+                p.text(pad, y, inner, &text, 13, TEXT, HorizontalAlign::Left);
             }
-            if let Some(rpm) = fan.rpm {
-                text.push_str(&format!("  {rpm} rpm"));
+            match sample.undervoltage {
+                Some(true) => p.text(
+                    pad,
+                    y,
+                    inner,
+                    "UNDER-VOLTAGE",
+                    13,
+                    CRITICAL,
+                    HorizontalAlign::Right,
+                ),
+                Some(false) => p.text(
+                    pad,
+                    y,
+                    inner,
+                    "power ok",
+                    13,
+                    NOMINAL,
+                    HorizontalAlign::Right,
+                ),
+                None => {}
             }
-            p.text(pad, y, inner, &text, 13, TEXT, HorizontalAlign::Left);
+            y += Layout::ROW;
         }
-        match sample.undervoltage {
-            Some(true) => p.text(
-                pad,
-                y,
-                inner,
-                "UNDER-VOLTAGE",
-                13,
-                CRITICAL,
-                HorizontalAlign::Right,
-            ),
-            Some(false) => p.text(
-                pad,
-                y,
-                inner,
-                "power ok",
-                13,
-                NOMINAL,
-                HorizontalAlign::Right,
-            ),
-            None => {}
-        }
-        y += 24.0;
 
         // Memory and disk.
         let rows = [
@@ -578,6 +793,24 @@ impl Painter<'_> {
                     ..column
                 },
                 IOWAIT,
+            );
+        }
+    }
+
+    /// One column per sample, `value / full_scale` of the height.
+    fn scaled_bars(&mut self, area: Rect, history: &History, full_scale: f32) {
+        let column = area.width / HISTORY as f32;
+        let offset = HISTORY - history.len;
+        for (i, value) in history.iter().enumerate() {
+            let h = area.height * (value / full_scale).clamp(0.0, 1.0);
+            self.fill(
+                Rect {
+                    x: area.x + (offset + i) as f32 * column,
+                    y: area.y + area.height - h,
+                    width: column,
+                    height: h,
+                },
+                ACCENT,
             );
         }
     }

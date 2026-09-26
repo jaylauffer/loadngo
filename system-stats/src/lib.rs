@@ -1,5 +1,6 @@
 //! System load sampling for monitors and work budgets: CPU busy and I/O-wait time per
-//! core, GPU busy time, memory, disk, CPU clock, fan, and supply-voltage alarms.
+//! core, GPU busy time, power draw (CPU, GPU, Neural Engine, DRAM), memory, disk, CPU
+//! clock, fan, and supply-voltage alarms.
 //!
 //! [`SystemSampler::sample`] fills a caller-owned [`SystemSample`] in place and reuses
 //! one read buffer, so a monitor that samples every few seconds does not allocate in
@@ -7,7 +8,8 @@
 //! sample, normally from a proactor deadline.
 //!
 //! Utilisation is workload evidence, not a thermal signal; thermal pressure comes from
-//! `loadngo-thermal`. Linux reads procfs and sysfs. Other platforms report every field
+//! `loadngo-thermal`. Linux reads procfs and sysfs; macOS reads Mach host statistics,
+//! the I/O Registry and IOReport (see `macos.rs`). Other platforms report every field
 //! as `None` until they have a provider. `None` means unknown, never zero.
 
 // The procfs parsers are only called on Linux but are unit-tested everywhere.
@@ -133,6 +135,17 @@ pub struct Fan {
     pub duty: Option<f32>,
 }
 
+/// Mean power over the last interval, where the platform reports energy (today macOS on
+/// Apple silicon). `npu_w` is the Neural Engine, whose power draw is the only activity
+/// signal macOS publishes for it.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PowerDraw {
+    pub cpu_w: Option<f32>,
+    pub gpu_w: Option<f32>,
+    pub npu_w: Option<f32>,
+    pub dram_w: Option<f32>,
+}
+
 /// One reading of everything the platform exposes. Reused across samples.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SystemSample {
@@ -150,6 +163,8 @@ pub struct SystemSample {
     /// A supply-voltage sensor reports below its lower critical limit. On a
     /// Raspberry Pi this is the firmware's under-voltage flag.
     pub undervoltage: Option<bool>,
+    /// `None` on the first sample and where the platform reports no energy.
+    pub power: Option<PowerDraw>,
 }
 
 /// Samples the running system; see the crate docs.
@@ -161,6 +176,8 @@ pub struct SystemSampler {
     gpu_previous: Option<GpuTimes>,
     #[cfg(target_os = "linux")]
     linux: linux::Paths,
+    #[cfg(target_os = "macos")]
+    mac: macos::Sources,
 }
 
 impl SystemSampler {
@@ -168,7 +185,7 @@ impl SystemSampler {
     /// Sensor files are discovered once here, not on every sample.
     #[must_use]
     pub fn new(disk_path: &Path) -> Self {
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let _ = disk_path;
         Self {
             buf: String::with_capacity(4096),
@@ -177,6 +194,8 @@ impl SystemSampler {
             gpu_previous: None,
             #[cfg(target_os = "linux")]
             linux: linux::Paths::discover(disk_path),
+            #[cfg(target_os = "macos")]
+            mac: macos::Sources::discover(disk_path),
         }
     }
 
@@ -184,7 +203,9 @@ impl SystemSampler {
     pub fn sample(&mut self, out: &mut SystemSample) {
         #[cfg(target_os = "linux")]
         self.sample_linux(out);
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
+        self.sample_macos(out);
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             *out = SystemSample::default();
             let _ = (&mut self.buf, &mut self.previous, &mut self.current);
@@ -203,6 +224,26 @@ impl SystemSampler {
         {
             None
         }
+    }
+
+    /// The neural accelerator, where the platform names one (for example "16-core
+    /// Neural Engine" on Apple silicon), found once at construction.
+    #[must_use]
+    pub fn npu_name(&self) -> Option<&str> {
+        #[cfg(target_os = "macos")]
+        {
+            self.mac.npu_name.as_deref()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    }
+
+    /// Whether CPU usage separates I/O wait (Linux does; macOS has no such state).
+    #[must_use]
+    pub const fn reports_iowait(&self) -> bool {
+        cfg!(target_os = "linux")
     }
 
     /// Stores `current` as usage against the previous GPU reading.
@@ -293,7 +334,19 @@ pub fn hostname() -> Option<String> {
             .map(|name| name.trim().to_string())
             .filter(|name| !name.is_empty())
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        let mut buf = [0u8; 256];
+        // SAFETY: `buf` is `buf.len()` writable bytes; gethostname NUL-terminates within.
+        let ok = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } == 0;
+        let name = std::ffi::CStr::from_bytes_until_nul(&buf)
+            .ok()?
+            .to_str()
+            .ok()?;
+        let name = name.strip_suffix(".local").unwrap_or(name);
+        (ok && !name.is_empty()).then(|| name.to_string())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         std::env::var("HOSTNAME")
             .ok()
@@ -364,6 +417,9 @@ fn parse_uptime(text: &str) -> Option<Duration> {
 fn parse_u64(text: &str) -> Option<u64> {
     text.trim().parse().ok()
 }
+
+#[cfg(target_os = "macos")]
+mod macos;
 
 #[cfg(target_os = "linux")]
 mod linux {

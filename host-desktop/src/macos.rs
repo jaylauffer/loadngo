@@ -754,6 +754,47 @@ pub fn launch(
     });
 }
 
+/// Turns the window into a desktop widget: no title bar, just below ordinary windows, on
+/// every Space, left out of the Dock and window cycling, and moved to the top-right corner
+/// of its screen's visible area (below the menu bar). The macOS counterpart of the labwc
+/// window rule `scripts/install-system-monitor.sh` installs on Linux. Call it from the
+/// entry future, after `launch` has created the window; a no-op before that.
+pub fn make_desktop_widget() {
+    APP_STATE.with(|state| {
+        let state = state.borrow();
+        let Some(state) = state.as_ref() else {
+            return;
+        };
+        // SAFETY: plain AppKit messages to the live application and window objects, on
+        // the main thread that created them.
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            // NSApplicationActivationPolicyAccessory: no Dock icon or menu bar.
+            let _: bool = msg_send![app, setActivationPolicy: 1isize];
+            let window = &*state.window;
+            let _: () = msg_send![window, setStyleMask: 0usize]; // borderless
+                                                                 // One below kCGNormalWindowLevel: under every ordinary window, above the desktop.
+            let _: () = msg_send![window, setLevel: -1isize];
+            // canJoinAllSpaces | stationary | ignoresCycle
+            let behavior: usize = (1 << 0) | (1 << 4) | (1 << 6);
+            let _: () = msg_send![window, setCollectionBehavior: behavior];
+            let _: () = msg_send![window, setMovableByWindowBackground: true];
+            let screen: *mut AnyObject = msg_send![window, screen];
+            if !screen.is_null() {
+                let visible: CGRect = msg_send![screen, visibleFrame];
+                let frame: CGRect = msg_send![window, frame];
+                let margin = 12.0;
+                let origin = CGPoint {
+                    x: visible.origin.x + visible.size.width - frame.size.width - margin,
+                    y: visible.origin.y + visible.size.height - frame.size.height - margin,
+                };
+                let _: () = msg_send![window, setFrameOrigin: origin];
+            }
+            let _: () = msg_send![window, orderFront: std::ptr::null_mut::<AnyObject>()];
+        }
+    });
+}
+
 /// Nudges the host to produce a frame sooner than its next scheduled one.
 ///
 /// A no-op on macOS: this backend's frame loop is driven by its own display

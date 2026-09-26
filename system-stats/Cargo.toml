@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Allocation-free sampling of CPU, memory, disk, clock, fan and power state for monitors and budgets"
+description = "Allocation-free sampling of CPU, GPU, power, memory, disk, clock, fan and supply state for monitors and budgets"
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 libc = "0.2"
