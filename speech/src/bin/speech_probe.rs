@@ -1,6 +1,7 @@
 //! Exercises loadngo-speech on this machine: permission, file transcription, speaking
 //! and live listening. Run with `--help`.
 
+#[cfg(target_os = "macos")]
 const HELP: &str = "\
 speech_probe: check on-device speech recognition and synthesis on this machine
 
@@ -83,6 +84,7 @@ fn listen(locale: &str, n: usize) -> Result<(), loadngo_speech::Error> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn fail(message: &str) -> ! {
     eprintln!("speech_probe: {message} (see --help)");
     std::process::exit(2);

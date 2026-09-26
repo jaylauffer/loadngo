@@ -302,11 +302,17 @@ impl FsTools {
     }
 }
 
+/// `path` relative to `root`, with `/` separators on every platform: the model sees
+/// one path form, and paths it passes back resolve the same way (Windows accepts `/`).
 fn relative(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .display()
-        .to_string()
+    match path.strip_prefix(root) {
+        Ok(inside) => inside
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
+        Err(_) => path.display().to_string(),
+    }
 }
 
 struct FsList(std::rc::Rc<FsTools>);
