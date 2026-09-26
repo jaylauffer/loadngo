@@ -208,6 +208,130 @@ Measured on the M4 Pro with the 4-bit experts, with no thermal warning at any po
 - `metal-compute/tests/gemm_timing.rs` holds the timing experiments (ignored tests, run
   by hand).
 
+## M1, second stage: what we are attempting (for review; not started)
+
+Written 2026-09-26 at Jay's request ("before starting on KDA routing to the GPU we need to
+understand clearly what we're attempting").
+
+### Where one token's time goes today
+
+These are steady-state `--accel gpu` decode figures at about 350 tokens of context:
+0.06-0.07 s per token (about 15 tokens/s). The split is from a `sample` of the main
+thread over 6 s, so treat it as approximate.
+
+| Share | About | What |
+|---|---|---|
+| ~66% | 43 ms | Waiting on the GPU. About 20 ms of that is the GPU reading the weights (the M0 measurement). The rest is the cost of about 136 separate round trips per token: every step's products are one submission, and the CPU waits for each. |
+| ~13% | 8.5 ms | The router on the CPU: 26 layers x 256 expert scores over 2304 inputs, then top-8. |
+| ~9% | 6 ms | Encoding and submitting those ~136 command buffers. |
+| ~7% | 4.5 ms | MLA attention (7 layers) and glue: norms, residual adds, SiLU, copies. |
+| ~3% | 2 ms | The KDA recurrence and short convolutions (20 layers). |
+
+### What would move
+
+At present the CPU and GPU take turns about 136 times per token. The goal is **one
+submission per token**. The CPU sends the token id; the GPU runs all 27 layers and the
+LM head; the CPU gets back the logits (or just the chosen token) and samples. Per layer,
+these move to GPU kernels:
+
+- **RMSNorm** (before attention and before the MLP) and the **residual adds**. Simple.
+- **KDA** (20 layers):
+  - the short convolution over the last 4 positions, which keeps a small state;
+  - L2 normalisation of q and k;
+  - the decay gate, `g = -exp(A_log) * softplus(z + dt_bias)`;
+  - the delta-rule recurrence on a 128x128 state per head (32 heads, 2 MB per layer);
+  - a per-head RMSNorm times a sigmoid gate.
+
+  It is sequential over positions, but each position's work is 32 heads x 128 x 128,
+  which parallelises well.
+- **MLA attention** (7 layers). Append to the KV cache, then compute scores against
+  every cached position, softmax, and a weighted sum. Its cost grows with the length of
+  the conversation, and it is what makes long chats slower.
+- **The router.** Sigmoid scores for 256 experts, the selection bias, top-8,
+  renormalise and scale.
+- **Expert selection on the GPU. This is the one genuinely new piece.** Today the CPU
+  picks the 8 experts and then submits their products. When the router runs on the
+  GPU, the expert kernels must read *which* experts from GPU memory ("indirect"
+  dispatch). That needs a table of every expert's weight location, and all 6,656
+  experts are already resident, so the table is fixed at load.
+- **Combining the experts.** A weighted sum of the 8 expert outputs plus the shared
+  expert.
+
+The session state moves into GPU memory too:
+
+- the KDA recurrent and convolution state: about 40 MB for 20 layers;
+- the MLA KV cache: about 134 MB per MLA layer at 4096 tokens, about 0.9 GB in total.
+
+The chat's "tool preamble snapshot" then becomes a GPU buffer copy.
+
+### What we expect
+
+The weight reads (~20 ms) stay, and nearly everything else goes. That makes about
+20-25 ms per token, or **40-50 tokens/s at short context**, against about 15 now. This
+is an estimate from the table above, not a measurement. Long conversations should also
+stop slowing down as much, because attention runs in parallel on the GPU.
+
+Prompts use the same kernels over many positions. KDA stays sequential across
+positions. Faster chunked forms of KDA exist but are a later step.
+
+### How we know it is right
+
+- The CPU path stays the reference.
+- Each kernel gets tests against the CPU op it replaces, as M0 did.
+- The whole model must still pass `--compare decode` and `--compare cpu`.
+- Today's GPU path matches the CPU exactly: KL 0.00000 at five decimals. The CPU's MLA
+  sums in f64 and the GPU will use f32, so expect a very small non-zero KL. The bound
+  should be agreed before we start, for example mean KL below 0.001 and top-1 agreement
+  of at least 99%.
+
+### What it does not do: the Neural Engine
+
+`--accel gpu` leaves the Neural Engine idle. The widget's 0 W NPU reading while Kimi
+runs is correct. The reason is measured: the Neural Engine streams weights at 15-29
+GB/s, against the GPU's 228 GB/s, and both draw on the same 273 GB/s of memory. During
+decoding the GPU already uses most of that bandwidth, so the Neural Engine cannot add
+speed there. It could help where the GPU is not bandwidth-bound:
+
+- **Speculative decoding.** A small draft model on the Neural Engine guesses several
+  tokens, and the big model on the GPU checks them in one pass. This would use the
+  NPU for real. It needs a draft model that shares Kimi's tokenizer, and none has been
+  chosen.
+- **Prompt processing on the Neural Engine while the GPU decodes.** This helps only
+  when there is a prompt to read and a reply to write at the same time, for example
+  tool results arriving mid-reply.
+
+Neither is part of this stage.
+
+### The work, in order
+
+1. `loadngo-metal-compute` kernels, each tested against a CPU reference:
+   - RMSNorm;
+   - residual add;
+   - SiLU-gate;
+   - short convolution with state;
+   - KDA step;
+   - MLA attention over a KV cache;
+   - sigmoid router top-k;
+   - indirect MXFP4 expert matrix-vector product;
+   - weighted combine;
+   - argmax.
+2. A model-level backend in kimi (`LinearBackend`), with the CPU forward as the
+   reference and fallback. The session state lives in GPU buffers.
+3. One command buffer per token, completed through the proactor.
+4. The gate: `--compare decode` and `--compare cpu` within the agreed bound, tokens/s,
+   idle CPU, and the thermal state over a 10-minute generation.
+
+This is several sessions of work. Kernels 1-3 (norms and adds) are small. KDA, MLA
+attention and the indirect experts are the substance.
+
+### Decisions for Jay
+
+- **The agreement bound.** For example mean KL below 0.001 and top-1 agreement of at
+  least 99%.
+- **Scope.** Decode only first, with prompts later; or both together.
+- **Speculative decoding.** Whether to pursue it on the Neural Engine as its own
+  project.
+
 ## Risks
 
 - bf16 in MSL needs Metal 3.1+ / Apple GPU family 9; M4 qualifies, older Macs may need an
