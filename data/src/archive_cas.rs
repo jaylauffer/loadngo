@@ -16,6 +16,7 @@ pub const ARCHIVE_CAS_FORMAT_V1: &str = "loadngo-archive-cas-v1";
 pub const ARCHIVE_MANIFEST_FORMAT_V1: &str = "loadngo-archive-manifest-v1";
 pub const ARCHIVE_MANIFEST_FORMAT_V2: &str = "loadngo-archive-manifest-v2";
 pub const ARCHIVE_DELETE_LOG_FORMAT_V1: &str = "loadngo-archive-delete-log-v1";
+pub const ARCHIVE_ADD_LOG_FORMAT_V1: &str = "loadngo-archive-add-log-v1";
 pub const DEFAULT_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
 /// A record of a manual content removal: which paths were dropped from a
@@ -34,6 +35,22 @@ pub struct ArchiveDeleteLog {
     pub actor: String,
     pub reason: String,
     pub removed_paths: Vec<String>,
+}
+
+/// A record of content added to an archive after it was captured: which paths, by
+/// whom, and why. The counterpart of [`ArchiveDeleteLog`], written as an
+/// `.add-log.json` sidecar next to the superseding manifest; the manifest chain is the
+/// tamper-evident record, this is the explanation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchiveAddLog {
+    pub format: String,
+    pub archive_id: String,
+    pub base_manifest_root: CasHash,
+    pub superseding_manifest_root: CasHash,
+    pub added_at_unix_secs: u64,
+    pub actor: String,
+    pub reason: String,
+    pub added_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,6 +230,96 @@ impl ArchiveManifest {
         )?;
         amended.supersedes_archive_root = Some(self.digest()?);
         Ok(amended)
+    }
+
+    /// Produces a new manifest with `added` entries alongside every existing one, and a
+    /// log describing the addition. Missing parent directories are created as
+    /// directory entries; an added directory that already exists is kept as it is. A
+    /// file, symlink or other entry whose path is already taken is refused: remove the
+    /// old one first, so nothing is replaced silently. The objects the added files
+    /// point at must already be stored (see [`ArchiveCasStorage::ingest_file`]).
+    pub fn with_entries_added(
+        &self,
+        added: Vec<ArchiveEntry>,
+        reason: impl Into<String>,
+        actor: impl Into<String>,
+        created_at_unix_secs: u64,
+    ) -> Result<(Self, ArchiveAddLog)> {
+        let reason = reason.into();
+        let actor = actor.into();
+        if reason.trim().is_empty() {
+            bail!("addition reason must not be empty");
+        }
+        if actor.trim().is_empty() {
+            bail!("addition actor must not be empty");
+        }
+        if added.is_empty() {
+            bail!("nothing given to add");
+        }
+        let mut entries: std::collections::BTreeMap<String, ArchiveEntry> = self
+            .entries
+            .iter()
+            .map(|entry| (entry.path().to_string(), entry.clone()))
+            .collect();
+        let mut added_paths = Vec::new();
+        for entry in added {
+            let path = entry.path().to_string();
+            validate_relative_path(&path)?;
+            // Parents first, as directories, where the archive has none.
+            let mut parent = path.as_str();
+            while let Some((up, _)) = parent.rsplit_once('/') {
+                match entries.get(up) {
+                    Some(ArchiveEntry::Directory { .. }) => {}
+                    Some(_) => {
+                        bail!("cannot add {path:?}: {up:?} is not a directory in the archive")
+                    }
+                    None => {
+                        entries.insert(
+                            up.to_string(),
+                            ArchiveEntry::Directory {
+                                path: up.to_string(),
+                                modified_at_unix_secs: None,
+                            },
+                        );
+                        added_paths.push(up.to_string());
+                    }
+                }
+                parent = up;
+            }
+            match (entries.get(&path), &entry) {
+                (Some(ArchiveEntry::Directory { .. }), ArchiveEntry::Directory { .. }) => continue,
+                (Some(_), _) => bail!(
+                    "{path:?} is already in the archive; remove it first (archive_cas_remove) to replace it"
+                ),
+                (None, _) => {
+                    added_paths.push(path.clone());
+                    entries.insert(path, entry);
+                }
+            }
+        }
+        if added_paths.is_empty() {
+            bail!("everything given is already in the archive");
+        }
+        added_paths.sort();
+        let base_root = self.digest()?;
+        let mut amended = Self::new(
+            self.archive_id.clone(),
+            self.source_label.clone(),
+            created_at_unix_secs,
+            entries.into_values().collect(),
+        )?;
+        amended.supersedes_archive_root = Some(base_root);
+        let log = ArchiveAddLog {
+            format: ARCHIVE_ADD_LOG_FORMAT_V1.to_string(),
+            archive_id: self.archive_id.clone(),
+            base_manifest_root: base_root,
+            superseding_manifest_root: amended.digest()?,
+            added_at_unix_secs: created_at_unix_secs,
+            actor,
+            reason,
+            added_paths,
+        };
+        Ok((amended, log))
     }
 
     /// Produces a new manifest with the named entries removed, and a log
@@ -752,6 +859,25 @@ impl ArchiveCasStorage {
         Ok(path)
     }
 
+    /// Writes an [`ArchiveAddLog`] as `{manifest stem}.add-log.json` beside the manifest.
+    pub fn write_add_log(&self, manifest_path: &Path, log: &ArchiveAddLog) -> Result<PathBuf> {
+        let stem = manifest_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or_else(|| {
+                anyhow!(
+                    "manifest path has no usable file stem: {}",
+                    manifest_path.display()
+                )
+            })?;
+        let path = self.manifests.join(format!("{stem}.add-log.json"));
+        let bytes = serde_json::to_vec_pretty(log).context("failed to serialize add log")?;
+        write_synced_file(&path, &bytes)
+            .with_context(|| format!("failed to write add log {}", path.display()))?;
+        sync_parent(&path)?;
+        Ok(path)
+    }
+
     /// Every canonical manifest currently readable under `manifests/`, newest
     /// paths mixed with old ones -- callers that need "what's still live"
     /// (GC) must include every manifest here, since blobs are globally
@@ -768,7 +894,9 @@ impl ArchiveCasStorage {
                     .file_name()
                     .and_then(|name| name.to_str())
                     .is_some_and(|name| {
-                        name.ends_with(".delete-log.json") || name.ends_with(".signature.json")
+                        name.ends_with(".delete-log.json")
+                            || name.ends_with(".add-log.json")
+                            || name.ends_with(".signature.json")
                     })
             {
                 paths.push(path);
@@ -855,11 +983,13 @@ impl ArchiveCasStorage {
         fs::remove_file(manifest_path)
             .with_context(|| format!("failed to remove manifest {}", manifest_path.display()))?;
         if let Some(stem) = manifest_path.file_stem().and_then(|stem| stem.to_str()) {
-            let sidecar = self.manifests.join(format!("{stem}.delete-log.json"));
-            if sidecar.exists() {
-                fs::remove_file(&sidecar).with_context(|| {
-                    format!("failed to remove delete log {}", sidecar.display())
-                })?;
+            for kind in ["delete-log", "add-log"] {
+                let sidecar = self.manifests.join(format!("{stem}.{kind}.json"));
+                if sidecar.exists() {
+                    fs::remove_file(&sidecar).with_context(|| {
+                        format!("failed to remove {kind} {}", sidecar.display())
+                    })?;
+                }
             }
         }
         Ok(())
@@ -1277,6 +1407,61 @@ mod tests {
 
         let objects = store.list_objects().unwrap();
         assert!(objects.iter().any(|(hash, _)| *hash == shared_object.hash));
+    }
+
+    #[test]
+    fn adding_entries_supersedes_the_manifest_and_creates_parents() {
+        let object = ArchiveObject {
+            hash: CasHash::digest(b"new"),
+            size: 3,
+        };
+        let base = ArchiveManifest::new(
+            "added-test",
+            "test",
+            1,
+            vec![ArchiveEntry::Directory {
+                path: "old".into(),
+                modified_at_unix_secs: None,
+            }],
+        )
+        .unwrap();
+        let file = |path: &str| ArchiveEntry::File {
+            path: path.into(),
+            object,
+            modified_at_unix_secs: Some(2),
+        };
+        let (amended, log) = base
+            .with_entries_added(vec![file("added/today/export.zip")], "export", "jay", 5)
+            .unwrap();
+        assert_eq!(
+            amended.supersedes_archive_root,
+            Some(base.digest().unwrap())
+        );
+        assert_eq!(log.superseding_manifest_root, amended.digest().unwrap());
+        assert_eq!(
+            log.added_paths,
+            ["added", "added/today", "added/today/export.zip"]
+        );
+        let paths: Vec<&str> = amended.entries.iter().map(ArchiveEntry::path).collect();
+        assert_eq!(
+            paths,
+            ["added", "added/today", "added/today/export.zip", "old"]
+        );
+        // A taken path is refused rather than replaced.
+        let again = amended.with_entries_added(vec![file("added/today/export.zip")], "x", "jay", 6);
+        assert!(again
+            .unwrap_err()
+            .to_string()
+            .contains("already in the archive"));
+        // Adding under an existing directory keeps it.
+        let (_, log) = amended
+            .with_entries_added(vec![file("old/more.txt")], "x", "jay", 7)
+            .unwrap();
+        assert_eq!(log.added_paths, ["old/more.txt"]);
+        assert!(base.with_entries_added(vec![], "x", "jay", 8).is_err());
+        assert!(base
+            .with_entries_added(vec![file("a")], " ", "jay", 8)
+            .is_err());
     }
 
     #[test]
