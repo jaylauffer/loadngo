@@ -17,3 +17,6 @@ url = { version = "2.5", optional = true }
 [features]
 cas = ["dep:data"]
 web = ["dep:ureq", "dep:url"]
+
+[dev-dependencies]
+tempfile = "3"

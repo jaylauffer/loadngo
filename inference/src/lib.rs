@@ -10,6 +10,7 @@
 #[cfg(feature = "cas")]
 pub mod cas_tools;
 pub mod compute;
+pub mod memory_tools;
 pub mod system_one;
 pub mod tools;
 #[cfg(feature = "web")]
