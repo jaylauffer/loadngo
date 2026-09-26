@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>com.loadngo.speech-probe</string>
+  <key>CFBundleName</key><string>speech_probe</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>speech_probe transcribes speech on this Mac to test loadngo's on-device recognition. Nothing leaves the machine.</string>
+  <key>NSMicrophoneUsageDescription</key><string>speech_probe listens to the microphone to test loadngo's on-device speech recognition.</string>
+</dict>
+</plist>
