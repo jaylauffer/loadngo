@@ -9,6 +9,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use data::archive_cas::{ArchiveCasStorage, ArchiveEntry, ArchiveManifest, ArchiveObject};
+use data::archive_cas_purge::{execute_purge, plan_archive_deletion, plan_purge, PurgePlan, Sweep};
 use data::cas::CasHash;
 use data::cli::{discover, ArgDoc, Usage};
 use loadngo_host_core::{DecodedImage, FrameDemand, HostKey, InputSnapshot, WindowDescriptor};
@@ -1493,6 +1494,15 @@ fn row_checkbox_rect(list: Rect, row_y: f32) -> Rect {
     }
 }
 
+/// A purge or archive deletion awaiting explicit confirmation: the exact plan is shown
+/// in the middle pane, and nothing is deleted until the user confirms -- see
+/// [`BrowserApp::confirm_purge`].
+#[derive(Debug, Clone)]
+struct PendingPurge {
+    title: String,
+    plan: PurgePlan,
+}
+
 /// A removal awaiting explicit confirmation. Nothing is written to disk
 /// until the user confirms -- see [`BrowserApp::confirm_removal`].
 #[derive(Debug, Clone)]
@@ -1545,6 +1555,7 @@ struct BrowserApp {
     archive_scroll: usize,
     message: Option<String>,
     pending_removal: Option<PendingRemoval>,
+    pending_purge: Option<PendingPurge>,
     /// Manifest paths checked in the explorer, scoped to the currently
     /// selected archive/manifest -- cleared on `select_archive`/`refresh`,
     /// but deliberately preserved across `navigate_to` so checking items in
@@ -1594,6 +1605,7 @@ impl BrowserApp {
             archive_scroll: 0,
             message: None,
             pending_removal: None,
+            pending_purge: None,
             checked: std::collections::BTreeSet::new(),
             pointer: Point { x: -1.0, y: -1.0 },
             signing,
@@ -1620,7 +1632,9 @@ impl BrowserApp {
         loop {
             let frame = loadngo_host_desktop::capture_frame();
             if frame.input.key_pressed(HostKey::Escape) {
-                if self.preview.take().is_some() {
+                if self.pending_purge.take().is_some() {
+                    self.message = Some("Cancelled; nothing was deleted.".to_string());
+                } else if self.preview.take().is_some() {
                     // Nothing to announce in `self.message` -- unlike a
                     // cancelled removal, closing a preview has no
                     // consequence worth a status line.
@@ -1669,6 +1683,7 @@ impl BrowserApp {
             self.selected_path = None;
             self.child_scroll = 0;
             self.pending_removal = None;
+            self.pending_purge = None;
             self.checked.clear();
             self.preview = None;
         }
@@ -1695,6 +1710,8 @@ impl BrowserApp {
                     .map(|path| catalog.initial_selection(Some(path)))
                     .unwrap_or(0);
                 self.catalog = catalog;
+                // A reloaded catalog can hold a different archive at the same index.
+                self.children_cache_key = None;
                 self.selected_archive = selected_archive;
                 self.current_prefix = None;
                 self.selected_path = None;
@@ -1874,6 +1891,79 @@ impl BrowserApp {
         self.pending_removal = Some(PendingRemoval { paths, label });
     }
 
+    /// Plans a purge of the selected archive's drive: superseded manifests and every
+    /// object only they listed. Shows the plan; deletes nothing.
+    fn request_purge(&mut self) {
+        let root = self.selected().cas_root.clone();
+        let planned = ArchiveCasStorage::new(&root)
+            .and_then(|store| plan_purge(&store, Sweep::Retired, |_| {}));
+        match planned {
+            Ok(plan) if plan.is_empty() => {
+                self.message = Some(format!(
+                    "Nothing to purge in {}: no superseded manifests, and no objects only they list.",
+                    root.display()
+                ));
+            }
+            Ok(plan) => {
+                self.preview = None;
+                self.pending_purge = Some(PendingPurge {
+                    title: format!("Purge {}", root.display()),
+                    plan,
+                });
+            }
+            Err(error) => self.message = Some(format!("Purge planning failed: {error:#}")),
+        }
+    }
+
+    /// Plans deleting the selected archive entirely: all its manifests, and every object
+    /// no other archive on the drive lists. Shows the plan; deletes nothing.
+    fn request_archive_deletion(&mut self) {
+        let root = self.selected().cas_root.clone();
+        let archive_id = self.selected().manifest.archive_id.clone();
+        let planned = ArchiveCasStorage::new(&root)
+            .and_then(|store| plan_archive_deletion(&store, &archive_id, |_| {}));
+        match planned {
+            Ok(plan) => {
+                self.preview = None;
+                self.pending_purge = Some(PendingPurge {
+                    title: format!("Delete archive {archive_id}"),
+                    plan,
+                });
+            }
+            Err(error) => {
+                self.message = Some(format!("Deletion planning failed: {error:#}"));
+            }
+        }
+    }
+
+    /// Deletes exactly the pending plan, then reloads the catalog.
+    fn confirm_purge(&mut self) {
+        let Some(pending) = self.pending_purge.take() else {
+            return;
+        };
+        let result = ArchiveCasStorage::new(&pending.plan.cas_root)
+            .and_then(|store| execute_purge(&store, &pending.plan, |_| {}));
+        match result {
+            Ok(outcome) => {
+                self.refresh();
+                self.message = Some(format!(
+                    "{}: deleted {} files ({} objects), freed {}.",
+                    pending.title,
+                    outcome.files_removed,
+                    outcome.objects_removed,
+                    format_bytes(outcome.bytes_freed)
+                ));
+            }
+            Err(error) => {
+                self.refresh();
+                self.message = Some(format!(
+                    "{} stopped: {error:#}. Anything already deleted stays deleted; plan again to finish.",
+                    pending.title
+                ));
+            }
+        }
+    }
+
     /// Writes the superseding manifest and delete-log sidecar, then reloads
     /// the catalog onto the new manifest. The old manifest, its signature,
     /// and every blob object are left untouched -- re-signing, history
@@ -1908,6 +1998,8 @@ impl BrowserApp {
                 Ok(catalog) => {
                     self.selected_archive = catalog.initial_selection(Some(&manifest_path));
                     self.catalog = catalog;
+                    // A reloaded catalog can hold a different archive at the same index.
+                    self.children_cache_key = None;
                     self.current_prefix = None;
                     self.selected_path = None;
                     self.child_scroll = 0;
@@ -2004,6 +2096,24 @@ impl BrowserApp {
             // has no meaning of its own while the explorer panel is
             // replaced by the preview) rather than adding a second
             // always-reserved layout region just for this.
+            return;
+        }
+        if self.pending_purge.is_some() {
+            if input.key_pressed(HostKey::Enter) || input.key_pressed(HostKey::Y) {
+                self.confirm_purge();
+                return;
+            }
+            let layout = AppLayout::new(width, height);
+            if input.mouse_pressed {
+                if layout.action_confirm.contains(self.pointer) {
+                    self.confirm_purge();
+                } else if layout.action_cancel.contains(self.pointer) {
+                    self.pending_purge = None;
+                    self.message = Some("Cancelled; nothing was deleted.".to_string());
+                }
+            }
+            // Every other input is ignored while a purge is pending, so a stray click
+            // can't change what it would delete.
             return;
         }
         if self.pending_removal.is_some() {
@@ -2153,6 +2263,14 @@ impl BrowserApp {
         }
         if layout.preview_button.contains(pointer) && self.preview_available() {
             self.open_preview();
+            return;
+        }
+        if layout.delete_archive_button.contains(pointer) {
+            self.request_archive_deletion();
+            return;
+        }
+        if layout.purge_button.contains(pointer) {
+            self.request_purge();
             return;
         }
         if layout.explorer_list.contains(pointer) {
@@ -2319,9 +2437,10 @@ impl BrowserApp {
         );
 
         self.paint_archives(scene, &layout);
-        match &self.preview {
-            Some(preview) => self.paint_preview_pane(scene, &layout, preview),
-            None => self.paint_explorer(scene, &layout, children, scroll, visible_rows),
+        match (&self.pending_purge, &self.preview) {
+            (Some(pending), _) => paint_purge_pane(scene, &layout, pending),
+            (None, Some(preview)) => self.paint_preview_pane(scene, &layout, preview),
+            (None, None) => self.paint_explorer(scene, &layout, children, scroll, visible_rows),
         }
         self.paint_inspector(scene, &layout, record, children);
 
@@ -3057,6 +3176,54 @@ impl BrowserApp {
     }
 
     fn paint_actions(&self, scene: &mut Vec<ui_core::PaintOp>, layout: &AppLayout) {
+        if let Some(pending) = &self.pending_purge {
+            paint_text(
+                scene,
+                &format!(
+                    "Delete {} files, {}? This cannot be undone.",
+                    pending.plan.file_count(),
+                    format_bytes(pending.plan.bytes())
+                ),
+                Rect {
+                    x: layout.action_button.x,
+                    y: layout.action_button.y - 20.0,
+                    width: layout.action_button.width,
+                    height: 18.0,
+                },
+                CAPTION_FONT,
+                DANGER,
+                HorizontalAlign::Left,
+            );
+            paint_button(
+                scene,
+                layout.action_confirm,
+                "Confirm (Enter)",
+                true,
+                layout.action_confirm.contains(self.pointer),
+            );
+            paint_button(
+                scene,
+                layout.action_cancel,
+                "Cancel (Esc)",
+                true,
+                layout.action_cancel.contains(self.pointer),
+            );
+            return;
+        }
+        paint_button(
+            scene,
+            layout.delete_archive_button,
+            "Delete archive",
+            true,
+            layout.delete_archive_button.contains(self.pointer),
+        );
+        paint_button(
+            scene,
+            layout.purge_button,
+            "Purge drive",
+            true,
+            layout.purge_button.contains(self.pointer),
+        );
         if let Some(pending) = &self.pending_removal {
             paint_text(
                 scene,
@@ -3137,6 +3304,90 @@ impl BrowserApp {
     }
 }
 
+/// Most lines of a pending purge's file list shown in the middle pane.
+const PURGE_LIST_LINES: usize = 60;
+
+/// Replaces the path explorer with everything a pending purge deletes.
+fn paint_purge_pane(scene: &mut Vec<ui_core::PaintOp>, layout: &AppLayout, pending: &PendingPurge) {
+    paint_panel(scene, layout.explorer, PANEL_BACKGROUND);
+    paint_text(
+        scene,
+        &pending.title,
+        layout.explorer_title,
+        SECTION_FONT,
+        DANGER,
+        HorizontalAlign::Left,
+    );
+    let plan = &pending.plan;
+    paint_text(
+        scene,
+        &format!(
+            "Frees {} in {} files. Nothing is deleted until you press Confirm.",
+            format_bytes(plan.bytes()),
+            plan.file_count()
+        ),
+        layout.breadcrumb,
+        CAPTION_FONT,
+        MUTED,
+        HorizontalAlign::Left,
+    );
+    paint_multiline(
+        scene,
+        &purge_plan_lines(plan).join("\n"),
+        layout.explorer_list,
+        CAPTION_FONT,
+        TEXT,
+    );
+}
+
+/// The plan as lines: manifests with their files, then objects largest first; at most
+/// [`PURGE_LIST_LINES`], with a count of the rest.
+fn purge_plan_lines(plan: &PurgePlan) -> Vec<String> {
+    let mut lines = Vec::new();
+    if !plan.manifests.is_empty() {
+        lines.push(format!("Manifests ({}):", plan.manifests.len()));
+        for manifest in &plan.manifests {
+            lines.push(format!(
+                "  {} {} ({})",
+                manifest.archive_id,
+                &manifest.root.to_hex()[..12],
+                if manifest.superseded_by.is_some() {
+                    "superseded"
+                } else {
+                    "archive deleted"
+                }
+            ));
+            for file in &manifest.files {
+                let name = file.file_name().map_or_else(
+                    || file.display().to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                );
+                lines.push(format!("      {name}"));
+            }
+        }
+    }
+    if !plan.objects.is_empty() {
+        lines.push(format!(
+            "Objects ({}, {}):",
+            plan.objects.len(),
+            format_bytes(plan.object_bytes())
+        ));
+        for object in &plan.objects {
+            lines.push(format!(
+                "  {:>10}  {}",
+                format_bytes(object.size),
+                object.origin
+            ));
+        }
+    }
+    if lines.len() > PURGE_LIST_LINES {
+        let more = lines.len() - (PURGE_LIST_LINES - 1);
+        lines.truncate(PURGE_LIST_LINES - 1);
+        lines.push(format!("... and {more} more lines"));
+    }
+    lines
+}
+
 fn archive_status(summary: &ArchiveSummary) -> (&'static str, Color) {
     if summary.unreadable > 0 {
         ("Incomplete: unreadable source entries", DANGER)
@@ -3167,6 +3418,8 @@ struct AppLayout {
     action_cancel: Rect,
     sign_button: Rect,
     preview_button: Rect,
+    delete_archive_button: Rect,
+    purge_button: Rect,
 }
 
 impl AppLayout {
@@ -3256,7 +3509,19 @@ impl AppLayout {
             x: inspector.x + PANEL_INSET,
             y: inspector.y + 61.0,
             width: inspector.width - PANEL_INSET * 2.0,
-            height: (inspector.height - 75.0 - (ACTION_BAND_HEIGHT + PANEL_GAP) * 3.0).max(0.0),
+            height: (inspector.height - 75.0 - (ACTION_BAND_HEIGHT + PANEL_GAP) * 4.0).max(0.0),
+        };
+        let purge_band_y =
+            inspector.bottom() - PANEL_INSET - ACTION_BAND_HEIGHT * 4.0 - PANEL_GAP * 3.0;
+        let delete_archive_button = Rect {
+            x: inspector.x + PANEL_INSET,
+            y: purge_band_y,
+            width: (inspector.width - PANEL_INSET * 2.0 - 8.0) / 2.0,
+            height: ACTION_BAND_HEIGHT,
+        };
+        let purge_button = Rect {
+            x: delete_archive_button.right() + 8.0,
+            ..delete_archive_button
         };
         let preview_button = Rect {
             x: inspector.x + PANEL_INSET,
@@ -3307,6 +3572,8 @@ impl AppLayout {
             action_cancel,
             sign_button,
             preview_button,
+            delete_archive_button,
+            purge_button,
         }
     }
 

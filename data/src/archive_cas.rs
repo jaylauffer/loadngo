@@ -824,6 +824,17 @@ impl ArchiveCasStorage {
     }
 
     pub fn read_manifest(&self, path: impl AsRef<Path>) -> Result<ArchiveManifest> {
+        self.read_manifest_and_root(path)
+            .map(|(manifest, _)| manifest)
+    }
+
+    /// [`Self::read_manifest`] plus the manifest's root hash. A manifest on
+    /// disk is its own canonical bytes, so the root is the hash of the file as
+    /// read, without serializing the manifest a second time.
+    pub fn read_manifest_and_root(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<(ArchiveManifest, CasHash)> {
         let path = path.as_ref();
         let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
         let manifest: ArchiveManifest = serde_json::from_slice(&bytes)
@@ -832,7 +843,7 @@ impl ArchiveCasStorage {
         if canonical != bytes {
             bail!("archive manifest is not canonical: {}", path.display());
         }
-        Ok(manifest)
+        Ok((manifest, CasHash::digest(&bytes)))
     }
 
     /// Writes a delete-log sidecar next to the manifest it describes. Refuses
@@ -972,6 +983,43 @@ impl ArchiveCasStorage {
         }
         objects.sort_by_key(|(hash, _)| *hash);
         Ok(objects)
+    }
+
+    /// The hash of every blob under `objects/`, from file names alone. No
+    /// per-object `stat`: on a spinning or USB drive that stat is what makes a
+    /// full walk take hours (about 90 objects a second on a 588k-object root),
+    /// while names come back a directory at a time. `on_progress(count)` is
+    /// called once per shard directory.
+    pub fn object_hashes_with_progress(
+        &self,
+        mut on_progress: impl FnMut(usize),
+    ) -> Result<Vec<CasHash>> {
+        let mut hashes = Vec::new();
+        for shard in fs::read_dir(&self.objects)
+            .with_context(|| format!("failed to enumerate {}", self.objects.display()))?
+        {
+            let shard = shard?;
+            if !shard.file_type()?.is_dir() {
+                continue;
+            }
+            for blob in fs::read_dir(shard.path())
+                .with_context(|| format!("failed to enumerate {}", shard.path().display()))?
+            {
+                let name = blob?.file_name();
+                let Some(stem) = name.to_str().and_then(|name| name.strip_suffix(".blob")) else {
+                    continue;
+                };
+                let bytes = hex::decode(stem)
+                    .with_context(|| format!("non-hex object file name: {stem}.blob"))?;
+                hashes.push(
+                    CasHash::from_slice(&bytes)
+                        .with_context(|| format!("invalid object hash: {stem}.blob"))?,
+                );
+            }
+            on_progress(hashes.len());
+        }
+        hashes.sort();
+        Ok(hashes)
     }
 
     /// Removes one manifest file and, if present, its `.delete-log.json`

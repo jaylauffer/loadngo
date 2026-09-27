@@ -73,6 +73,31 @@ For a proof that manifest-referenced blobs are present and hash correctly, use
 `archive_cas_verify`. For an owner-authorized selected-file recovery, use
 `archive_cas_restore`; the browser does not perform either operation.
 
+## Purge drive and Delete archive
+
+Removing a file writes a new manifest; the old manifest stays on disk and still lists
+the file, so its stored bytes stay too. Two buttons in the inspector free that space
+(added 2026-09-27; both use `data::archive_cas_purge`, as does the
+`archive_cas_purge` command):
+
+- **Purge drive**: for the drive the selected archive is on, every superseded manifest
+  (with its signature and delete/add log) and every object only those manifests
+  listed: the stored copies of files you removed, and the old manifests' own bytes.
+- **Delete archive**: the selected archive entirely: all its manifests, and every
+  object no other archive on the drive lists. Objects another archive shares stay.
+
+Either one first computes the exact list and shows it in the middle pane: each
+manifest file, each object with its size and what it was, and the total freed. Nothing
+is deleted until you press **Confirm** (Enter); **Cancel** (Esc) deletes nothing. If
+the drive's manifests change between the list and Confirm, nothing is deleted. The
+plan checks only objects the retired manifests listed, one lookup each, so it takes
+seconds even on a spinning drive; `archive_cas_purge --full` also finds strays no
+manifest ever listed, by listing every object (about 90 objects a second on the USB
+staging drive).
+
+Planning and deleting run on the UI thread, like removal and signing: the window does
+not respond until they finish (seconds for a few hundred files).
+
 ## Preview
 
 Selecting a regular file shows a "Preview (V)" action in the inspector panel. It reads that one file's blob
