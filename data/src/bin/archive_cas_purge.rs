@@ -5,7 +5,9 @@
 
 use anyhow::{bail, Result};
 use data::archive_cas::ArchiveCasStorage;
-use data::archive_cas_purge::{execute_purge, plan_purge, PurgePlan, PurgeProgress, Sweep};
+use data::archive_cas_purge::{
+    execute_purge, plan_archive_deletion, plan_purge, PurgePlan, PurgeProgress, Sweep,
+};
 use data::cli::{ArgDoc, Usage};
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -21,12 +23,16 @@ fn run() -> Result<()> {
     let mut cas_root = None;
     let mut execute = None;
     let mut sweep = Sweep::Retired;
+    let mut delete_archives = Vec::new();
+    let mut yes = false;
     let mut args = data::cli::read_args(&usage(), true).into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--cas-root" => cas_root = args.next().map(PathBuf::from),
             "--execute" => execute = args.next(),
             "--full" => sweep = Sweep::Full,
+            "--delete-archive" => delete_archives.extend(args.next()),
+            "--yes" => yes = true,
             other => bail!("unknown argument: {other}\n{}", usage().hint()),
         }
     }
@@ -34,6 +40,9 @@ fn run() -> Result<()> {
         bail!("missing --cas-root <archive-directory>\n{}", usage().hint());
     };
     let store = ArchiveCasStorage::new(&cas_root)?;
+    if !delete_archives.is_empty() {
+        return delete(&store, &delete_archives, yes);
+    }
     let plan = plan_purge(&store, sweep, show)?;
     eprintln!();
     print_plan(&plan);
@@ -61,6 +70,46 @@ fn run() -> Result<()> {
             "plan {id} is not the current plan ({}); nothing deleted. Review the list above and run again with its id.",
             plan.id()
         ),
+    }
+    Ok(())
+}
+
+/// Deletes each archive in turn, keeping its delete and add logs (the record of what was
+/// removed and added). Prints each plan; deletes only with `--yes`.
+fn delete(store: &ArchiveCasStorage, archives: &[String], yes: bool) -> Result<()> {
+    let mut freed = 0;
+    for archive in archives {
+        let mut plan = plan_archive_deletion(store, archive, show)?;
+        for manifest in &mut plan.manifests {
+            manifest.files.retain(|file| {
+                let name = file.to_string_lossy();
+                !(name.ends_with(".delete-log.json") || name.ends_with(".add-log.json"))
+            });
+        }
+        plan.manifest_file_bytes = plan
+            .manifests
+            .iter()
+            .flat_map(|m| &m.files)
+            .map(|f| std::fs::metadata(f).map_or(0, |m| m.len()))
+            .sum();
+        eprintln!();
+        print_plan(&plan);
+        if yes {
+            let outcome = execute_purge(store, &plan, show)?;
+            eprintln!();
+            println!(
+                "Deleted archive {archive}: {} files ({} objects), {} freed.\n",
+                outcome.files_removed,
+                outcome.objects_removed,
+                human(outcome.bytes_freed)
+            );
+            freed += outcome.bytes_freed;
+        }
+    }
+    if yes {
+        println!("Total freed: {}", human(freed));
+    } else {
+        println!("\nNothing deleted. Add --yes to delete these archives (their delete/add logs are kept).");
     }
     Ok(())
 }
@@ -140,6 +189,12 @@ fn usage() -> Usage {
             "--full",
             "also list every object to find strays no manifest ever listed (slow on a spinning drive)",
         ),
+        ArgDoc::repeated(
+            "--delete-archive",
+            "<archive-id>",
+            "delete this archive entirely (all versions; objects other archives list stay; delete/add logs kept)",
+        ),
+        ArgDoc::switch("--yes", "with --delete-archive: actually delete (without it, prints the lists)"),
         ArgDoc::optional(
             "--execute",
             "<plan-id>",

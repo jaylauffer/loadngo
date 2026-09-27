@@ -273,6 +273,10 @@ fn plan(
             .copied()
             .collect::<BTreeSet<_>>()
             .into_iter()
+            // Drop what the remaining archives still list before touching the disk: a
+            // retired archive can list hundreds of thousands of objects another archive
+            // shares, and each lookup on a spinning drive costs ~10 ms.
+            .filter(|hash| !referenced.contains(hash))
             .filter(|hash| store.object_path(*hash).exists())
             .collect(),
     };
