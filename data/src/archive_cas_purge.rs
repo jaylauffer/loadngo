@@ -238,9 +238,16 @@ fn plan(
                     },
                 );
                 for (file, hash) in files() {
-                    only_in_retired
-                        .entry(hash)
-                        .or_insert_with(|| format!("{}:{file}", manifest.archive_id));
+                    // A file of an archive being deleted was not removed by anyone; that
+                    // label wins over "removed file" from one of its superseded versions.
+                    let label = format!("{}:{file}", manifest.archive_id);
+                    if superseded_by.is_some() {
+                        only_in_retired
+                            .entry(hash)
+                            .or_insert_with(|| format!("removed file {label}"));
+                    } else {
+                        only_in_retired.insert(hash, format!("file {label}"));
+                    }
                 }
                 retired.push(RetiredManifest {
                     archive_id: manifest.archive_id.clone(),
@@ -276,8 +283,8 @@ fn plan(
         }
         let origin = if let Some(what) = retired_roots.get(&hash) {
             what.clone()
-        } else if let Some(file) = only_in_retired.get(&hash) {
-            format!("removed file {file}")
+        } else if let Some(what) = only_in_retired.get(&hash) {
+            what.clone()
         } else {
             "not listed by any manifest".to_string()
         };
@@ -513,7 +520,7 @@ mod tests {
         assert!(plan
             .objects
             .iter()
-            .any(|o| o.origin == "removed file docs:keep.txt"));
+            .any(|o| o.origin == "file docs:keep.txt"));
         assert!(!plan.objects.iter().any(|o| o.origin.contains("shared.txt")));
         execute_purge(&store, &plan, |_| {}).unwrap();
         assert!(!v1_path.exists());

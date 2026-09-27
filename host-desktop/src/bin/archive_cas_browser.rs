@@ -2117,11 +2117,11 @@ impl BrowserApp {
                 self.confirm_purge();
                 return;
             }
-            let layout = AppLayout::new(width, height);
+            let dialog = DialogLayout::new(width, height);
             if input.mouse_pressed {
-                if layout.action_confirm.contains(self.pointer) {
+                if dialog.confirm.contains(self.pointer) {
                     self.confirm_purge();
-                } else if layout.action_cancel.contains(self.pointer) {
+                } else if dialog.cancel.contains(self.pointer) {
                     self.pending_purge = None;
                     self.message = Some("Cancelled; nothing was deleted.".to_string());
                 }
@@ -2451,10 +2451,9 @@ impl BrowserApp {
         );
 
         self.paint_archives(scene, &layout);
-        match (&self.pending_purge, &self.preview) {
-            (Some(pending), _) => paint_purge_pane(scene, &layout, pending),
-            (None, Some(preview)) => self.paint_preview_pane(scene, &layout, preview),
-            (None, None) => self.paint_explorer(scene, &layout, children, scroll, visible_rows),
+        match &self.preview {
+            Some(preview) => self.paint_preview_pane(scene, &layout, preview),
+            None => self.paint_explorer(scene, &layout, children, scroll, visible_rows),
         }
         self.paint_inspector(scene, &layout, record, children);
 
@@ -2476,6 +2475,9 @@ impl BrowserApp {
                 CAPTION_FONT,
                 CAUTION,
             );
+        }
+        if let Some(pending) = &self.pending_purge {
+            paint_purge_dialog(scene, width, height, self.pointer, pending);
         }
     }
 
@@ -2903,10 +2905,14 @@ impl BrowserApp {
     ) {
         paint_panel(scene, layout.inspector, PANEL_BACKGROUND);
         let summary = &record.summary;
+        // The archive's own name heads the inspector; Delete archive sits to its right.
         paint_text(
             scene,
-            "Archive visualizer",
-            layout.inspector_title,
+            &record.manifest.archive_id,
+            Rect {
+                width: (layout.delete_archive_button.x - 8.0 - layout.inspector_title.x).max(0.0),
+                ..layout.inspector_title
+            },
             SECTION_FONT,
             TEXT,
             HorizontalAlign::Left,
@@ -3190,51 +3196,16 @@ impl BrowserApp {
     }
 
     fn paint_actions(&self, scene: &mut Vec<ui_core::PaintOp>, layout: &AppLayout) {
-        if let Some(pending) = &self.pending_purge {
-            paint_text(
-                scene,
-                &format!(
-                    "Delete {} files, {}? This cannot be undone.",
-                    pending.plan.file_count(),
-                    format_bytes(pending.plan.bytes())
-                ),
-                Rect {
-                    x: layout.action_button.x,
-                    y: layout.action_button.y - 20.0,
-                    width: layout.action_button.width,
-                    height: 18.0,
-                },
-                CAPTION_FONT,
-                DANGER,
-                HorizontalAlign::Left,
-            );
-            paint_button(
-                scene,
-                layout.action_confirm,
-                "Confirm (Enter)",
-                true,
-                layout.action_confirm.contains(self.pointer),
-            );
-            paint_button(
-                scene,
-                layout.action_cancel,
-                "Cancel (Esc)",
-                true,
-                layout.action_cancel.contains(self.pointer),
-            );
-            return;
-        }
-        paint_button(
+        paint_danger_button(
             scene,
             layout.delete_archive_button,
-            "Delete archive",
-            true,
+            "Delete archive…",
             layout.delete_archive_button.contains(self.pointer),
         );
         paint_button(
             scene,
             layout.purge_button,
-            "Purge drive",
+            "Purge drive…",
             true,
             layout.purge_button.contains(self.pointer),
         );
@@ -3321,36 +3292,129 @@ impl BrowserApp {
 /// Most lines of a pending purge's file list shown in the middle pane.
 const PURGE_LIST_LINES: usize = 60;
 
-/// Replaces the path explorer with everything a pending purge deletes.
-fn paint_purge_pane(scene: &mut Vec<ui_core::PaintOp>, layout: &AppLayout, pending: &PendingPurge) {
-    paint_panel(scene, layout.explorer, PANEL_BACKGROUND);
+/// The confirmation dialog for a purge or archive deletion, centred over the window.
+#[derive(Debug, Clone, Copy)]
+struct DialogLayout {
+    panel: Rect,
+    title: Rect,
+    summary: Rect,
+    body: Rect,
+    confirm: Rect,
+    cancel: Rect,
+}
+
+impl DialogLayout {
+    fn new(width: f32, height: f32) -> Self {
+        let panel_width = (width - 80.0).clamp(320.0, 820.0);
+        let panel_height = (height - 120.0).clamp(240.0, 620.0);
+        let panel = Rect {
+            x: ((width - panel_width) / 2.0).max(0.0),
+            y: ((height - panel_height) / 2.0).max(0.0),
+            width: panel_width,
+            height: panel_height,
+        };
+        let inner_x = panel.x + PANEL_INSET;
+        let inner_width = panel.width - PANEL_INSET * 2.0;
+        let button_width = 180.0;
+        let buttons_y = panel.bottom() - PANEL_INSET - 40.0;
+        let cancel = Rect {
+            x: panel.right() - PANEL_INSET - button_width,
+            y: buttons_y,
+            width: button_width,
+            height: 40.0,
+        };
+        Self {
+            panel,
+            title: Rect {
+                x: inner_x,
+                y: panel.y + PANEL_INSET,
+                width: inner_width,
+                height: 26.0,
+            },
+            summary: Rect {
+                x: inner_x,
+                y: panel.y + PANEL_INSET + 30.0,
+                width: inner_width,
+                height: 20.0,
+            },
+            body: Rect {
+                x: inner_x,
+                y: panel.y + PANEL_INSET + 58.0,
+                width: inner_width,
+                height: (buttons_y - 12.0 - (panel.y + PANEL_INSET + 58.0)).max(0.0),
+            },
+            confirm: Rect {
+                x: cancel.x - 12.0 - button_width,
+                ..cancel
+            },
+            cancel,
+        }
+    }
+}
+
+/// Dims the window and shows everything a pending purge or deletion removes, with
+/// Delete and Cancel. Nothing is deleted until Delete.
+fn paint_purge_dialog(
+    scene: &mut Vec<ui_core::PaintOp>,
+    width: f32,
+    height: f32,
+    pointer: Point,
+    pending: &PendingPurge,
+) {
+    let dialog = DialogLayout::new(width, height);
+    scene.push(ui_core::PaintOp::FillRect {
+        rect: Rect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        },
+        color: Color::rgba(0x05, 0x08, 0x0d, 0xc8),
+    });
+    paint_panel(scene, dialog.panel, Color::rgba(0x1c, 0x24, 0x33, 0xff));
+    scene.push(ui_core::PaintOp::StrokeRect {
+        rect: dialog.panel,
+        color: DANGER,
+    });
     paint_text(
         scene,
-        &pending.title,
-        layout.explorer_title,
+        &format!("{}?", pending.title),
+        dialog.title,
         SECTION_FONT,
         DANGER,
         HorizontalAlign::Left,
     );
-    let plan = &pending.plan;
     paint_text(
         scene,
         &format!(
-            "Frees {} in {} files. Nothing is deleted until you press Confirm.",
-            format_bytes(plan.bytes()),
-            plan.file_count()
+            "Deletes {} files and frees {}. This cannot be undone.",
+            pending.plan.file_count(),
+            format_bytes(pending.plan.bytes())
         ),
-        layout.breadcrumb,
+        dialog.summary,
         CAPTION_FONT,
-        MUTED,
+        TEXT,
         HorizontalAlign::Left,
     );
     paint_multiline(
         scene,
-        &purge_plan_lines(plan).join("\n"),
-        layout.explorer_list,
+        &purge_plan_lines(&pending.plan).join("\n"),
+        dialog.body,
         CAPTION_FONT,
-        TEXT,
+        MUTED,
+    );
+    paint_danger_button(
+        scene,
+        dialog.confirm,
+        "Delete (Enter)",
+        dialog.confirm.contains(pointer),
+    );
+    paint_button(
+        scene,
+        dialog.cancel,
+        "Cancel (Esc)",
+        true,
+        dialog.cancel.contains(pointer),
     );
 }
 
@@ -3527,15 +3591,19 @@ impl AppLayout {
         };
         let purge_band_y =
             inspector.bottom() - PANEL_INSET - ACTION_BAND_HEIGHT * 4.0 - PANEL_GAP * 3.0;
+        // Deleting the whole archive belongs to the archive, not to the selection: it
+        // sits at the right of the inspector's header, opposite the archive's title.
         let delete_archive_button = Rect {
-            x: inspector.x + PANEL_INSET,
-            y: purge_band_y,
-            width: (inspector.width - PANEL_INSET * 2.0 - 8.0) / 2.0,
-            height: ACTION_BAND_HEIGHT,
+            x: inspector.right() - PANEL_INSET - 136.0,
+            y: inspector_title.y - 2.0,
+            width: 136.0,
+            height: 26.0,
         };
         let purge_button = Rect {
-            x: delete_archive_button.right() + 8.0,
-            ..delete_archive_button
+            x: inspector.x + PANEL_INSET,
+            y: purge_band_y,
+            width: inspector.width - PANEL_INSET * 2.0,
+            height: ACTION_BAND_HEIGHT,
         };
         let preview_button = Rect {
             x: inspector.x + PANEL_INSET,
@@ -3797,6 +3865,30 @@ fn paint_button(
         rect,
         CAPTION_FONT,
         if enabled { TEXT } else { MUTED },
+        HorizontalAlign::Center,
+    );
+}
+
+/// A button for an action that deletes: red outline and text, filled red on hover.
+fn paint_danger_button(scene: &mut Vec<ui_core::PaintOp>, rect: Rect, label: &str, hovered: bool) {
+    scene.push(ui_core::PaintOp::FillRect {
+        rect,
+        color: if hovered {
+            Color::rgba(0x8a, 0x2e, 0x2e, 0xff)
+        } else {
+            Color::rgba(0x3a, 0x1c, 0x22, 0xff)
+        },
+    });
+    scene.push(ui_core::PaintOp::StrokeRect {
+        rect,
+        color: DANGER,
+    });
+    paint_text(
+        scene,
+        label,
+        rect,
+        CAPTION_FONT,
+        if hovered { TEXT } else { DANGER },
         HorizontalAlign::Center,
     );
 }

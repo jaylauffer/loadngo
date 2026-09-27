@@ -76,7 +76,9 @@ For a proof that manifest-referenced blobs are present and hash correctly, use
 ## Purge drive and Delete archive
 
 Removing a file writes a new manifest; the old manifest stays on disk and still lists
-the file, so its stored bytes stay too. Two buttons in the inspector free that space
+the file, so its stored bytes stay too. Two buttons free that space: **Delete archive…** at the top right of the inspector,
+opposite the selected archive's name, and **Purge drive…** among the inspector's
+actions. Either opens a confirmation dialog over the window; see below
 (added 2026-09-27; both use `data::archive_cas_purge`, as does the
 `archive_cas_purge` command):
 
@@ -86,9 +88,9 @@ the file, so its stored bytes stay too. Two buttons in the inspector free that s
 - **Delete archive**: the selected archive entirely: all its manifests, and every
   object no other archive on the drive lists. Objects another archive shares stay.
 
-Either one first computes the exact list and shows it in the middle pane: each
+Either one first computes the exact list and shows it in a confirmation dialog: each
 manifest file, each object with its size and what it was, and the total freed. Nothing
-is deleted until you press **Confirm** (Enter); **Cancel** (Esc) deletes nothing. If
+is deleted until you press **Delete** (Enter); **Cancel** (Esc) deletes nothing. If
 the drive's manifests change between the list and Confirm, nothing is deleted. The
 plan checks only objects the retired manifests listed, one lookup each, so it takes
 seconds even on a spinning drive; `archive_cas_purge --full` also finds strays no
