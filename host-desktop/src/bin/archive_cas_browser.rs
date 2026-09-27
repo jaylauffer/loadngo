@@ -1126,7 +1126,21 @@ impl ArchiveCatalog {
             paths.sort();
 
             for path in paths {
-                if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_default();
+                // Signatures and delete/add/merge logs sit beside the manifests.
+                if !name.ends_with(".json")
+                    || [
+                        ".signature.json",
+                        ".delete-log.json",
+                        ".add-log.json",
+                        ".merge-log.json",
+                    ]
+                    .iter()
+                    .any(|sidecar| name.ends_with(sidecar))
+                {
                     continue;
                 }
                 match ArchiveRecord::read(&path, cas_root.clone()) {

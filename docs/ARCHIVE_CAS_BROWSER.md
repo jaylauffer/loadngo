@@ -98,6 +98,21 @@ staging drive).
 Planning and deleting run on the UI thread, like removal and signing: the window does
 not respond until they finish (seconds for a few hundred files).
 
+## One archive per drive
+
+`archive_cas_merge` combines archives in one root into a single archive, each under its
+own folder, by writing one new manifest and a `.merge-log.json` naming every source and
+its root; no data is copied and the sources are unchanged. On 2026-09-28 the seven
+archives on Loadngo Archive Staging became `loadngo-archive` (root `fa7c12d4...`,
+759,861 files: `Untitled/<folder>/` for the six Untitled archives, `Zhoenus II/` for
+`zhoenus-ii-20260915`), in 17.5 s. Its object set equals the sources' current manifests'
+exactly; the only objects outside it are three files removed from `untitled-documents`
+on 09-27/28, held by that archive's superseded versions. Retiring the sources with
+**Delete archive** then frees only their manifests.
+
+The browser skips signatures and delete/add/merge logs when listing manifests (it used
+to try to read them as manifests and report them as unreadable).
+
 ## Preview
 
 Selecting a regular file shows a "Preview (V)" action in the inspector panel. It reads that one file's blob

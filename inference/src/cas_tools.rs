@@ -18,9 +18,13 @@ use data::archive_view::{list_archives, ArchiveListing, ArchiveView, PublicKey};
 use serde_json::{json, Value};
 
 use crate::tools::{
-    as_text, glob_match, numbered_lines, Tool, MAX_ENTRIES, MAX_GREP_FILE_BYTES, MAX_MATCHES,
-    MAX_SCAN_BYTES,
+    as_text, glob_match, numbered_lines, Tool, MAX_GREP_FILE_BYTES, MAX_MATCHES, MAX_SCAN_BYTES,
 };
+
+/// Most entries one `cas_list` shows. A model reads every token of a result before it
+/// can answer, slowly on the CPU (about 0.4 s a token at 6,000 tokens of context), so a
+/// listing stops here and summarises the rest.
+const LIST_ENTRIES: usize = 50;
 
 fn str_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     args.get(key)
@@ -252,7 +256,7 @@ impl Tool for CasList {
         let children = view.list(path).map_err(|e| format!("{e:#}"))?;
         // Kinds and sizes only: the root above identifies every entry, and per-entry
         // hashes would triple the prompt tokens a listing costs the model.
-        for child in children.iter().take(MAX_ENTRIES) {
+        for child in children.iter().take(LIST_ENTRIES) {
             match child.object {
                 Some(o) => {
                     let _ = writeln!(out, "{} {:>10}  {}", child.kind, o.size, child.name);
@@ -262,11 +266,15 @@ impl Tool for CasList {
                 }
             }
         }
-        if children.len() > MAX_ENTRIES {
+        if children.len() > LIST_ENTRIES {
+            let rest = &children[LIST_ENTRIES..];
+            let files = rest.iter().filter(|c| c.object.is_some()).count();
+            let bytes: u64 = rest.iter().filter_map(|c| c.object).map(|o| o.size).sum();
             let _ = writeln!(
                 out,
-                "[{} more entries not shown]",
-                children.len() - MAX_ENTRIES
+                "[{} more: {files} files ({bytes} bytes), {} other; use cas_find with a pattern to see them]",
+                rest.len(),
+                rest.len() - files
             );
         }
         Ok(out)
@@ -521,6 +529,32 @@ mod tests {
         assert!(names.iter().all(|n| n.starts_with("docs@")), "{names:?}");
         assert!(archives.view("docs").is_err(), "ambiguous without a drive");
         assert!(archives.view(&names[0]).is_ok());
+    }
+
+    #[test]
+    fn a_long_listing_shows_fifty_entries_and_summarises_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("cas");
+        let store = ArchiveCasStorage::new(&root).unwrap();
+        let entries = (0..80)
+            .map(|i| file(&store, &format!("f{i:02}.txt"), format!("{i}").as_bytes()))
+            .collect();
+        store
+            .write_manifest(&ArchiveManifest::new("many", "Many", 1, entries).unwrap())
+            .unwrap();
+        let mut archives = Archives::new(vec![root], None);
+        archives.discover = no_discovery;
+        let listed = toolbox(archives)
+            .call("cas_list", r#"{"archive": "many", "path": ""}"#)
+            .unwrap();
+        assert!(
+            listed.contains("f49.txt") && !listed.contains("f50.txt"),
+            "{listed}"
+        );
+        assert!(
+            listed.contains("[30 more: 30 files (60 bytes), 0 other"),
+            "{listed}"
+        );
     }
 
     #[test]

@@ -17,6 +17,7 @@ pub const ARCHIVE_MANIFEST_FORMAT_V1: &str = "loadngo-archive-manifest-v1";
 pub const ARCHIVE_MANIFEST_FORMAT_V2: &str = "loadngo-archive-manifest-v2";
 pub const ARCHIVE_DELETE_LOG_FORMAT_V1: &str = "loadngo-archive-delete-log-v1";
 pub const ARCHIVE_ADD_LOG_FORMAT_V1: &str = "loadngo-archive-add-log-v1";
+pub const ARCHIVE_MERGE_LOG_FORMAT_V1: &str = "loadngo-archive-merge-log-v1";
 pub const DEFAULT_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
 /// A record of a manual content removal: which paths were dropped from a
@@ -51,6 +52,29 @@ pub struct ArchiveAddLog {
     pub actor: String,
     pub reason: String,
     pub added_paths: Vec<String>,
+}
+
+/// Why a merged manifest exists: which archives it combines, each under which folder.
+/// Written beside the merged manifest as `{stem}.merge-log.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchiveMergeLog {
+    pub format: String,
+    pub archive_id: String,
+    pub merged_manifest_root: CasHash,
+    pub merged_at_unix_secs: u64,
+    pub actor: String,
+    pub reason: String,
+    pub sources: Vec<ArchiveMergeSource>,
+}
+
+/// One archive a merged manifest contains.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchiveMergeSource {
+    pub archive_id: String,
+    pub source_label: String,
+    pub manifest_root: CasHash,
+    /// The folder its entries sit under in the merged manifest.
+    pub under: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,6 +143,16 @@ impl ArchiveEntry {
             | Self::Excluded { path, .. } => path,
         }
     }
+
+    fn path_mut(&mut self) -> &mut String {
+        match self {
+            Self::Directory { path, .. }
+            | Self::File { path, .. }
+            | Self::Symlink { path, .. }
+            | Self::Unreadable { path, .. }
+            | Self::Excluded { path, .. } => path,
+        }
+    }
 }
 
 impl ArchiveManifest {
@@ -145,6 +179,59 @@ impl ArchiveManifest {
             supersedes_archive_root: None,
             entries,
         })
+    }
+
+    /// One manifest holding every entry of `sources`, each source's entries under its
+    /// folder (`under`, a relative path such as `Untitled/Documents`), with directory
+    /// entries for those folders. Objects are referenced as they are; nothing is copied,
+    /// so the sources must live in the same CAS root as the merged manifest.
+    ///
+    /// # Errors
+    /// Invalid id or label, a folder that is not a clean relative path, two sources
+    /// under the same folder, or a source entry colliding with another's.
+    pub fn merged(
+        archive_id: impl Into<String>,
+        source_label: impl Into<String>,
+        created_at_unix_secs: u64,
+        sources: &[(&str, &ArchiveManifest)],
+    ) -> Result<Self> {
+        let mut entries = Vec::new();
+        let mut folders = std::collections::BTreeSet::new();
+        for (under, source) in sources {
+            let under = under.trim_matches('/');
+            validate_relative_path(under)?;
+            if !folders.insert(under.to_string()) {
+                bail!("two sources are merged under {under:?}");
+            }
+            for entry in &source.entries {
+                let mut entry = entry.clone();
+                let path = format!("{under}/{}", entry.path());
+                *entry.path_mut() = path;
+                entries.push(entry);
+            }
+        }
+        // Directory entries for every folder level the sources sit under.
+        let mut parents = std::collections::BTreeSet::new();
+        for folder in &folders {
+            let mut at = String::new();
+            for part in folder.split('/') {
+                if !at.is_empty() {
+                    at.push('/');
+                }
+                at.push_str(part);
+                parents.insert(at.clone());
+            }
+        }
+        for folder in parents {
+            if entries.iter().any(|e| e.path() == folder) {
+                continue;
+            }
+            entries.push(ArchiveEntry::Directory {
+                path: folder,
+                modified_at_unix_secs: None,
+            });
+        }
+        Self::new(archive_id, source_label, created_at_unix_secs, entries)
     }
 
     pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
@@ -871,6 +958,25 @@ impl ArchiveCasStorage {
     }
 
     /// Writes an [`ArchiveAddLog`] as `{manifest stem}.add-log.json` beside the manifest.
+    /// Writes a merge-log sidecar next to the merged manifest it describes.
+    pub fn write_merge_log(&self, manifest_path: &Path, log: &ArchiveMergeLog) -> Result<PathBuf> {
+        let stem = manifest_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or_else(|| {
+                anyhow!(
+                    "manifest path has no usable file stem: {}",
+                    manifest_path.display()
+                )
+            })?;
+        let path = self.manifests.join(format!("{stem}.merge-log.json"));
+        let bytes = serde_json::to_vec_pretty(log).context("failed to serialize merge log")?;
+        write_synced_file(&path, &bytes)
+            .with_context(|| format!("failed to write merge log {}", path.display()))?;
+        sync_parent(&path)?;
+        Ok(path)
+    }
+
     pub fn write_add_log(&self, manifest_path: &Path, log: &ArchiveAddLog) -> Result<PathBuf> {
         let stem = manifest_path
             .file_stem()
@@ -907,6 +1013,7 @@ impl ArchiveCasStorage {
                     .is_some_and(|name| {
                         name.ends_with(".delete-log.json")
                             || name.ends_with(".add-log.json")
+                            || name.ends_with(".merge-log.json")
                             || name.ends_with(".signature.json")
                     })
             {
@@ -1555,5 +1662,76 @@ mod tests {
         assert_eq!(objects.len(), 3);
         // One callback per object, strictly increasing, ending at the total.
         assert_eq!(progress_calls, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn merged_puts_each_archive_under_its_folder_and_references_the_same_objects() {
+        let directory = tempdir().unwrap();
+        let store = ArchiveCasStorage::new(directory.path().join("cas")).unwrap();
+        let note = store.add_content(b"note").unwrap().object;
+        let song = store.add_content(b"song").unwrap().object;
+        let docs = ArchiveManifest::new(
+            "docs",
+            "Documents",
+            1,
+            vec![
+                ArchiveEntry::Directory {
+                    path: "a".into(),
+                    modified_at_unix_secs: Some(5),
+                },
+                ArchiveEntry::File {
+                    path: "a/note.txt".into(),
+                    object: note,
+                    modified_at_unix_secs: None,
+                },
+                ArchiveEntry::Excluded {
+                    path: "a/big.ipa".into(),
+                    reason: "owner-approved".into(),
+                },
+            ],
+        )
+        .unwrap();
+        let music = ArchiveManifest::new(
+            "music",
+            "Music",
+            2,
+            vec![ArchiveEntry::File {
+                path: "song.ogg".into(),
+                object: song,
+                modified_at_unix_secs: None,
+            }],
+        )
+        .unwrap();
+        let merged = ArchiveManifest::merged(
+            "all",
+            "Everything",
+            3,
+            &[("Untitled/Documents", &docs), ("Music", &music)],
+        )
+        .unwrap();
+        let paths: Vec<&str> = merged.entries.iter().map(ArchiveEntry::path).collect();
+        assert_eq!(
+            paths,
+            [
+                "Music",
+                "Music/song.ogg",
+                "Untitled",
+                "Untitled/Documents",
+                "Untitled/Documents/a",
+                "Untitled/Documents/a/big.ipa",
+                "Untitled/Documents/a/note.txt",
+            ]
+        );
+        assert_eq!(merged.file_count(), 2);
+        assert_eq!(merged.excluded_entry_count(), 1);
+        assert!(merged.entries.iter().any(|e| matches!(e,
+            ArchiveEntry::File { path, object, .. } if path == "Music/song.ogg" && *object == song)));
+        let (path, _) = store.write_manifest(&merged).unwrap();
+        assert_eq!(store.read_manifest(&path).unwrap(), merged);
+
+        assert!(
+            ArchiveManifest::merged("all", "x", 3, &[("Same", &docs), ("Same", &music)]).is_err()
+        );
+        assert!(ArchiveManifest::merged("all", "x", 3, &[("../up", &docs)]).is_err());
     }
 }
