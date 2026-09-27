@@ -380,33 +380,46 @@ mod preview {
     /// format-specific limit.
     pub const MAX_PREVIEW_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
 
+    pub use text::{decode_text, TextPreview, MAX_TEXT_BYTES};
+
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum PreviewKind {
         Raster,
         #[cfg(feature = "pdf-preview")]
         Pdf,
+        /// Anything else: shown as text when its bytes decode as text
+        /// (see `text::decode_text`), refused as binary otherwise. Judged
+        /// by content, not extension, because `.conf`, `.txt`, `.log`,
+        /// `README` and extensionless files are all plain text.
+        Text,
     }
 
     /// The preview kind for a manifest-relative path, by extension, or
-    /// `None` if this build offers no preview for it.
+    /// `None` if this build offers no preview for it (a PDF without the
+    /// `pdf-preview` feature).
     pub fn kind_for_path(path: &str) -> Option<PreviewKind> {
         let extension = std::path::Path::new(path)
             .extension()
-            .and_then(|extension| extension.to_str())?
-            .to_ascii_lowercase();
-        match extension.as_str() {
-            "png" | "jpg" | "jpeg" => Some(PreviewKind::Raster),
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase);
+        match extension.as_deref() {
+            Some("png" | "jpg" | "jpeg") => Some(PreviewKind::Raster),
             #[cfg(feature = "pdf-preview")]
-            "pdf" => Some(PreviewKind::Pdf),
-            _ => None,
+            Some("pdf") => Some(PreviewKind::Pdf),
+            #[cfg(not(feature = "pdf-preview"))]
+            Some("pdf") => None,
+            _ => Some(PreviewKind::Text),
         }
     }
 
-    pub fn decode(kind: PreviewKind, bytes: &[u8]) -> Result<DecodedImage> {
+    /// Decodes an image kind. Text goes through [`decode_text`] instead,
+    /// since it reads only a prefix of the file.
+    pub fn decode_image(kind: PreviewKind, bytes: &[u8]) -> Result<DecodedImage> {
         match kind {
             PreviewKind::Raster => decode_raster(bytes),
             #[cfg(feature = "pdf-preview")]
             PreviewKind::Pdf => pdf::render_first_page(bytes, MAX_PREVIEW_DIMENSION),
+            PreviewKind::Text => anyhow::bail!("text is not an image"),
         }
     }
 
@@ -436,6 +449,190 @@ mod preview {
             ((width as f32 * scale).round() as u32).max(1),
             ((height as f32 * scale).round() as u32).max(1),
         )
+    }
+
+    /// Plain-text preview. Recognizes what Windows Notepad calls ANSI,
+    /// UTF-8 and Unicode: ASCII, UTF-8 (with or without a byte-order mark),
+    /// Windows-1252 for 8-bit text that is not UTF-8, and UTF-16 with a
+    /// byte-order mark. Anything with NUL bytes or many control characters
+    /// is refused as binary. Terminal escape sequences (ANSI colour codes)
+    /// are removed and tabs expanded, so the lines paint as the file reads.
+    mod text {
+        use anyhow::{bail, Result};
+
+        /// Most bytes of a file decoded for a text preview; the rest is
+        /// not read.
+        pub const MAX_TEXT_BYTES: u64 = 4 * 1024 * 1024;
+        /// Most lines kept.
+        const MAX_TEXT_LINES: usize = 100_000;
+        /// Longest line kept, in characters; longer lines end in `…`.
+        const MAX_LINE_CHARS: usize = 1_000;
+        const TAB_WIDTH: usize = 4;
+
+        /// A decoded text file, as lines ready to paint.
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub struct TextPreview {
+            /// The encoding the bytes were read as, for display.
+            pub encoding: &'static str,
+            pub lines: Vec<String>,
+            /// Only the start of the file is shown: it is longer than
+            /// [`MAX_TEXT_BYTES`] or [`MAX_TEXT_LINES`].
+            pub truncated: bool,
+        }
+
+        /// Decodes `bytes`, the first bytes of a file; `cut` says the file
+        /// continues past them.
+        pub fn decode_text(bytes: &[u8], cut: bool) -> Result<TextPreview> {
+            let (encoding, text) = if let Some(rest) = bytes.strip_prefix(b"\xEF\xBB\xBF") {
+                ("UTF-8 with BOM", String::from_utf8_lossy(rest).into_owned())
+            } else if let Some(rest) = bytes.strip_prefix(b"\xFF\xFE") {
+                ("UTF-16 LE", utf16(rest, u16::from_le_bytes))
+            } else if let Some(rest) = bytes.strip_prefix(b"\xFE\xFF") {
+                ("UTF-16 BE", utf16(rest, u16::from_be_bytes))
+            } else if looks_binary(bytes) {
+                bail!("binary data, not text");
+            } else {
+                match std::str::from_utf8(bytes) {
+                    Ok(text) => (
+                        if text.is_ascii() { "ASCII" } else { "UTF-8" },
+                        text.to_string(),
+                    ),
+                    // The prefix ended inside a character: still UTF-8.
+                    Err(error) if cut && error.error_len().is_none() => (
+                        "UTF-8",
+                        String::from_utf8_lossy(&bytes[..error.valid_up_to()]).into_owned(),
+                    ),
+                    Err(_) => (
+                        "ANSI (Windows-1252)",
+                        bytes.iter().map(|&byte| windows_1252(byte)).collect(),
+                    ),
+                }
+            };
+            let (lines, too_many) = display_lines(&text);
+            Ok(TextPreview {
+                encoding,
+                lines,
+                truncated: cut || too_many,
+            })
+        }
+
+        fn utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> String {
+            // An odd last byte is half a code unit and is dropped.
+            let units = (0..bytes.len() / 2).map(|i| unit([bytes[2 * i], bytes[2 * i + 1]]));
+            char::decode_utf16(units)
+                .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
+                .collect()
+        }
+
+        /// NUL bytes, or more than one control character in 64 that text
+        /// does not use (bell, tab, newlines, form feed and escape are allowed).
+        fn looks_binary(bytes: &[u8]) -> bool {
+            if bytes.contains(&0) {
+                return true;
+            }
+            let controls = bytes
+                .iter()
+                .filter(|&&b| {
+                    (b < 0x20 && !matches!(b, 0x07 | b'\t' | b'\n' | b'\r' | 0x0c | 0x1b))
+                        || b == 0x7f
+                })
+                .count();
+            controls * 64 > bytes.len()
+        }
+
+        /// Windows-1252: Latin-1, except 0x80-0x9F, which hold typographic
+        /// characters (curly quotes, dashes, the euro sign). Its five
+        /// unassigned bytes become U+FFFD.
+        pub(super) fn windows_1252(byte: u8) -> char {
+            const HIGH: [u16; 32] = [
+                0x20AC, 0xFFFD, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030,
+                0x0160, 0x2039, 0x0152, 0xFFFD, 0x017D, 0xFFFD, 0xFFFD, 0x2018, 0x2019, 0x201C,
+                0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0xFFFD,
+                0x017E, 0x0178,
+            ];
+            match byte {
+                0x80..=0x9f => {
+                    char::from_u32(u32::from(HIGH[usize::from(byte - 0x80)])).unwrap_or('\u{FFFD}')
+                }
+                _ => char::from(byte),
+            }
+        }
+
+        /// Splits `text` into display lines (CRLF, LF and lone CR all end a
+        /// line), drops terminal escape sequences, expands tabs and marks
+        /// other control characters. Returns the lines and whether
+        /// [`MAX_TEXT_LINES`] cut them short.
+        fn display_lines(text: &str) -> (Vec<String>, bool) {
+            let mut lines = Vec::new();
+            let mut line = String::new();
+            let mut column = 0;
+            let mut chars = text.chars().peekable();
+            while let Some(c) = chars.next() {
+                match c {
+                    '\r' | '\n' => {
+                        if c == '\r' && chars.peek() == Some(&'\n') {
+                            chars.next();
+                        }
+                        if lines.len() == MAX_TEXT_LINES {
+                            return (lines, true);
+                        }
+                        lines.push(std::mem::take(&mut line));
+                        column = 0;
+                        continue;
+                    }
+                    '\x1b' => {
+                        skip_escape(&mut chars);
+                        continue;
+                    }
+                    _ => {}
+                }
+                if column >= MAX_LINE_CHARS {
+                    if column == MAX_LINE_CHARS {
+                        line.push('…');
+                        column += 1;
+                    }
+                    continue;
+                }
+                if c == '\t' {
+                    let spaces = TAB_WIDTH - column % TAB_WIDTH;
+                    line.push_str(&" ".repeat(spaces));
+                    column += spaces;
+                } else {
+                    line.push(if c.is_control() { '\u{FFFD}' } else { c });
+                    column += 1;
+                }
+            }
+            if !line.is_empty() {
+                if lines.len() == MAX_TEXT_LINES {
+                    return (lines, true);
+                }
+                lines.push(line);
+            }
+            (lines, false)
+        }
+
+        /// Consumes the rest of an escape sequence after ESC: CSI
+        /// (`ESC [ ... final`), OSC (`ESC ] ... BEL` or `ESC ] ... ESC \\`),
+        /// or a two-character escape.
+        fn skip_escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+            match chars.next() {
+                Some('[') => {
+                    for c in chars.by_ref() {
+                        if ('\u{40}'..='\u{7e}').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    while let Some(c) = chars.next() {
+                        if c == '\x07' || (c == '\x1b' && chars.next_if_eq(&'\\').is_some()) {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Native PDF page rendering via pdfium (Google's PDF engine), through
@@ -546,8 +743,98 @@ mod preview {
             assert_eq!(kind_for_path("photo.PNG"), Some(PreviewKind::Raster));
             assert_eq!(kind_for_path("photo.jpg"), Some(PreviewKind::Raster));
             assert_eq!(kind_for_path("photo.JPEG"), Some(PreviewKind::Raster));
-            assert_eq!(kind_for_path("no/extension/at/all"), None);
-            assert_eq!(kind_for_path("readme.md"), None);
+            assert_eq!(
+                kind_for_path("no/extension/at/all"),
+                Some(PreviewKind::Text)
+            );
+            assert_eq!(kind_for_path("readme.md"), Some(PreviewKind::Text));
+            assert_eq!(kind_for_path("wg-gcp.conf"), Some(PreviewKind::Text));
+            #[cfg(not(feature = "pdf-preview"))]
+            assert_eq!(kind_for_path("paper.PDF"), None);
+        }
+
+        fn lines(preview: &TextPreview) -> Vec<&str> {
+            preview.lines.iter().map(String::as_str).collect()
+        }
+
+        #[test]
+        fn ascii_and_utf8_text_decode_with_their_line_endings() {
+            let ascii = decode_text(b"[Interface]\r\nAddress = 10.0.0.2\n\nlast", false).unwrap();
+            assert_eq!(ascii.encoding, "ASCII");
+            assert_eq!(
+                lines(&ascii),
+                ["[Interface]", "Address = 10.0.0.2", "", "last"]
+            );
+            assert!(!ascii.truncated);
+            let utf8 = decode_text("กรุงเทพ\nnǐ hǎo\rcafé\n".as_bytes(), false).unwrap();
+            assert_eq!(utf8.encoding, "UTF-8");
+            assert_eq!(lines(&utf8), ["กรุงเทพ", "nǐ hǎo", "café"]);
+            let bom = decode_text(b"\xEF\xBB\xBFhello", false).unwrap();
+            assert_eq!(
+                (bom.encoding, lines(&bom)),
+                ("UTF-8 with BOM", vec!["hello"])
+            );
+        }
+
+        #[test]
+        fn eight_bit_text_that_is_not_utf8_reads_as_windows_1252() {
+            // "café – “quoted” €5" as Notepad saves it in ANSI.
+            let preview = decode_text(b"caf\xe9 \x96 \x93quoted\x94 \x805", false).unwrap();
+            assert_eq!(preview.encoding, "ANSI (Windows-1252)");
+            assert_eq!(lines(&preview), ["café – “quoted” €5"]);
+            assert_eq!(text::windows_1252(0x81), '\u{FFFD}');
+            assert_eq!(text::windows_1252(b'A'), 'A');
+        }
+
+        #[test]
+        fn utf16_with_a_byte_order_mark_decodes_both_ways() {
+            let le: Vec<u8> = [0xFF, 0xFE]
+                .into_iter()
+                .chain("hi\nthere".encode_utf16().flat_map(u16::to_le_bytes))
+                .collect();
+            let be: Vec<u8> = [0xFE, 0xFF]
+                .into_iter()
+                .chain("hi\nthere".encode_utf16().flat_map(u16::to_be_bytes))
+                .collect();
+            for (bytes, encoding) in [(le, "UTF-16 LE"), (be, "UTF-16 BE")] {
+                let preview = decode_text(&bytes, false).unwrap();
+                assert_eq!(
+                    (preview.encoding, lines(&preview)),
+                    (encoding, vec!["hi", "there"])
+                );
+            }
+        }
+
+        #[test]
+        fn binary_data_is_refused() {
+            assert!(decode_text(b"\x7fELF\x02\x01\x01\x00\x00", false).is_err());
+            assert!(decode_text(&[0x01, 0x02, 0x03, 0x04, b'a', b'b'], false).is_err());
+        }
+
+        #[test]
+        fn escape_sequences_are_dropped_and_tabs_expanded() {
+            let mut bytes = b"\x1b[1;31mred\x1b[0m\tx\n\x1b]0;title\x07ok\x01\n".to_vec();
+            bytes.extend_from_slice("plain text line\n".repeat(8).as_bytes());
+            let preview = decode_text(&bytes, false).unwrap();
+            assert_eq!(
+                lines(&preview)[..3],
+                ["red x", "ok\u{FFFD}", "plain text line"]
+            );
+        }
+
+        #[test]
+        fn a_prefix_cut_inside_a_character_is_still_utf8_and_marked_truncated() {
+            let bytes = "é".repeat(4).into_bytes();
+            let preview = decode_text(&bytes[..7], true).unwrap();
+            assert_eq!((preview.encoding, lines(&preview)), ("UTF-8", vec!["ééé"]));
+            assert!(preview.truncated);
+        }
+
+        #[test]
+        fn very_long_lines_end_in_an_ellipsis() {
+            let preview = decode_text("x".repeat(5_000).as_bytes(), false).unwrap();
+            assert_eq!(preview.lines[0].chars().count(), 1_001);
+            assert!(preview.lines[0].ends_with('…'));
         }
 
         #[test]
@@ -1222,7 +1509,15 @@ struct PendingRemoval {
 #[derive(Debug, Clone)]
 struct PreviewState {
     path: String,
-    outcome: std::result::Result<PreviewImage, String>,
+    outcome: std::result::Result<PreviewContent, String>,
+    /// First text line shown; unused for images.
+    scroll: usize,
+}
+
+#[derive(Debug, Clone)]
+enum PreviewContent {
+    Image(PreviewImage),
+    Text(preview::TextPreview),
 }
 
 /// A successfully decoded and texture-uploaded preview image.
@@ -1489,7 +1784,7 @@ impl BrowserApp {
         let Some(kind) = preview::kind_for_path(&item.path) else {
             return;
         };
-        let outcome = (|| -> std::result::Result<PreviewImage, String> {
+        let outcome = (|| -> std::result::Result<PreviewContent, String> {
             let object = self.manifest_file_object(&item.path).ok_or_else(|| {
                 "selected entry is not a regular file in this manifest".to_string()
             })?;
@@ -1505,21 +1800,32 @@ impl BrowserApp {
             store
                 .verify_object(object)
                 .map_err(|error| format!("archive object failed verification: {error:#}"))?;
+            if kind == preview::PreviewKind::Text {
+                let length = object.size.min(preview::MAX_TEXT_BYTES);
+                let bytes = store
+                    .read_range(object.hash, 0, length as usize)
+                    .map_err(|error| format!("{error:#}"))?;
+                return preview::decode_text(&bytes, length < object.size)
+                    .map(PreviewContent::Text)
+                    .map_err(|error| format!("{error:#}"));
+            }
             let bytes = store
                 .read_range(object.hash, 0, object.size as usize)
                 .map_err(|error| format!("{error:#}"))?;
-            let decoded = preview::decode(kind, &bytes).map_err(|error| format!("{error:#}"))?;
+            let decoded =
+                preview::decode_image(kind, &bytes).map_err(|error| format!("{error:#}"))?;
             let image_key = "archive_cas_browser_preview".to_string();
             loadngo_host_desktop::upload_texture_with_image_key(Some(&image_key), &decoded)?;
-            Ok(PreviewImage {
+            Ok(PreviewContent::Image(PreviewImage {
                 image_key,
                 width: decoded.width as f32,
                 height: decoded.height as f32,
-            })
+            }))
         })();
         self.preview = Some(PreviewState {
             path: item.path,
             outcome,
+            scroll: 0,
         });
     }
 
@@ -1683,10 +1989,14 @@ impl BrowserApp {
             x: input.mouse_x,
             y: input.mouse_y,
         };
-        if self.preview.is_some() {
+        if let Some(preview) = self.preview.as_mut() {
             let layout = AppLayout::new(width, height);
             if input.mouse_pressed && layout.up_button.contains(self.pointer) {
                 self.close_preview();
+                return;
+            }
+            if let Ok(PreviewContent::Text(text)) = &preview.outcome {
+                preview.scroll = scrolled_text(preview.scroll, text.lines.len(), &layout, input);
             }
             // Escape is handled in `run()`. Every other input is ignored
             // while a preview is showing, same as a pending removal --
@@ -2429,7 +2739,10 @@ impl BrowserApp {
             HorizontalAlign::Left,
         );
         match &preview.outcome {
-            Ok(image) => {
+            Ok(PreviewContent::Text(text)) => {
+                paint_text_preview(scene, layout, text, preview.scroll);
+            }
+            Ok(PreviewContent::Image(image)) => {
                 let fit = fit_within(image.width, image.height, layout.explorer_list);
                 scene.push(ui_core::PaintOp::BlitImage {
                     rect: fit,
@@ -2999,6 +3312,152 @@ impl AppLayout {
 
     fn explorer_visible_rows(self) -> usize {
         (self.explorer_list.height / ROW_HEIGHT).floor().max(1.0) as usize
+    }
+
+    /// The text preview's status line, and the rect its lines fill.
+    fn text_preview_areas(self) -> (Rect, Rect) {
+        let list = self.explorer_list;
+        let status = Rect {
+            height: TEXT_LINE_HEIGHT,
+            ..list
+        };
+        let body = Rect {
+            y: list.y + TEXT_LINE_HEIGHT + 6.0,
+            height: (list.height - TEXT_LINE_HEIGHT - 6.0).max(0.0),
+            ..list
+        };
+        (status, body)
+    }
+
+    fn text_preview_rows(self) -> usize {
+        (self.text_preview_areas().1.height / TEXT_LINE_HEIGHT)
+            .floor()
+            .max(1.0) as usize
+    }
+}
+
+/// Row height of a text preview line.
+const TEXT_LINE_HEIGHT: f32 = 18.0;
+/// Width of the text preview's line-number column.
+const LINE_NUMBER_WIDTH: f32 = 56.0;
+
+/// The text preview's first line after this frame's wheel and keys: Up and
+/// Down move a line, Space a page, Home and End to either end.
+fn scrolled_text(
+    scroll: usize,
+    line_count: usize,
+    layout: &AppLayout,
+    input: &InputSnapshot,
+) -> usize {
+    let rows = layout.text_preview_rows();
+    let last = line_count.saturating_sub(rows);
+    let mut scroll = scroll;
+    if layout.explorer_list.contains(Point {
+        x: input.mouse_x,
+        y: input.mouse_y,
+    }) && input.mouse_wheel_y != 0.0
+    {
+        let step = if input.mouse_wheel_precise {
+            (input.mouse_wheel_y.abs() / TEXT_LINE_HEIGHT)
+                .ceil()
+                .max(1.0) as usize
+        } else {
+            3 * input.mouse_wheel_y.abs().ceil().max(1.0) as usize
+        };
+        scroll = if input.mouse_wheel_y < 0.0 {
+            scroll.saturating_add(step)
+        } else {
+            scroll.saturating_sub(step)
+        };
+    }
+    if input.key_pressed(HostKey::Down) {
+        scroll = scroll.saturating_add(1);
+    }
+    if input.key_pressed(HostKey::Up) {
+        scroll = scroll.saturating_sub(1);
+    }
+    if input.key_pressed(HostKey::Space) {
+        scroll = scroll.saturating_add(rows.saturating_sub(1).max(1));
+    }
+    if input.key_pressed(HostKey::Home) {
+        scroll = 0;
+    }
+    if input.key_pressed(HostKey::End) {
+        scroll = last;
+    }
+    scroll.min(last)
+}
+
+/// A text preview: a status line (encoding, line range, truncation), then
+/// the visible lines with their numbers. Only the visible lines are painted.
+fn paint_text_preview(
+    scene: &mut Vec<ui_core::PaintOp>,
+    layout: &AppLayout,
+    text: &preview::TextPreview,
+    scroll: usize,
+) {
+    let (status, body) = layout.text_preview_areas();
+    // Aligned with the path above it, not the list's own left edge.
+    let status = Rect {
+        x: layout.breadcrumb.x,
+        width: status.width - (layout.breadcrumb.x - status.x),
+        ..status
+    };
+    let rows = layout.text_preview_rows();
+    let shown = text.lines.len().saturating_sub(scroll).min(rows);
+    let mut summary = if text.lines.is_empty() {
+        format!("{} · empty", text.encoding)
+    } else {
+        format!(
+            "{} · lines {}–{} of {}",
+            text.encoding,
+            scroll + 1,
+            scroll + shown,
+            text.lines.len()
+        )
+    };
+    if text.truncated {
+        summary.push_str(" · only the start of the file is shown");
+    }
+    summary.push_str("   ↑↓ Space Home End");
+    paint_text(
+        scene,
+        &summary,
+        status,
+        CAPTION_FONT,
+        MUTED,
+        HorizontalAlign::Left,
+    );
+    for (row, line) in text.lines.iter().skip(scroll).take(rows).enumerate() {
+        let y = body.y + row as f32 * TEXT_LINE_HEIGHT;
+        paint_text(
+            scene,
+            &(scroll + row + 1).to_string(),
+            Rect {
+                x: body.x,
+                y,
+                width: LINE_NUMBER_WIDTH - 10.0,
+                height: TEXT_LINE_HEIGHT,
+            },
+            CAPTION_FONT,
+            MUTED,
+            HorizontalAlign::Right,
+        );
+        if !line.is_empty() {
+            paint_text(
+                scene,
+                line,
+                Rect {
+                    x: body.x + LINE_NUMBER_WIDTH,
+                    y,
+                    width: (body.width - LINE_NUMBER_WIDTH).max(0.0),
+                    height: TEXT_LINE_HEIGHT,
+                },
+                CAPTION_FONT,
+                TEXT,
+                HorizontalAlign::Left,
+            );
+        }
     }
 }
 

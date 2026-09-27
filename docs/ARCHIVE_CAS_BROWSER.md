@@ -75,12 +75,11 @@ For a proof that manifest-referenced blobs are present and hash correctly, use
 
 ## Preview
 
-Selecting a regular file whose extension the browser recognizes shows a
-"Preview (V)" action in the inspector panel. It reads that one file's blob
+Selecting a regular file shows a "Preview (V)" action in the inspector panel. It reads that one file's blob
 bytes from the CAS, verifies them against the manifest's recorded hash (the
 same check `archive_cas_verify` performs, just for one object instead of
 every object), decodes them, and replaces the path explorer panel with the
-decoded image -- `Esc` or the "Close" button returns to the explorer.
+decoded image or text -- `Esc` or the "Close" button returns to the explorer.
 Nothing is written to disk and nothing is handed to an external viewer.
 
 - **PNG and JPEG** decode unconditionally, via the `image` crate already
@@ -95,7 +94,31 @@ Nothing is written to disk and nothing is handed to an external viewer.
   renderer) this is a stop-gap for. Without a library present, a `.pdf`
   entry's Preview action reports that clearly instead of failing to build
   or crashing.
-- Any other extension has no Preview action offered at all.
+- **Text** is every other file, judged by its bytes rather than its
+  extension, since `.conf`, `.log`, `README` and extensionless files are
+  text too (added 2026-09-27). Recognized encodings, named in the preview's
+  status line:
+  - ASCII;
+  - UTF-8, with or without a byte-order mark;
+  - "ANSI": 8-bit text that isn't valid UTF-8 is read as Windows-1252, so
+    curly quotes, dashes and the euro sign come out right;
+  - UTF-16 LE or BE with a byte-order mark (Notepad's "Unicode").
+
+  How it's shown:
+  - A file with NUL bytes, or more than one unusual control character in
+    64, is refused as binary data.
+  - Terminal escape sequences (ANSI colour codes, title sequences) are
+    removed, tabs expand to 4 columns, and other control characters show
+    as U+FFFD.
+  - Lines are numbered. Up and Down scroll a line, Space a page, Home and
+    End jump to the ends, and the mouse wheel works.
+  - Only the first 4 MiB and at most 100,000 lines are shown; the status
+    line says so when a file is longer.
+  - Lines longer than 1,000 characters end in `…`, and a line wider than
+    the panel is cut off with an ellipsis. There is no horizontal scroll or
+    wrap yet.
+  - The whole object is still hash-verified before anything is shown.
+- A `.pdf` in a build without `pdf-preview` has no Preview action.
 
 A file larger than 64 MiB is refused with a clear message rather than
 attempted -- decoding happens synchronously on the same thread as every
