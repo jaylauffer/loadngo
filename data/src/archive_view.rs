@@ -1,7 +1,9 @@
-//! A read-only, signature-verified view of one Archive CAS snapshot, for callers that
-//! should see archived files but never the store's write paths (a local model's tools).
+//! A read-only view of one Archive CAS archive, for callers that should see archived
+//! files but never the store's write paths (a local model's tools), and a listing of
+//! every archive under a root ([`list_archives`]), as the Archive CAS browser shows them.
 //!
-//! A snapshot is trusted only when all three hold: its signature file verifies against
+//! Any archive can be opened ([`ArchiveView::open`]); its [`Signature`] says whether it
+//! is signed by the trusted key. A signature is trusted only when all three hold: its signature file verifies against
 //! a trusted public key ([`archive_cas_sign::verify_signature`]), the manifest it names
 //! is stored as an intact CAS object ([`archive_cas_sign::present_root`]), and that
 //! object's digest equals the signed root. Every file read is BLAKE3-checked against
@@ -9,13 +11,17 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::io::Read as _;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
 use crate::archive_cas::{ArchiveCasStorage, ArchiveEntry, ArchiveManifest, ArchiveObject};
-use crate::archive_cas_sign::{present_root, read_public_key, verify_signature, SignedArchiveRoot};
+use crate::archive_cas_sign::{
+    present_root, read_public_key, signature_path, verify_signature, SignedArchiveRoot,
+};
 use crate::cas::CasHash;
+pub use loadngo_pq_crypto::PublicKey;
 
 /// Largest single object [`ArchiveView::read_file`] loads.
 pub const MAX_OBJECT_BYTES: u64 = 64 * 1024 * 1024;
@@ -28,12 +34,152 @@ pub struct ViewChild {
     pub object: Option<ArchiveObject>,
 }
 
+/// Whether an archive is signed by the trusted key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Signature {
+    /// Its signature verifies against the trusted key, over this archive's root.
+    Verified {
+        signer: String,
+        signed_at_unix_secs: u64,
+    },
+    /// It has no signature file.
+    Unsigned,
+    /// A signature file exists but does not verify (reason given).
+    NotVerified(String),
+}
+
+impl Signature {
+    /// `signed by <signer>`, `unsigned`, or `signature not verified (<reason>)`.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Verified { signer, .. } => format!("signed by {signer}"),
+            Self::Unsigned => "unsigned".to_string(),
+            Self::NotVerified(reason) => format!("signature not verified ({reason})"),
+        }
+    }
+
+    /// The signature of archive `archive_id` at `root`, checked against `trusted`.
+    fn check(
+        store: &ArchiveCasStorage,
+        archive_id: &str,
+        root: CasHash,
+        trusted: Option<&PublicKey>,
+    ) -> Self {
+        let path = signature_path(store, archive_id, root);
+        let Ok(bytes) = fs::read(&path) else {
+            return Self::Unsigned;
+        };
+        let Some(key) = trusted else {
+            return Self::NotVerified("no trusted key given".into());
+        };
+        let signed: SignedArchiveRoot = match serde_json::from_slice(&bytes) {
+            Ok(signed) => signed,
+            Err(error) => return Self::NotVerified(format!("unreadable: {error}")),
+        };
+        match verify_signature(&signed, key) {
+            Ok(signed_root) if signed_root == root && signed.archive_id == archive_id => {
+                Self::Verified {
+                    signer: signed.signer_identity,
+                    signed_at_unix_secs: signed.signed_at_unix_secs,
+                }
+            }
+            Ok(_) => Self::NotVerified("it signs a different root".into()),
+            Err(error) => Self::NotVerified(format!("{error:#}")),
+        }
+    }
+}
+
+/// One archive manifest under a root, from its header alone (no entries read).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveListing {
+    pub cas_root: PathBuf,
+    pub manifest_path: PathBuf,
+    pub archive_id: String,
+    pub source_label: String,
+    pub created_at_unix_secs: u64,
+    /// The root the manifest's file name records; [`ArchiveView::open`] checks it.
+    pub root: CasHash,
+    /// A newer manifest of the same archive supersedes this one.
+    pub superseded: bool,
+    pub signature: Signature,
+}
+
+#[derive(serde::Deserialize)]
+struct ManifestHead {
+    archive_id: String,
+    source_label: String,
+    created_at_unix_secs: u64,
+    #[serde(default)]
+    supersedes_archive_root: Option<CasHash>,
+}
+
+/// The fields before `entries` in a canonical manifest, read from the file's first bytes.
+/// A manifest can be hundreds of megabytes; its header is a few hundred bytes.
+fn read_head(path: &Path) -> Result<ManifestHead> {
+    let mut start = Vec::new();
+    fs::File::open(path)
+        .with_context(|| format!("failed to open {}", path.display()))?
+        .take(64 * 1024)
+        .read_to_end(&mut start)?;
+    let text = String::from_utf8_lossy(&start);
+    let Some(end) = text.find("\n  \"entries\"") else {
+        bail!("{} has no manifest header", path.display());
+    };
+    let head = format!("{}\n}}", text[..end].trim_end_matches(','));
+    serde_json::from_str(&head).with_context(|| format!("bad header in {}", path.display()))
+}
+
+/// Every archive manifest under `cas_root`, oldest first within each archive, with
+/// superseded versions marked and signatures checked against `trusted`. Reads only
+/// each manifest's header and signature file.
+///
+/// # Errors
+/// When the root's `manifests/` directory cannot be read.
+pub fn list_archives(cas_root: &Path, trusted: Option<&PublicKey>) -> Result<Vec<ArchiveListing>> {
+    let store = ArchiveCasStorage::new(cas_root)?;
+    let mut listings = Vec::new();
+    let mut replaced = std::collections::BTreeSet::new();
+    for path in store.list_manifests()? {
+        let Some(root) = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .and_then(|s| s.rsplit_once('-'))
+            .and_then(|(_, hex)| hex.parse::<CasHash>().ok())
+        else {
+            continue;
+        };
+        let Ok(head) = read_head(&path) else {
+            continue;
+        };
+        if let Some(previous) = head.supersedes_archive_root {
+            replaced.insert((head.archive_id.clone(), previous));
+        }
+        let signature = Signature::check(&store, &head.archive_id, root, trusted);
+        listings.push(ArchiveListing {
+            cas_root: cas_root.to_path_buf(),
+            manifest_path: path,
+            archive_id: head.archive_id,
+            source_label: head.source_label,
+            created_at_unix_secs: head.created_at_unix_secs,
+            root,
+            superseded: false,
+            signature,
+        });
+    }
+    for listing in &mut listings {
+        listing.superseded = replaced.contains(&(listing.archive_id.clone(), listing.root));
+    }
+    listings.sort_by(|a, b| {
+        (&a.archive_id, a.created_at_unix_secs).cmp(&(&b.archive_id, b.created_at_unix_secs))
+    });
+    Ok(listings)
+}
+
 pub struct ArchiveView {
     store: ArchiveCasStorage,
     manifest: ArchiveManifest,
     root: CasHash,
-    signer: String,
-    signed_at_unix_secs: u64,
+    signature: Signature,
     by_path: BTreeMap<String, usize>,
     children: BTreeMap<String, Vec<usize>>,
 }
@@ -125,17 +271,36 @@ impl ArchiveView {
             store,
             manifest,
             root,
-            signed.signer_identity,
-            signed_at_unix_secs,
+            Signature::Verified {
+                signer: signed.signer_identity,
+                signed_at_unix_secs,
+            },
         ))
+    }
+
+    /// The archive whose manifest is at `manifest_path` under `cas_root`, signed or not.
+    /// The manifest must be stored intact as a CAS object; its [`Signature`] is checked
+    /// against `trusted`.
+    ///
+    /// # Errors
+    /// When the manifest cannot be read, is not canonical, or is not stored intact.
+    pub fn open(
+        cas_root: &Path,
+        manifest_path: &Path,
+        trusted: Option<&PublicKey>,
+    ) -> Result<Self> {
+        let store = ArchiveCasStorage::new(cas_root)?;
+        let manifest = store.read_manifest(manifest_path)?;
+        let root = present_root(&store, &manifest)?;
+        let signature = Signature::check(&store, &manifest.archive_id, root, trusted);
+        Ok(Self::index(store, manifest, root, signature))
     }
 
     fn index(
         store: ArchiveCasStorage,
         manifest: ArchiveManifest,
         root: CasHash,
-        signer: String,
-        signed_at_unix_secs: u64,
+        signature: Signature,
     ) -> Self {
         let mut by_path = BTreeMap::new();
         let mut children: BTreeMap<String, Vec<usize>> = BTreeMap::new();
@@ -150,8 +315,7 @@ impl ArchiveView {
             store,
             manifest,
             root,
-            signer,
-            signed_at_unix_secs,
+            signature,
             by_path,
             children,
         }
@@ -163,11 +327,11 @@ impl ArchiveView {
     pub fn root(&self) -> CasHash {
         self.root
     }
-    pub fn signer(&self) -> &str {
-        &self.signer
+    pub fn signature(&self) -> &Signature {
+        &self.signature
     }
-    pub fn signed_at_unix_secs(&self) -> u64 {
-        self.signed_at_unix_secs
+    pub fn source_label(&self) -> &str {
+        &self.manifest.source_label
     }
     pub fn created_at_unix_secs(&self) -> u64 {
         self.manifest.created_at_unix_secs
@@ -347,7 +511,7 @@ mod tests {
         let (cas, trusted, _) = signed_snapshot(&dir);
         let view = ArchiveView::open_newest_verified(&cas, &trusted).unwrap();
         assert_eq!(view.archive_id(), "view-test");
-        assert_eq!(view.signer(), "test-signer");
+        assert_eq!(view.signature().describe(), "signed by test-signer");
         let root: Vec<_> = view
             .list("")
             .unwrap()
@@ -385,5 +549,63 @@ mod tests {
         ArchiveCasStorage::new(&empty).unwrap();
         assert!(ArchiveView::open_newest_verified(&empty, &stranger).is_err());
         let _ = fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn every_archive_is_listed_with_its_signature_and_unsigned_ones_open_too() {
+        let dir = scratch("listing");
+        let (cas, trusted, stranger) = signed_snapshot(&dir);
+        let store = ArchiveCasStorage::new(&cas).unwrap();
+        // A second, unsigned archive, then a newer version of it that supersedes it.
+        let note = store.add_content(b"PrivateKey = abc\n").unwrap().object;
+        let docs = ArchiveManifest::new(
+            "docs",
+            "Documents",
+            5,
+            vec![ArchiveEntry::File {
+                path: "wg.conf".into(),
+                object: note,
+                modified_at_unix_secs: None,
+            }],
+        )
+        .unwrap();
+        let (old_path, _) = store.write_manifest(&docs).unwrap();
+        let (newer, _) = docs
+            .with_entries_removed(&["wg.conf".to_string()], "test", "jay", 6)
+            .unwrap();
+        let (new_path, _) = store.write_manifest(&newer).unwrap();
+
+        let key = read_public_key(&trusted).unwrap();
+        let listings = list_archives(&cas, Some(&key)).unwrap();
+        let summary: Vec<(&str, bool, String)> = listings
+            .iter()
+            .map(|l| (l.archive_id.as_str(), l.superseded, l.signature.describe()))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("docs", true, "unsigned".to_string()),
+                ("docs", false, "unsigned".to_string()),
+                ("view-test", false, "signed by test-signer".to_string()),
+            ]
+        );
+        assert_eq!(listings[0].manifest_path, old_path);
+        assert_eq!(listings[0].source_label, "Documents");
+        assert_eq!(listings[1].created_at_unix_secs, 6);
+
+        // A stranger's key does not verify the signed archive.
+        let other = read_public_key(&stranger).unwrap();
+        let listed = list_archives(&cas, Some(&other)).unwrap();
+        assert!(matches!(listed[2].signature, Signature::NotVerified(_)));
+
+        // Unsigned archives open and read verified bytes; the signed one keeps its signer.
+        let view = ArchiveView::open(&cas, &old_path, Some(&key)).unwrap();
+        assert_eq!(view.signature(), &Signature::Unsigned);
+        assert_eq!(view.read_file("wg.conf").unwrap().0, b"PrivateKey = abc\n");
+        let view = ArchiveView::open(&cas, &new_path, Some(&key)).unwrap();
+        assert!(view.read_file("wg.conf").is_err());
+        let view = ArchiveView::open(&cas, &listings[2].manifest_path, Some(&key)).unwrap();
+        assert_eq!(view.signature().describe(), "signed by test-signer");
+        assert_eq!(view.root(), listings[2].root);
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

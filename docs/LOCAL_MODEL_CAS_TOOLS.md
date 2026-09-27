@@ -12,14 +12,23 @@ CAS capabilities"; the CAS is her default capability alongside ordinary read acc
   credential stores (`~/.ssh`, `~/.gnupg`, `~/.loadngo/keys`, `~/.aws`, `~/.config/gh`,
   `~/Library/Keychains`) and files that look like private keys (`*.key`, `*.pem`, `id_*`,
   `.env`), checked after resolving symlinks. Walks skip `.git`, `target`, `node_modules`.
-- **Signed snapshot (`cas_*`, `loadngo-inference::cas_tools` over
-  `data::archive_view::ArchiveView`)**: the same kinds of reads against a signed Archive
-  CAS snapshot, with provenance the live drive cannot give:
-  - every file is BLAKE3-verified against the manifest before a byte reaches the model;
-  - every result names the snapshot's signed root and signer, and `cas_read`/`cas_find`
-    name each file's object hash, so any claim about a file can be checked by anyone
-    holding the public key (`COLLABORATION.md` rule 5 applied to a model);
+- **Archives (`cas_*`, `loadngo-inference::cas_tools` over `data::archive_view`)**: the
+  same kinds of reads against any Archive CAS archive on the attached drives, the ones
+  the Archive CAS browser shows, with provenance the live drive cannot give:
+  - `cas_archives` finds the roots on attached storage (`data::cli::discover`, as the
+    browser does) and lists each drive's current archives: name, label, date, and
+    whether the trusted key signed it;
+  - every file is BLAKE3-verified against the manifest before a byte reaches the model,
+    signed archive or not;
+  - every result names the archive, its root and its signature status, and
+    `cas_read`/`cas_find` name each file's object hash, so any claim about a file can be
+    checked (`COLLABORATION.md` rule 5 applied to a model);
   - it answers about one identified state, not a checkout mid-edit.
+
+  Until 2026-09-27 the model saw only one archive: the most recently signed manifest in
+  the root given by `--cas-root`. Adding and signing `dolores-card-20260916` in that root
+  silently switched Kimi from the pudding snapshot to the dolores card image. She now
+  names the archive in every call instead.
 
 Nothing in either family writes, deletes, executes or uses the network.
 
@@ -46,12 +55,17 @@ tokens as single ids (163595-163599). All read-only, all bounded:
 
 | Tool | Arguments | Returns |
 |---|---|---|
+| `cas_archives` | none | every drive with an Archive CAS root, and its current archives (superseded versions left out) with label, date and signature status |
 | `cas_list` | `path` (directory) | children with kind and size (hashes via `cas_read`/`cas_find`, to keep listings short); at most 200 entries |
 | `cas_find` | `pattern` (path glob) | matching paths from the manifest; at most 100 |
 | `cas_read` | `path`, optional `line_start`, `line_count` | UTF-8 text, at most 16 KiB per call; binaries report size and hash only |
 | `cas_grep` | `pattern` (literal), optional `path_prefix` | matching lines with path:line, scanning at most 32 MiB of text per call |
 
-Every result starts with `snapshot <id> root <hex> signed by <signer>`. The local tools
+Every tool but `cas_archives` takes `archive`, a name from `cas_archives`: the archive
+id, or `id@drive` when two drives hold the same id. One archive is open at a time (a
+large manifest's index is hundreds of megabytes); naming another releases it. Every
+result starts with `archive <name> root <hex>` and `signed by <signer>`, `unsigned`, or
+`signature not verified (<reason>)`. The local tools
 mirror them: `fs_list`, `fs_read` (16 KiB, line windows), `fs_find` (glob), `fs_grep`
 (literal, 32 MiB scanned, 100 matches).
 
@@ -60,15 +74,27 @@ mirror them: `fs_list`, `fs_read` (16 KiB, line windows), `fs_find` (glob), `fs_
 - loadngo `inference/src/tools.rs`: `Tool`, `Toolbox` (JSON function declarations, calls
   by name), `FsTools`, glob and text helpers. No new dependencies beyond `serde_json`.
 - loadngo `inference/src/cas_tools.rs` behind the `cas` feature, and
-  `data/src/archive_view.rs`: a snapshot is trusted only when its signature verifies
-  against the trusted key, the manifest it names is an intact CAS object, and that
-  object's digest is the signed root. Unsigned manifests are never opened.
+  `data/src/archive_view.rs`: `list_archives` reads each manifest's header (not its
+  entries) and signature file; `ArchiveView::open` opens any manifest stored intact as a
+  CAS object. A signature counts only when it verifies against the trusted key and signs
+  that manifest's recomputed root.
 - kimi-k3-in-rust `crates/kimi-k3-cli/src/chat.rs`: Kimi Linear's `tool_declare` message,
   `<|tool_call_begin|>id<|tool_call_argument_begin|>args<|tool_call_end|>` parsing, results
   as `## Return of <id>` tool messages, at most 8 tool rounds per question, results
   shortened to fit the context. `k3` flags `--fs-base`, `--cas-root`, `--cas-key`,
-  `--no-tools`; the launcher passes the pudding folder, the Zhoenus II snapshot when
+  `--no-tools`; the launcher passes the pudding folder, the Zhoenus II root when
   mounted, and the public key from `~/.loadngo/keys` (never the copy on the archive drive).
+  Other roots are found on attached drives.
+
+## Evidence, 2026-09-27 (all archives)
+
+- Real drives: `cas_archives` listed all 9 current archives, the same as the browser:
+  Loadngo Archive Staging (6 `untitled-*` unsigned, `zhoenus-ii-20260915` signed by
+  jay-macmini) and Zhoenus II (`dolores-card-20260916`, `pudding-20260917`, both signed).
+  Opening `pudding-20260917` and reading `loadngo/proactor/src/lib.rs` took 0.96 s.
+- Unit tests: archives on two roots listed and read by name; a superseded version left
+  out; the same id on two drives named `id@drive`; an unsigned archive opens and reads
+  verified bytes; a stranger's key leaves a signature `not verified`.
 
 ## Evidence, 2026-09-24
 
