@@ -221,7 +221,13 @@ fn plan(
             Some(superseded_by) => {
                 let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                 let mut owned = vec![path.clone()];
-                for sidecar in ["signature", "delete-log", "add-log", "merge-log"] {
+                for sidecar in [
+                    "signature",
+                    "delete-log",
+                    "add-log",
+                    "merge-log",
+                    "unpack-log",
+                ] {
                     let side = store
                         .manifests_root()
                         .join(format!("{stem}.{sidecar}.json"));

@@ -14,6 +14,7 @@ pub mod action;
 pub mod archive_cas;
 pub mod archive_cas_purge;
 pub mod archive_cas_sign;
+pub mod archive_cas_unpack;
 pub mod archive_view;
 pub mod cas;
 pub mod cli;
@@ -27,6 +28,8 @@ pub mod machine;
 pub mod p2pmsg;
 pub mod pudding;
 pub mod service;
+
+pub mod zip;
 
 pub mod types {
     use serde::{Deserialize, Serialize};

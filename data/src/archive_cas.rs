@@ -572,6 +572,90 @@ impl ArchiveCasStorage {
     ///
     /// Large source files should use [`Self::ingest_file`]. This helper is for
     /// small, generated objects whose bytes are already available in memory.
+    /// Stores whatever `reader` yields, hashing it while it is written to a partial
+    /// file, so content of any size streams through a bounded buffer. When the object
+    /// already exists with the same size, the partial is discarded (identical content
+    /// hashes the same; `archive_cas_verify` re-checks stored bytes).
+    pub fn add_stream(&self, reader: &mut dyn Read) -> Result<ArchiveIngestResult> {
+        let temporary = self.partials.join(format!(
+            ".stream-{}-{}.partial",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let mut hasher = blake3::Hasher::new();
+        let mut size = 0u64;
+        {
+            let mut file = File::create(&temporary)
+                .with_context(|| format!("failed to create {}", temporary.display()))?;
+            let mut buffer = vec![0u8; self.buffer_bytes.max(64 * 1024)];
+            loop {
+                let read = match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(read) => read,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => {
+                        let _ = fs::remove_file(&temporary);
+                        return Err(error).context("failed to read content to store");
+                    }
+                };
+                hasher.update(&buffer[..read]);
+                file.write_all(&buffer[..read])?;
+                size += read as u64;
+            }
+            file.sync_all()?;
+        }
+        let object = ArchiveObject {
+            hash: CasHash::from_bytes(*hasher.finalize().as_bytes()),
+            size,
+        };
+        let object_path = self.object_path(object.hash);
+        self.ensure_object_parent(&object_path)?;
+        let existing = |path: &Path| -> Result<bool> {
+            match fs::metadata(path) {
+                Ok(metadata) if metadata.len() == size => Ok(true),
+                Ok(metadata) => bail!(
+                    "stored object {} is {} bytes, expected {size}",
+                    object.hash,
+                    metadata.len()
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+                Err(error) => Err(error.into()),
+            }
+        };
+        if existing(&object_path)? {
+            fs::remove_file(&temporary)?;
+            return Ok(ArchiveIngestResult {
+                object,
+                inserted: false,
+                resumed_bytes: 0,
+            });
+        }
+        match fs::hard_link(&temporary, &object_path) {
+            Ok(()) => {
+                sync_parent(&object_path)?;
+                fs::remove_file(&temporary)?;
+                Ok(ArchiveIngestResult {
+                    object,
+                    inserted: true,
+                    resumed_bytes: 0,
+                })
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                existing(&object_path)?;
+                fs::remove_file(&temporary)?;
+                Ok(ArchiveIngestResult {
+                    object,
+                    inserted: false,
+                    resumed_bytes: 0,
+                })
+            }
+            Err(error) => {
+                let _ = fs::remove_file(&temporary);
+                Err(error).context("failed to publish archive content object")
+            }
+        }
+    }
+
     pub fn add_content(&self, bytes: &[u8]) -> Result<ArchiveIngestResult> {
         let hash = CasHash::digest(bytes);
         let object = ArchiveObject {
@@ -958,6 +1042,35 @@ impl ArchiveCasStorage {
     }
 
     /// Writes an [`ArchiveAddLog`] as `{manifest stem}.add-log.json` beside the manifest.
+    /// Writes `value` as the `{stem}.{kind}.json` sidecar of the manifest at
+    /// `manifest_path` (for example `kind` = `"unpack-log"`). Refuses to overwrite.
+    pub fn write_sidecar<T: Serialize>(
+        &self,
+        manifest_path: &Path,
+        kind: &str,
+        value: &T,
+    ) -> Result<PathBuf> {
+        let stem = manifest_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or_else(|| {
+                anyhow!(
+                    "manifest path has no usable file stem: {}",
+                    manifest_path.display()
+                )
+            })?;
+        let path = self.manifests.join(format!("{stem}.{kind}.json"));
+        if path.exists() {
+            bail!("{} already exists", path.display());
+        }
+        let bytes = serde_json::to_vec_pretty(value)
+            .with_context(|| format!("failed to serialize {kind}"))?;
+        write_synced_file(&path, &bytes)
+            .with_context(|| format!("failed to write {kind} {}", path.display()))?;
+        sync_parent(&path)?;
+        Ok(path)
+    }
+
     /// Writes a merge-log sidecar next to the merged manifest it describes.
     pub fn write_merge_log(&self, manifest_path: &Path, log: &ArchiveMergeLog) -> Result<PathBuf> {
         let stem = manifest_path
@@ -1014,6 +1127,7 @@ impl ArchiveCasStorage {
                         name.ends_with(".delete-log.json")
                             || name.ends_with(".add-log.json")
                             || name.ends_with(".merge-log.json")
+                            || name.ends_with(".unpack-log.json")
                             || name.ends_with(".signature.json")
                     })
             {

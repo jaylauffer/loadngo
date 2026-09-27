@@ -115,6 +115,19 @@ on 09-27/28, held by that archive's superseded versions. Retiring the sources wi
 The browser skips signatures and delete/add/merge logs when listing manifests (it used
 to try to read them as manifests and report them as unreadable).
 
+## Zips are unpacked
+
+`archive_cas_unpack` (added 2026-09-28) turns the zips an archive holds (`.zip`, `.ipa`,
+`.jar`, `.apk`, and zips inside them up to three levels) into folders of their members,
+so every file inside is stored and deduplicated like any other. Office documents stay
+whole. Members stream into the store (`ArchiveCasStorage::add_stream`) and are checked
+against the CRC-32 their zip records; a zip with encrypted members, compression other
+than stored/deflate, unsafe names (`..`) or a CRC mismatch is left whole and listed.
+It writes a new version of the archive and a `.unpack-log.json` (each zip's object and
+member count); nothing is deleted until the superseded version is purged. `--dry-run`
+reads only the zips' central directories. The zip reader is loadngo's own
+(`data::zip`, Zip64 included); deflate comes from `flate2`/`miniz_oxide`.
+
 ## Preview
 
 Selecting a regular file shows a "Preview (V)" action in the inspector panel. It reads that one file's blob

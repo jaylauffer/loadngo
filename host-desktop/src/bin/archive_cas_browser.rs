@@ -1137,6 +1137,7 @@ impl ArchiveCatalog {
                         ".delete-log.json",
                         ".add-log.json",
                         ".merge-log.json",
+                        ".unpack-log.json",
                     ]
                     .iter()
                     .any(|sidecar| name.ends_with(sidecar))

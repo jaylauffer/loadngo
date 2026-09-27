@@ -16,6 +16,9 @@ blake3.workspace = true
 hex.workspace = true
 loadngo-pq-crypto.workspace = true
 loadngo-anchor.workspace = true
+# Zip members: raw deflate and CRC-32, both pure Rust and already in the workspace lock.
+flate2 = "1"
+crc32fast = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
