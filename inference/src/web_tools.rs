@@ -386,7 +386,9 @@ pub fn decode_entities(text: &str) -> String {
     while let Some(at) = rest.find('&') {
         out.push_str(&rest[..at]);
         let after = &rest[at..];
-        let Some(semi) = after[..after.len().min(12)].find(';') else {
+        // Byte search: ';' is ASCII, so its index is always a char boundary, while a
+        // fixed 12-byte slice can end inside a multibyte character.
+        let Some(semi) = after.bytes().take(12).position(|b| b == b';') else {
             out.push('&');
             rest = &after[1..];
             continue;
@@ -535,6 +537,17 @@ mod tests {
     }
 
     #[test]
+    fn a_bare_ampersand_before_multibyte_text_is_kept() {
+        // The page that crashed Kimi: no ';' after a '&', and a character wider than one
+        // byte straddling the 12-byte entity window ('’' at bytes 10..13).
+        assert_eq!(
+            decode_entities("Tom &amp Jerry’s; &amp;"),
+            "Tom &amp Jerry’s; &"
+        );
+        assert_eq!(decode_entities("&123456789é"), "&123456789é");
+    }
+
+    #[test]
     fn local_and_private_addresses_are_refused() {
         for ip in [
             "127.0.0.1",
@@ -575,7 +588,7 @@ mod tests {
         let page = tools[1]
             .call(&json!({"url": "https://en.wikipedia.org/wiki/Lat_Phrao_district"}))
             .unwrap();
-        println!("{}", &page[..page.len().min(1200)]);
+        println!("{}", page.chars().take(1200).collect::<String>());
         assert!(page.contains("Lat Phrao"));
     }
 }
