@@ -1918,11 +1918,16 @@ fn sync_parent(_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// A suffix no other call in this process returns: the clock alone repeats across
+/// threads (macOS reports whole microseconds), so a counter is folded in.
 fn unique_suffix() -> u128 {
-    SystemTime::now()
+    static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    (nanos << 32) | u128::from(count)
 }
 
 fn is_archive_id(value: &str) -> bool {
@@ -1956,6 +1961,21 @@ fn validate_relative_path(value: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn temporary_names_do_not_repeat_across_threads() {
+        let names: Vec<u128> = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..4)
+                .map(|_| scope.spawn(|| (0..5_000).map(|_| unique_suffix()).collect::<Vec<_>>()))
+                .collect();
+            workers
+                .into_iter()
+                .flat_map(|w| w.join().unwrap())
+                .collect()
+        });
+        let distinct: std::collections::HashSet<_> = names.iter().collect();
+        assert_eq!(distinct.len(), names.len());
+    }
+
     use super::*;
     use tempfile::tempdir;
 

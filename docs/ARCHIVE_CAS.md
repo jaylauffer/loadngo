@@ -111,6 +111,16 @@ tools and the browser before using a compressed root.
 - Reading from an offset in a compressed object decompresses from its start;
   reading a compressed zip for unpacking decompresses it to a temporary file.
 
+Measured 2026-09-30 with `--dry-run --max-gib 8` on `loadngo-archive-cas`
+(Loadngo Archive Staging, a USB "My Passport" drive; 12,413 objects in hash
+order, i.e. a random sample, 8.03 GiB): 8,507 objects were under 8 KiB, about
+840 did not compress, and about 3,060 did. Level 3 would save 3.88 GiB (48.2%
+of the bytes examined) at 8.4 MiB/s; level 9 would save 4.05 GiB (50.4%). The
+level 3 run read the drive cold, so its rate is the drive's: random reads
+(seek-bound), CPU about 12% busy. At that rate a full pass over this 733 GiB
+root takes about a day; the level 9 rate (13.7 MiB/s) was measured on a warm
+page cache and is not comparable. No real root has been compressed yet.
+
 ## Commands
 
 Every command below, and `archive_cas_sign` and `archive_cas_browser`, prints
