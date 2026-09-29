@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use data::archive_cas::{ArchiveCasStorage, ArchiveEntry, ArchiveManifest};
+use data::archive_cas_unpack::{has_zips, unpack_zips, UnpackProgress, DEFAULT_MAX_DEPTH};
 use data::cli::{ArgDoc, Usage};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -44,6 +45,34 @@ fn run() -> Result<()> {
         entries.into_values().collect(),
     )?;
     let (manifest_path, manifest_object) = store.write_manifest(&manifest)?;
+    let captured_complete = manifest.is_complete();
+    let unpacked = if args.keep_zips || !has_zips(&manifest) {
+        None
+    } else {
+        // Zips are not kept as opaque files: their members are stored and deduplicated
+        // like any other file, in a version that supersedes the capture.
+        eprintln!("unpacking zips (.zip, .ipa, .jar, .apk)...");
+        let (unpacked, log) = unpack_zips(
+            &store,
+            &manifest,
+            manifest_object.hash,
+            DEFAULT_MAX_DEPTH,
+            unix_now()?,
+            "archive_cas_ingest",
+            "zips unpacked at ingest",
+            |progress| match progress {
+                UnpackProgress::Zip { path, members, .. } => {
+                    eprintln!("  unpacked {path}: {members} members");
+                }
+                UnpackProgress::Skipped { path, reason } => {
+                    eprintln!("  left whole {path}: {reason}");
+                }
+            },
+        )?;
+        let (path, object) = store.write_manifest(&unpacked)?;
+        let log_path = store.write_sidecar(&path, "unpack-log", &log)?;
+        Some((path, object, log_path, log))
+    };
 
     println!("Archive CAS root: {}", store.root().display());
     println!("Ingest journal: {}", journal.path.display());
@@ -54,12 +83,30 @@ fn run() -> Result<()> {
     println!("Directories declared: {}", stats.directories);
     println!("Symlinks declared: {}", stats.symlinks);
     println!("Unreadable source entries: {}", stats.unreadable_entries);
-    println!("Capture complete: {}", manifest.is_complete());
+    println!("Capture complete: {captured_complete}");
     println!("Logical file bytes: {}", stats.logical_bytes);
     println!("New archive objects: {}", stats.inserted_objects);
     println!("Deduplicated files: {}", stats.deduplicated_files);
     println!("Journal-reused files: {}", stats.journal_reused_files);
     println!("Resumed source bytes: {}", stats.resumed_bytes);
+    if let Some((path, object, log_path, log)) = unpacked {
+        println!(
+            "Zips unpacked: {} ({} left whole)",
+            log.unpacked.len(),
+            log.skipped.len()
+        );
+        println!(
+            "Zip members newly stored: {} ({} bytes); already stored: {}",
+            log.new_objects, log.new_object_bytes, log.reused_objects
+        );
+        println!("Current manifest (zips unpacked): {}", path.display());
+        println!("Current root object: {}", object.hash);
+        println!("Unpack log: {}", log_path.display());
+        println!(
+            "The capture above is superseded; purging it frees the zips' own bytes \
+             (archive_cas_purge, or the browser's Purge drive)."
+        );
+    }
     Ok(())
 }
 
@@ -69,6 +116,7 @@ struct Args {
     cas_root: PathBuf,
     archive_id: String,
     source_label: String,
+    keep_zips: bool,
 }
 
 impl Args {
@@ -77,6 +125,7 @@ impl Args {
         let mut cas_root = None;
         let mut archive_id = None;
         let mut source_label = None;
+        let mut keep_zips = false;
         let args = data::cli::read_args(&usage(), true);
         let mut args = args.into_iter();
 
@@ -86,6 +135,7 @@ impl Args {
                 "--cas-root" => cas_root = args.next().map(PathBuf::from),
                 "--archive-id" => archive_id = args.next(),
                 "--source-label" => source_label = args.next(),
+                "--keep-zips" => keep_zips = true,
                 other => return Err(anyhow!("unknown argument: {other}\n{}", usage().hint())),
             }
         }
@@ -99,6 +149,7 @@ impl Args {
                 .ok_or_else(|| anyhow!("missing --cas-root <directory>\n{}", usage().hint()))?,
             source_label: source_label.unwrap_or_else(|| archive_id.clone()),
             archive_id,
+            keep_zips,
         })
     }
 }
@@ -125,6 +176,10 @@ fn usage() -> Usage {
             "<label>",
             "human-readable label stored in the manifest; defaults to --archive-id",
         ),
+        ArgDoc::switch(
+            "--keep-zips",
+            "store zips as single files instead of unpacking them (the default unpacks)",
+        ),
     ];
     const EXAMPLES: &[&str] = &[
         "cargo run -p data --bin archive_cas_ingest -- --source /Volumes/Old/Photos --cas-root /Volumes/Backup/loadngo-archive-cas --archive-id photos-20260920 --source-label \"Old external photo drive\"",
@@ -133,6 +188,8 @@ fn usage() -> Usage {
         "Prints the manifest path and archive-root hash on success.",
         "If interrupted, rerun the identical command; matching partial files resume after prefix verification.",
         "Run archive_cas_verify afterward to confirm every blob is present and re-hashes correctly.",
+        "Zips (.zip, .ipa, .jar, .apk, and zips inside them) are unpacked into folders of their members, as archive_cas_unpack does, in a version that supersedes the capture; purging the capture frees the zips' bytes. Office documents stay whole.",
+        "A root with compression on (archive_cas_compress --enable) stores new objects compressed.",
     ];
     Usage {
         bin: "archive_cas_ingest",

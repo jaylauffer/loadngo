@@ -127,6 +127,9 @@ It writes a new version of the archive and a `.unpack-log.json` (each zip's obje
 member count); nothing is deleted until the superseded version is purged. `--dry-run`
 reads only the zips' central directories. The zip reader is loadngo's own
 (`data::zip`, Zip64 included); deflate comes from `flate2`/`miniz_oxide`.
+Since 2026-09-30 `archive_cas_ingest` does the same unpack for every new capture
+(`--keep-zips` opts out), and objects may be stored compressed; see
+[`ARCHIVE_CAS.md`](ARCHIVE_CAS.md#compression).
 
 ## Preview
 

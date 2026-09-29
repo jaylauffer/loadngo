@@ -19,6 +19,32 @@ pub const ARCHIVE_DELETE_LOG_FORMAT_V1: &str = "loadngo-archive-delete-log-v1";
 pub const ARCHIVE_ADD_LOG_FORMAT_V1: &str = "loadngo-archive-add-log-v1";
 pub const ARCHIVE_MERGE_LOG_FORMAT_V1: &str = "loadngo-archive-merge-log-v1";
 pub const DEFAULT_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+pub const ARCHIVE_COMPRESSION_FORMAT_V1: &str = "loadngo-archive-cas-compression-v1";
+/// A root's compression setting, at `<root>/compression.json`. Without it (the default)
+/// new objects are stored as they are.
+pub const COMPRESSION_SETTINGS_FILE: &str = "compression.json";
+/// The zstd level a root gets when compression is turned on without one.
+pub const DEFAULT_COMPRESSION_LEVEL: i32 = 9;
+/// Objects smaller than this are always stored as they are: the file system's block
+/// rounding eats what compression could save.
+pub const MIN_COMPRESSED_OBJECT_BYTES: u64 = 8 * 1024;
+/// How much of a large object is compressed first, quickly, to skip media and other
+/// already-compressed content without compressing all of it.
+const COMPRESSION_SAMPLE_BYTES: usize = 1024 * 1024;
+
+/// A root's compression setting (`compression.json`).
+///
+/// Compression changes only how an object's bytes sit on disk. An object is named by the
+/// BLAKE3 hash of its uncompressed bytes either way and [`ArchiveObject::size`] stays
+/// the uncompressed size, so manifests, roots and signatures do not change, and every
+/// reader in this module returns (and verifies) the uncompressed bytes. A compressed
+/// object is `objects/<xx>/<hash>.zst` (one zstd stream) instead of `<hash>.blob`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchiveCompression {
+    pub format: String,
+    pub codec: String,
+    pub level: i32,
+}
 
 /// A record of a manual content removal: which paths were dropped from a
 /// manifest, by whom, and why. Written as a sidecar next to the superseding
@@ -528,6 +554,53 @@ pub struct ArchiveCasStorage {
     partials: PathBuf,
     manifests: PathBuf,
     buffer_bytes: usize,
+    /// The zstd level new objects are compressed at, when this root compresses.
+    compression_level: Option<i32>,
+}
+
+/// Why a compression attempt kept an object as it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeptRaw {
+    /// Smaller than [`MIN_COMPRESSED_OBJECT_BYTES`].
+    Small,
+    /// Compressing saved too little (less than a sixteenth, or less than 4 KiB).
+    Incompressible,
+}
+
+/// The uncompressed bytes of a stored object, whichever form it is stored in.
+pub enum ObjectReader {
+    Raw(File),
+    Zstd(Box<zstd::stream::read::Decoder<'static, std::io::BufReader<File>>>),
+}
+
+impl Read for ObjectReader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Raw(file) => file.read(buffer),
+            Self::Zstd(decoder) => decoder.read(buffer),
+        }
+    }
+}
+
+/// A stored object as a seekable file of its uncompressed bytes: the object itself, or
+/// a temporary decompressed copy under `partials/` that is removed on drop.
+pub struct SeekableObject {
+    file: File,
+    temporary: Option<PathBuf>,
+}
+
+impl SeekableObject {
+    pub fn file(&mut self) -> &mut File {
+        &mut self.file
+    }
+}
+
+impl Drop for SeekableObject {
+    fn drop(&mut self) {
+        if let Some(temporary) = &self.temporary {
+            let _ = fs::remove_file(temporary);
+        }
+    }
 }
 
 impl ArchiveCasStorage {
@@ -546,13 +619,87 @@ impl ArchiveCasStorage {
         fs::create_dir_all(&objects)?;
         fs::create_dir_all(&partials)?;
         fs::create_dir_all(&manifests)?;
+        let compression_level = Self::read_compression(&root)?.map(|setting| setting.level);
         Ok(Self {
             root,
             objects,
             partials,
             manifests,
             buffer_bytes,
+            compression_level,
         })
+    }
+
+    fn read_compression(root: &Path) -> Result<Option<ArchiveCompression>> {
+        let path = root.join(COMPRESSION_SETTINGS_FILE);
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to read {}", path.display()))
+            }
+        };
+        let setting: ArchiveCompression = serde_json::from_slice(&bytes)
+            .with_context(|| format!("{} is not a compression setting", path.display()))?;
+        if setting.format != ARCHIVE_COMPRESSION_FORMAT_V1 || setting.codec != "zstd" {
+            bail!(
+                "{} names {} / {}; this build reads {ARCHIVE_COMPRESSION_FORMAT_V1} / zstd",
+                path.display(),
+                setting.format,
+                setting.codec
+            );
+        }
+        if !zstd::compression_level_range().contains(&setting.level) {
+            bail!(
+                "{} has zstd level {} out of range",
+                path.display(),
+                setting.level
+            );
+        }
+        Ok(Some(setting))
+    }
+
+    /// The zstd level new objects are compressed at, or `None` when this root stores
+    /// them as they are.
+    pub fn compression_level(&self) -> Option<i32> {
+        self.compression_level
+    }
+
+    /// Turns compression of new objects on at `level` (writes `compression.json`), or
+    /// off with `None`. Objects already stored keep their form; readers take both.
+    pub fn set_compression(&mut self, level: Option<i32>) -> Result<()> {
+        let path = self.root.join(COMPRESSION_SETTINGS_FILE);
+        match level {
+            Some(level) => {
+                if !zstd::compression_level_range().contains(&level) {
+                    bail!(
+                        "zstd level {level} is outside {:?}",
+                        zstd::compression_level_range()
+                    );
+                }
+                let setting = ArchiveCompression {
+                    format: ARCHIVE_COMPRESSION_FORMAT_V1.into(),
+                    codec: "zstd".into(),
+                    level,
+                };
+                let temporary = self.partials.join(format!(
+                    ".compression-{}-{}.partial",
+                    std::process::id(),
+                    unique_suffix()
+                ));
+                write_synced_file(&temporary, &serde_json::to_vec_pretty(&setting)?)?;
+                fs::rename(&temporary, &path)
+                    .with_context(|| format!("failed to write {}", path.display()))?;
+                sync_parent(&path)?;
+            }
+            None => match fs::remove_file(&path) {
+                Ok(()) => sync_parent(&path)?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            },
+        }
+        self.compression_level = level;
+        Ok(())
     }
 
     pub fn root(&self) -> &Path {
@@ -563,9 +710,255 @@ impl ArchiveCasStorage {
         &self.manifests
     }
 
+    /// Where the object is stored as it is (`.blob`). It may instead be stored
+    /// compressed ([`Self::compressed_object_path`]); read it with [`Self::open_object`].
     pub fn object_path(&self, hash: CasHash) -> PathBuf {
         let hex = hash.to_hex();
         self.objects.join(&hex[..2]).join(format!("{hex}.blob"))
+    }
+
+    /// A fresh, unused path under `partials/` for a temporary file.
+    pub fn scratch_path(&self, label: &str) -> PathBuf {
+        self.partials.join(format!(
+            ".{label}-{}-{}.partial",
+            std::process::id(),
+            unique_suffix()
+        ))
+    }
+
+    /// Where the object is stored when compressed (`.zst`).
+    pub fn compressed_object_path(&self, hash: CasHash) -> PathBuf {
+        let hex = hash.to_hex();
+        self.objects.join(&hex[..2]).join(format!("{hex}.zst"))
+    }
+
+    /// Whether the object is stored, in either form.
+    pub fn has_object(&self, hash: CasHash) -> bool {
+        self.object_path(hash).exists() || self.compressed_object_path(hash).exists()
+    }
+
+    /// Bytes the object takes on disk: both forms together while a compression pass
+    /// that stopped between them has left both.
+    pub fn stored_bytes(&self, hash: CasHash) -> Result<u64> {
+        let mut total = 0;
+        let mut found = false;
+        for path in [self.object_path(hash), self.compressed_object_path(hash)] {
+            match fs::metadata(&path) {
+                Ok(metadata) => {
+                    total += metadata.len();
+                    found = true;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        if !found {
+            bail!("archive object is missing: {hash}");
+        }
+        Ok(total)
+    }
+
+    /// The object's uncompressed bytes: the `.blob` when there is one, otherwise the
+    /// `.zst` decompressed as it is read. Not verified here; callers hash what they read.
+    pub fn open_object(&self, hash: CasHash) -> Result<ObjectReader> {
+        let raw = self.object_path(hash);
+        match File::open(&raw) {
+            Ok(file) => return Ok(ObjectReader::Raw(file)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to open {}", raw.display()))
+            }
+        }
+        let compressed = self.compressed_object_path(hash);
+        let file = File::open(&compressed).with_context(|| {
+            format!(
+                "archive object is missing: {} (nor {})",
+                raw.display(),
+                compressed.display()
+            )
+        })?;
+        Ok(ObjectReader::Zstd(Box::new(
+            zstd::stream::read::Decoder::new(file)
+                .with_context(|| format!("failed to read {}", compressed.display()))?,
+        )))
+    }
+
+    /// The object as a seekable file of its uncompressed bytes, for readers such as the
+    /// zip reader that need to seek. A compressed object is decompressed into a
+    /// temporary file first (and the copy checked against its hash).
+    pub fn open_object_seekable(&self, expected: ArchiveObject) -> Result<SeekableObject> {
+        if let Ok(file) = File::open(self.object_path(expected.hash)) {
+            return Ok(SeekableObject {
+                file,
+                temporary: None,
+            });
+        }
+        let temporary = self.partials.join(format!(
+            ".decompressed-{}-{}.partial",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let mut seekable = SeekableObject {
+            file: File::create(&temporary)
+                .with_context(|| format!("failed to create {}", temporary.display()))?,
+            temporary: Some(temporary),
+        };
+        let mut reader = self.open_object(expected.hash)?;
+        let (hash, size) = self.copy_hashing(&mut reader, &mut seekable.file)?;
+        check_object(expected, hash, size)?;
+        seekable.file.seek(SeekFrom::Start(0))?;
+        Ok(seekable)
+    }
+
+    /// Copies all of `reader` into `writer`, returning the BLAKE3 hash and length.
+    fn copy_hashing(
+        &self,
+        reader: &mut dyn Read,
+        writer: &mut dyn Write,
+    ) -> Result<(CasHash, u64)> {
+        let mut buffer = vec![0_u8; self.buffer_bytes];
+        let mut hasher = blake3::Hasher::new();
+        let mut size = 0_u64;
+        loop {
+            let count = match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => count,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error.into()),
+            };
+            hasher.update(&buffer[..count]);
+            writer.write_all(&buffer[..count])?;
+            size += count as u64;
+        }
+        Ok((CasHash::from_bytes(*hasher.finalize().as_bytes()), size))
+    }
+
+    /// Compresses the uncompressed object bytes in `raw` into a new file `out` when that
+    /// pays, checking that `raw` really holds `expected` as it goes and that `out`
+    /// decompresses back to it. Returns the compressed length, or why the object stays
+    /// as it is (then `out` does not exist).
+    ///
+    /// # Errors
+    /// When `raw` does not hash to `expected` (nothing is written), or on I/O failure.
+    pub fn compress_to(
+        &self,
+        raw: &Path,
+        expected: ArchiveObject,
+        level: i32,
+        out: &Path,
+    ) -> Result<std::result::Result<u64, KeptRaw>> {
+        if expected.size < MIN_COMPRESSED_OBJECT_BYTES {
+            return Ok(Err(KeptRaw::Small));
+        }
+        let mut source =
+            File::open(raw).with_context(|| format!("failed to open {}", raw.display()))?;
+        if expected.size > COMPRESSION_SAMPLE_BYTES as u64 {
+            // A fast look at the start: media and archives are already compressed.
+            let mut sample = vec![0_u8; COMPRESSION_SAMPLE_BYTES];
+            source.read_exact(&mut sample)?;
+            let packed = zstd::bulk::compress(&sample, 1)?;
+            if packed.len() as u64 * 100 > sample.len() as u64 * 97 {
+                return Ok(Err(KeptRaw::Incompressible));
+            }
+            source.seek(SeekFrom::Start(0))?;
+        }
+        let result = (|| -> Result<std::result::Result<u64, KeptRaw>> {
+            let file = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(out)
+                .with_context(|| format!("failed to create {}", out.display()))?;
+            let mut encoder = zstd::stream::write::Encoder::new(file, level)?;
+            encoder.include_checksum(true)?;
+            encoder.set_pledged_src_size(Some(expected.size))?;
+            let (hash, size) = self.copy_hashing(&mut source, &mut encoder)?;
+            check_object(expected, hash, size)
+                .with_context(|| format!("{} is damaged; not compressed", raw.display()))?;
+            encoder.finish()?.sync_all()?;
+            let compressed = fs::metadata(out)?.len();
+            let saved = expected.size.saturating_sub(compressed);
+            if saved < expected.size / 16 || saved < 4096 {
+                fs::remove_file(out)?;
+                return Ok(Err(KeptRaw::Incompressible));
+            }
+            let mut decoder = zstd::stream::read::Decoder::new(File::open(out)?)?;
+            let (hash, size) = self.copy_hashing(&mut decoder, &mut std::io::sink())?;
+            check_object(expected, hash, size)
+                .context("compressed copy does not decompress to the object")?;
+            Ok(Ok(compressed))
+        })();
+        if !matches!(result, Ok(Ok(_))) {
+            let _ = fs::remove_file(out);
+        }
+        result
+    }
+
+    /// For a new object whose uncompressed bytes are in `partial`: what to publish and
+    /// where. When this root compresses and it pays, a verified compressed copy (the
+    /// partial is then removed) as `.zst`; otherwise the partial itself as `.blob`.
+    fn prepare_publish(&self, partial: &Path, object: ArchiveObject) -> Result<(PathBuf, PathBuf)> {
+        if let Some(level) = self.compression_level {
+            let compressed = self.partials.join(format!(
+                ".compressed-{}-{}.partial",
+                std::process::id(),
+                unique_suffix()
+            ));
+            if self
+                .compress_to(partial, object, level, &compressed)?
+                .is_ok()
+            {
+                fs::remove_file(partial)?;
+                return Ok((compressed, self.compressed_object_path(object.hash)));
+            }
+        }
+        Ok((partial.to_path_buf(), self.object_path(object.hash)))
+    }
+
+    /// Stores an object already present as a `.blob` compressed instead, when that pays:
+    /// the verified `.zst` is published first, then the `.blob` removed, so the object
+    /// is readable throughout. Returns `(bytes before, bytes after)`, or why it stays.
+    pub fn compress_stored_object(
+        &self,
+        expected: ArchiveObject,
+        level: i32,
+    ) -> Result<std::result::Result<(u64, u64), KeptRaw>> {
+        let raw = self.object_path(expected.hash);
+        let compressed_path = self.compressed_object_path(expected.hash);
+        let before = fs::metadata(&raw)
+            .with_context(|| format!("archive object is missing: {}", raw.display()))?
+            .len();
+        if compressed_path.exists() {
+            // A pass stopped between publishing the `.zst` and removing the `.blob`.
+            self.verify_compressed(expected)?;
+            fs::remove_file(&raw)?;
+            sync_parent(&raw)?;
+            return Ok(Ok((before, fs::metadata(&compressed_path)?.len())));
+        }
+        let temporary = self.partials.join(format!(
+            ".compressed-{}-{}.partial",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let after = match self.compress_to(&raw, expected, level, &temporary)? {
+            Ok(after) => after,
+            Err(kept) => return Ok(Err(kept)),
+        };
+        let published = fs::hard_link(&temporary, &compressed_path);
+        let _ = fs::remove_file(&temporary);
+        published.with_context(|| format!("failed to publish {}", compressed_path.display()))?;
+        sync_parent(&compressed_path)?;
+        fs::remove_file(&raw).with_context(|| format!("failed to remove {}", raw.display()))?;
+        sync_parent(&raw)?;
+        Ok(Ok((before, after)))
+    }
+
+    fn verify_compressed(&self, expected: ArchiveObject) -> Result<()> {
+        let path = self.compressed_object_path(expected.hash);
+        let mut decoder = zstd::stream::read::Decoder::new(
+            File::open(&path).with_context(|| format!("failed to open {}", path.display()))?,
+        )?;
+        let (hash, size) = self.copy_hashing(&mut decoder, &mut std::io::sink())?;
+        check_object(expected, hash, size).with_context(|| format!("{}", path.display()))
     }
 
     /// Adds an in-memory control object, such as a manifest, to the archive.
@@ -622,7 +1015,7 @@ impl ArchiveCasStorage {
                 Err(error) => Err(error.into()),
             }
         };
-        if existing(&object_path)? {
+        if self.compressed_object_path(object.hash).exists() || existing(&object_path)? {
             fs::remove_file(&temporary)?;
             return Ok(ArchiveIngestResult {
                 object,
@@ -630,10 +1023,17 @@ impl ArchiveCasStorage {
                 resumed_bytes: 0,
             });
         }
-        match fs::hard_link(&temporary, &object_path) {
+        let (source, target) = match self.prepare_publish(&temporary, object) {
+            Ok(publish) => publish,
+            Err(error) => {
+                let _ = fs::remove_file(&temporary);
+                return Err(error);
+            }
+        };
+        match fs::hard_link(&source, &target) {
             Ok(()) => {
-                sync_parent(&object_path)?;
-                fs::remove_file(&temporary)?;
+                sync_parent(&target)?;
+                fs::remove_file(&source)?;
                 Ok(ArchiveIngestResult {
                     object,
                     inserted: true,
@@ -641,8 +1041,10 @@ impl ArchiveCasStorage {
                 })
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                existing(&object_path)?;
-                fs::remove_file(&temporary)?;
+                if target == object_path {
+                    existing(&object_path)?;
+                }
+                fs::remove_file(&source)?;
                 Ok(ArchiveIngestResult {
                     object,
                     inserted: false,
@@ -650,7 +1052,7 @@ impl ArchiveCasStorage {
                 })
             }
             Err(error) => {
-                let _ = fs::remove_file(&temporary);
+                let _ = fs::remove_file(&source);
                 Err(error).context("failed to publish archive content object")
             }
         }
@@ -665,7 +1067,7 @@ impl ArchiveCasStorage {
         let object_path = self.object_path(hash);
         self.ensure_object_parent(&object_path)?;
 
-        if object_path.exists() {
+        if self.has_object(hash) {
             self.verify_object(object)?;
             return Ok(ArchiveIngestResult {
                 object,
@@ -680,11 +1082,18 @@ impl ArchiveCasStorage {
             unique_suffix()
         ));
         write_synced_file(&temporary, bytes)?;
-        match fs::hard_link(&temporary, &object_path) {
+        let (source, target) = match self.prepare_publish(&temporary, object) {
+            Ok(publish) => publish,
+            Err(error) => {
+                let _ = fs::remove_file(&temporary);
+                return Err(error);
+            }
+        };
+        match fs::hard_link(&source, &target) {
             Ok(()) => {
-                sync_parent(&object_path)?;
-                fs::remove_file(&temporary)?;
-                sync_parent(&temporary)?;
+                sync_parent(&target)?;
+                fs::remove_file(&source)?;
+                sync_parent(&source)?;
                 Ok(ArchiveIngestResult {
                     object,
                     inserted: true,
@@ -693,14 +1102,17 @@ impl ArchiveCasStorage {
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 self.verify_object(object)?;
-                fs::remove_file(&temporary)?;
+                fs::remove_file(&source)?;
                 Ok(ArchiveIngestResult {
                     object,
                     inserted: false,
                     resumed_bytes: 0,
                 })
             }
-            Err(error) => Err(error).context("failed to publish archive content object"),
+            Err(error) => {
+                let _ = fs::remove_file(&source);
+                Err(error).context("failed to publish archive content object")
+            }
         }
     }
 
@@ -795,7 +1207,7 @@ impl ArchiveCasStorage {
         let object_path = self.object_path(hash);
         self.ensure_object_parent(&object_path)?;
 
-        if object_path.exists() {
+        if self.has_object(hash) {
             self.verify_object(object)?;
             fs::remove_file(&partial_path).with_context(|| {
                 format!(
@@ -810,6 +1222,9 @@ impl ArchiveCasStorage {
             });
         }
 
+        // A compressed copy replaces the resumable partial; if publishing then fails,
+        // the next ingest of this source starts over.
+        let (partial_path, object_path) = self.prepare_publish(&partial_path, object)?;
         match fs::hard_link(&partial_path, &object_path) {
             Ok(()) => {
                 sync_parent(&object_path)?;
@@ -847,35 +1262,58 @@ impl ArchiveCasStorage {
         }
     }
 
+    /// Checks the object's uncompressed bytes against its hash and size, whichever
+    /// form it is stored in.
     pub fn verify_object(&self, expected: ArchiveObject) -> Result<()> {
         let path = self.object_path(expected.hash);
-        let metadata = fs::metadata(&path)
-            .with_context(|| format!("archive object is missing: {}", path.display()))?;
-        if metadata.len() != expected.size {
-            bail!(
+        match fs::metadata(&path) {
+            Ok(metadata) if metadata.len() != expected.size => bail!(
                 "archive object size mismatch for {}: expected {}, got {}",
                 expected.hash,
                 expected.size,
                 metadata.len()
-            );
+            ),
+            Ok(_) => {
+                let actual = hash_file_streaming(&path, self.buffer_bytes)?;
+                if actual != expected.hash {
+                    bail!(
+                        "archive object hash mismatch for {}: expected {}, got {}",
+                        path.display(),
+                        expected.hash,
+                        actual
+                    );
+                }
+                Ok(())
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.verify_compressed(expected)
+            }
+            Err(error) => Err(error).with_context(|| format!("failed to stat {}", path.display())),
         }
-        let actual = hash_file_streaming(&path, self.buffer_bytes)?;
-        if actual != expected.hash {
-            bail!(
-                "archive object hash mismatch for {}: expected {}, got {}",
-                path.display(),
-                expected.hash,
-                actual
-            );
-        }
-        Ok(())
     }
 
+    /// Up to `size` uncompressed bytes from `offset`. A compressed object is decompressed
+    /// from its start, so reads far into a large one cost time in proportion.
     pub fn read_range(&self, hash: CasHash, offset: u64, size: usize) -> Result<Vec<u8>> {
         let path = self.object_path(hash);
-        let length = fs::metadata(&path)
-            .with_context(|| format!("archive object is missing: {}", path.display()))?
-            .len();
+        let length = match fs::metadata(&path) {
+            Ok(metadata) => metadata.len(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let mut reader = self.open_object(hash)?;
+                let skipped = std::io::copy(&mut (&mut reader).take(offset), &mut std::io::sink())?;
+                if skipped < offset {
+                    bail!("offset {offset} past end of archive object {hash}");
+                }
+                let mut bytes = Vec::with_capacity(size.min(self.buffer_bytes));
+                reader
+                    .take(u64::try_from(size).unwrap_or(u64::MAX))
+                    .read_to_end(&mut bytes)?;
+                return Ok(bytes);
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to stat {}", path.display()))
+            }
+        };
         if offset > length {
             bail!("offset {offset} past end of archive object {hash}");
         }
@@ -1143,13 +1581,20 @@ impl ArchiveCasStorage {
     /// that no manifest anywhere references this hash. This performs no such
     /// check itself -- it is the low-level primitive a GC sweep calls once
     /// per confirmed-orphaned object.
+    /// Returns the bytes freed, counting both forms if both are stored.
     pub fn remove_object(&self, hash: CasHash) -> Result<u64> {
-        let path = self.object_path(hash);
-        let size = fs::metadata(&path)
-            .with_context(|| format!("archive object is missing: {}", path.display()))?
-            .len();
-        fs::remove_file(&path)
-            .with_context(|| format!("failed to remove archive object {}", path.display()))?;
+        let size = self.stored_bytes(hash)?;
+        for path in [self.object_path(hash), self.compressed_object_path(hash)] {
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("failed to remove archive object {}", path.display())
+                    })
+                }
+            }
+        }
         Ok(size)
     }
 
@@ -1189,7 +1634,7 @@ impl ArchiveCasStorage {
                 let Some(stem) = path
                     .file_name()
                     .and_then(|name| name.to_str())
-                    .and_then(|name| name.strip_suffix(".blob"))
+                    .and_then(object_stem)
                 else {
                     continue;
                 };
@@ -1203,6 +1648,14 @@ impl ArchiveCasStorage {
             }
         }
         objects.sort_by_key(|(hash, _)| *hash);
+        // An object stored in both forms is one object taking both sizes.
+        objects.dedup_by(|later, earlier| {
+            let same = later.0 == earlier.0;
+            if same {
+                earlier.1 += later.1;
+            }
+            same
+        });
         Ok(objects)
     }
 
@@ -1227,19 +1680,20 @@ impl ArchiveCasStorage {
                 .with_context(|| format!("failed to enumerate {}", shard.path().display()))?
             {
                 let name = blob?.file_name();
-                let Some(stem) = name.to_str().and_then(|name| name.strip_suffix(".blob")) else {
+                let Some(stem) = name.to_str().and_then(object_stem) else {
                     continue;
                 };
                 let bytes = hex::decode(stem)
-                    .with_context(|| format!("non-hex object file name: {stem}.blob"))?;
+                    .with_context(|| format!("non-hex object file name: {stem}"))?;
                 hashes.push(
                     CasHash::from_slice(&bytes)
-                        .with_context(|| format!("invalid object hash: {stem}.blob"))?,
+                        .with_context(|| format!("invalid object hash: {stem}"))?,
                 );
             }
             on_progress(hashes.len());
         }
         hashes.sort();
+        hashes.dedup();
         Ok(hashes)
     }
 
@@ -1320,18 +1774,18 @@ impl ArchiveCasStorage {
 
     fn restore_object_to_temporary(&self, expected: ArchiveObject, temporary: &Path) -> Result<()> {
         let source_path = self.object_path(expected.hash);
-        let source_metadata = fs::metadata(&source_path)
-            .with_context(|| format!("archive object is missing: {}", source_path.display()))?;
-        if source_metadata.len() != expected.size {
-            bail!(
-                "archive object size mismatch for {}: expected {}, got {}",
-                expected.hash,
-                expected.size,
-                source_metadata.len()
-            );
+        if let Ok(source_metadata) = fs::metadata(&source_path) {
+            if source_metadata.len() != expected.size {
+                bail!(
+                    "archive object size mismatch for {}: expected {}, got {}",
+                    expected.hash,
+                    expected.size,
+                    source_metadata.len()
+                );
+            }
         }
 
-        let mut source = File::open(&source_path)?;
+        let mut source = self.open_object(expected.hash)?;
         let mut destination = OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -1396,6 +1850,29 @@ impl SourceStamp {
             file_type: metadata.file_type(),
         })
     }
+}
+
+/// The hash part of an object file name, `<hash>.blob` or `<hash>.zst`.
+fn object_stem(name: &str) -> Option<&str> {
+    name.strip_suffix(".blob")
+        .or_else(|| name.strip_suffix(".zst"))
+}
+
+fn check_object(expected: ArchiveObject, hash: CasHash, size: u64) -> Result<()> {
+    if size != expected.size {
+        bail!(
+            "archive object size mismatch for {}: expected {}, got {size}",
+            expected.hash,
+            expected.size
+        );
+    }
+    if hash != expected.hash {
+        bail!(
+            "archive object hash mismatch: expected {}, got {hash}",
+            expected.hash
+        );
+    }
+    Ok(())
 }
 
 fn hash_file_streaming(path: &Path, buffer_bytes: usize) -> Result<CasHash> {

@@ -15,10 +15,13 @@ An archive root has this layout:
 
 ```text
 loadngo-archive-cas/
-  objects/ab/<blake3-hex>.blob
+  objects/ab/<blake3-hex>.blob     stored as it is
+  objects/ab/<blake3-hex>.zst      or compressed (see Compression)
   partials/<resume-key>.part
   ingest/<archive-id>.jsonl
   manifests/<archive-id>-<blake3-hex>.json
+  compression.json                 present when new objects are compressed
+  compression-kept-raw.txt         objects a compression pass left as they are
 ```
 
 Each object is addressed by its BLAKE3-256 digest. A manifest is both written
@@ -65,9 +68,48 @@ not record the source mount path or the staging mount path.
   blob and reports `complete within declared scope`, but it does **not** mean
   every byte from the original source was captured.
 
+- Zips (`.zip`, `.ipa`, `.jar`, `.apk`, and zips inside them up to three levels)
+  are unpacked into folders of their members after the capture, so their
+  contents are stored and deduplicated like any other file (since 2026-09-30;
+  `--keep-zips` stores them whole). The unpacked version supersedes the
+  capture and has an `.unpack-log.json` beside it; a zip that cannot be
+  unpacked stays whole and is listed there. Nothing is deleted: the zips' own
+  bytes stay until the capture version is purged. Office documents stay whole.
+  This is the same unpack as `archive_cas_unpack`, which does it for archives
+  captured before.
+
 The source is never changed by ingestion. Archive CAS has no automatic partial
 garbage collection; keep partials until a verified archive exists, then decide
 on cleanup as a separate, explicitly authorized maintenance operation.
+
+## Compression
+
+Since 2026-09-30 an object may be stored compressed with zstd as
+`objects/<xx>/<hash>.zst` instead of `<hash>.blob`. Compression changes only
+how bytes sit on the disk: an object is still named by the BLAKE3 hash of its
+**uncompressed** bytes, manifests still record its uncompressed size, and
+roots, signatures and dedup are unchanged. Every reader (`verify_object`,
+`read_range`, restore, the browser's preview, Kimi's `cas_*` tools, unpack,
+purge and GC) takes either form and checks the uncompressed bytes against the
+hash. Builds from before this change cannot read `.zst` objects: rebuild the
+tools and the browser before using a compressed root.
+
+- `archive_cas_compress --cas-root R --enable` writes `compression.json`
+  (zstd level, default 9) so every new object is stored compressed, then
+  compresses the objects already stored. `--settings-only` only changes the
+  setting; `--disable` turns it off (stored objects keep their form).
+- `--dry-run` compresses into scratch files and reports the saving without
+  changing anything; `--max-gib N` bounds it to a sample.
+- Each `.blob` is hashed while it is compressed, so a damaged one is reported
+  and left alone. The `.zst` is published only after it decompresses back to
+  the same hash, and the `.blob` is removed after that; a stop in between
+  leaves both, and the next run finishes the job.
+- Objects under 8 KiB stay as they are (block rounding eats the saving), and so
+  do objects that compress by less than a sixteenth: a 1 MiB sample of large
+  objects is tried first so media and archives are skipped quickly. Those
+  are listed in `compression-kept-raw.txt` and not retried.
+- Reading from an offset in a compressed object decompresses from its start;
+  reading a compressed zip for unpacking decompresses it to a temporary file.
 
 ## Commands
 
@@ -91,6 +133,17 @@ cargo run -p data --bin archive_cas_ingest -- \
 The command prints the manifest file and its archive-root hash. If it is
 interrupted, rerun the identical command; matching partial files resume after
 prefix verification.
+When the source holds zips it also prints the unpacked version, which is the
+archive's current manifest.
+
+Try compression on a sample, then turn it on and compress what is stored:
+
+```sh
+cargo run --release -p data --bin archive_cas_compress -- \
+  --cas-root /path/to/writable/loadngo-archive-cas --dry-run --max-gib 20
+cargo run --release -p data --bin archive_cas_compress -- \
+  --cas-root /path/to/writable/loadngo-archive-cas --enable
+```
 
 Create a successor manifest that excludes one already-recorded unreadable
 entry without rereading the source or modifying the original manifest:

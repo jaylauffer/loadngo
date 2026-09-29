@@ -283,7 +283,7 @@ fn plan(
             // retired archive can list hundreds of thousands of objects another archive
             // shares, and each lookup on a spinning drive costs ~10 ms.
             .filter(|hash| !referenced.contains(hash))
-            .filter(|hash| store.object_path(*hash).exists())
+            .filter(|hash| store.has_object(*hash))
             .collect(),
     };
     let mut objects = Vec::new();
@@ -300,7 +300,7 @@ fn plan(
         };
         objects.push(PurgeObject {
             hash,
-            size: file_size(&store.object_path(hash)),
+            size: store.stored_bytes(hash).unwrap_or(0),
             origin,
         });
     }

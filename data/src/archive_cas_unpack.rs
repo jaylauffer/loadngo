@@ -9,7 +9,6 @@
 //! retires the superseded manifest.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::fs::File;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -68,6 +67,15 @@ fn is_zip_path(path: &str) -> bool {
     name.rsplit_once('.').is_some_and(|(stem, extension)| {
         !stem.is_empty() && UNPACK_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
     })
+}
+
+/// Whether `manifest` holds any file [`unpack_zips`] would try to unpack.
+#[must_use]
+pub fn has_zips(manifest: &ArchiveManifest) -> bool {
+    manifest
+        .entries
+        .iter()
+        .any(|e| matches!(e, ArchiveEntry::File { path, .. } if is_zip_path(path)))
 }
 
 /// A member name as a clean relative path, or `None` when it is unsafe (`..`, NUL) and
@@ -141,12 +149,14 @@ fn check_zip(
     store: &ArchiveCasStorage,
     object: ArchiveObject,
 ) -> std::result::Result<(usize, u64), String> {
-    let mut file =
-        File::open(store.object_path(object.hash)).map_err(|e| format!("object missing: {e}"))?;
-    if !looks_like_zip(&mut file) {
+    let mut object = store
+        .open_object_seekable(object)
+        .map_err(|e| format!("object missing: {e:#}"))?;
+    let file = object.file();
+    if !looks_like_zip(file) {
         return Err("not a zip".into());
     }
-    let entries = read_entries(&mut file).map_err(|e| format!("{e:#}"))?;
+    let entries = read_entries(file).map_err(|e| format!("{e:#}"))?;
     if let Some(entry) = entries.iter().find(|e| !e.is_supported()) {
         return Err(if entry.encrypted {
             format!("encrypted member {}", entry.name)
@@ -183,8 +193,11 @@ fn unpack_one(
     object: ArchiveObject,
 ) -> std::result::Result<Unpacked, String> {
     check_zip(store, object)?;
-    let mut file = File::open(store.object_path(object.hash)).map_err(|e| e.to_string())?;
-    let members = read_entries(&mut file).map_err(|e| format!("{e:#}"))?;
+    let mut seekable = store
+        .open_object_seekable(object)
+        .map_err(|e| format!("{e:#}"))?;
+    let file = seekable.file();
+    let members = read_entries(file).map_err(|e| format!("{e:#}"))?;
     let mut out = Unpacked {
         entries: Vec::new(),
         nested: Vec::new(),
@@ -212,7 +225,7 @@ fn unpack_one(
             folders.insert(path);
             continue;
         }
-        let mut reader = member_reader(&mut file, member).map_err(|e| format!("{e:#}"))?;
+        let mut reader = member_reader(&mut *file, member).map_err(|e| format!("{e:#}"))?;
         let stored = store
             .add_stream(&mut reader)
             .map_err(|e| format!("{path}: {e:#}"))?;

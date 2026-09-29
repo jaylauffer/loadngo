@@ -19,6 +19,8 @@ loadngo-anchor.workspace = true
 # Zip members: raw deflate and CRC-32, both pure Rust and already in the workspace lock.
 flate2 = "1"
 crc32fast = "1"
+# Compressed Archive CAS objects (`<hash>.zst`); libzstd, built from source by `zstd-sys`.
+zstd = "0.13"
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
