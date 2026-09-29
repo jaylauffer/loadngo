@@ -119,7 +119,16 @@ of the bytes examined) at 8.4 MiB/s; level 9 would save 4.05 GiB (50.4%). The
 level 3 run read the drive cold, so its rate is the drive's: random reads
 (seek-bound), CPU about 12% busy. At that rate a full pass over this 733 GiB
 root takes about a day; the level 9 rate (13.7 MiB/s) was measured on a warm
-page cache and is not comparable. No real root has been compressed yet.
+page cache and is not comparable.
+
+First real root, 2026-09-30, at Jay's request: `pudding-cas` on Zhoenus II
+(archive `pudding-20260917`, a USB SSD), `--enable --level 3`: 83,731 objects
+(47.69 GiB) examined in 637 s (76.6 MiB/s); 31,369 compressed, 19.91 GiB to
+7.97 GiB; 49,093 under 8 KiB and 3,269 incompressible kept as they were; 0
+failures. The volume went from 49 to 37 GiB used. Afterwards
+`archive_cas_verify` re-hashed all 83,730 unique objects (51.1 GB
+uncompressed, 60 s; capture complete) and `archive_cas_sign verify` accepted
+the signature against the trusted key.
 
 ## Commands
 
