@@ -210,6 +210,44 @@ Measured on the M4 Pro with the 4-bit experts, with no thermal warning at any po
 
 ## M1, second stage: what we are attempting (in progress: attention, router, KDA and fused blocks done 2026-09-29)
 
+### Memory: weights kept resident, no per-layer churn (2026-09-29, later)
+
+The stalls after long prompts were memory pressure, found with `vmmap --summary` on the
+running process:
+
+- Right after loading, 25 GB of the 27.6 GB of GPU weight memory was compressed or
+  swapped out. The experts were read into heap buffers and only then copied into GPU
+  memory, so both copies existed at once. The heap copies, once freed, stayed resident
+  in malloc's empty regions (11.4 GB), and the system compressed the oldest dirty pages:
+  the weights just copied.
+- Even after that was fixed, 13–15 GB stayed compressed. A mixture-of-experts model
+  touches 8 of 256 experts per layer per token, so most expert pages look cold. When a
+  compressed expert was selected, the GPU waited for decompression, taking seconds per
+  token.
+
+Fixes:
+
+- **Wiring.** `Gpu::set_wire_residents` locks the resident arenas with `mlock` (the user
+  wire limit here is 56 GB). They are unlocked when freed. `tests/wired.rs` covers it,
+  and Kimi turns it on. After loading, 0 bytes of GPU weight memory are compressed.
+- **Loading.** Kimi reads each MoE layer's experts and moves them into GPU memory at
+  once, reusing the heap buffers for the next layer (kimi `preload_experts(.., device)`).
+  Loading takes about 9 s instead of 17, and the peak footprint is 37 GB, not 41.
+- **Churn.** The MoE layer's large arrays (router logits, shared-expert rows, every
+  expert's output) live in one scratch buffer reused across layers and passes. The GPU
+  gathers each expert's input rows itself, and the mix reads the outputs through a
+  slot-to-position table, in the original order. The page reclaims that the 3,895-token
+  prompt adds on top of loading fell from about 1.4 million to 0.34 million. The 2.2
+  million at load are the wired pages being faulted in once.
+
+Same 3,895-token prompt, three runs:
+
+| | Before | After |
+|---|---:|---:|
+| Prompt pass | 51 s | 44.2–46.8 s |
+| First token after it | 1.5–5.9 s | 0.24–0.30 s |
+| Then | 0.04 s/token | 0.04 s/token |
+
 ### Fewer round trips: fused blocks (2026-09-29, later)
 
 Decoding one token took about 187 GPU round trips. Each cost about 0.25–0.4 ms of submit

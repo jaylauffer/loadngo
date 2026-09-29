@@ -2,6 +2,7 @@
 
 use std::ops::Range;
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -74,6 +75,10 @@ pub struct Gpu {
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     /// The arena residents are carved from now, and how much of it is used.
     arena: Mutex<Option<(Arc<Arena>, usize)>>,
+    /// Lock new arenas in physical memory; bytes locked; arenas that could not be.
+    wire: bool,
+    wired: AtomicUsize,
+    wire_failures: AtomicUsize,
     bf16: [Pipeline; 3],
     mxfp4: [Pipeline; 3],
     gemm_bf16: Pipeline,
@@ -153,6 +158,9 @@ impl Gpu {
             device,
             queue,
             arena: Mutex::new(None),
+            wire: false,
+            wired: AtomicUsize::new(0),
+            wire_failures: AtomicUsize::new(0),
             bf16,
             mxfp4,
             gemm_bf16,
@@ -207,6 +215,27 @@ impl Gpu {
 
     /// Read-only memory shared by the CPU and GPU, filled once from `bytes`: model weights
     /// that many batches read at the same time.
+    /// Locks the memory of residents made from now on in physical memory (`mlock`), so
+    /// the system never compresses or swaps it out. Weights are read by the GPU at
+    /// unpredictable times (a mixture-of-experts model touches a few experts per token),
+    /// and under memory pressure the cold ones were compressed and had to be
+    /// decompressed in the middle of a token, for seconds. Arenas that cannot be locked
+    /// (the system's wire limit) still work, unlocked, and are counted in
+    /// [`Gpu::wire_failures`]. Unlocked when the arena is freed.
+    pub fn set_wire_residents(&mut self, wire: bool) {
+        self.wire = wire;
+    }
+
+    /// Bytes of resident memory locked by [`Gpu::set_wire_residents`] so far.
+    pub fn wired_bytes(&self) -> usize {
+        self.wired.load(Ordering::Relaxed)
+    }
+
+    /// Arenas that could not be locked.
+    pub fn wire_failures(&self) -> usize {
+        self.wire_failures.load(Ordering::Relaxed)
+    }
+
     pub fn resident(&self, bytes: &[u8]) -> Result<Arc<Resident>, Error> {
         self.carve(bytes.len(), |dst| dst.copy_from_slice(bytes))
     }
@@ -239,9 +268,20 @@ impl Gpu {
             }
             None => {
                 let buffer = self.buffer(len.max(ARENA_BYTES))?;
+                // SAFETY: the buffer's shared-storage contents are mapped for `len` bytes
+                // for as long as the buffer lives; the arena unlocks them before release.
+                let wired = self.wire
+                    && unsafe { libc::mlock(buffer.raw.contents().as_ptr().cast(), buffer.len) }
+                        == 0;
+                if wired {
+                    self.wired.fetch_add(buffer.len, Ordering::Relaxed);
+                } else if self.wire {
+                    self.wire_failures.fetch_add(1, Ordering::Relaxed);
+                }
                 let arena = Arc::new(Arena {
                     raw: buffer.raw,
                     len: buffer.len,
+                    wired,
                 });
                 if len < ARENA_BYTES {
                     *current = Some((Arc::clone(&arena), len.div_ceil(ARENA_ALIGN) * ARENA_ALIGN));
@@ -340,6 +380,18 @@ const ARENA_ALIGN: usize = 256;
 struct Arena {
     raw: Retained<ProtocolObject<dyn MTLBuffer>>,
     len: usize,
+    /// Locked in physical memory with `mlock` (see [`Gpu::set_wire_residents`]).
+    wired: bool,
+}
+
+impl Drop for Arena {
+    fn drop(&mut self) {
+        if self.wired {
+            // SAFETY: the range was locked when the arena was made and is still mapped:
+            // the Metal buffer is released only after this.
+            unsafe { libc::munlock(self.raw.contents().as_ptr().cast(), self.len) };
+        }
+    }
 }
 
 // SAFETY: each byte range of an arena is written once, when its resident is carved and
