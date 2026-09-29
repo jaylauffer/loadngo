@@ -208,7 +208,50 @@ Measured on the M4 Pro with the 4-bit experts, with no thermal warning at any po
 - `metal-compute/tests/gemm_timing.rs` holds the timing experiments (ignored tests, run
   by hand).
 
-## M1, second stage: what we are attempting (in progress: attention, router and KDA done 2026-09-29)
+## M1, second stage: what we are attempting (in progress: attention, router, KDA and fused blocks done 2026-09-29)
+
+### Fewer round trips: fused blocks (2026-09-29, later)
+
+Decoding one token took about 187 GPU round trips. Each cost about 0.25–0.4 ms of submit
+and completion latency on top of its GPU work, roughly 37 of the 50 ms per token. Three
+blocks are now each one command buffer. Their intermediates stay in GPU memory between
+stages, with barriers where one stage reads another's output.
+
+- **KDA block**, 4 round trips to 1: projections, both low-rank halves, the causal
+  convolutions carrying their history, normalization, decay, sigmoid, the recurrence,
+  the gated per-head `RMSNorm` and the output projection.
+- **MLA block**, 4 to 1: projections, the latent `RMSNorm`, the shared key appended to
+  the GPU cache copy, the up-projection written straight into the cache copy, attention
+  and the output projection. The new rows are copied back to the CPU cache.
+- **Routed experts**, 3 to 2 per MoE layer: every selected expert's gate and up, the
+  SiLU product and the down projection, together with the shared expert's down
+  projection. The router's batch stays separate, because the CPU picks the experts.
+
+New generic kernels support them (`tests/glue.rs`, each against a CPU reference):
+`causal_conv_silu` and `causal_conv_history` (history checked across calls shorter than
+the kernel), `l2norm_rows`, `rmsnorm_rows` (strided), `rmsnorm_gated_rows`,
+`softplus_decay`, `sigmoid_in_place`, `silu_mul` and `copy_rows`. That is about 82
+round trips per token now.
+
+Kimi Linear, CPU against GPU on 453 tokens, whole-text and one position at a time:
+top-1 100%, KL divergence 0.00000, identical perplexity; the same generated text.
+
+| | Before fusing | Fused |
+|---|---:|---:|
+| Decoding at short context | 0.050 s/token | 0.031 s/token (about 32 tokens/s) |
+| 453 positions one at a time | 26.1 s | 16.5 s |
+| 3,895-token prompt | 59.2 s | 51.0–51.8 s |
+| Decoding at ~3.9k context | 0.06 s/token | 0.040 s/token |
+
+The first one or two tokens after a long prompt still take 1.5–4.5 s, varying from run to
+run. During one run the system compressed about 4.9 million pages, decompressed 4.7
+million and swapped out about 630 MB. Kimi's peak footprint was 41 GB on a 64 GB machine
+with other applications open, so these stalls are memory pressure, not GPU work. The same
+run had 6.7 million page reclaims: the CPU side still allocates and frees large buffers
+per layer during a long prompt. The largest is each MoE layer's gathered expert input,
+about 287 MB at 3,895 tokens. That churn and the loading peak are the next memory work.
+The next latency step is one submission per layer: the residual, the norms, the router
+and the expert mix on the GPU, so only the routing decision crosses to the CPU.
 
 ### Router, KDA recurrence and decoding attention (2026-09-29, same day)
 

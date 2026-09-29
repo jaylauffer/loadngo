@@ -647,3 +647,228 @@ kernel void attention_split_key_wide(
         }
     }
 }
+
+// ---- Elementwise and row kernels: the glue between products in one command buffer ----
+// All operate on contiguous float32 rows. 256 threads per threadgroup.
+
+// Depthwise causal convolution then SiLU: for row r and channel c,
+//   acc = taps[c][K-1] * x[r][c] + sum over h < K-1 of taps[c][h] * input(r - (K-1) + h)
+//   out[r][c] = acc * sigmoid(acc)
+// where input(i) is x[i][c] for i >= 0 and history[c][K-1 + i] (the previous call's last
+// K-1 inputs, oldest first) for i < 0. Needs K <= 8. One thread per (row, channel).
+struct ConvArgs {
+    uint rows;
+    uint channels;
+    uint width; // K, the taps per channel
+};
+
+kernel void causal_conv_silu(
+    device const float *x [[buffer(0)]],
+    device const float *taps [[buffer(1)]],
+    device const float *history [[buffer(2)]],
+    device float *out [[buffer(3)]],
+    constant ConvArgs &a [[buffer(4)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid >= a.rows * a.channels) {
+        return;
+    }
+    const uint r = gid / a.channels;
+    const uint c = gid % a.channels;
+    const uint hist = a.width - 1;
+    device const float *t = taps + (ulong)c * a.width;
+    float acc = t[hist] * x[gid];
+    for (uint h = 0; h < hist; ++h) {
+        const int i = int(r) - int(hist) + int(h);
+        const float past = i >= 0 ? x[(ulong)i * a.channels + c]
+                                  : history[(ulong)c * hist + uint(int(hist) + i)];
+        acc += t[h] * past;
+    }
+    out[gid] = acc * (1.0f / (1.0f + exp(-acc)));
+}
+
+// The history causal_conv_silu reads next time: each channel's last K-1 inputs, from x
+// or, when there are fewer rows than that, partly from the old history. One thread per
+// channel; run it after the convolution that reads the old history.
+kernel void causal_conv_history(
+    device const float *x [[buffer(0)]],
+    device float *history [[buffer(1)]],
+    constant ConvArgs &a [[buffer(2)]],
+    uint c [[thread_position_in_grid]])
+{
+    if (c >= a.channels) {
+        return;
+    }
+    const uint hist = a.width - 1;
+    device float *hc = history + (ulong)c * hist;
+    float old[8];
+    for (uint h = 0; h < hist; ++h) {
+        old[h] = hc[h];
+    }
+    for (uint h = 0; h < hist; ++h) {
+        const int i = int(a.rows) - int(hist) + int(h);
+        hc[h] = i >= 0 ? x[(ulong)i * a.channels + c] : old[uint(int(a.rows) + int(h))];
+    }
+}
+
+// Each row of width d, in place: v = (v / sqrt(sum v^2 + eps)) * scale. One simdgroup
+// per row.
+struct RowArgs {
+    uint rows;
+    uint d;
+    float eps;
+    float scale;
+};
+
+kernel void l2norm_rows(
+    device float *v [[buffer(0)]],
+    constant RowArgs &a [[buffer(1)]],
+    uint group [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]])
+{
+    const uint row = group * 8 + sg;
+    if (row >= a.rows) {
+        return;
+    }
+    device float *x = v + (ulong)row * a.d;
+    float ss = 0.0f;
+    for (uint i = lane; i < a.d; i += SIMD) {
+        ss += x[i] * x[i];
+    }
+    const float inv = 1.0f / sqrt(simd_sum(ss) + a.eps);
+    for (uint i = lane; i < a.d; i += SIMD) {
+        x[i] = x[i] * inv * a.scale;
+    }
+}
+
+// Each row of width d, in place: v = w * v / sqrt(mean(v^2) + eps) * sigmoid(gate), with
+// gate shaped like v and w of width d. One simdgroup per row.
+kernel void rmsnorm_gated_rows(
+    device float *v [[buffer(0)]],
+    device const float *gate [[buffer(1)]],
+    device const float *w [[buffer(2)]],
+    constant RowArgs &a [[buffer(3)]],
+    uint group [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]])
+{
+    const uint row = group * 8 + sg;
+    if (row >= a.rows) {
+        return;
+    }
+    device float *x = v + (ulong)row * a.d;
+    device const float *g = gate + (ulong)row * a.d;
+    float ss = 0.0f;
+    for (uint i = lane; i < a.d; i += SIMD) {
+        ss += x[i] * x[i];
+    }
+    const float inv = 1.0f / sqrt(simd_sum(ss) / float(a.d) + a.eps);
+    for (uint i = lane; i < a.d; i += SIMD) {
+        x[i] = w[i] * x[i] * inv * (1.0f / (1.0f + exp(-g[i])));
+    }
+}
+
+// Decay from a log-space rate: for element i of a row of width `width` whose heads are
+// `d` wide, alpha[i] = exp(-exp(a_log[head]) * softplus(z[i] + bias[i % width])), with
+// softplus(x) = x above 20, else log(1 + exp(x)) (as fla's naive gate).
+struct DecayArgs {
+    uint n;
+    uint width;
+    uint d;
+};
+
+kernel void softplus_decay(
+    device const float *z [[buffer(0)]],
+    device const float *a_log [[buffer(1)]],
+    device const float *bias [[buffer(2)]],
+    device float *alpha [[buffer(3)]],
+    constant DecayArgs &a [[buffer(4)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid >= a.n) {
+        return;
+    }
+    const uint col = gid % a.width;
+    const float x = z[gid] + bias[col];
+    // log1p(e^x) is e^x to float precision below -15, where 1 + e^x would round to 1.
+    const float sp = x > 20.0f ? x : (x < -15.0f ? exp(x) : log(1.0f + exp(x)));
+    alpha[gid] = exp(-exp(a_log[col / a.d]) * sp);
+}
+
+// v = sigmoid(v), in place, for n elements.
+kernel void sigmoid_in_place(
+    device float *v [[buffer(0)]],
+    constant DecayArgs &a [[buffer(1)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid < a.n) {
+        v[gid] = 1.0f / (1.0f + exp(-v[gid]));
+    }
+}
+
+// g = silu(g) * u in place, silu(x) = x * sigmoid(x), over n elements.
+kernel void silu_mul(
+    device float *g [[buffer(0)]],
+    device const float *u [[buffer(1)]],
+    constant DecayArgs &a [[buffer(2)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid < a.n) {
+        const float x = g[gid];
+        g[gid] = x * (1.0f / (1.0f + exp(-x))) * u[gid];
+    }
+}
+
+// The first d floats of each of `rows` rows, `stride` floats apart, in place:
+// v = w * v / sqrt(mean(v^2) + eps). One simdgroup per row.
+struct StridedArgs {
+    uint rows;
+    uint d;
+    uint stride;
+    float eps;
+};
+
+kernel void rmsnorm_rows(
+    device float *v [[buffer(0)]],
+    device const float *w [[buffer(1)]],
+    constant StridedArgs &a [[buffer(2)]],
+    uint group [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]])
+{
+    const uint row = group * 8 + sg;
+    if (row >= a.rows) {
+        return;
+    }
+    device float *x = v + (ulong)row * a.stride;
+    float ss = 0.0f;
+    for (uint i = lane; i < a.d; i += SIMD) {
+        ss += x[i] * x[i];
+    }
+    const float inv = 1.0f / sqrt(simd_sum(ss) / float(a.d) + a.eps);
+    for (uint i = lane; i < a.d; i += SIMD) {
+        x[i] = w[i] * x[i] * inv;
+    }
+}
+
+// dst[r * dst_stride + i] = src[r * src_stride + i] for i < width, over `rows` rows.
+struct CopyArgs {
+    uint rows;
+    uint width;
+    uint src_stride;
+    uint dst_stride;
+};
+
+kernel void copy_rows(
+    device const float *src [[buffer(0)]],
+    device float *dst [[buffer(1)]],
+    constant CopyArgs &a [[buffer(2)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid < a.rows * a.width) {
+        const uint r = gid / a.width;
+        const uint i = gid % a.width;
+        dst[(ulong)r * a.dst_stride + i] = src[(ulong)r * a.src_stride + i];
+    }
+}

@@ -81,6 +81,7 @@ pub struct Gpu {
     attention: Pipeline,
     attention_wide: Pipeline,
     recurrence: Pipeline,
+    glue: Glue,
     rows: Rows,
 }
 
@@ -118,13 +119,29 @@ impl Gpu {
         let attention = pipeline("attention_split_key")?;
         let attention_wide = pipeline("attention_split_key_wide")?;
         let recurrence = pipeline("delta_rule_recurrence")?;
-        for p in bf16.iter().chain(&mxfp4).chain([
-            &gemm_bf16,
-            &gemm_mxfp4,
-            &attention,
-            &attention_wide,
-            &recurrence,
-        ]) {
+        let glue = Glue {
+            conv: pipeline("causal_conv_silu")?,
+            conv_history: pipeline("causal_conv_history")?,
+            l2norm: pipeline("l2norm_rows")?,
+            rmsnorm_gated: pipeline("rmsnorm_gated_rows")?,
+            decay: pipeline("softplus_decay")?,
+            sigmoid: pipeline("sigmoid_in_place")?,
+            silu_mul: pipeline("silu_mul")?,
+            rmsnorm: pipeline("rmsnorm_rows")?,
+            copy_rows: pipeline("copy_rows")?,
+        };
+        for p in bf16
+            .iter()
+            .chain(&mxfp4)
+            .chain([
+                &gemm_bf16,
+                &gemm_mxfp4,
+                &attention,
+                &attention_wide,
+                &recurrence,
+            ])
+            .chain(glue.all())
+        {
             if p.maxTotalThreadsPerThreadgroup() < THREADS_PER_GROUP {
                 return Err(Error::Compile(format!(
                     "kernels need {THREADS_PER_GROUP} threads per threadgroup, the device allows {}",
@@ -143,6 +160,7 @@ impl Gpu {
             attention,
             attention_wide,
             recurrence,
+            glue,
             rows: Rows::default(),
         })
     }
@@ -504,6 +522,80 @@ pub struct RecurrenceShape {
     pub dv: usize,
 }
 
+/// The elementwise and row kernels that join products inside one batch.
+struct Glue {
+    conv: Pipeline,
+    conv_history: Pipeline,
+    l2norm: Pipeline,
+    rmsnorm_gated: Pipeline,
+    decay: Pipeline,
+    sigmoid: Pipeline,
+    silu_mul: Pipeline,
+    rmsnorm: Pipeline,
+    copy_rows: Pipeline,
+}
+
+impl Glue {
+    fn all(&self) -> [&Pipeline; 9] {
+        [
+            &self.conv,
+            &self.conv_history,
+            &self.l2norm,
+            &self.rmsnorm_gated,
+            &self.decay,
+            &self.sigmoid,
+            &self.silu_mul,
+            &self.rmsnorm,
+            &self.copy_rows,
+        ]
+    }
+}
+
+#[repr(C)]
+struct ConvArgs {
+    rows: u32,
+    channels: u32,
+    width: u32,
+}
+
+#[repr(C)]
+struct RowArgs {
+    rows: u32,
+    d: u32,
+    eps: f32,
+    scale: f32,
+}
+
+#[repr(C)]
+struct DecayArgs {
+    n: u32,
+    width: u32,
+    d: u32,
+}
+
+#[repr(C)]
+struct StridedArgs {
+    rows: u32,
+    d: u32,
+    stride: u32,
+    eps: f32,
+}
+
+#[repr(C)]
+struct CopyArgs {
+    rows: u32,
+    width: u32,
+    src_stride: u32,
+    dst_stride: u32,
+}
+
+/// Rows per threadgroup in the row kernels: one simdgroup each.
+const ROWS_PER_GROUP: usize = SIMDGROUPS_PER_GROUP;
+
+fn narrow(n: usize) -> Result<u32, Error> {
+    u32::try_from(n).map_err(|_| Error::Dispatch(format!("{n} does not fit in u32")))
+}
+
 /// Weight rows per simdgroup in the multi-position kernels (`GEMM_ROWS` in the MSL).
 const GEMM_ROWS: usize = 2;
 
@@ -853,6 +945,246 @@ impl Batch<'_> {
         self.check_output(&out, &[&q, &k, &v, &alpha, &beta])?;
         let pipeline = self.gpu.recurrence.clone();
         self.encode(&pipeline, &[q, k, v, alpha, beta, state, out], &args, heads);
+        Ok(())
+    }
+
+    /// Depthwise causal convolution over `rows` rows of `channels` floats, then SiLU:
+    /// `out[r][c] = silu(taps[c][K-1] x[r][c] + sum_h taps[c][h] input(r - (K-1) + h))`,
+    /// where inputs before row 0 come from `history` (`[channels][K-1]`, oldest first).
+    /// `taps` is `[channels][K]`, `K = kernel <= 8`. `history` is only read; update it
+    /// with [`Self::causal_conv_history`] after a barrier.
+    pub fn causal_conv_silu(
+        &mut self,
+        (x, taps, history): (Slice, Slice, Slice),
+        out: Slice,
+        rows: usize,
+        channels: usize,
+        kernel: usize,
+    ) -> Result<(), Error> {
+        let args = Self::conv_args(rows, channels, kernel)?;
+        self.check("x", &x, rows * channels * 4, 4)?;
+        self.check("taps", &taps, channels * kernel * 4, 4)?;
+        self.check("history", &history, channels * (kernel - 1) * 4, 4)?;
+        self.check("out", &out, rows * channels * 4, 4)?;
+        self.check_output(&out, &[&x, &taps, &history])?;
+        let pipeline = self.gpu.glue.conv.clone();
+        let groups = (rows * channels).div_ceil(THREADS_PER_GROUP);
+        self.encode(&pipeline, &[x, taps, history, out], &args, groups);
+        Ok(())
+    }
+
+    /// Replaces `history` with each channel's last `kernel - 1` inputs of `x` (and, when
+    /// `rows` is fewer, the newest of the old history before them).
+    pub fn causal_conv_history(
+        &mut self,
+        x: Slice,
+        history: Slice,
+        rows: usize,
+        channels: usize,
+        kernel: usize,
+    ) -> Result<(), Error> {
+        let args = Self::conv_args(rows, channels, kernel)?;
+        self.check("x", &x, rows * channels * 4, 4)?;
+        self.check("history", &history, channels * (kernel - 1) * 4, 4)?;
+        self.check_output(&history, &[&x])?;
+        let pipeline = self.gpu.glue.conv_history.clone();
+        let groups = channels.div_ceil(THREADS_PER_GROUP);
+        self.encode(&pipeline, &[x, history], &args, groups);
+        Ok(())
+    }
+
+    fn conv_args(rows: usize, channels: usize, kernel: usize) -> Result<ConvArgs, Error> {
+        if rows == 0 || channels == 0 || !(2..=8).contains(&kernel) {
+            return Err(Error::Dispatch(format!(
+                "unsupported convolution: {rows} rows, {channels} channels, kernel {kernel}"
+            )));
+        }
+        narrow(rows * channels)?;
+        Ok(ConvArgs {
+            rows: narrow(rows)?,
+            channels: narrow(channels)?,
+            width: narrow(kernel)?,
+        })
+    }
+
+    /// In place over `rows` rows of `d` floats: `v = v / sqrt(sum(v^2) + eps) * scale`.
+    pub fn l2norm_rows(
+        &mut self,
+        v: Slice,
+        rows: usize,
+        d: usize,
+        eps: f32,
+        scale: f32,
+    ) -> Result<(), Error> {
+        let args = Self::row_args(rows, d, eps, scale)?;
+        self.check("v", &v, rows * d * 4, 4)?;
+        self.check_output(&v, &[])?;
+        let pipeline = self.gpu.glue.l2norm.clone();
+        self.encode(&pipeline, &[v], &args, rows.div_ceil(ROWS_PER_GROUP));
+        Ok(())
+    }
+
+    /// In place over `rows` rows of `d` floats:
+    /// `v = w * v / sqrt(mean(v^2) + eps) * sigmoid(gate)`, `gate` shaped like `v`, `w`
+    /// of `d` floats.
+    pub fn rmsnorm_gated_rows(
+        &mut self,
+        v: Slice,
+        (gate, w): (Slice, Slice),
+        rows: usize,
+        d: usize,
+        eps: f32,
+    ) -> Result<(), Error> {
+        let args = Self::row_args(rows, d, eps, 1.0)?;
+        self.check("v", &v, rows * d * 4, 4)?;
+        self.check("gate", &gate, rows * d * 4, 4)?;
+        self.check("w", &w, d * 4, 4)?;
+        self.check_output(&v, &[&gate, &w])?;
+        let pipeline = self.gpu.glue.rmsnorm_gated.clone();
+        self.encode(
+            &pipeline,
+            &[v, gate, w],
+            &args,
+            rows.div_ceil(ROWS_PER_GROUP),
+        );
+        Ok(())
+    }
+
+    fn row_args(rows: usize, d: usize, eps: f32, scale: f32) -> Result<RowArgs, Error> {
+        if rows == 0 || d == 0 {
+            return Err(Error::Dispatch(format!("unsupported rows: {rows} x {d}")));
+        }
+        narrow(rows * d)?;
+        Ok(RowArgs {
+            rows: narrow(rows)?,
+            d: narrow(d)?,
+            eps,
+            scale,
+        })
+    }
+
+    /// `alpha[i] = exp(-exp(a_log[head]) * softplus(z[i] + bias[i % width]))` over `n`
+    /// elements in rows of `width`, heads `d` wide (`a_log` has `width / d` entries).
+    pub fn softplus_decay(
+        &mut self,
+        (z, a_log, bias): (Slice, Slice, Slice),
+        alpha: Slice,
+        n: usize,
+        width: usize,
+        d: usize,
+    ) -> Result<(), Error> {
+        if n == 0 || width == 0 || d == 0 || !width.is_multiple_of(d) || !n.is_multiple_of(width) {
+            return Err(Error::Dispatch(format!(
+                "unsupported decay: {n} elements, width {width}, heads {d} wide"
+            )));
+        }
+        let args = DecayArgs {
+            n: narrow(n)?,
+            width: narrow(width)?,
+            d: narrow(d)?,
+        };
+        self.check("z", &z, n * 4, 4)?;
+        self.check("a_log", &a_log, width / d * 4, 4)?;
+        self.check("bias", &bias, width * 4, 4)?;
+        self.check("alpha", &alpha, n * 4, 4)?;
+        self.check_output(&alpha, &[&z, &a_log, &bias])?;
+        let pipeline = self.gpu.glue.decay.clone();
+        let groups = n.div_ceil(THREADS_PER_GROUP);
+        self.encode(&pipeline, &[z, a_log, bias, alpha], &args, groups);
+        Ok(())
+    }
+
+    /// `v = sigmoid(v)` in place over `n` elements.
+    pub fn sigmoid_in_place(&mut self, v: Slice, n: usize) -> Result<(), Error> {
+        if n == 0 {
+            return Err(Error::Dispatch("empty sigmoid".into()));
+        }
+        let args = DecayArgs {
+            n: narrow(n)?,
+            width: 1,
+            d: 1,
+        };
+        self.check("v", &v, n * 4, 4)?;
+        self.check_output(&v, &[])?;
+        let pipeline = self.gpu.glue.sigmoid.clone();
+        self.encode(&pipeline, &[v], &args, n.div_ceil(THREADS_PER_GROUP));
+        Ok(())
+    }
+
+    /// `g = silu(g) * u` in place over `n` elements, `silu(x) = x * sigmoid(x)`.
+    pub fn silu_mul(&mut self, g: Slice, u: Slice, n: usize) -> Result<(), Error> {
+        if n == 0 {
+            return Err(Error::Dispatch("empty silu_mul".into()));
+        }
+        let args = DecayArgs {
+            n: narrow(n)?,
+            width: 1,
+            d: 1,
+        };
+        self.check("g", &g, n * 4, 4)?;
+        self.check("u", &u, n * 4, 4)?;
+        self.check_output(&g, &[&u])?;
+        let pipeline = self.gpu.glue.silu_mul.clone();
+        self.encode(&pipeline, &[g, u], &args, n.div_ceil(THREADS_PER_GROUP));
+        Ok(())
+    }
+
+    /// In place over the first `d` floats of `rows` rows `stride` floats apart:
+    /// `v = w * v / sqrt(mean(v^2) + eps)`, `w` of `d` floats.
+    pub fn rmsnorm_rows(
+        &mut self,
+        (v, w): (Slice, Slice),
+        rows: usize,
+        (d, stride): (usize, usize),
+        eps: f32,
+    ) -> Result<(), Error> {
+        if rows == 0 || d == 0 || stride < d {
+            return Err(Error::Dispatch(format!(
+                "unsupported rows: {rows} x {d}, stride {stride}"
+            )));
+        }
+        let args = StridedArgs {
+            rows: narrow(rows)?,
+            d: narrow(d)?,
+            stride: narrow(stride)?,
+            eps,
+        };
+        narrow(rows * stride)?;
+        self.check("v", &v, ((rows - 1) * stride + d) * 4, 4)?;
+        self.check("w", &w, d * 4, 4)?;
+        self.check_output(&v, &[&w])?;
+        let pipeline = self.gpu.glue.rmsnorm.clone();
+        self.encode(&pipeline, &[v, w], &args, rows.div_ceil(ROWS_PER_GROUP));
+        Ok(())
+    }
+
+    /// Copies `width` floats of each of `rows` rows: `src` rows `src_stride` floats
+    /// apart, `dst` rows `dst_stride` apart.
+    pub fn copy_rows(
+        &mut self,
+        (src, src_stride): (Slice, usize),
+        (dst, dst_stride): (Slice, usize),
+        rows: usize,
+        width: usize,
+    ) -> Result<(), Error> {
+        if rows == 0 || width == 0 || src_stride < width || dst_stride < width {
+            return Err(Error::Dispatch(format!(
+                "unsupported copy: {rows} x {width}, strides {src_stride} and {dst_stride}"
+            )));
+        }
+        let args = CopyArgs {
+            rows: narrow(rows)?,
+            width: narrow(width)?,
+            src_stride: narrow(src_stride)?,
+            dst_stride: narrow(dst_stride)?,
+        };
+        narrow(rows * src_stride.max(dst_stride))?;
+        self.check("src", &src, ((rows - 1) * src_stride + width) * 4, 4)?;
+        self.check("dst", &dst, ((rows - 1) * dst_stride + width) * 4, 4)?;
+        self.check_output(&dst, &[&src])?;
+        let pipeline = self.gpu.glue.copy_rows.clone();
+        let groups = (rows * width).div_ceil(THREADS_PER_GROUP);
+        self.encode(&pipeline, &[src, dst], &args, groups);
         Ok(())
     }
 
