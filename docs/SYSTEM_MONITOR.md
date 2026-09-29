@@ -56,17 +56,21 @@ private Apple interface, the one sudo-free monitors use. If it changes, power sh
 without root: the Neural Engine's power went from 0 W at idle to about 1.3 W while
 Kimi ran on it (2026-09-26).
 
-I/O wait is time a CPU sat idle while a task waited on I/O. On a Pi that is
-usually the SD card, but a kernel worker stuck in uninterruptible sleep counts
-too: agnes showed a steady 25% (one core of four) on 2026-09-25 with no disk
-traffic in `vmstat`.
+I/O wait is Linux's accounting of idle time associated with outstanding task
+I/O; it is not disk utilization or proof of a failing SD card. Agnes's steady
+25% was independently reproduced by `vmstat` on 2026-09-29 with negligible
+disk traffic. The kernel/driver cause remains unresolved: today's root thread
+scan did not reproduce the D-state worker reported on 2026-09-25. See
+[`system-stats/DIAGNOSTICS.md`](../system-stats/DIAGNOSTICS.md) for evidence,
+counter limitations and the distinction between observations and hypotheses.
 
 The band is the governor's published band, the one other loadngo consumers act
 on, so it rises immediately and falls only after the recovery rules in
 `THERMAL_AWARENESS.md`. On Raspberry Pi 4 and 5 the bands follow the firmware's
 own limits: fair from 70 C, serious from 80 C (the firmware starts capping the
-clock), critical from 85 C. Firmware throttling itself is not visible without
-root, so the widget does not claim it; a low clock under load is the hint.
+clock), critical from 85 C. The widget does not read firmware throttling flags.
+For diagnosis, `vcgencmd get_throttled` worked without root on both lab Pis
+on 2026-09-29; distinguish current flags from historical flags.
 
 GPU load needs busy-time counters from the driver. Broadcom `v3d` (Raspberry
 Pi 4 and 5) publishes them world-readable; other drivers show the driver name
@@ -107,6 +111,32 @@ RSS grew by under 1.5 MB over the first ten minutes (allocator and driver
 warm-up), then held flat on both Pis for the rest of a 10-minute series: no
 growth from the value strings that change every sample. Most of it is the GL
 driver.
+
+**Long-running review, 2026-09-29:** those initial measurements do not rule
+out later memory retention. After about 68 hours, the Mac widget had a
+1.0–1.1 GiB footprint, mostly swapped out, despite a small RSS; its malloc
+allocation count and bytes grew across a four-minute comparison. Missing
+autorelease scopes in the shared macOS host and unbalanced Mach host-port
+references in the sampler need repair. Agnes and Dolores had flat RSS/PSS/swap
+over a separate 72-second idle comparison, at 0.36% and 0.10% of one CPU core.
+No runtime fix was made in this review. Details and verification requirements:
+[`system-stats/DIAGNOSTICS.md`](../system-stats/DIAGNOSTICS.md).
+
+Jay's follow-up direction is to maximize the existing host proactor. Keep its
+sampling deadlines, move suitable reads to completion I/O, and use shared
+bounded worker offload for synchronous platform calls. Allow only one sample
+in flight, reuse buffers, and invalidate on completion. `enqueue_work` alone
+does not offload blocking work. The linked diagnostic note records the
+current API gap, cancellation requirements and serial validation plan.
+
+## Widget controls
+
+The current monitor does not process pointer or keyboard input and has no
+right-click Close/Restart menu. Widget mode removes ordinary window controls,
+so explicit lifecycle controls are still needed. The installer provides login
+startup; it does not add these actions. Add them through the host's input and
+redraw contracts, retaining the sampling deadline and preventing duplicate
+instances on restart.
 
 ## Installing on a labwc desktop
 
