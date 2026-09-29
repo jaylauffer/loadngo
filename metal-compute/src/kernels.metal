@@ -384,3 +384,88 @@ kernel void gemm_mxfp4(
 GEMV_VARIANTS(1)
 GEMV_VARIANTS(2)
 GEMV_VARIANTS(4)
+
+// Causal multi-head attention whose keys have two parts: one per head, stored with that
+// head's values, and one shared by every head (as in multi-head latent attention with a
+// decoupled rotary key). For new position i (absolute position cached + i) and head h:
+//   score(s) = scale * (q[i][h][:qa] . kv[s][h][:qa] + q[i][h][qa:] . shared[s])
+//   out[i][h] = sum over s <= cached + i of softmax(score)(s) * kv[s][h][qa:qa + dv]
+// Layouts, float32: q [t][heads][qa + qb], kv [positions][heads][qa + dv],
+// shared [positions][qb], out [t][heads][dv]. Needs qa + qb <= 256 and dv <= 128.
+//
+// One threadgroup per (block of 8 new positions, head); simdgroup g takes position
+// block * 8 + g and walks the cache in order, so the block's simdgroups read each cached
+// row at about the same time. Lanes split the dot product and the value dimensions; the
+// softmax is computed online (running maximum, sum and weighted values), in float32.
+struct AttentionArgs {
+    uint t;
+    uint cached;
+    uint heads;
+    uint qa;
+    uint qb;
+    uint dv;
+    float scale;
+};
+
+constant constexpr uint ATTENTION_BLOCK = 8;
+
+kernel void attention_split_key(
+    device const float *q [[buffer(0)]],
+    device const float *kv [[buffer(1)]],
+    device const float *shared_key [[buffer(2)]],
+    device float *out [[buffer(3)]],
+    constant AttentionArgs &a [[buffer(4)]],
+    uint group [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]])
+{
+    const uint head = group % a.heads;
+    const uint step = (group / a.heads) * ATTENTION_BLOCK + sg;
+    if (sg >= ATTENTION_BLOCK || step >= a.t) {
+        return;
+    }
+    const uint dq = a.qa + a.qb;
+    const uint row = a.qa + a.dv;
+    device const float *qt = q + ((ulong)step * a.heads + head) * dq;
+    float qv[8];
+    for (uint i = 0; i < 8; ++i) {
+        const uint d = lane + SIMD * i;
+        qv[i] = d < dq ? qt[d] : 0.0f;
+    }
+    float m = -INFINITY;
+    float l = 0.0f;
+    float acc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    const uint last = a.cached + step;
+    for (uint s = 0; s <= last; ++s) {
+        device const float *k = kv + ((ulong)s * a.heads + head) * row;
+        device const float *r = shared_key + (ulong)s * a.qb;
+        float dot = 0.0f;
+        for (uint i = 0; i < 8; ++i) {
+            const uint d = lane + SIMD * i;
+            if (d < a.qa) {
+                dot += qv[i] * k[d];
+            } else if (d < dq) {
+                dot += qv[i] * r[d - a.qa];
+            }
+        }
+        const float score = simd_sum(dot) * a.scale;
+        const float next = max(m, score);
+        const float keep = exp(m - next);
+        const float p = exp(score - next);
+        l = l * keep + p;
+        for (uint j = 0; j < 4; ++j) {
+            const uint d = lane + SIMD * j;
+            if (d < a.dv) {
+                acc[j] = acc[j] * keep + p * k[a.qa + d];
+            }
+        }
+        m = next;
+    }
+    device float *o = out + ((ulong)step * a.heads + head) * a.dv;
+    for (uint j = 0; j < 4; ++j) {
+        const uint d = lane + SIMD * j;
+        if (d < a.dv) {
+            o[d] = acc[j] / l;
+        }
+    }
+}

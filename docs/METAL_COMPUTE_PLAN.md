@@ -208,7 +208,38 @@ Measured on the M4 Pro with the 4-bit experts, with no thermal warning at any po
 - `metal-compute/tests/gemm_timing.rs` holds the timing experiments (ignored tests, run
   by hand).
 
-## M1, second stage: what we are attempting (for review; not started)
+## M1, second stage: what we are attempting (in progress: attention done 2026-09-29)
+
+### Attention on the GPU (2026-09-29)
+
+New kernel `attention_split_key` (`Batch::attention_split_key`): causal multi-head
+attention whose keys are split between a per-head part and a part every head shares,
+which is multi-head latent attention's expanded-cache layout. One threadgroup covers 8 new
+positions of one head, with one simdgroup per position. The 8 simdgroups walk the cache
+in step, so each cached row is read once per group. Softmax is computed online in
+`f32`. Kimi keeps a copy of each attention layer's cache in GPU memory, inside the
+session. It appends only the new rows each call, doubles capacity as it grows, and
+empties the copy on clone, reset, or any CPU-computed call (kimi `DeviceCache`).
+
+Checked: `tests/attention.rs` compares the kernel against a float64 reference, covering
+decode, partial blocks, a 3,000-row cache, sharp softmaxes and no shared part, with max
+error under 2e-5. The test fails if the causal limit is off by one or the running
+rescale is removed. It also exercises shape and overlap validation. End to end, with
+Kimi Linear, CPU against GPU on 453 tokens, both whole-text and one position at a time:
+top-1 agreement 100%, KL 0.00000, identical perplexity.
+
+Measured on this Mac mini, with the same 3,895-token prompt before and after:
+
+| | Before | After |
+|---|---:|---:|
+| Prompt pass | 439.2 s (8.9 tokens/s) | 107.6 s (36.2 tokens/s) |
+| One new token at ~3.9k context | 0.27 s | 0.14 s |
+
+Still on the CPU: the router (about 13% of the main thread in the first 20 s of that
+prompt) and the KDA recurrence, both serial. The GPU cache copy doubles the
+MLA cache's memory, about 32 KiB per position per layer, or 1.8 GB each at 8k context
+across the 7 layers. Dropping the CPU copy is the next memory step.
+
 
 Written 2026-09-26 at Jay's request ("before starting on KDA routing to the GPU we need to
 understand clearly what we're attempting").

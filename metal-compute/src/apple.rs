@@ -78,6 +78,7 @@ pub struct Gpu {
     mxfp4: [Pipeline; 3],
     gemm_bf16: Pipeline,
     gemm_mxfp4: Pipeline,
+    attention: Pipeline,
     rows: Rows,
 }
 
@@ -112,7 +113,12 @@ impl Gpu {
         ];
         let gemm_bf16 = pipeline("gemm_bf16")?;
         let gemm_mxfp4 = pipeline("gemm_mxfp4")?;
-        for p in bf16.iter().chain(&mxfp4).chain([&gemm_bf16, &gemm_mxfp4]) {
+        let attention = pipeline("attention_split_key")?;
+        for p in bf16
+            .iter()
+            .chain(&mxfp4)
+            .chain([&gemm_bf16, &gemm_mxfp4, &attention])
+        {
             if p.maxTotalThreadsPerThreadgroup() < THREADS_PER_GROUP {
                 return Err(Error::Compile(format!(
                     "kernels need {THREADS_PER_GROUP} threads per threadgroup, the device allows {}",
@@ -128,6 +134,7 @@ impl Gpu {
             mxfp4,
             gemm_bf16,
             gemm_mxfp4,
+            attention,
             rows: Rows::default(),
         })
     }
@@ -432,6 +439,38 @@ struct GemmArgs {
     y_stride: u32,
 }
 
+#[repr(C)]
+struct AttentionArgs {
+    t: u32,
+    cached: u32,
+    heads: u32,
+    qa: u32,
+    qb: u32,
+    dv: u32,
+    scale: f32,
+}
+
+/// New positions per threadgroup in `attention_split_key` (`ATTENTION_BLOCK` in the MSL).
+const ATTENTION_BLOCK: usize = 8;
+
+/// The shape of one [`Batch::attention_split_key`] dispatch.
+#[derive(Clone, Copy, Debug)]
+pub struct AttentionShape {
+    /// New positions (queries).
+    pub t: usize,
+    /// Positions already in the cache before them.
+    pub cached: usize,
+    pub heads: usize,
+    /// Key dimensions stored per head, beside that head's values.
+    pub qa: usize,
+    /// Key dimensions shared by every head.
+    pub qb: usize,
+    /// Value dimensions per head.
+    pub dv: usize,
+    /// Score scale, usually `1 / sqrt(qa + qb)`.
+    pub scale: f32,
+}
+
 /// Weight rows per simdgroup in the multi-position kernels (`GEMM_ROWS` in the MSL).
 const GEMM_ROWS: usize = 2;
 
@@ -524,7 +563,7 @@ impl Batch<'_> {
             // holds (and the command buffer retains) until the GPU has finished.
             unsafe { enc.setBuffer_offset_atIndex(Some(raw), slice.offset, index) };
         }
-        // SAFETY: `A` is `GemvArgs` or `GemmArgs`, `repr(C)` like the kernel's argument struct.
+        // SAFETY: `A` is `GemvArgs`, `GemmArgs` or `AttentionArgs`, `repr(C)` like the kernel's argument struct.
         unsafe {
             enc.setBytes_length_atIndex(
                 NonNull::from(args).cast(),
@@ -674,6 +713,59 @@ impl Batch<'_> {
 
     /// Makes every later dispatch see the buffer writes of every earlier one. Needed only
     /// in a [`Dispatch::Concurrent`] batch.
+    /// Causal attention with split keys: for each of `shape.t` new positions and each
+    /// head, a softmax over every cached position up to and including its own. `q` is
+    /// `[t][heads][qa + qb]`, `kv` `[positions][heads][qa + dv]` (per-head keys, then
+    /// values), `shared` `[positions][qb]` (the key part every head shares) and `out`
+    /// `[t][heads][dv]`, all `f32`, with `positions = cached + t`. Needs `qa + qb <= 256`
+    /// and `dv <= 128`. Accumulates in `f32`.
+    pub fn attention_split_key(
+        &mut self,
+        q: Slice,
+        kv: Slice,
+        shared: Slice,
+        out: Slice,
+        shape: AttentionShape,
+    ) -> Result<(), Error> {
+        let AttentionShape {
+            t,
+            cached,
+            heads,
+            qa,
+            qb,
+            dv,
+            scale,
+        } = shape;
+        let positions = cached + t;
+        if t == 0 || heads == 0 || qa + qb == 0 || qa + qb > 256 || dv == 0 || dv > 128 {
+            return Err(Error::Dispatch(format!(
+                "unsupported attention shape {shape:?}"
+            )));
+        }
+        let narrow = |n: usize| {
+            u32::try_from(n).map_err(|_| Error::Dispatch(format!("{n} does not fit in u32")))
+        };
+        let args = AttentionArgs {
+            t: narrow(t)?,
+            cached: narrow(cached)?,
+            heads: narrow(heads)?,
+            qa: narrow(qa)?,
+            qb: narrow(qb)?,
+            dv: narrow(dv)?,
+            scale,
+        };
+        let groups = t.div_ceil(ATTENTION_BLOCK) * heads;
+        narrow(groups)?;
+        self.check("q", &q, t * heads * (qa + qb) * 4, 4)?;
+        self.check("kv", &kv, positions * heads * (qa + dv) * 4, 4)?;
+        self.check("shared", &shared, positions * qb * 4, 4)?;
+        self.check("out", &out, t * heads * dv * 4, 4)?;
+        self.check_output(&out, &[&q, &kv, &shared])?;
+        let pipeline = self.gpu.attention.clone();
+        self.encode(&pipeline, &[q, kv, shared, out], &args, groups);
+        Ok(())
+    }
+
     pub fn barrier(&mut self) {
         self.encoder
             .memoryBarrierWithScope(MTLBarrierScope::Buffers);
