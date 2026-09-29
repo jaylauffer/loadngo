@@ -210,6 +210,41 @@ Measured on the M4 Pro with the 4-bit experts, with no thermal warning at any po
 
 ## M1, second stage: what we are attempting (in progress: attention, router, KDA and fused blocks done 2026-09-29)
 
+### Prompts on the matrix units (2026-09-29, later)
+
+Reading a prompt (or a tool result) was dominated by kernels that handle one position
+at a time. Measured on the 3,895-token prompt: routed experts 17.6 s, MLA attention
+13.0 s, KDA blocks 9.7 s. Three kernels now use the GPU's 8 x 8 `simdgroup_float8x8`
+matrix units, all in `f32`:
+
+- `gemm_mxfp4_tiled` and `gemm_bf16_tiled` compute a 64 weight-row by 32-position tile,
+  32 columns at a time. The weight tile is decoded once into threadgroup memory and shared
+  by all 32 positions, so each weight is read once per 32 positions instead of once per
+  position (MXFP4) or per 8 (the old bf16 kernel). Kimi runs whole tiles of 32 positions
+  through them and the rest through the old kernels; an expert with 8 or more positions
+  is padded to whole tiles.
+- `attention_split_key_tiled`: flash-style attention for 32 or more new positions. Each
+  threadgroup takes 32 queries of one head and walks the cache 32 keys at a time: scores
+  from matrix products, online softmax per row in threadgroup memory, the output rescaled
+  by a diagonal matrix and then plus P V. Rows are padded to multiples of 32, and cache
+  rows past the valid ones must be finite (Kimi zeroes new cache copies).
+
+Checked: each kernel against the CPU or float64 reference (`tests/gemv.rs`,
+`tests/attention.rs`), including expert shapes, strided rows, partial query blocks, a
+3,000-row cache and a sharp softmax. Mutation-checked: removing the MXFP4 scale, the
+transposed store, the running rescale, or the causal limit each fails. End to end, CPU
+against GPU on 453 tokens: top-1 100%, KL divergence 0.00000.
+
+| 3,895-token prompt | Time |
+|---|---:|
+| This morning (CPU attention) | 439 s |
+| Before these kernels | 43.8 s |
+| + tiled MXFP4 experts | 30.4 s |
+| + tiled bf16 products | 19.8 s |
+| + tiled attention | 9.9 s (about 390 tokens/s) |
+
+Decoding is unchanged: one position uses the single-position kernels.
+
 ### Memory: weights kept resident, no per-layer churn (2026-09-29, later)
 
 The stalls after long prompts were memory pressure, found with `vmmap --summary` on the

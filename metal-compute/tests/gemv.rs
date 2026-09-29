@@ -423,3 +423,106 @@ fn multi_position_products_match_the_cpu_reference() {
         }
     }
 }
+
+/// The tiled matrix-unit MXFP4 product against the CPU reference, position by position,
+/// on expert-shaped matrices and with row strides wider than the rows.
+#[test]
+fn tiled_mxfp4_matches_the_cpu_reference() {
+    let gpu = Gpu::new().unwrap();
+    let proactor = new_platform_proactor().unwrap();
+    for (rows, cols, n, pad) in [
+        (64, 64, 32, 0),
+        (1024, 2304, 64, 0),
+        (2304, 1024, 96, 4),
+        (128, 96, 32, 8),
+    ] {
+        let (elements, scales) = mxfp4_bytes(
+            &values(rows as u64 * 13 + cols as u64, rows * cols),
+            rows,
+            cols,
+        );
+        let (xs, ys) = (cols + pad, rows + pad);
+        let x = values(29, n * xs);
+        let buffers = vec![
+            upload(&gpu, &elements),
+            upload(&gpu, &scales),
+            upload_f32(&gpu, &x),
+            gpu.buffer(n * ys * 4).unwrap(),
+        ];
+        let mut batch = gpu.batch(buffers, Dispatch::Serial).unwrap();
+        batch
+            .gemm_mxfp4_tiled(
+                Slice::new(0, 0, elements.len()),
+                Slice::new(1, 0, scales.len()),
+                Slice::new(2, 0, ((n - 1) * xs + cols) * 4),
+                Slice::new(3, 0, ((n - 1) * ys + rows) * 4),
+                rows,
+                cols,
+                n,
+                (xs, ys),
+            )
+            .unwrap();
+        let done = run(&proactor, batch);
+        done.gpu_time.unwrap();
+        let m = Mxfp4Matrix::new(&elements, &scales, rows, cols).unwrap();
+        let got = done.buffers[3].as_f32();
+        for p in 0..n {
+            let xp = &x[p * xs..p * xs + cols];
+            let mut want = vec![0.0; rows];
+            m.mul_vec(&mut want, xp);
+            let magnitude = magnitudes(rows, cols, xp, |r, out| m.dequantize_row(r, out));
+            assert_close(&got[p * ys..p * ys + rows], &want, &magnitude, cols);
+        }
+    }
+    // Shapes the tiles do not cover are refused.
+    let mut batch = gpu
+        .batch(vec![gpu.buffer(1 << 20).unwrap()], Dispatch::Serial)
+        .unwrap();
+    let s = Slice::new(0, 0, 64);
+    assert!(batch
+        .gemm_mxfp4_tiled(s, s, s, s, 60, 64, 32, (64, 60))
+        .is_err());
+    assert!(batch
+        .gemm_mxfp4_tiled(s, s, s, s, 64, 64, 30, (64, 64))
+        .is_err());
+}
+
+/// The tiled matrix-unit bf16 product against the CPU reference, position by position.
+#[test]
+fn tiled_bf16_matches_the_cpu_reference() {
+    let gpu = Gpu::new().unwrap();
+    let proactor = new_platform_proactor().unwrap();
+    for (rows, cols, n, pad) in [(64, 64, 32, 0), (4096, 2304, 64, 0), (576, 2304, 32, 8)] {
+        let w = bf16_bytes(&values(rows as u64 * 7 + cols as u64, rows * cols));
+        let (xs, ys) = (cols + pad, rows + pad);
+        let x = values(31, n * xs);
+        let buffers = vec![
+            upload(&gpu, &w),
+            upload_f32(&gpu, &x),
+            gpu.buffer(n * ys * 4).unwrap(),
+        ];
+        let mut batch = gpu.batch(buffers, Dispatch::Serial).unwrap();
+        batch
+            .gemm_bf16_tiled(
+                Slice::new(0, 0, w.len()),
+                Slice::new(1, 0, ((n - 1) * xs + cols) * 4),
+                Slice::new(2, 0, ((n - 1) * ys + rows) * 4),
+                rows,
+                cols,
+                n,
+                (xs, ys),
+            )
+            .unwrap();
+        let done = run(&proactor, batch);
+        done.gpu_time.unwrap();
+        let m = HalfMatrix::new(&w, rows, cols, HalfFormat::Bf16).unwrap();
+        let got = done.buffers[2].as_f32();
+        for p in 0..n {
+            let xp = &x[p * xs..p * xs + cols];
+            let mut want = vec![0.0; rows];
+            m.mul_vec(&mut want, xp);
+            let magnitude = magnitudes(rows, cols, xp, |r, out| m.row_into(r, out));
+            assert_close(&got[p * ys..p * ys + rows], &want, &magnitude, cols);
+        }
+    }
+}

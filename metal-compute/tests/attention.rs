@@ -191,3 +191,63 @@ fn rejects_unsupported_shapes_and_overlapping_output() {
         )
         .is_ok());
 }
+
+/// The matrix-unit kernel against the same float64 definition, with its padded rows:
+/// zeros past the valid cache rows and past the valid queries.
+#[test]
+fn tiled_matches_the_float64_definition() {
+    let gpu = Gpu::new().unwrap();
+    let proactor = new_platform_proactor().unwrap();
+    for (s, sharp) in [
+        (shape(32, 0, 2, 128, 64, 128), 1.0),
+        (shape(45, 100, 3, 128, 64, 128), 8.0),
+        (shape(64, 3000, 2, 128, 64, 128), 4.0),
+        (shape(40, 7, 2, 96, 0, 128), 1.0),
+    ] {
+        let positions = s.cached + s.t;
+        let (t_rows, rows) = (s.t.div_ceil(32) * 32, positions.div_ceil(32) * 32);
+        let (dq, row) = (s.qa + s.qb, s.qa + s.dv);
+        let q: Vec<f32> = values(1, s.t * s.heads * dq)
+            .iter()
+            .map(|x| x * sharp)
+            .collect();
+        let kv = values(2, positions * s.heads * row);
+        let shared = values(3, positions * s.qb);
+        let padded = |v: &[f32], len: usize| {
+            let mut p = v.to_vec();
+            p.resize(len, 0.0);
+            p
+        };
+        let buffers = vec![
+            upload(&gpu, &padded(&q, t_rows * s.heads * dq)),
+            upload(&gpu, &padded(&kv, rows * s.heads * row)),
+            upload(&gpu, &padded(&shared, rows * s.qb)),
+            gpu.buffer(t_rows * s.heads * s.dv * 4).unwrap(),
+        ];
+        let mut batch = gpu.batch(buffers, Dispatch::Serial).unwrap();
+        batch
+            .attention_split_key_tiled(
+                Slice::new(0, 0, t_rows * s.heads * dq * 4),
+                Slice::new(1, 0, rows * s.heads * row * 4),
+                Slice::new(2, 0, rows * s.qb * 4),
+                Slice::new(3, 0, t_rows * s.heads * s.dv * 4),
+                s,
+            )
+            .unwrap();
+        let done = run(&proactor, batch);
+        done.gpu_time.unwrap();
+        let want = reference(&q, &kv, &shared, s);
+        let error = done.buffers[3].as_f32()[..want.len()]
+            .iter()
+            .zip(&want)
+            .map(|(g, w)| (g - w).abs())
+            .fold(0.0, |worst, e| {
+                if e.is_nan() {
+                    f32::INFINITY
+                } else {
+                    worst.max(e)
+                }
+            });
+        assert!(error < 2e-5, "{s:?} sharp {sharp}: max error {error:e}");
+    }
+}

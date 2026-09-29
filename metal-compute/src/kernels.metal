@@ -11,6 +11,7 @@
 //   and one E8M0 scale byte per block (2^(s-127); 0xFF is NaN).
 
 #include <metal_stdlib>
+#include <metal_simdgroup_matrix>
 using namespace metal;
 
 struct GemvArgs {
@@ -870,5 +871,308 @@ kernel void copy_rows(
         const uint r = gid / a.width;
         const uint i = gid % a.width;
         dst[(ulong)r * a.dst_stride + i] = src[(ulong)r * a.src_stride + i];
+    }
+}
+
+// y[p] = W x[p] for n positions on the matrix units, W in MXFP4: a threadgroup computes a
+// tile of 64 weight rows by 32 positions, 32 columns (one MXFP4 block) at a time. The
+// weight tile is decoded once into threadgroup memory as float and shared by all 32
+// positions, so each weight is read once per 32 positions. Needs rows % 64 == 0,
+// cols % 32 == 0 and n % 32 == 0 (callers pad positions); x rows start on 16-byte
+// boundaries. Products and sums in float32.
+constant constexpr uint TILE_M = 64;
+constant constexpr uint TILE_N = 32;
+constant constexpr uint TILE_K = 32;
+
+kernel void gemm_mxfp4_tiled(
+    device const uchar *elements [[buffer(0)]],
+    device const uchar *scales [[buffer(1)]],
+    device const float *x [[buffer(2)]],
+    device float *y [[buffer(3)]],
+    constant GemmArgs &a [[buffer(4)]],
+    uint group [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint tid [[thread_index_in_threadgroup]])
+{
+    threadgroup float lut[16];
+    threadgroup float wa[TILE_M * TILE_K];
+    threadgroup float xb[TILE_N * TILE_K];
+    if (tid < 16) {
+        lut[tid] = E2M1[tid];
+    }
+    const uint row_tiles = a.rows / TILE_M;
+    const uint r0 = (group % row_tiles) * TILE_M;
+    const uint p0 = (group / row_tiles) * TILE_N;
+    const uint blocks = a.cols / 32;
+    // Simdgroup sg owns rows (sg % 4) * 16 .. +16 and positions (sg / 4) * 16 .. +16.
+    const uint rs = (sg % 4) * 16;
+    const uint ps = (sg / 4) * 16;
+    simdgroup_float8x8 acc[2][2];
+    for (uint i = 0; i < 2; ++i) {
+        for (uint j = 0; j < 2; ++j) {
+            acc[i][j] = simdgroup_float8x8(0.0f);
+        }
+    }
+    // Loading: thread t decodes 8 weights (row t / 4, word t % 4 of the block) and loads
+    // 4 x values (position t / 8, floats (t % 8) * 4 .. +4).
+    const uint wrow = tid / 4;
+    const uint word = tid % 4;
+    const uint xpos = tid / 8;
+    const uint xpart = tid % 8;
+    device const uint *codes = (device const uint *)elements;
+    for (uint b = 0; b < blocks; ++b) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        {
+            const ulong row = r0 + wrow;
+            const uint q = codes[(row * blocks + b) * 4 + word];
+            const float scale = e8m0(scales[row * blocks + b]);
+            threadgroup float *dst = wa + wrow * TILE_K + word * 8;
+            for (uint i = 0; i < 8; ++i) {
+                dst[i] = lut[(q >> (4 * i)) & 15] * scale;
+            }
+            device const float4 *src =
+                (device const float4 *)(x + (ulong)(p0 + xpos) * a.x_stride + b * TILE_K);
+            ((threadgroup float4 *)(xb + xpos * TILE_K))[xpart] = src[xpart];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint k = 0; k < TILE_K; k += 8) {
+            simdgroup_float8x8 wm[2];
+            simdgroup_float8x8 xm[2];
+            for (uint i = 0; i < 2; ++i) {
+                simdgroup_load(wm[i], wa, TILE_K, ulong2(k, rs + i * 8));
+                // Positions are rows of xb; as a K x N matrix they are its columns.
+                simdgroup_load(xm[i], xb, TILE_K, ulong2(k, ps + i * 8), true);
+            }
+            for (uint i = 0; i < 2; ++i) {
+                for (uint j = 0; j < 2; ++j) {
+                    simdgroup_multiply_accumulate(acc[i][j], wm[i], xm[j], acc[i][j]);
+                }
+            }
+        }
+    }
+    // acc[i][j] is rows x positions; y is positions x rows: store it transposed.
+    for (uint i = 0; i < 2; ++i) {
+        for (uint j = 0; j < 2; ++j) {
+            device float *dst = y + (ulong)(p0 + ps + j * 8) * a.y_stride + r0 + rs + i * 8;
+            simdgroup_store(acc[i][j], dst, a.y_stride, ulong2(0, 0), true);
+        }
+    }
+}
+
+// As gemm_mxfp4_tiled for a bfloat16 W (row-major, little-endian): the 64 x 32 weight
+// tile is widened into threadgroup memory once and shared by 32 positions. Needs
+// rows % 64 == 0, cols % 32 == 0 and n % 32 == 0; W rows and x rows on 16-byte
+// boundaries (cols % 8 == 0 keeps them there).
+kernel void gemm_bf16_tiled(
+    device const uchar *w [[buffer(0)]],
+    device const float *x [[buffer(1)]],
+    device float *y [[buffer(2)]],
+    constant GemmArgs &a [[buffer(3)]],
+    uint group [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint tid [[thread_index_in_threadgroup]])
+{
+    threadgroup float wa[TILE_M * TILE_K];
+    threadgroup float xb[TILE_N * TILE_K];
+    const uint row_tiles = a.rows / TILE_M;
+    const uint r0 = (group % row_tiles) * TILE_M;
+    const uint p0 = (group / row_tiles) * TILE_N;
+    const uint rs = (sg % 4) * 16;
+    const uint ps = (sg / 4) * 16;
+    simdgroup_float8x8 acc[2][2];
+    for (uint i = 0; i < 2; ++i) {
+        for (uint j = 0; j < 2; ++j) {
+            acc[i][j] = simdgroup_float8x8(0.0f);
+        }
+    }
+    // Thread t widens 8 weights (row t / 4, elements (t % 4) * 8 .. +8: one uint4) and
+    // loads 4 x values (position t / 8, floats (t % 8) * 4 .. +4).
+    const uint wrow = tid / 4;
+    const uint part = tid % 4;
+    const uint xpos = tid / 8;
+    const uint xpart = tid % 8;
+    device const uint4 *w4 = (device const uint4 *)w;
+    const uint row_words = a.cols / 8;
+    for (uint k0 = 0; k0 < a.cols; k0 += TILE_K) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        {
+            const uint4 q = w4[(ulong)(r0 + wrow) * row_words + k0 / 8 + part];
+            threadgroup float *dst = wa + wrow * TILE_K + part * 8;
+            dst[0] = bf16_lo(q.x);
+            dst[1] = bf16_hi(q.x);
+            dst[2] = bf16_lo(q.y);
+            dst[3] = bf16_hi(q.y);
+            dst[4] = bf16_lo(q.z);
+            dst[5] = bf16_hi(q.z);
+            dst[6] = bf16_lo(q.w);
+            dst[7] = bf16_hi(q.w);
+            device const float4 *src =
+                (device const float4 *)(x + (ulong)(p0 + xpos) * a.x_stride + k0);
+            ((threadgroup float4 *)(xb + xpos * TILE_K))[xpart] = src[xpart];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint k = 0; k < TILE_K; k += 8) {
+            simdgroup_float8x8 wm[2];
+            simdgroup_float8x8 xm[2];
+            for (uint i = 0; i < 2; ++i) {
+                simdgroup_load(wm[i], wa, TILE_K, ulong2(k, rs + i * 8));
+                simdgroup_load(xm[i], xb, TILE_K, ulong2(k, ps + i * 8), true);
+            }
+            for (uint i = 0; i < 2; ++i) {
+                for (uint j = 0; j < 2; ++j) {
+                    simdgroup_multiply_accumulate(acc[i][j], wm[i], xm[j], acc[i][j]);
+                }
+            }
+        }
+    }
+    for (uint i = 0; i < 2; ++i) {
+        for (uint j = 0; j < 2; ++j) {
+            device float *dst = y + (ulong)(p0 + ps + j * 8) * a.y_stride + r0 + rs + i * 8;
+            simdgroup_store(acc[i][j], dst, a.y_stride, ulong2(0, 0), true);
+        }
+    }
+}
+
+// attention_split_key for many new positions, on the matrix units: a threadgroup takes 32
+// new positions (queries) of one head and walks the cache 32 keys at a time. Scores
+// Q K^T (32 x 32) come from 8 x 8 matrix products; the softmax runs online per query row
+// in threadgroup memory; the output (32 x dv, dv = 128) stays in the simdgroups' matrices,
+// rescaled by a diagonal matrix when a row's maximum grows, plus P V. Needs qa and qb
+// multiples of 8, dv == 128. Reads (and writes) rows up to the next multiple of 32: q and
+// out need t rounded up, kv and shared cached + t rounded up, and cache rows past
+// cached + t must be finite (their weight is exactly zero).
+kernel void attention_split_key_tiled(
+    device const float *q [[buffer(0)]],
+    device const float *kv [[buffer(1)]],
+    device const float *shared_key [[buffer(2)]],
+    device float *out [[buffer(3)]],
+    constant AttentionArgs &a [[buffer(4)]],
+    uint group [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]],
+    uint tid [[thread_index_in_threadgroup]])
+{
+    threadgroup float scores[32 * 32];
+    threadgroup float diag[4 * 64];
+    threadgroup float row_max[32];
+    threadgroup float row_sum[32];
+    const uint head = group % a.heads;
+    const uint q0 = (group / a.heads) * 32;
+    const uint dq = a.qa + a.qb;
+    const uint row = a.qa + a.dv;
+    const ulong q_stride = (ulong)a.heads * dq;
+    const ulong kv_stride = (ulong)a.heads * row;
+    // Simdgroup sg: query tile qi (8 queries), score key tiles kj0, kj0 + 1, and value
+    // columns vc0 .. vc0 + 64 of the output.
+    const uint qi = sg / 2;
+    const uint kj0 = (sg % 2) * 2;
+    const uint vc0 = (sg % 2) * 64;
+    for (uint i = tid; i < 4 * 64; i += 256) {
+        diag[i] = 0.0f;
+    }
+    if (tid < 32) {
+        row_max[tid] = -INFINITY;
+        row_sum[tid] = 0.0f;
+    }
+    simdgroup_float8x8 o[8];
+    for (uint v = 0; v < 8; ++v) {
+        o[v] = simdgroup_float8x8(0.0f);
+    }
+    const uint queries = min(32u, a.t - q0);
+    const uint keys_end = a.cached + q0 + queries;
+    device const float *qt = q + (ulong)(q0 + qi * 8) * q_stride + (ulong)head * dq;
+    for (uint s0 = 0; s0 < keys_end; s0 += 32) {
+        // Scores for this simdgroup's two 8 x 8 tiles.
+        simdgroup_float8x8 sc[2] = {simdgroup_float8x8(0.0f), simdgroup_float8x8(0.0f)};
+        for (uint d = 0; d < dq; d += 8) {
+            simdgroup_float8x8 qm;
+            simdgroup_load(qm, qt + d, q_stride);
+            for (uint j = 0; j < 2; ++j) {
+                const uint s = s0 + (kj0 + j) * 8;
+                simdgroup_float8x8 km;
+                if (d < a.qa) {
+                    simdgroup_load(km, kv + (ulong)s * kv_stride + (ulong)head * row + d,
+                                   kv_stride, ulong2(0, 0), true);
+                } else {
+                    simdgroup_load(km, shared_key + (ulong)s * a.qb + (d - a.qa), a.qb,
+                                   ulong2(0, 0), true);
+                }
+                simdgroup_multiply_accumulate(sc[j], qm, km, sc[j]);
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint j = 0; j < 2; ++j) {
+            simdgroup_store(sc[j], scores, 32, ulong2((kj0 + j) * 8, qi * 8));
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        // Online softmax: 8 threads per query row, 4 keys each.
+        {
+            const uint r = tid / 8;
+            const uint c0 = (tid % 8) * 4;
+            const uint limit = a.cached + q0 + r; // last key this query sees
+            float p[4];
+            float local = -INFINITY;
+            for (uint c = 0; c < 4; ++c) {
+                const uint s = s0 + c0 + c;
+                const bool live = r < queries && s <= limit;
+                p[c] = live ? scores[r * 32 + c0 + c] * a.scale : -INFINITY;
+                local = max(local, p[c]);
+            }
+            local = max(local, simd_shuffle_xor(local, 1));
+            local = max(local, simd_shuffle_xor(local, 2));
+            local = max(local, simd_shuffle_xor(local, 4));
+            const float old = row_max[r];
+            const float next = max(old, local);
+            float sum = 0.0f;
+            for (uint c = 0; c < 4; ++c) {
+                p[c] = next == -INFINITY ? 0.0f : exp(p[c] - next);
+                sum += p[c];
+                scores[r * 32 + c0 + c] = p[c];
+            }
+            sum += simd_shuffle_xor(sum, 1);
+            sum += simd_shuffle_xor(sum, 2);
+            sum += simd_shuffle_xor(sum, 4);
+            const float keep = next == -INFINITY ? 1.0f : exp(old - next);
+            // Every lane read row_max[r] above; one writes it after the barrier-free
+            // shuffles, and the value it writes is what all eight computed.
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+            if (tid % 8 == 0) {
+                row_max[r] = next;
+                row_sum[r] = row_sum[r] * keep + sum;
+                diag[(r / 8) * 64 + (r % 8) * 9] = keep;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        // o = diag(keep) o + P V over this simdgroup's 8 value tiles.
+        simdgroup_float8x8 dm;
+        simdgroup_load(dm, diag + qi * 64, 8);
+        for (uint v = 0; v < 8; ++v) {
+            simdgroup_multiply(o[v], dm, o[v]);
+        }
+        for (uint k = 0; k < 32; k += 8) {
+            simdgroup_float8x8 pm;
+            simdgroup_load(pm, scores, 32, ulong2(k, qi * 8));
+            device const float *vt = kv + (ulong)(s0 + k) * kv_stride + (ulong)head * row
+                                   + a.qa + vc0;
+            for (uint v = 0; v < 8; ++v) {
+                simdgroup_float8x8 vm;
+                simdgroup_load(vm, vt + v * 8, kv_stride);
+                simdgroup_multiply_accumulate(o[v], pm, vm, o[v]);
+            }
+        }
+    }
+    // out = diag(1 / sum) o.
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (tid < 32) {
+        const uint r = tid;
+        diag[(r / 8) * 64 + (r % 8) * 9] = row_sum[r] > 0.0f ? 1.0f / row_sum[r] : 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    simdgroup_float8x8 dm;
+    simdgroup_load(dm, diag + qi * 64, 8);
+    device float *ot = out + (ulong)(q0 + qi * 8) * a.heads * a.dv + (ulong)head * a.dv + vc0;
+    for (uint v = 0; v < 8; ++v) {
+        simdgroup_multiply(o[v], dm, o[v]);
+        simdgroup_store(o[v], ot + v * 8, (ulong)a.heads * a.dv);
     }
 }

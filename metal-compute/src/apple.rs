@@ -83,8 +83,11 @@ pub struct Gpu {
     mxfp4: [Pipeline; 3],
     gemm_bf16: Pipeline,
     gemm_mxfp4: Pipeline,
+    gemm_mxfp4_tiled: Pipeline,
+    gemm_bf16_tiled: Pipeline,
     attention: Pipeline,
     attention_wide: Pipeline,
+    attention_tiled: Pipeline,
     recurrence: Pipeline,
     glue: Glue,
     rows: Rows,
@@ -121,8 +124,11 @@ impl Gpu {
         ];
         let gemm_bf16 = pipeline("gemm_bf16")?;
         let gemm_mxfp4 = pipeline("gemm_mxfp4")?;
+        let gemm_mxfp4_tiled = pipeline("gemm_mxfp4_tiled")?;
+        let gemm_bf16_tiled = pipeline("gemm_bf16_tiled")?;
         let attention = pipeline("attention_split_key")?;
         let attention_wide = pipeline("attention_split_key_wide")?;
+        let attention_tiled = pipeline("attention_split_key_tiled")?;
         let recurrence = pipeline("delta_rule_recurrence")?;
         let glue = Glue {
             conv: pipeline("causal_conv_silu")?,
@@ -141,8 +147,11 @@ impl Gpu {
             .chain([
                 &gemm_bf16,
                 &gemm_mxfp4,
+                &gemm_mxfp4_tiled,
+                &gemm_bf16_tiled,
                 &attention,
                 &attention_wide,
+                &attention_tiled,
                 &recurrence,
             ])
             .chain(glue.all())
@@ -165,8 +174,11 @@ impl Gpu {
             mxfp4,
             gemm_bf16,
             gemm_mxfp4,
+            gemm_mxfp4_tiled,
+            gemm_bf16_tiled,
             attention,
             attention_wide,
+            attention_tiled,
             recurrence,
             glue,
             rows: Rows::default(),
@@ -888,6 +900,69 @@ impl Batch<'_> {
         Ok(())
     }
 
+    /// As [`Self::gemm_mxfp4`] on the matrix units, tiled 64 weight rows by 32 positions:
+    /// each weight is read once per 32 positions. Needs `rows % 64 == 0`,
+    /// `cols % 32 == 0` and `n % 32 == 0` (pad the positions).
+    #[allow(clippy::too_many_arguments)]
+    pub fn gemm_mxfp4_tiled(
+        &mut self,
+        elements: Slice,
+        scales: Slice,
+        x: Slice,
+        y: Slice,
+        rows: usize,
+        cols: usize,
+        n: usize,
+        (x_stride, y_stride): (usize, usize),
+    ) -> Result<(), Error> {
+        if !rows.is_multiple_of(64) || !cols.is_multiple_of(32) || !n.is_multiple_of(32) {
+            return Err(Error::Dispatch(format!(
+                "tiled MXFP4 product needs rows % 64, cols % 32 and n % 32 == 0: {rows} x {cols}, n {n}"
+            )));
+        }
+        let (args, x_len, y_len) = Self::gemm_args(rows, cols, n, x_stride, y_stride)?;
+        self.check("elements", &elements, rows * cols / 2, 16)?;
+        self.check("scales", &scales, rows * cols / 32, 1)?;
+        self.check("x", &x, x_len, 16)?;
+        self.check("y", &y, y_len, 4)?;
+        self.check_output(&y, &[&elements, &scales, &x])?;
+        let pipeline = self.gpu.gemm_mxfp4_tiled.clone();
+        let groups = rows / 64 * (n / 32);
+        narrow(groups)?;
+        self.encode(&pipeline, &[elements, scales, x, y], &args, groups);
+        Ok(())
+    }
+
+    /// As [`Self::gemm_bf16`] on the matrix units, tiled 64 weight rows by 32 positions.
+    /// Needs `rows % 64 == 0`, `cols % 32 == 0` and `n % 32 == 0` (pad the positions).
+    #[allow(clippy::too_many_arguments)]
+    pub fn gemm_bf16_tiled(
+        &mut self,
+        w: Slice,
+        x: Slice,
+        y: Slice,
+        rows: usize,
+        cols: usize,
+        n: usize,
+        (x_stride, y_stride): (usize, usize),
+    ) -> Result<(), Error> {
+        if !rows.is_multiple_of(64) || !cols.is_multiple_of(32) || !n.is_multiple_of(32) {
+            return Err(Error::Dispatch(format!(
+                "tiled bf16 product needs rows % 64, cols % 32 and n % 32 == 0: {rows} x {cols}, n {n}"
+            )));
+        }
+        let (args, x_len, y_len) = Self::gemm_args(rows, cols, n, x_stride, y_stride)?;
+        self.check("weights", &w, rows * cols * 2, 16)?;
+        self.check("x", &x, x_len, 16)?;
+        self.check("y", &y, y_len, 4)?;
+        self.check_output(&y, &[&w, &x])?;
+        let pipeline = self.gpu.gemm_bf16_tiled.clone();
+        let groups = rows / 64 * (n / 32);
+        narrow(groups)?;
+        self.encode(&pipeline, &[w, x, y], &args, groups);
+        Ok(())
+    }
+
     /// Makes every later dispatch see the buffer writes of every earlier one. Needed only
     /// in a [`Dispatch::Concurrent`] batch.
     /// Causal attention with split keys: for each of `shape.t` new positions and each
@@ -948,6 +1023,63 @@ impl Batch<'_> {
         } else {
             self.gpu.attention.clone()
         };
+        self.encode(&pipeline, &[q, kv, shared, out], &args, groups);
+        Ok(())
+    }
+
+    /// [`Self::attention_split_key`] on the matrix units, 32 new positions per
+    /// threadgroup and 32 cached positions per step: for many new positions at once (a
+    /// prompt). Needs `qa` and `qb` multiples of 8 and `dv == 128`. Rows are read (and
+    /// written) up to the next multiple of 32: `q` and `out` hold `t` rounded up to 32
+    /// rows, `kv` and `shared` `cached + t` rounded up, and cache rows past
+    /// `cached + t` must be finite (they are multiplied by zero).
+    pub fn attention_split_key_tiled(
+        &mut self,
+        q: Slice,
+        kv: Slice,
+        shared: Slice,
+        out: Slice,
+        shape: AttentionShape,
+    ) -> Result<(), Error> {
+        let AttentionShape {
+            t,
+            cached,
+            heads,
+            qa,
+            qb,
+            dv,
+            scale,
+        } = shape;
+        if t == 0
+            || heads == 0
+            || qa == 0
+            || !qa.is_multiple_of(8)
+            || !qb.is_multiple_of(8)
+            || dv != 128
+        {
+            return Err(Error::Dispatch(format!(
+                "unsupported tiled attention shape {shape:?}"
+            )));
+        }
+        let (t_rows, rows) = (t.div_ceil(32) * 32, (cached + t).div_ceil(32) * 32);
+        let args = AttentionArgs {
+            t: narrow(t)?,
+            cached: narrow(cached)?,
+            heads: narrow(heads)?,
+            qa: narrow(qa)?,
+            qb: narrow(qb)?,
+            dv: narrow(dv)?,
+            scale,
+        };
+        let groups = t_rows / 32 * heads;
+        narrow(groups)?;
+        narrow(rows * heads * (qa + dv))?;
+        self.check("q", &q, t_rows * heads * (qa + qb) * 4, 4)?;
+        self.check("kv", &kv, rows * heads * (qa + dv) * 4, 4)?;
+        self.check("shared", &shared, rows * qb * 4, 4)?;
+        self.check("out", &out, t_rows * heads * dv * 4, 4)?;
+        self.check_output(&out, &[&q, &kv, &shared])?;
+        let pipeline = self.gpu.attention_tiled.clone();
         self.encode(&pipeline, &[q, kv, shared, out], &args, groups);
         Ok(())
     }
