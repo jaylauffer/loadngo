@@ -82,8 +82,43 @@ impl Session {
         })
     }
 
+    /// Rebuild a session saved from [`Self::tokens`], [`Self::turn_starts`] and
+    /// [`Self::is_pending`], for example after the process restarts.
+    ///
+    /// # Errors
+    /// [`Error::InvalidLimit`] for a zero limit or saved state that is not a session's:
+    /// more tokens than the limit, turn starts that are not strictly increasing inside
+    /// the history, or a pending reply with no turn.
+    pub fn restore(
+        max_context: usize,
+        tokens: Vec<u32>,
+        turns: Vec<usize>,
+        pending: bool,
+    ) -> Result<Self, Error> {
+        let increasing = turns.windows(2).all(|pair| pair[0] < pair[1]);
+        let inside = turns.last().is_none_or(|&last| last < tokens.len());
+        if max_context == 0
+            || tokens.len() > max_context
+            || !increasing
+            || !inside
+            || (pending && turns.is_empty())
+        {
+            return Err(Error::InvalidLimit);
+        }
+        Ok(Self {
+            tokens,
+            turns,
+            pending,
+            max_context,
+        })
+    }
+
     pub fn tokens(&self) -> &[u32] {
         &self.tokens
+    }
+    /// Where each turn began in [`Self::tokens`]; [`Self::undo`] removes back to the last.
+    pub fn turn_starts(&self) -> &[usize] {
+        &self.turns
     }
     pub fn is_pending(&self) -> bool {
         self.pending
@@ -259,6 +294,45 @@ mod tests {
         s.reset();
         assert!(s.tokens().is_empty());
         assert!(!s.is_pending());
+    }
+
+    #[test]
+    fn a_restored_session_continues_and_undoes_like_the_saved_one() {
+        let cancel = AtomicBool::new(false);
+        let mut saved = Session::new(20).unwrap();
+        saved.begin_turn(&[1, 2]).unwrap();
+        saved
+            .generate(1, &[99], &cancel, |_| Ok(3), |_| Ok(()))
+            .unwrap();
+        assert!(saved.is_pending());
+
+        let mut s = Session::restore(
+            20,
+            saved.tokens().to_vec(),
+            saved.turn_starts().to_vec(),
+            saved.is_pending(),
+        )
+        .unwrap();
+        let g = s
+            .generate(4, &[99], &cancel, |_| Ok(99), |_| Ok(()))
+            .unwrap();
+        assert_eq!(g.reason, StopReason::EndToken);
+        assert_eq!(s.tokens(), [1, 2, 3, 99]);
+        assert!(s.undo());
+        assert!(s.tokens().is_empty());
+
+        for (limit, tokens, turns, pending) in [
+            (0, vec![], vec![], false),
+            (2, vec![1, 2, 3], vec![0], false),
+            (9, vec![1, 2, 3], vec![1, 1], false),
+            (9, vec![1, 2, 3], vec![3], false),
+            (9, vec![1, 2, 3], vec![], true),
+        ] {
+            assert_eq!(
+                Session::restore(limit, tokens, turns, pending).unwrap_err(),
+                Error::InvalidLimit
+            );
+        }
     }
 
     #[test]
