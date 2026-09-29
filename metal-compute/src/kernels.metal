@@ -469,3 +469,181 @@ kernel void attention_split_key(
         }
     }
 }
+
+// The delta-rule recurrence with a per-key-channel decay (Kimi Delta Attention; gated
+// DeltaNet when the decay is per head). Per head, with state S [dk][dv], for each step:
+//   S = diag(alpha) S;  u = S^T k;  S += k (beta (v - u))^T;  out = S^T q
+// Layouts, float32: q, k, alpha [t][heads][dk]; v and out [t][heads][dv]; beta
+// [t][heads]; state [heads][dk][dv], read at the start and written back at the end.
+// Needs dk even, dk <= 128 and dv <= 128.
+//
+// One threadgroup of 256 threads per head, steps in order. Thread 2j + h holds column j
+// of S, rows h * dk / 2 onwards, in registers; the two halves meet in a lane shuffle.
+// The step's k, q and alpha are staged in threadgroup memory.
+struct RecurrenceArgs {
+    uint t;
+    uint heads;
+    uint dk;
+    uint dv;
+};
+
+constant constexpr uint RECURRENCE_HALF = 64;
+
+kernel void delta_rule_recurrence(
+    device const float *q [[buffer(0)]],
+    device const float *k [[buffer(1)]],
+    device const float *v [[buffer(2)]],
+    device const float *alpha [[buffer(3)]],
+    device const float *beta [[buffer(4)]],
+    device float *state [[buffer(5)]],
+    device float *out [[buffer(6)]],
+    constant RecurrenceArgs &a [[buffer(7)]],
+    uint head [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint threads [[threads_per_threadgroup]])
+{
+    threadgroup float staged[3 * 2 * RECURRENCE_HALF];
+    threadgroup float *sk = staged;
+    threadgroup float *sq = staged + 2 * RECURRENCE_HALF;
+    threadgroup float *sa = staged + 4 * RECURRENCE_HALF;
+    const uint j = tid >> 1;
+    const uint half_index = tid & 1;
+    const bool column = j < a.dv;
+    const uint rows = a.dk / 2;
+    const uint r0 = half_index * rows;
+    device float *sh = state + (ulong)head * a.dk * a.dv;
+    float s[RECURRENCE_HALF];
+    for (uint r = 0; r < RECURRENCE_HALF; ++r) {
+        s[r] = (column && r < rows) ? sh[(ulong)(r0 + r) * a.dv + j] : 0.0f;
+    }
+    for (uint step = 0; step < a.t; ++step) {
+        const ulong at = (ulong)step * a.heads + head;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint i = tid; i < a.dk; i += threads) {
+            sk[i] = k[at * a.dk + i];
+            sq[i] = q[at * a.dk + i];
+            sa[i] = alpha[at * a.dk + i];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        float u = 0.0f;
+        for (uint r = 0; r < RECURRENCE_HALF; ++r) {
+            if (r < rows) {
+                s[r] *= sa[r0 + r];
+                u += sk[r0 + r] * s[r];
+            }
+        }
+        u += simd_shuffle_xor(u, 1);
+        const float b = beta[at];
+        const float delta = (column ? v[at * a.dv + j] : 0.0f) - u;
+        float o = 0.0f;
+        for (uint r = 0; r < RECURRENCE_HALF; ++r) {
+            if (r < rows) {
+                s[r] += sk[r0 + r] * b * delta;
+                o += sq[r0 + r] * s[r];
+            }
+        }
+        o += simd_shuffle_xor(o, 1);
+        if (column && half_index == 0) {
+            out[at * a.dv + j] = o;
+        }
+    }
+    for (uint r = 0; r < RECURRENCE_HALF; ++r) {
+        if (column && r < rows) {
+            sh[(ulong)(r0 + r) * a.dv + j] = s[r];
+        }
+    }
+}
+
+// attention_split_key for a few new positions (decoding): one threadgroup per (new
+// position, head), whose 8 simdgroups take every 8th cached position and each keep an
+// online softmax; the partial results meet in threadgroup memory at the end.
+kernel void attention_split_key_wide(
+    device const float *q [[buffer(0)]],
+    device const float *kv [[buffer(1)]],
+    device const float *shared_key [[buffer(2)]],
+    device float *out [[buffer(3)]],
+    constant AttentionArgs &a [[buffer(4)]],
+    uint group [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]])
+{
+    threadgroup float part_max[ATTENTION_BLOCK];
+    threadgroup float part_sum[ATTENTION_BLOCK];
+    threadgroup float part_acc[ATTENTION_BLOCK][128];
+    const uint head = group % a.heads;
+    const uint step = group / a.heads;
+    const uint dq = a.qa + a.qb;
+    const uint row = a.qa + a.dv;
+    device const float *qt = q + ((ulong)step * a.heads + head) * dq;
+    float qv[8];
+    for (uint i = 0; i < 8; ++i) {
+        const uint d = lane + SIMD * i;
+        qv[i] = d < dq ? qt[d] : 0.0f;
+    }
+    float m = -INFINITY;
+    float l = 0.0f;
+    float acc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    const uint last = a.cached + step;
+    for (uint s = sg; s <= last; s += ATTENTION_BLOCK) {
+        device const float *k = kv + ((ulong)s * a.heads + head) * row;
+        device const float *r = shared_key + (ulong)s * a.qb;
+        float dot = 0.0f;
+        for (uint i = 0; i < 8; ++i) {
+            const uint d = lane + SIMD * i;
+            if (d < a.qa) {
+                dot += qv[i] * k[d];
+            } else if (d < dq) {
+                dot += qv[i] * r[d - a.qa];
+            }
+        }
+        const float score = simd_sum(dot) * a.scale;
+        const float next = max(m, score);
+        const float keep = exp(m - next);
+        const float p = exp(score - next);
+        l = l * keep + p;
+        for (uint j = 0; j < 4; ++j) {
+            const uint d = lane + SIMD * j;
+            if (d < a.dv) {
+                acc[j] = acc[j] * keep + p * k[a.qa + d];
+            }
+        }
+        m = next;
+    }
+    if (sg < ATTENTION_BLOCK) {
+        if (lane == 0) {
+            part_max[sg] = m;
+            part_sum[sg] = l;
+        }
+        for (uint j = 0; j < 4; ++j) {
+            const uint d = lane + SIMD * j;
+            if (d < a.dv) {
+                part_acc[sg][d] = acc[j];
+            }
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (sg == 0) {
+        float total_max = -INFINITY;
+        for (uint g = 0; g < ATTENTION_BLOCK; ++g) {
+            total_max = max(total_max, part_max[g]);
+        }
+        float total = 0.0f;
+        float w[ATTENTION_BLOCK];
+        for (uint g = 0; g < ATTENTION_BLOCK; ++g) {
+            // A simdgroup with no positions has max -inf and sum 0: weight 0.
+            w[g] = exp(part_max[g] - total_max);
+            total += part_sum[g] * w[g];
+        }
+        device float *o = out + ((ulong)step * a.heads + head) * a.dv;
+        for (uint j = 0; j < 4; ++j) {
+            const uint d = lane + SIMD * j;
+            if (d < a.dv) {
+                float v = 0.0f;
+                for (uint g = 0; g < ATTENTION_BLOCK; ++g) {
+                    v += part_acc[g][d] * w[g];
+                }
+                o[d] = v / total;
+            }
+        }
+    }
+}

@@ -148,6 +148,8 @@ fn matches_the_float64_definition() {
         (shape(13, 5, 3, 40, 24, 72), 8.0),
         (shape(37, 0, 2, 128, 64, 128), 8.0),
         // A long cache: the running maximum and sum over thousands of rows.
+        // Decoding against a long cache (the split-walk kernel, below 8 new positions).
+        (shape(3, 3000, 2, 128, 64, 128), 4.0),
         (shape(9, 3000, 2, 128, 64, 128), 4.0),
         // No shared key part.
         (shape(5, 11, 2, 96, 0, 32), 1.0),

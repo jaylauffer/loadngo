@@ -12,6 +12,8 @@
 //!   `loadngo_weights::mxfp4::Mxfp4Matrix`: packed elements and one scale per 32).
 //! - `attention_split_key`: causal multi-head attention whose keys are split between a
 //!   per-head part and a part every head shares (multi-head latent attention's layout).
+//! - `delta_rule_recurrence`: the delta-rule linear-attention recurrence with a decay per
+//!   key channel (Kimi Delta Attention), steps in order, state updated in place.
 //!
 //! No model architecture belongs in this crate.
 #![deny(unsafe_code)]
@@ -21,7 +23,9 @@
 mod apple;
 
 #[cfg(target_os = "macos")]
-pub use apple::{AttentionShape, Batch, Buffer, Completed, Dispatch, Gpu, Resident, Rows, Slice};
+pub use apple::{
+    AttentionShape, Batch, Buffer, Completed, Dispatch, Gpu, RecurrenceShape, Resident, Rows, Slice,
+};
 
 /// Why a GPU operation could not be set up or did not complete.
 #[derive(Debug, thiserror::Error)]

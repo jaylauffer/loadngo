@@ -208,7 +208,46 @@ Measured on the M4 Pro with the 4-bit experts, with no thermal warning at any po
 - `metal-compute/tests/gemm_timing.rs` holds the timing experiments (ignored tests, run
   by hand).
 
-## M1, second stage: what we are attempting (in progress: attention done 2026-09-29)
+## M1, second stage: what we are attempting (in progress: attention, router and KDA done 2026-09-29)
+
+### Router, KDA recurrence and decoding attention (2026-09-29, same day)
+
+- **KDA recurrence:** new kernel `delta_rule_recurrence` (`Batch::delta_rule_recurrence`).
+  Each head gets one threadgroup of 256 threads, taking the steps in order. Thread `2j + h`
+  holds half of state column `j` in registers, and the two halves meet in a lane shuffle.
+  The step's k, q and decay are staged in threadgroup memory. Kimi keeps the state in the
+  GPU between calls and copies it back to the session after each one, so snapshots stay
+  exact.
+- **Router:** its weights are bf16 in the checkpoint, so its logits are a bf16 product in
+  the same batch as the shared expert's gate and up, which read the same input. Expert
+  selection stays on the CPU (`select_experts`, which the f64 CPU router also uses).
+  Devices opt in with `DenseAccel::routes`: only the GPU does, since its products
+  accumulate in f32. The fp16 Neural Engine keeps the CPU router.
+- **Decoding attention:** `attention_split_key_wide`, used below 8 new positions. Each
+  position gets a whole threadgroup, and its 8 simdgroups split the cache walk and combine
+  at the end. Before this, one simdgroup walked the whole cache alone.
+- **Short convolution** (CPU): reordered to go row by row. It is bit-identical to the old
+  channel-by-channel walk, which strided a whole row per step; a test checks bit identity.
+
+Checked: `tests/recurrence.rs` compares the recurrence against a float64 reference over
+1, 17 and 300 steps, with state carried across two dispatches (error < 1e-4). It fails
+without the decay or the cross-half sum. The attention test gained a decoding case
+against a 3,000-row cache, which fails if the partial results are combined without
+their weights. End to end, CPU against GPU on 453 tokens, whole-text and one position at
+a time: top-1 agreement 100%, KL divergence 0.00000 (to five decimals), identical
+perplexity.
+
+Same 3,895-token prompt:
+
+| | Morning | Attention on GPU | + router, KDA, decoding kernel |
+|---|---:|---:|---:|
+| Prompt pass | 439.2 s | 107.6 s | 59.2 s |
+| One new token at ~3.9k context | 0.27 s | 0.14 s | 0.06 s |
+| 453-token text scored whole | 16.5 s (Codex's 488-token baseline) | 11.3 s | 5.6 s |
+
+At short context, decoding is unchanged (26.1 s against 27.0 s for 453 positions one at
+a time): the added GPU round trips roughly cancel the CPU they save. Each forward pass
+still makes many serial round trips, and removing them is the next step.
 
 ### Attention on the GPU (2026-09-29)
 

@@ -79,6 +79,8 @@ pub struct Gpu {
     gemm_bf16: Pipeline,
     gemm_mxfp4: Pipeline,
     attention: Pipeline,
+    attention_wide: Pipeline,
+    recurrence: Pipeline,
     rows: Rows,
 }
 
@@ -114,11 +116,15 @@ impl Gpu {
         let gemm_bf16 = pipeline("gemm_bf16")?;
         let gemm_mxfp4 = pipeline("gemm_mxfp4")?;
         let attention = pipeline("attention_split_key")?;
-        for p in bf16
-            .iter()
-            .chain(&mxfp4)
-            .chain([&gemm_bf16, &gemm_mxfp4, &attention])
-        {
+        let attention_wide = pipeline("attention_split_key_wide")?;
+        let recurrence = pipeline("delta_rule_recurrence")?;
+        for p in bf16.iter().chain(&mxfp4).chain([
+            &gemm_bf16,
+            &gemm_mxfp4,
+            &attention,
+            &attention_wide,
+            &recurrence,
+        ]) {
             if p.maxTotalThreadsPerThreadgroup() < THREADS_PER_GROUP {
                 return Err(Error::Compile(format!(
                     "kernels need {THREADS_PER_GROUP} threads per threadgroup, the device allows {}",
@@ -135,6 +141,8 @@ impl Gpu {
             gemm_bf16,
             gemm_mxfp4,
             attention,
+            attention_wide,
+            recurrence,
             rows: Rows::default(),
         })
     }
@@ -453,6 +461,11 @@ struct AttentionArgs {
 /// New positions per threadgroup in `attention_split_key` (`ATTENTION_BLOCK` in the MSL).
 const ATTENTION_BLOCK: usize = 8;
 
+/// Below this many new positions, attention splits each position's cache walk across a
+/// threadgroup's simdgroups (`attention_split_key_wide`) instead of giving each position
+/// one simdgroup: a single decoding position would otherwise walk the cache alone.
+const ATTENTION_WIDE_BELOW: usize = ATTENTION_BLOCK;
+
 /// The shape of one [`Batch::attention_split_key`] dispatch.
 #[derive(Clone, Copy, Debug)]
 pub struct AttentionShape {
@@ -469,6 +482,26 @@ pub struct AttentionShape {
     pub dv: usize,
     /// Score scale, usually `1 / sqrt(qa + qb)`.
     pub scale: f32,
+}
+
+#[repr(C)]
+struct RecurrenceArgs {
+    t: u32,
+    heads: u32,
+    dk: u32,
+    dv: u32,
+}
+
+/// The shape of one [`Batch::delta_rule_recurrence`] dispatch.
+#[derive(Clone, Copy, Debug)]
+pub struct RecurrenceShape {
+    /// Steps, run in order.
+    pub t: usize,
+    pub heads: usize,
+    /// Key dimensions per head (rows of the state).
+    pub dk: usize,
+    /// Value dimensions per head (columns of the state).
+    pub dv: usize,
 }
 
 /// Weight rows per simdgroup in the multi-position kernels (`GEMM_ROWS` in the MSL).
@@ -563,7 +596,7 @@ impl Batch<'_> {
             // holds (and the command buffer retains) until the GPU has finished.
             unsafe { enc.setBuffer_offset_atIndex(Some(raw), slice.offset, index) };
         }
-        // SAFETY: `A` is `GemvArgs`, `GemmArgs` or `AttentionArgs`, `repr(C)` like the kernel's argument struct.
+        // SAFETY: `A` is one of the `repr(C)` argument structs above, like the kernel's argument struct.
         unsafe {
             enc.setBytes_length_atIndex(
                 NonNull::from(args).cast(),
@@ -754,15 +787,72 @@ impl Batch<'_> {
             dv: narrow(dv)?,
             scale,
         };
-        let groups = t.div_ceil(ATTENTION_BLOCK) * heads;
+        let wide = t < ATTENTION_WIDE_BELOW;
+        let groups = if wide {
+            t * heads
+        } else {
+            t.div_ceil(ATTENTION_BLOCK) * heads
+        };
         narrow(groups)?;
         self.check("q", &q, t * heads * (qa + qb) * 4, 4)?;
         self.check("kv", &kv, positions * heads * (qa + dv) * 4, 4)?;
         self.check("shared", &shared, positions * qb * 4, 4)?;
         self.check("out", &out, t * heads * dv * 4, 4)?;
         self.check_output(&out, &[&q, &kv, &shared])?;
-        let pipeline = self.gpu.attention.clone();
+        let pipeline = if wide {
+            self.gpu.attention_wide.clone()
+        } else {
+            self.gpu.attention.clone()
+        };
         self.encode(&pipeline, &[q, kv, shared, out], &args, groups);
+        Ok(())
+    }
+
+    /// The delta-rule recurrence with per-key-channel decay, `shape.t` steps in order.
+    /// Per head, with state `S` `[dk][dv]`: `S = diag(alpha) S`, `u = S^T k`,
+    /// `S += k (beta (v - u))^T`, `out = S^T q`. `q`, `k` and `alpha` are
+    /// `[t][heads][dk]`, `v` and `out` `[t][heads][dv]`, `beta` `[t][heads]`, `state`
+    /// `[heads][dk][dv]`, read and then updated in place; all `f32`. Needs `dk` even,
+    /// `dk <= 128` and `dv <= 128`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn delta_rule_recurrence(
+        &mut self,
+        (q, k, v, alpha, beta): (Slice, Slice, Slice, Slice, Slice),
+        state: Slice,
+        out: Slice,
+        shape: RecurrenceShape,
+    ) -> Result<(), Error> {
+        let RecurrenceShape { t, heads, dk, dv } = shape;
+        if t == 0 || heads == 0 || dk == 0 || dk % 2 != 0 || dk > 128 || dv == 0 || dv > 128 {
+            return Err(Error::Dispatch(format!(
+                "unsupported recurrence shape {shape:?}"
+            )));
+        }
+        let narrow = |n: usize| {
+            u32::try_from(n).map_err(|_| Error::Dispatch(format!("{n} does not fit in u32")))
+        };
+        let args = RecurrenceArgs {
+            t: narrow(t)?,
+            heads: narrow(heads)?,
+            dk: narrow(dk)?,
+            dv: narrow(dv)?,
+        };
+        narrow(t * heads * dk.max(dv))?;
+        for (what, slice, floats) in [
+            ("q", &q, t * heads * dk),
+            ("k", &k, t * heads * dk),
+            ("v", &v, t * heads * dv),
+            ("alpha", &alpha, t * heads * dk),
+            ("beta", &beta, t * heads),
+            ("state", &state, heads * dk * dv),
+            ("out", &out, t * heads * dv),
+        ] {
+            self.check(what, slice, floats * 4, 4)?;
+        }
+        self.check_output(&state, &[&q, &k, &v, &alpha, &beta, &out])?;
+        self.check_output(&out, &[&q, &k, &v, &alpha, &beta])?;
+        let pipeline = self.gpu.recurrence.clone();
+        self.encode(&pipeline, &[q, k, v, alpha, beta, state, out], &args, heads);
         Ok(())
     }
 
