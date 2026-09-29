@@ -703,6 +703,24 @@ pub fn launch(
     MAC_PROACTOR.with(|proactor| {
         *proactor.borrow_mut() = Some(new_mac_proactor());
     });
+    // Setup's autoreleased objects are drained here; what must live on is retained in
+    // the app state.
+    objc2::rc::autoreleasepool(|_| start(window, icon, entry));
+    run_event_loop();
+    APP_STATE.with(|state| {
+        state.borrow_mut().take();
+    });
+    MAC_PROACTOR.with(|proactor| {
+        proactor.borrow_mut().take();
+    });
+}
+
+/// The window, the app state, the Metal binding and the entry future's first poll.
+fn start(
+    window: WindowDescriptor,
+    icon: Option<WindowIconSet>,
+    entry: impl Future<Output = ()> + 'static,
+) {
     let (window_obj, view_obj, surface) = create_window(&window, icon.as_ref());
     APP_STATE.with(|state| {
         *state.borrow_mut() = Some(AppState {
@@ -745,13 +763,6 @@ pub fn launch(
             }
         });
     }
-    run_event_loop();
-    APP_STATE.with(|state| {
-        state.borrow_mut().take();
-    });
-    MAC_PROACTOR.with(|proactor| {
-        proactor.borrow_mut().take();
-    });
 }
 
 /// Turns the window into a desktop widget: no title bar, just below ordinary windows, on
@@ -1379,34 +1390,42 @@ fn ns_image_from_rgba(rgba: &[u8], width: usize, height: usize) -> Option<Retain
     }
 }
 
+/// This host runs its own loop instead of `NSApplication::run`, so nothing else drains
+/// the objects AppKit and Metal autorelease (the wait's `NSDate`, drawables, command
+/// buffers): each iteration gets its own pool. Without one they were never freed; the
+/// desktop widget reached 1 GB after three days (Codex, `system-stats/DIAGNOSTICS.md`).
 fn run_event_loop() {
-    loop {
-        let should_break = APP_STATE.with(|state| {
-            state
-                .borrow()
-                .as_ref()
-                .map(|s| s.should_close)
-                .unwrap_or(true)
-        });
-        if should_break {
-            break;
-        }
-        let timeout = with_mac_proactor(|proactor| {
-            proactor
-                .proactor
-                .next_deadline()
-                .map(|deadline| deadline.saturating_duration_since(Instant::now()))
-        });
-        pump_events_until(timeout);
-        drain_proactor();
-        if poll_entry_future() {
-            APP_STATE.with(|state| {
-                if let Some(state) = state.borrow_mut().as_mut() {
-                    state.should_close = true;
-                }
-            });
-        }
+    while objc2::rc::autoreleasepool(|_| run_event_loop_once()) {}
+}
+
+/// One wait-for-events, proactor drain and entry poll; false once the app should close.
+fn run_event_loop_once() -> bool {
+    let should_break = APP_STATE.with(|state| {
+        state
+            .borrow()
+            .as_ref()
+            .map(|s| s.should_close)
+            .unwrap_or(true)
+    });
+    if should_break {
+        return false;
     }
+    let timeout = with_mac_proactor(|proactor| {
+        proactor
+            .proactor
+            .next_deadline()
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+    });
+    pump_events_until(timeout);
+    drain_proactor();
+    if poll_entry_future() {
+        APP_STATE.with(|state| {
+            if let Some(state) = state.borrow_mut().as_mut() {
+                state.should_close = true;
+            }
+        });
+    }
+    true
 }
 
 fn pump_events_until(timeout: Option<Duration>) {

@@ -418,6 +418,33 @@ impl SystemSampler {
     }
 }
 
+unsafe extern "C" {
+    fn mach_port_deallocate(task: libc::mach_port_t, name: libc::mach_port_t) -> libc::c_int;
+}
+
+/// A send right to the host port, released when dropped. `mach_host_self` adds a user
+/// reference each call; the sampler took two every sample and released none (Codex,
+/// `DIAGNOSTICS.md`).
+struct HostPort(libc::mach_port_t);
+
+impl HostPort {
+    fn acquire() -> Self {
+        // SAFETY: no arguments; returns this task's send right to the host port.
+        #[allow(deprecated)] // libc points to the mach2 crate; the call is the same
+        Self(unsafe { libc::mach_host_self() })
+    }
+}
+
+impl Drop for HostPort {
+    fn drop(&mut self) {
+        // SAFETY: the right was acquired by `acquire` and is released once, here.
+        #[allow(deprecated)]
+        unsafe {
+            mach_port_deallocate(libc::mach_task_self(), self.0);
+        }
+    }
+}
+
 /// Per-CPU tick counters into `out`: the total first, then each CPU. macOS has no I/O
 /// wait state, so `iowait` stays zero.
 fn read_cpu_times(out: &mut Vec<CpuTimes>) -> bool {
@@ -427,11 +454,10 @@ fn read_cpu_times(out: &mut Vec<CpuTimes>) -> bool {
     let mut count: libc::mach_msg_type_number_t = 0;
     // SAFETY: out pointers to locals; on success the kernel allocates `info` in this
     // task, `count` integers long, which is deallocated below.
+    let host = HostPort::acquire();
     unsafe {
-        #[allow(deprecated)] // libc points to the mach2 crate; the call is the same
-        let host = libc::mach_host_self();
         if libc::host_processor_info(
-            host,
+            host.0,
             libc::PROCESSOR_CPU_LOAD_INFO,
             &raw mut cpus,
             &raw mut info,
@@ -477,11 +503,10 @@ fn memory_usage(total: u64) -> Option<MemoryUsage> {
     let mut stats = std::mem::MaybeUninit::<libc::vm_statistics64>::zeroed();
     let mut count = libc::HOST_VM_INFO64_COUNT;
     // SAFETY: `stats` has room for HOST_VM_INFO64_COUNT integers; the kernel fills it.
+    let host = HostPort::acquire();
     let stats = unsafe {
-        #[allow(deprecated)]
-        let host = libc::mach_host_self();
         if libc::host_statistics64(
-            host,
+            host.0,
             libc::HOST_VM_INFO64,
             stats.as_mut_ptr().cast(),
             &raw mut count,
@@ -531,6 +556,46 @@ fn load_average() -> Option<[f32; 3]> {
 
 #[cfg(test)]
 mod tests {
+
+    unsafe extern "C" {
+        fn mach_port_get_refs(
+            task: libc::mach_port_t,
+            name: libc::mach_port_t,
+            right: libc::c_uint,
+            refs: *mut libc::c_uint,
+        ) -> libc::c_int;
+    }
+
+    /// This task's user references to its send right on the host port.
+    fn host_send_refs() -> u32 {
+        const MACH_PORT_RIGHT_SEND: libc::c_uint = 0;
+        let host = HostPort::acquire();
+        let mut refs = 0;
+        // SAFETY: a valid right name and an out pointer to a local.
+        #[allow(deprecated)]
+        let status = unsafe {
+            mach_port_get_refs(
+                libc::mach_task_self(),
+                host.0,
+                MACH_PORT_RIGHT_SEND,
+                &raw mut refs,
+            )
+        };
+        assert_eq!(status, 0);
+        refs
+    }
+
+    #[test]
+    fn sampling_releases_its_host_port_rights() {
+        let before = host_send_refs();
+        let mut cpus = Vec::new();
+        for _ in 0..200 {
+            assert!(read_cpu_times(&mut cpus));
+            assert!(memory_usage(1 << 30).is_some());
+        }
+        assert_eq!(host_send_refs(), before, "host send rights leaked");
+    }
+
     use super::*;
 
     #[test]
