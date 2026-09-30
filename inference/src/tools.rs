@@ -71,8 +71,31 @@ impl Toolbox {
         } else {
             serde_json::from_str(arguments).map_err(|e| format!("arguments are not JSON: {e}"))?
         };
-        if !args.is_object() {
+        let Some(given) = args.as_object() else {
             return Err("arguments must be a JSON object".into());
+        };
+        // An argument the tool does not declare would be dropped without a word, and
+        // the call answer a different question: Kimi's `fs_find` with `path` (it took
+        // `root`) searched the whole workspace and reported 0 matches.
+        let schema = tool.parameters();
+        if let Some(known) = schema.get("properties").and_then(Value::as_object) {
+            let quoted = |keys: &mut dyn Iterator<Item = &String>| {
+                keys.map(|k| format!("`{k}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let unknown = quoted(&mut given.keys().filter(|k| !known.contains_key(*k)));
+            if !unknown.is_empty() {
+                let accepted = quoted(&mut known.keys());
+                return Err(format!(
+                    "{name} has no argument {unknown}, so nothing was run; it takes {}",
+                    if accepted.is_empty() {
+                        "none"
+                    } else {
+                        &accepted
+                    }
+                ));
+            }
         }
         tool.call(&args)
     }
@@ -442,19 +465,25 @@ impl Tool for FsFind {
         "fs_find"
     }
     fn description(&self) -> &'static str {
-        "Find files on the local drive whose path matches a glob: * within a directory, ** across directories, ? one character. The glob may be written relative to `root` or to the workspace (with root app, src/*.rs and app/src/*.rs both work). Paths come back relative to the workspace. Skips .git and build output."
+        "Find files on the local drive whose path matches a glob: * within a directory, ** across directories, ? one character. The glob may be written relative to `path` or to the workspace (with path app, src/*.rs and app/src/*.rs both work). Paths come back relative to the workspace. Skips .git and build output."
     }
     fn parameters(&self) -> Value {
         json!({"type": "object", "properties": {
             "pattern": {"type": "string", "description": "e.g. **/*.rs or docs/*.md"},
-            "root": {"type": "string", "description": "directory to search (default: the workspace); searching one repository is faster and complete"}},
+            "path": {"type": "string", "description": "directory to search (default: the workspace); searching one repository is faster and complete"},
+            "root": {"type": "string", "description": "same as path"}},
             "required": ["pattern"]})
     }
     fn call(&self, args: &Value) -> Result<String, String> {
         let pattern = str_arg(args, "pattern")?;
-        let root = self
-            .0
-            .resolve(args.get("root").and_then(Value::as_str).unwrap_or("."))?;
+        let root = self.0.resolve(
+            // Kimi has written both: `root` in three calls, `path` (as every other
+            // tool takes it) in one.
+            args.get("path")
+                .or_else(|| args.get("root"))
+                .and_then(Value::as_str)
+                .unwrap_or("."),
+        )?;
         let mut found = Vec::new();
         let visited = self.0.walk(&root, |path, _| {
             if self.0.glob_matches(pattern, &root, path) {
@@ -476,7 +505,7 @@ impl Tool for FsFind {
         } else if found.len() >= MAX_MATCHES {
             let _ = writeln!(
                 out,
-                "[first {MAX_MATCHES} matches only; narrow the pattern or root]"
+                "[first {MAX_MATCHES} matches only; narrow the pattern or path]"
             );
         }
         Ok(out)
@@ -768,7 +797,7 @@ mod tests {
             let found = tools
                 .call(
                     "fs_find",
-                    &json!({"pattern": pattern, "root": "src"}).to_string(),
+                    &json!({"pattern": pattern, "path": "src"}).to_string(),
                 )
                 .unwrap();
             assert!(
@@ -780,6 +809,19 @@ mod tests {
             .call("fs_grep", r#"{"pattern": "needle", "path": "src/nested"}"#)
             .unwrap();
         assert!(grep.contains("src/nested/deep.rs:1:"), "{grep}");
+        // `root` also names the directory; an undeclared argument is refused, not
+        // dropped (Kimi's `path` once widened a search to the whole workspace).
+        let rooted = tools
+            .call("fs_find", r#"{"pattern": "*.rs", "root": "src/nested"}"#)
+            .unwrap();
+        assert!(rooted.contains("\nsrc/nested/deep.rs\n"), "{rooted}");
+        let refused = tools
+            .call("fs_find", r#"{"pattern": "**/*.rs", "dir": "src"}"#)
+            .unwrap_err();
+        assert!(
+            refused.contains("no argument `dir`") && refused.contains("`path`"),
+            "{refused}"
+        );
         // The path a result shows reads back as it is.
         assert!(tools
             .call("fs_read", r#"{"path": "src/nested/deep.rs"}"#)

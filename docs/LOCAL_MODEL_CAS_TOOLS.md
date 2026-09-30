@@ -73,8 +73,11 @@ large manifest's index is hundreds of megabytes); naming another releases it. Ev
 result starts with `archive <name> root <hex>` and `signed by <signer>`, `unsigned`, or
 `signature not verified (<reason>)`. The local tools
 mirror them: `fs_list`, `fs_read` (16 KiB, line windows), `fs_find` (glob, written
-relative to `root` or to the workspace), `fs_grep` (literal, `a|b` for either, binary
-files skipped after an 8 KiB sniff, 32 MiB scanned, 100 matches).
+relative to `path` or to the workspace), `fs_grep` (literal, `a|b` for either, binary
+files skipped after an 8 KiB sniff, 32 MiB scanned, 100 matches). `fs_find` takes the
+directory as `path` or `root` (Kimi writes both). `Toolbox::call` refuses an argument
+a tool does not declare and names the ones it takes: when `fs_find` took only `root`,
+Kimi's `path` was dropped and her search widened to the whole workspace.
 
 ## Where the code is
 
