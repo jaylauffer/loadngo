@@ -11,7 +11,13 @@ CAS capabilities"; the CAS is her default capability alongside ordinary read acc
   folder from the launcher); absolute paths anywhere the user can read. Refused: key and
   credential stores (`~/.ssh`, `~/.gnupg`, `~/.loadngo/keys`, `~/.aws`, `~/.config/gh`,
   `~/Library/Keychains`) and files that look like private keys (`*.key`, `*.pem`, `id_*`,
-  `.env`), checked after resolving symlinks. Walks skip `.git`, `target`, `node_modules`.
+  `.env`), checked after resolving symlinks. Walks skip `.git`, `target`, `node_modules`
+  and any directory holding a `CACHEDIR.TAG` (Cargo marks every build directory, whatever
+  its name, e.g. `target-android-build-std`). They go breadth first, so a find from the
+  pudding root reaches each repository's `src/` long before the 50,000-entry limit, and
+  do not follow symlinked directories. Found paths are shown relative to `--fs-base`, so
+  they can be passed straight back; a result that stopped at a limit says it is
+  incomplete, because Kimi read "0 matches" as "none exist" (2026-10-01).
 - **Archives (`cas_*`, `loadngo-inference::cas_tools` over `data::archive_view`)**: the
   same kinds of reads against any Archive CAS archive on the attached drives, the ones
   the Archive CAS browser shows, with provenance the live drive cannot give:
@@ -66,8 +72,9 @@ id, or `id@drive` when two drives hold the same id. One archive is open at a tim
 large manifest's index is hundreds of megabytes); naming another releases it. Every
 result starts with `archive <name> root <hex>` and `signed by <signer>`, `unsigned`, or
 `signature not verified (<reason>)`. The local tools
-mirror them: `fs_list`, `fs_read` (16 KiB, line windows), `fs_find` (glob), `fs_grep`
-(literal, 32 MiB scanned, 100 matches).
+mirror them: `fs_list`, `fs_read` (16 KiB, line windows), `fs_find` (glob, written
+relative to `root` or to the workspace), `fs_grep` (literal, `a|b` for either, binary
+files skipped after an 8 KiB sniff, 32 MiB scanned, 100 matches).
 
 ## Where the code is
 

@@ -8,8 +8,10 @@
 //! tools, behind the `web` feature, are in `web_tools`). A failed call
 //! returns an error message as its result text; it never panics the conversation.
 
+use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::fs;
+use std::io::Read as _;
 use std::path::{Component, Path, PathBuf};
 
 use serde_json::{json, Value};
@@ -89,6 +91,12 @@ pub const MAX_WALK: usize = 50_000;
 
 /// Directory names a walk skips: build output and version-control internals.
 const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", ".cache", "__pycache__"];
+/// A walk also skips any directory holding this file, the Cache Directory Tagging
+/// marker Cargo writes into every build directory whatever it is called
+/// (`target-android-build-std`, `--target-dir` builds).
+const CACHE_TAG: &str = "CACHEDIR.TAG";
+/// Bytes of a file a grep reads first to tell text from binary.
+const SNIFF_BYTES: usize = 8 * 1024;
 
 /// `*` matches within one path component, `**` across components, `?` one character.
 pub fn glob_match(pattern: &str, text: &str) -> bool {
@@ -172,6 +180,8 @@ pub(crate) fn usize_arg(args: &Value, key: &str, default: usize) -> usize {
 /// cannot reach a denied location.
 pub struct FsTools {
     base: PathBuf,
+    /// `base` with symlinks resolved, for showing found paths relative to it.
+    real_base: PathBuf,
     denied_dirs: Vec<PathBuf>,
 }
 
@@ -193,8 +203,10 @@ impl FsTools {
                 .collect()
             })
             .unwrap_or_default();
+        let base = base.into();
         Self {
-            base: base.into(),
+            real_base: base.canonicalize().unwrap_or_else(|_| base.clone()),
+            base,
             denied_dirs,
         }
     }
@@ -250,21 +262,34 @@ impl FsTools {
         Ok(())
     }
 
-    /// Relative display of `path` against the walk root.
+    /// How a model names `path`: relative to the workspace when it lies inside it, so
+    /// the text can be passed straight back to any tool, and absolute otherwise.
+    fn shown(&self, path: &Path) -> String {
+        match path.strip_prefix(&self.real_base) {
+            Ok(inside) if inside.as_os_str().is_empty() => ".".into(),
+            Ok(_) => relative(&self.real_base, path),
+            Err(_) => path.display().to_string(),
+        }
+    }
+
+    /// Visits entries under `root` breadth first, shallow paths before deep ones, so a
+    /// walk from the workspace reaches every repository's top levels before the limit.
+    /// Symlinks are not followed (`DirEntry::metadata` does not traverse them). Returns
+    /// the entries visited; more than [`MAX_WALK`] means the walk stopped early.
     fn walk(
         &self,
         root: &Path,
         mut visit: impl FnMut(&Path, &fs::Metadata) -> bool,
     ) -> Result<usize, String> {
-        let mut stack = vec![root.to_path_buf()];
+        let mut queue = VecDeque::from([root.to_path_buf()]);
         let mut visited = 0;
-        while let Some(dir) = stack.pop() {
+        while let Some(dir) = queue.pop_front() {
             let Ok(entries) = fs::read_dir(&dir) else {
                 continue;
             };
             let mut entries: Vec<_> = entries.flatten().collect();
             entries.sort_by_key(std::fs::DirEntry::file_name);
-            for entry in entries.into_iter().rev() {
+            for entry in entries {
                 visited += 1;
                 if visited > MAX_WALK {
                     return Ok(visited);
@@ -278,8 +303,9 @@ impl FsTools {
                     let name = entry.file_name();
                     if !SKIP_DIRS.iter().any(|s| name == *s)
                         && !self.denied_dirs.iter().any(|d| path.starts_with(d))
+                        && !path.join(CACHE_TAG).exists()
                     {
-                        stack.push(path.clone());
+                        queue.push_back(path.clone());
                     }
                 }
                 if !visit(&path, &meta) {
@@ -416,12 +442,12 @@ impl Tool for FsFind {
         "fs_find"
     }
     fn description(&self) -> &'static str {
-        "Find files on the local drive whose path (relative to `root`) matches a glob: * within a directory, ** across directories, ? one character. Skips .git and target."
+        "Find files on the local drive whose path matches a glob: * within a directory, ** across directories, ? one character. The glob may be written relative to `root` or to the workspace (with root app, src/*.rs and app/src/*.rs both work). Paths come back relative to the workspace. Skips .git and build output."
     }
     fn parameters(&self) -> Value {
         json!({"type": "object", "properties": {
             "pattern": {"type": "string", "description": "e.g. **/*.rs or docs/*.md"},
-            "root": {"type": "string", "description": "directory to search (default: the workspace)"}},
+            "root": {"type": "string", "description": "directory to search (default: the workspace); searching one repository is faster and complete"}},
             "required": ["pattern"]})
     }
     fn call(&self, args: &Value) -> Result<String, String> {
@@ -431,9 +457,8 @@ impl Tool for FsFind {
             .resolve(args.get("root").and_then(Value::as_str).unwrap_or("."))?;
         let mut found = Vec::new();
         let visited = self.0.walk(&root, |path, _| {
-            let rel = relative(&root, path);
-            if glob_match(pattern, &rel) {
-                found.push(rel);
+            if self.0.glob_matches(pattern, &root, path) {
+                found.push(self.0.shown(path));
             }
             found.len() < MAX_MATCHES
         })?;
@@ -441,16 +466,41 @@ impl Tool for FsFind {
         let mut out = format!(
             "{} matches under {} ({visited} entries visited)\n",
             found.len(),
-            root.display()
+            self.0.shown(&root)
         );
         for path in &found {
             let _ = writeln!(out, "{path}");
         }
-        if found.len() >= MAX_MATCHES || visited > MAX_WALK {
-            out.push_str("[stopped at the search limit; narrow the pattern or root]\n");
+        if visited > MAX_WALK {
+            out.push_str(&incomplete_walk(&root, &self.0));
+        } else if found.len() >= MAX_MATCHES {
+            let _ = writeln!(
+                out,
+                "[first {MAX_MATCHES} matches only; narrow the pattern or root]"
+            );
         }
         Ok(out)
     }
+}
+
+impl FsTools {
+    /// Whether `pattern` matches `path`, written relative to the walk root or to the
+    /// workspace: models often repeat the directory they are searching in the pattern.
+    fn glob_matches(&self, pattern: &str, root: &Path, path: &Path) -> bool {
+        glob_match(pattern, &relative(root, path))
+            || (path.starts_with(&self.real_base)
+                && glob_match(pattern, &relative(&self.real_base, path)))
+    }
+}
+
+/// The note under a find or grep whose walk stopped at [`MAX_WALK`]: a model reads
+/// "0 matches" as "none exist" unless told the search did not cover the tree.
+fn incomplete_walk(root: &Path, tools: &FsTools) -> String {
+    format!(
+        "[incomplete: stopped after {MAX_WALK} entries under {}, so files not reached may \
+         still match. Search one repository or directory instead.]\n",
+        tools.shown(root)
+    )
 }
 
 impl Tool for FsGrep {
@@ -458,18 +508,19 @@ impl Tool for FsGrep {
         "fs_grep"
     }
     fn description(&self) -> &'static str {
-        "Search text files on the local drive for a literal string; returns path:line: text. Bounded to 32 MiB scanned and 100 matches."
+        "Search text files on the local drive for literal text, case-sensitive; `a|b` finds lines containing a or b. Not a regular expression. Returns path:line: text, paths relative to the workspace. Skips binary files, .git and build output. Bounded to 32 MiB scanned and 100 matches."
     }
     fn parameters(&self) -> Value {
         json!({"type": "object", "properties": {
-            "pattern": {"type": "string", "description": "literal text, case-sensitive"},
+            "pattern": {"type": "string", "description": "literal text, case-sensitive; | separates alternatives"},
             "path": {"type": "string", "description": "file or directory (default: the workspace)"},
-            "glob": {"type": "string", "description": "only files whose relative path matches, e.g. **/*.rs"}},
+            "glob": {"type": "string", "description": "only files whose path matches, e.g. **/*.rs"}},
             "required": ["pattern"]})
     }
     fn call(&self, args: &Value) -> Result<String, String> {
         let pattern = str_arg(args, "pattern")?;
-        if pattern.is_empty() {
+        let needles = alternatives(pattern);
+        if needles.is_empty() {
             return Err("empty pattern".into());
         }
         let root = self
@@ -479,19 +530,19 @@ impl Tool for FsGrep {
         let mut out = String::new();
         let mut matches = 0;
         let mut scanned = 0_u64;
-        let mut scan = |path: &Path, rel: &str| -> bool {
-            if filter.is_some_and(|g| !glob_match(g, rel)) {
+        let mut scan = |path: &Path| -> bool {
+            if filter.is_some_and(|g| !self.0.glob_matches(g, &root, path)) {
                 return true;
             }
-            let Ok(bytes) = fs::read(path) else {
-                return true;
+            let Some(bytes) = read_text_file(path, &mut scanned) else {
+                return scanned < MAX_SCAN_BYTES;
             };
-            scanned += bytes.len() as u64;
             if let Some(text) = as_text(&bytes) {
+                let shown = self.0.shown(path);
                 for (i, line) in text.lines().enumerate() {
-                    if line.contains(pattern) {
-                        let shown: String = line.chars().take(240).collect();
-                        let _ = writeln!(out, "{rel}:{}: {shown}", i + 1);
+                    if needles.iter().any(|n| line.contains(n)) {
+                        let line: String = line.chars().take(240).collect();
+                        let _ = writeln!(out, "{shown}:{}: {line}", i + 1);
                         matches += 1;
                         if matches >= MAX_MATCHES {
                             return false;
@@ -501,26 +552,88 @@ impl Tool for FsGrep {
             }
             scanned < MAX_SCAN_BYTES
         };
+        let mut visited = 0;
         if root.is_file() {
-            scan(&root, &root.display().to_string());
+            scan(&root);
         } else {
-            self.0.walk(&root, |path, meta| {
+            visited = self.0.walk(&root, |path, meta| {
                 if !meta.is_file() || meta.len() > MAX_GREP_FILE_BYTES {
                     return true;
                 }
-                scan(path, &relative(&root, path))
+                scan(path)
             })?;
         }
+        let mut note = String::new();
+        if visited > MAX_WALK {
+            note = incomplete_walk(&root, &self.0);
+        } else if scanned >= MAX_SCAN_BYTES {
+            note = format!(
+                "[incomplete: stopped after scanning {MAX_SCAN_BYTES} bytes, so files not \
+                 reached may still match; narrow the path or glob]\n"
+            );
+        } else if matches >= MAX_MATCHES {
+            note = format!("[first {MAX_MATCHES} matches only; narrow the path or glob]\n");
+        } else if matches == 0 && looks_like_regex(pattern) {
+            note =
+                "[the pattern is literal text: regular-expression syntax such as .* \\s ^ $ [ ] \
+                    is searched for as written; only | separates alternatives]\n"
+                    .into();
+        }
         Ok(format!(
-            "{matches} matches for {pattern:?} under {} ({scanned} bytes scanned)\n{out}{}",
-            root.display(),
-            if matches >= MAX_MATCHES || scanned >= MAX_SCAN_BYTES {
-                "[stopped at the search limit; narrow the path or glob]\n"
-            } else {
-                ""
-            }
+            "{matches} matches for {pattern:?} under {} ({scanned} bytes scanned)\n{out}{note}",
+            self.0.shown(&root),
         ))
     }
+}
+
+/// The literal strings a grep pattern stands for. `a|b` is two alternatives, since
+/// models reach for grep's alternation; a pattern with an empty side of a `|`, such as
+/// a Markdown table cell `| Since |` or Rust's `||`, stays one literal string.
+fn alternatives(pattern: &str) -> Vec<&str> {
+    let parts: Vec<&str> = pattern.split('|').map(str::trim).collect();
+    if parts.len() > 1 && parts.iter().all(|p| !p.is_empty()) {
+        parts
+    } else if pattern.is_empty() {
+        Vec::new()
+    } else {
+        vec![pattern]
+    }
+}
+
+fn looks_like_regex(pattern: &str) -> bool {
+    pattern.contains('\\')
+        || pattern.contains(".*")
+        || pattern.contains(".+")
+        || pattern.starts_with('^')
+        || pattern.ends_with('$')
+        || (pattern.contains('[') && pattern.contains(']'))
+}
+
+/// The whole of `path` when its first [`SNIFF_BYTES`] hold no NUL byte, so a binary
+/// file costs one small read instead of the grep's byte budget. Adds what was read to
+/// `scanned`.
+fn read_text_file(path: &Path, scanned: &mut u64) -> Option<Vec<u8>> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut bytes = vec![0; SNIFF_BYTES];
+    let mut filled = 0;
+    while filled < bytes.len() {
+        match file.read(&mut bytes[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(_) => return None,
+        }
+    }
+    bytes.truncate(filled);
+    *scanned += filled as u64;
+    if bytes.contains(&0) {
+        return None;
+    }
+    if filled == SNIFF_BYTES {
+        let before = bytes.len();
+        file.read_to_end(&mut bytes).ok()?;
+        *scanned += (bytes.len() - before) as u64;
+    }
+    Some(bytes)
 }
 
 /// True when `path` has no `..` component, for callers that join untrusted relative
@@ -587,6 +700,90 @@ mod tests {
             .call("fs_read", r#"{"path": "blob.bin"}"#)
             .unwrap_err()
             .contains("binary"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn grep_takes_alternatives_and_says_when_a_pattern_is_not_a_regex() {
+        let dir = scratch("alternatives");
+        fs::write(dir.join("table.md"), "| Since | Agent |\n").unwrap();
+        let tools = toolbox(&dir);
+        let either = tools
+            .call("fs_grep", r#"{"pattern": "fn main|let needle"}"#)
+            .unwrap();
+        assert!(either.starts_with("2 matches"), "{either}");
+        // An empty side keeps a pipe literal: table cells and `||` search as written.
+        let cell = tools
+            .call("fs_grep", r#"{"pattern": "| Since |"}"#)
+            .unwrap();
+        assert!(cell.contains("table.md:1:"), "{cell}");
+        assert_eq!(alternatives("a || b"), ["a || b"]);
+        assert_eq!(alternatives("audio | sound"), ["audio", "sound"]);
+        let regex = tools
+            .call("fs_grep", r#"{"pattern": "fn\\s+main"}"#)
+            .unwrap();
+        assert!(
+            regex.starts_with("0 matches") && regex.contains("literal text"),
+            "{regex}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn walks_skip_tagged_build_output_and_binary_files_cost_one_small_read() {
+        let dir = scratch("build-output");
+        fs::create_dir_all(dir.join("target-android/release")).unwrap();
+        fs::write(dir.join("target-android/CACHEDIR.TAG"), "Signature: x\n").unwrap();
+        fs::write(dir.join("target-android/release/gen.rs"), "needle\n").unwrap();
+        let mut blob = vec![0_u8; 256 * 1024];
+        blob.extend_from_slice(b"needle");
+        fs::write(dir.join("font.otf"), &blob).unwrap();
+        let tools = toolbox(&dir);
+        let grep = tools.call("fs_grep", r#"{"pattern": "needle"}"#).unwrap();
+        assert!(grep.starts_with("2 matches"), "{grep}");
+        assert!(
+            !grep.contains("gen.rs") && !grep.contains("font.otf"),
+            "{grep}"
+        );
+        let scanned: u64 = grep
+            .split(" bytes scanned")
+            .next()
+            .and_then(|head| head.rsplit('(').next())
+            .and_then(|n| n.parse().ok())
+            .unwrap();
+        assert!(
+            scanned < 64 * 1024,
+            "the binary file was read whole: {grep}"
+        );
+        let found = tools.call("fs_find", r#"{"pattern": "**/*.rs"}"#).unwrap();
+        assert!(!found.contains("gen.rs"), "{found}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn found_paths_resolve_from_the_workspace_and_patterns_may_repeat_the_root() {
+        let dir = scratch("root-relative");
+        let tools = toolbox(&dir);
+        for pattern in ["nested/*.rs", "src/nested/*.rs", "**/src/**/*.rs"] {
+            let found = tools
+                .call(
+                    "fs_find",
+                    &json!({"pattern": pattern, "root": "src"}).to_string(),
+                )
+                .unwrap();
+            assert!(
+                found.contains("\nsrc/nested/deep.rs\n"),
+                "{pattern}: {found}"
+            );
+        }
+        let grep = tools
+            .call("fs_grep", r#"{"pattern": "needle", "path": "src/nested"}"#)
+            .unwrap();
+        assert!(grep.contains("src/nested/deep.rs:1:"), "{grep}");
+        // The path a result shows reads back as it is.
+        assert!(tools
+            .call("fs_read", r#"{"path": "src/nested/deep.rs"}"#)
+            .is_ok());
         let _ = fs::remove_dir_all(&dir);
     }
 
