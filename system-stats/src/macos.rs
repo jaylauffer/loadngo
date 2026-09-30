@@ -566,6 +566,17 @@ mod tests {
         ) -> libc::c_int;
     }
 
+    /// Held by every test that takes host port rights. The reference count is per
+    /// process, so a sample in a parallel test moved it between the leak test's two
+    /// readings and failed it (34 of 40 runs on 2026-10-01; 0 of 20 on one thread).
+    static HOST_PORT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn host_port_lock() -> std::sync::MutexGuard<'static, ()> {
+        HOST_PORT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// This task's user references to its send right on the host port.
     fn host_send_refs() -> u32 {
         const MACH_PORT_RIGHT_SEND: libc::c_uint = 0;
@@ -587,6 +598,7 @@ mod tests {
 
     #[test]
     fn sampling_releases_its_host_port_rights() {
+        let _host = host_port_lock();
         let before = host_send_refs();
         let mut cpus = Vec::new();
         for _ in 0..200 {
@@ -600,6 +612,7 @@ mod tests {
 
     #[test]
     fn macos_sample_reads_the_running_system() {
+        let _host = host_port_lock();
         let mut sampler = SystemSampler::new(Path::new("/"));
         let mut sample = SystemSample::default();
         sampler.sample(&mut sample);
