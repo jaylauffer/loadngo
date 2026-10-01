@@ -161,19 +161,37 @@ produced, and the positive `TaskAck` is the approver's signature on it.
 | Task edit, move, delete | `Changed`, `Moved`, `Deleted` | the next sync point |
 | Task sync | records resolving each discrepancy, `Same` and `Distinct` | one, with each participant's previous point as a parent, signed by each |
 
-## Questions for Jay
+## Decisions
 
-1. When origins are judged the same, is the item the set of origins, or
-   does one origin become canonical (as `Merged` keeps one side per
-   property)?
-2. May an agent resolve a discrepancy under a stated policy, with Jay
-   approving the consolidation, or does every `Same` and `Distinct` need
-   Jay?
-3. Should equal content with equal placement resolve to `Same` without
-   asking, or always be a proposal?
-4. Existing archives: treat each current manifest as a consolidation with
-   no records (format v3 starts from them), or write records reconstructed
-   from the sidecar logs?
+Jay, 2026-10-01:
+
+- **Every origin is recognised.** If three people build the same thing,
+  `Same` keeps all three origins, each with its author and time; none is
+  demoted. Credit and naming are separate questions: the item still needs
+  one id where bytes must name it (a parent in a tree, a reference in a
+  later record). Proposed, not yet agreed: that id is the hash of the `Same`
+  record, and a later record may name any joined origin, resolved through
+  the `Same` records. No origin is "canonical"; ordering by time is only
+  for display.
+- **Agents resolve discrepancies; Jay approves.** An agent writes the `Same`,
+  `Distinct`, `Changed` and `Moved` records and signs the consolidation as
+  author; Jay's signature approves it.
+- **Equal content at equal placement is `Same` without asking.** Anything
+  less (equal content elsewhere, a name match) stays a proposal.
+
+Open:
+
+- **Existing archives.** There are two: `pudding-20260917` (Zhoenus II,
+  root `4d8babf2`) and `loadngo-archive` (Loadngo Archive Staging, root
+  `dfec4e4f`). The history that survives is 10 small sidecar logs: 9 delete
+  logs and 1 add log, 7 of them for the archives later merged into
+  `loadngo-archive`. The merge and unpack logs, the two largest changes,
+  no longer exist, and neither do the earlier manifests the surviving logs
+  name. Rebuilding records from them would give a partial history that
+  looks complete, naming versions that cannot be fetched or verified, under
+  a new signature. Recommended: start each archive's v3 history at its
+  current manifest, with no parent, and attach the old logs to that first
+  consolidation unchanged, marked as unverified history.
 
 ## Order of work
 
