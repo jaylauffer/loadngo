@@ -2992,6 +2992,12 @@ impl BrowserApp {
         } else {
             ("Current".to_string(), COMPLETE)
         };
+        // Old sidecar logs the version keeps as unverified history (archive_cas_upgrade).
+        let version_value = match record.manifest.unverified_history.len() {
+            0 => version_value,
+            1 => format!("{version_value} • 1 old log kept"),
+            logs => format!("{version_value} • {logs} old logs kept"),
+        };
         paint_key_value(
             scene,
             layout.inspector_body.x,
@@ -3001,7 +3007,30 @@ impl BrowserApp {
             text_width,
             version_color,
         );
-        y += 48.0;
+        y += 35.0;
+        // How this version was made (manifest v3): its first change record, one row,
+        // ellipsized; `archive_cas_verify` lists them all with times.
+        if let Some(change) = record.manifest.records.first() {
+            let more = record.manifest.records.len() - 1;
+            paint_key_value(
+                scene,
+                layout.inspector_body.x,
+                &if more > 0 {
+                    format!(
+                        "Change by {} ({more} more): {}",
+                        change.actor, change.reason
+                    )
+                } else {
+                    format!("Change by {}: {}", change.actor, change.reason)
+                },
+                &change.describe(),
+                y,
+                text_width,
+                TEXT,
+            );
+            y += 35.0;
+        }
+        y += 13.0;
 
         paint_text(
             scene,
@@ -3069,36 +3098,41 @@ impl BrowserApp {
             false,
         );
         y += 25.0;
-        paint_bar(
-            scene,
-            Rect {
-                x: layout.inspector_body.x,
-                y,
-                width: text_width,
-                height: 16.0,
-            },
-            "Unreadable",
-            summary.unreadable,
-            max_entries,
-            DANGER,
-            false,
-        );
-        y += 25.0;
-        paint_bar(
-            scene,
-            Rect {
-                x: layout.inspector_body.x,
-                y,
-                width: text_width,
-                height: 16.0,
-            },
-            "Excluded",
-            summary.excluded,
-            max_entries,
-            CAUTION,
-            false,
-        );
-        y += 39.0;
+        // A complete capture with nothing excluded says so in its status line; its two
+        // empty bars would only push the selection under the action buttons.
+        if summary.unreadable > 0 || summary.excluded > 0 {
+            paint_bar(
+                scene,
+                Rect {
+                    x: layout.inspector_body.x,
+                    y,
+                    width: text_width,
+                    height: 16.0,
+                },
+                "Unreadable",
+                summary.unreadable,
+                max_entries,
+                DANGER,
+                false,
+            );
+            y += 25.0;
+            paint_bar(
+                scene,
+                Rect {
+                    x: layout.inspector_body.x,
+                    y,
+                    width: text_width,
+                    height: 16.0,
+                },
+                "Excluded",
+                summary.excluded,
+                max_entries,
+                CAUTION,
+                false,
+            );
+            y += 25.0;
+        }
+        y += 14.0;
 
         paint_text(
             scene,

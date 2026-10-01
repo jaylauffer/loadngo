@@ -119,7 +119,10 @@ merge's sources under the signed merged archive instead.
 The browser skips signatures and the old sidecar logs when listing manifests (it used
 to try to read them as manifests and report them as unreadable). A version is
 superseded when any later version names it as a parent; Remove writes a version whose
-`deleted` record names the removed paths.
+`deleted` record names the removed paths. The inspector shows a version's first change record (who, why,
+what) under Version, and how many old logs it keeps after the version line; the
+Unreadable and Excluded bars appear only when one of them is non-zero, since the status
+line already says a capture is complete (checked on screen 2026-10-01).
 
 ## Zips are unpacked
 
