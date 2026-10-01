@@ -396,6 +396,145 @@ Recommended order:
 6. Add replica records for Google Drive or other offsite relays.
 7. Keep tarball export only as a compatibility fallback.
 
+## Lessons From The First Edit Of A Signed Archive
+
+On 2026-10-01, at Jay's request, build output was removed from the signed
+Archive CAS snapshot `pudding-20260917` (Zhoenus II): 146,000 files, 38.7 GiB of
+`target-android-build-std`, app bundles under `build/`, `.venv`, `build_tmp`
+tarball exports and the March `.loadngo-cas`. The new root `4d8babf2...` was
+verified and signed, the old root `d8ec110f...` was pruned, and GC freed
+14.16 GiB (record in [ARCHIVE_CAS.md](ARCHIVE_CAS.md)). It was the first real
+mutation of a signed root, and it showed where the Archive CAS falls short of
+the ancestor model above.
+
+### 1. Freeing space destroyed history
+
+`4d8babf2` names `d8ec110f` as the root it supersedes, under its signature. But
+pruning deleted `d8ec110f`'s manifest, its signature and its stored manifest
+object, and its own ancestor `89b7e1f5` had been pruned on 09-18. The ancestor
+link now names a root nobody can check, and nothing can prove what the 09-17
+snapshot held.
+
+Freeing bytes and keeping lineage must be separate operations. Retiring a
+version keeps its manifest, signature and change record; only content objects
+no current version needs are deleted, and only once a signed successor exists.
+Verifying a retired version then reports those objects as dropped on
+retirement, naming the successor, instead of missing. A leaked secret can be
+dropped the same way without losing the version that held it.
+
+Done 2026-10-01: `archive_cas_purge` retires a superseded version only under a
+later version signed by the trusted key, keeps its manifest, stored manifest
+object, signature and logs, and deletes only objects no live version lists;
+`archive_cas_verify` reports a retired version's dropped objects;
+`archive_cas_prune_manifests` is gone. See "Changing an archive" in
+[ARCHIVE_CAS.md](ARCHIVE_CAS.md); test `data/tests/archive_cas_retire.rs`.
+
+### 2. The record of a change lived outside the store
+
+Removal, addition, merge and unpack each wrote a `.delete-log`, `.add-log`,
+`.merge-log` or `.unpack-log` JSON file beside the new manifest. None was
+hashed, signed or referenced by a root, which is why
+`archive_cas_prune_manifests` could delete one without listing it. The
+`jay-macmini` signature covered the new tree but not the reason for it.
+
+The change record (what kind of change, the paths it named, why, who, when,
+and for a merge the archives combined) belongs inside the new version's
+manifest, before its entries, so the root's hash and signature cover it and a
+lister can read it from the header.
+
+Not done yet: its format waits on the consolidation with Task below, so the
+store does not get a CAS-only record that Task then has to translate.
+
+### 3. Every version is one flat list
+
+A manifest lists every entry of its version: 59 MB for `pudding-20260917`, 426
+MB for `loadngo-archive` (34 s to open). Keeping every version therefore costs
+a full listing each, which is what pushed toward pruning, and any count or
+directory view needs a pass over everything.
+
+Directory nodes should be content-addressed objects of their own, so a new
+version rewrites only the nodes on the changed paths: removing `build_tmp` costs
+a few KB, every version can be kept, a directory node can carry its file and
+byte totals, and a reader loads only the directories it opens. This extends
+"Split child repositories into their own file manifests" below to every
+directory, and is the structural change the repository model depends on.
+
+### 4. The snapshot's scope was never recorded
+
+"pudding workspace without .git or Rust target" was a label. Ingest captured
+whatever was on disk, and 39 of 63 GiB was build output, because only
+directories named exactly `target` had been left out. The content root model
+above calls for an inclusion policy entry.
+
+The rules an ingest applied, and what it skipped by each, belong in the
+manifest. Since `15ca8444` ingest skips empty directories and `CACHEDIR.TAG`
+caches and prints each skip, but the manifest does not yet record them.
+
+### 5. The signature named the owner, not the author
+
+Claude Code made the removal and signed `4d8babf2` with `jay-macmini`; only the
+unsigned delete log said "claude-code for jay". With Jay, Claude Code, Codex
+and Kimi all changing the workspace, the author of a version should sign with
+its own key and Jay should sign as approver. This is where Task fits: an
+agent's signed version is its `TaskResult`, and Jay's signature promoting it
+is the `TaskAck`.
+
+### 6. One edit took four tools in a fixed order
+
+`archive_cas_remove`, `archive_cas_sign`, `archive_cas_prune_manifests` and
+`archive_cas_gc` each printed the next step, and one dry run did not list all
+it would delete. One operation should produce a complete signed version and
+list exactly what goes and what stays; deleting unreferenced objects stays
+separate as the only irreversible step.
+
+### The same problems in Task's move chains
+
+The loadngo C++ Task code (`loadngo-cpp/Task/Data/Undo.*`,
+`Task/Task/Network/TaskSynch.*`) solved the same problems for task entities
+synchronised between machines:
+
+- `Deleted` records who deleted an entity, on which machine, its origin
+  machine and user, and its hash, and holds the deleted contents;
+  `Undo::Clear()` later drops the contents and keeps the record. That is
+  lesson 1: drop the data, keep the record.
+- `Moved`, `Merged` and `Deleted` are typed change records, each tied to the
+  entity's stable origin id. That is lesson 2, and it adds what the CAS
+  lacks: a stable identity, so a renamed or moved file is one subject with a
+  move record rather than a removal plus an addition.
+- A move chain is consolidated since the last concluded sync
+  (`ConsolidateMovesSince`, `MakeCourse`); peers exchange chains, find
+  discrepancies (`Conflict::Moved`, `Conflict::Deleted`), record the chosen
+  side of a property conflict as `Merged`, and agree a consolidated id for
+  the sync point. That is versions on several devices diverging and being
+  reconciled, which the single-parent `supersedes_archive_root` cannot
+  express.
+
+The Rust `data` crate already holds a stub port (`Entity` with `origin_id`,
+`MoveChain`, `Discrepancy`, `Sync`, `Participant`). One mutation record type
+for both would serve Task synchronisation and archive versions: a subject
+(stable origin id, or a path plus the object it held), a kind (added,
+deleted, moved, merged), from and to, actor (user and machine), time, hash
+and reason; versions and sync points both become signed consolidations of
+the records since the previous one.
+
+### What held up
+
+- An object is named by the hash of its uncompressed bytes, so compression
+  rewrote storage under live readers and nothing that names an object changed.
+- Every read is checked against its hash; the edited archive verified complete
+  before signing and again after GC.
+- Ingest records each finished file in a journal and resumes from it.
+- GC and purge work by reachability over every manifest on disk.
+
+### A related gap: work in progress is not recorded in the store
+
+The compression pass keeps no position. A restart re-lists all 773,323 objects
+(23 minutes on the USB drive) and checks each one's file at about 30 a second
+to rediscover what it already did, and the objects it kept as they were are
+remembered in `compression-kept-raw.txt`, another record outside the store.
+Progress belongs in the pass's own progress record (objects are visited in
+hash order, so a position is enough), not in more side files.
+
 ## Next Evolution Steps
 
 ### 1. Stabilize the current signed-root slice
