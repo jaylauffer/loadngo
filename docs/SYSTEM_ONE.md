@@ -55,6 +55,47 @@ It took 17.3 s for four questions: 99 state tokens read once, then 200 question
 tokens. The time is Kimi's prompt processing, which is still CPU-bound
 (`METAL_COMPUTE_PLAN.md`, "M1, second stage"). TypeSafe quotes 70-500 ms for Jev.
 
+## Checkpoints and the Task model
+
+Since 2026-10-02 Kimi's chat asks System One where a turn stands each time her
+context is rebuilt from a handoff (kimi-k3-in-rust `docs/CHAT.md`, "Checkpoint"). The
+questions were chosen to line up with the Task work protocol
+([TASK_OFFER_PROTOCOL.md](TASK_OFFER_PROTOCOL.md), `data/src/p2pmsg.rs`), because a
+long chat turn and a Task assignment are the same thing: a request, a worker reporting
+on it, a claim that it is done, and the requester's verdict.
+
+| Task message | Field | In Kimi's chat | System One |
+|---|---|---|---|
+| `TaskRequest` / `TaskAccept` | `summary`, `success_criteria` | Jay's message, word for word | first half of the state |
+| `TaskStatus` | `note` | the handoff she writes | second half of the state |
+| `TaskStatus` | `state` (a free string: the code sends `"running"` and `"in-progress"`) | none | `state`: choice of `in-progress`, `blocked`, `complete` |
+| `TaskResult` | the claim that the criteria are met | her final answer | `state` = `complete`; `progress` = 3 |
+| `TaskAck` | `accepted` | Jay's verdict | the label the answers are measured against |
+
+What follows from putting the two together:
+
+- **`TaskStatus.state` can be a type.** Today each worker writes what it likes. A
+  choice gives the submitter values it can compare across workers, each with a
+  probability.
+- **The submitter should ask, not the worker.** The protocol gives selection, timeout
+  policy and verification to the submitter. A checkpoint is a submitter-side decision
+  over `(TaskRequest, TaskStatus)`: keep waiting, ask, or reassign. In the chat the
+  same model both writes the notes and judges them, so its errors are correlated;
+  asked by the submitter's own model about another node's status, they are not.
+- **`TaskAck` is the calibration data this document says is missing.** Every closed
+  assignment gives a state text, an answer distribution and `accepted`. Those are
+  `Example`s for `fit_temperature` and `calibration_report`. A question leaves shadow
+  mode when its report on real acknowledgements is good enough to set a threshold, and
+  not before.
+- **An answer never stands in for `TaskAck`.** The qcoin receipt follows accepted work
+  that is anchored. A probability may decide whether to look, or what to look at
+  first. Acceptance stays with the submitter's verification of the success criteria.
+
+Built: the chat checkpoint, in shadow mode (answers shown and saved, nothing acts on
+them), with the field names above. Not built: anything in the Task runtime. The first
+step there would be a submitter recording the same three answers beside each
+`TaskStatus` it receives, also in shadow.
+
 ## Still open
 
 - **Calibration on real tasks.** Labelled examples from our own decisions (the
