@@ -26,7 +26,7 @@ then answered:
 
 | Question | Answer | What had happened |
 |---|---|---|
-| `state` | `blocked` 53%, `in-progress` 46% | looping on one failing approach |
+| `state` (then a choice of `in-progress`, `blocked`, `complete`) | `blocked` 53%, `in-progress` 46% | looping on one failing approach |
 | `repeating` | false 67% | the same error five times |
 | `progress` | 2 "part of the change is made", 93% | nothing was changed (1) |
 
@@ -39,24 +39,83 @@ Two things follow, and they are the basis of every recommendation below:
 
 ## Recommendations
 
-### 1. Make `TaskStatus.state` a closed set
+### 1. Two lifecycles, each with a closed set of states
 
-`state` is a `String`. `task-node` and `task_worker` send `"running"`; the tests and
-codec example use `"in-progress"`. A submitter cannot compare states across workers
-or act on one it has not seen before.
+Revised 2026-10-02 after Jay's questions: the first draft had one set of three values
+(`in-progress`, `blocked`, `complete`). It left out a task nobody holds, and `blocked`
+covered three situations that need three different responses.
 
-Recommend three values, the ones the checkpoint uses:
+There are two things with a status, held by different parties.
 
-| Value | Meaning | Submitter's usual response |
+**The task**, held by the submitter. `TaskStatus` cannot report it: before
+`TaskAccept` there is no worker to send one. Today the submitter keeps this implicitly
+in its control flow.
+
+| Task state | Meaning | Becomes |
 |---|---|---|
-| `in-progress` | work is under way and the next step differs from what failed | wait for the next status |
-| `blocked` | the worker cannot go on without the submitter, or a step keeps failing | answer, reassign or self-execute |
-| `complete` | the worker believes the criteria are met | expect `TaskResult` |
+| `open` | requested, no worker holds it (unclaimed) | `assigned` on `TaskAccept`; `expired` |
+| `assigned` | one worker holds it; see the assignment's state | `submitted`; back to `open` if the worker withdraws or is timed out |
+| `submitted` | a `TaskResult` is waiting for verification | `accepted`; back to `open` on `TaskAck(accepted=false)` |
+| `accepted` | verified, acknowledged, reward anchored | final |
+| `expired` / `cancelled` | nobody took it in time, or the submitter withdrew it | final |
 
-`"running"` reads as `in-progress`. An unknown value should be treated as `blocked`,
-so a worker that says something new gets looked at instead of waited on. This is a
-wire-compatible change while the field stays a string; making it an enum in the
-codec is a later step.
+A task returns to `open` more than once in its life. What the earlier worker did
+(its last status note and artifacts) should travel with the reopened request, so the
+next worker does not start from nothing.
+
+**The assignment**, reported by the worker in `TaskStatus.state`. `state` is a
+`String` today: `task-node` and `task_worker` send `"running"`, the tests and codec
+example use `"in-progress"`. Recommend these values:
+
+| Assignment state | Meaning | Who acts next | Submitter's response |
+|---|---|---|---|
+| `in-progress` | working; the next step differs from what failed | worker | wait for the next status |
+| `paused` | stopped for a reason unrelated to the task (budget spent, preempted, thermal, operator); will resume by `next_check_in_by` | worker | wait; do not count it against the delivery estimate as a stall |
+| `needs-input` | cannot go on without something from the submitter: a decision, an answer, access, an artifact. The note asks the question | submitter | answer |
+| `needs-help` | the work needs expertise or capability this worker lacks. The note names it as capability tags and says what is done so far | submitter | bring in another worker (below) |
+| `withdrawn` | the worker gives the assignment back; the note says why and what exists | submitter | the task is `open` again |
+| `complete` | the worker believes the criteria are met | worker | expect `TaskResult` |
+
+`"running"` reads as `in-progress`. An unknown value is treated as `needs-input`, so
+a worker that says something new gets looked at instead of waited on.
+
+`blocked` is gone. Paused, waiting on the submitter and needing another worker have
+different owners of the next move, and a submitter that cannot tell them apart can
+only guess between waiting, answering and reassigning.
+
+**Stuck is not a reported state.** A worker looping on a failing step does not know
+it, or does not say so: Kimi's note called five failures an "initial attempt" and she
+would have reported `in-progress`. Stuck is what the submitter concludes from the
+counts (recommendation 2) and the typed questions (recommendation 3). The reported
+states are what the worker knows; the judged ones are what the submitter infers.
+
+#### Needing someone else, discovered during the work
+
+A `TaskOffer` is made from the request's summary and capability tags, before the work
+is understood. That a task needs other expertise often shows only partway through. So
+`needs-help` is an ordinary outcome, not a failure of the offer, and it must be
+reportable at any point after `TaskAccept` without penalty beyond the unfinished
+work.
+
+What the status carries: the capability tags the worker found it lacks, and a
+handoff of what exists so far (done, facts established, what failed, artifacts). The
+handoff Kimi writes at a context compaction has this shape for the same reason: it is
+written for whoever continues, and that may be a different worker.
+
+What happens next is the submitter's choice, because the protocol gives the submitter
+selection and the reward:
+
+- **A helper**: a second `TaskRequest` for the missing part, with those capability
+  tags and the first worker's handoff as its artifact. The first assignment stays
+  open (`needs-help` until the helper's result arrives, then `in-progress`). Two
+  assignments, two acknowledgements.
+- **A replacement**: the first worker's assignment ends as `withdrawn` and the task
+  reopens with the wider capability tags and the handoff.
+
+Not recommended yet: the worker issuing its own `TaskRequest` for the missing part and
+answering for the helper's result. Any node may be a submitter, so the wire allows it,
+but it puts verification and reward for the sub-task with a party the original
+submitter did not choose. Left open.
 
 ### 2. Put facts beside the note in `TaskStatus`
 
@@ -81,8 +140,9 @@ Until the message has fields for them, they can travel as a fixed first line of
 The protocol already says the submitter owns selection, timeout policy and
 verification. A checkpoint belongs on the same side: when a `TaskStatus` arrives,
 the submitter puts the request (`summary`, `success_criteria`) and the status (its
-counts first, then its note) to a System One model as the state, and asks `state`,
-`repeating` and `progress`.
+counts first, then its note) to a System One model as the state, and asks `repeating`,
+`progress`, and whether the reported `state` is the one the evidence supports
+(a choice over the assignment states above plus `stuck`).
 
 Asked by the submitter's own model about another node's status, the judge is not the
 author. That removes the correlation seen above. It does not remove the dependence on
@@ -116,12 +176,12 @@ would have let a loop continue.
 
 In order of how much trust each needs:
 
-1. **Which assignment to look at first.** Low confidence, `blocked`, or a note and
+1. **Which assignment to look at first.** Low confidence, a judged stall, or a note and
    counts that disagree go to the top of the submitter's list. Wrong answers cost
    attention only.
 2. **When to ask the worker a question** before the status interval runs out.
 3. **When to stop waiting**: reissue the request or self-execute, the actions
-   "Timeout And Recovery" already gives the submitter. A wrong `blocked` here stops
+   "Timeout And Recovery" already gives the submitter. A wrong "stuck" here stops
    good work, so this needs measured calibration.
 
 ### 6. What an answer must never decide
@@ -136,7 +196,7 @@ order the verification queue. It may not shorten it.
 
 | Step | Change | Where | Needs |
 |---|---|---|---|
-| 1 | `state` values documented; workers send `in-progress` | `TASK_OFFER_PROTOCOL.md`, `task-node`, `task_worker` | nothing |
+| 1 | Assignment states documented and sent by workers; task states named in the submitter | `TASK_OFFER_PROTOCOL.md`, `task-node`, `task_worker` | nothing |
 | 2 | Counts in the first line of `note` | `task-node`, `task_worker` | step 1 |
 | 3 | Submitter records typed answers per status, in shadow | `task_submitter`, a System One model on the submitter | steps 1-2; a model on the submitting machine |
 | 4 | Calibration report from closed assignments | a tool over the submitter's records | enough `TaskAck`s to measure |
