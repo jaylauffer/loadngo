@@ -4,7 +4,9 @@
 //! are left untouched. The counterpart of [`archive_cas_remove`].
 
 use anyhow::{anyhow, bail, Context, Result};
-use data::archive_cas::{ArchiveCasStorage, ArchiveEntry, ArchiveManifest, ArchiveObject};
+use data::archive_cas::{
+    is_build_cache, ArchiveCasStorage, ArchiveEntry, ArchiveManifest, ArchiveObject,
+};
 use data::cli::{ArgDoc, Usage};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -54,7 +56,7 @@ fn run() -> Result<()> {
             Some(under) => format!("{}/{name}", under.trim_matches('/')),
             None => name.to_string(),
         };
-        capture(&store, source, &at, &mut added, &mut bytes)?;
+        capture(&store, source, &at, true, &mut added, &mut bytes)?;
     }
 
     let (amended, log) =
@@ -115,14 +117,18 @@ fn newest_manifest(store: &ArchiveCasStorage, id: &str) -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("no manifest for archive {id:?} under this root"))
 }
 
-/// Stores `source` (a file, folder or symlink) at archive path `at`, recursively.
+/// Stores `source` (a file, folder or symlink) at archive path `at`, recursively. Inside
+/// a folder, empty folders are not recorded (a `.keep` file keeps one) and build caches
+/// (a valid `CACHEDIR.TAG`) are skipped; a folder named on the command line (`top`) is
+/// always recorded. Returns whether anything was stored.
 fn capture(
     store: &ArchiveCasStorage,
     source: &Path,
     at: &str,
+    top: bool,
     added: &mut Vec<ArchiveEntry>,
     bytes: &mut u64,
-) -> Result<()> {
+) -> Result<bool> {
     let metadata = fs::symlink_metadata(source)
         .with_context(|| format!("failed to stat {}", source.display()))?;
     let modified = metadata
@@ -132,10 +138,12 @@ fn capture(
         .map(|d| d.as_secs());
     let kind = metadata.file_type();
     if kind.is_dir() {
-        added.push(ArchiveEntry::Directory {
-            path: at.to_string(),
-            modified_at_unix_secs: modified,
-        });
+        if !top && is_build_cache(source) {
+            println!("  skipped build cache (CACHEDIR.TAG): {at}");
+            return Ok(false);
+        }
+        let index = added.len();
+        let mut stored = false;
         let mut children = fs::read_dir(source)
             .with_context(|| format!("failed to read {}", source.display()))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -145,8 +153,26 @@ fn capture(
             let name = name
                 .to_str()
                 .ok_or_else(|| anyhow!("{} is not valid UTF-8", child.path().display()))?;
-            capture(store, &child.path(), &format!("{at}/{name}"), added, bytes)?;
+            stored |= capture(
+                store,
+                &child.path(),
+                &format!("{at}/{name}"),
+                false,
+                added,
+                bytes,
+            )?;
         }
+        if !stored && !top {
+            println!("  skipped empty folder: {at}");
+            return Ok(false);
+        }
+        added.insert(
+            index,
+            ArchiveEntry::Directory {
+                path: at.to_string(),
+                modified_at_unix_secs: modified,
+            },
+        );
     } else if kind.is_file() {
         let key = source
             .canonicalize()
@@ -181,7 +207,7 @@ fn capture(
     } else {
         bail!("unsupported special file: {}", source.display());
     }
-    Ok(())
+    Ok(true)
 }
 
 #[derive(Debug)]
@@ -302,4 +328,50 @@ fn unix_now() -> Result<u64> {
         .duration_since(UNIX_EPOCH)
         .context("system clock is before the Unix epoch")?
         .as_secs())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_named_folder_is_kept_but_empty_folders_and_build_caches_inside_it_are_not() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("project");
+        let tag = "Signature: 8a477f597d28d172789f06886806bc55\n";
+        for (path, bytes) in [
+            ("src/lib.rs", "pub fn f() {}"),
+            ("target/CACHEDIR.TAG", tag),
+            ("target/debug/lib.rlib", "rlib"),
+        ] {
+            let path = source.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        fs::create_dir_all(source.join("empty/deeper")).unwrap();
+        let named_empty = directory.path().join("placeholder");
+        fs::create_dir_all(&named_empty).unwrap();
+        let store = ArchiveCasStorage::new(directory.path().join("cas")).unwrap();
+        let (mut added, mut bytes) = (Vec::new(), 0);
+        assert!(capture(&store, &source, "project", true, &mut added, &mut bytes).unwrap());
+        assert!(capture(
+            &store,
+            &named_empty,
+            "placeholder",
+            true,
+            &mut added,
+            &mut bytes
+        )
+        .unwrap());
+        let paths: Vec<&str> = added.iter().map(ArchiveEntry::path).collect();
+        assert_eq!(
+            paths,
+            [
+                "project",
+                "project/src",
+                "project/src/lib.rs",
+                "placeholder"
+            ]
+        );
+    }
 }

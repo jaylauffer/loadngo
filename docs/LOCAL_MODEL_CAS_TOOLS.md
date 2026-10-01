@@ -47,8 +47,9 @@ Nothing in either family writes, deletes, executes or uses the network.
   recomputed root equals a root signed by a trusted key.
 - `cli::discover`: finds Archive CAS roots on attached storage.
 - A signed workspace snapshot: `/Volumes/Zhoenus II/pudding-cas`, archive
-  `pudding-20260917`, current root `d8ec110f...` (re-signed 2026-09-18 after a removal),
-  157,876 files, 59 MB manifest; signing key `jay-macmini` (public key beside it).
+  `pudding-20260917`, current root `4d8babf2...` (re-signed 2026-10-01 after build output
+  was removed; see `ARCHIVE_CAS.md`), 11,901 files; signing key `jay-macmini` (public
+  key beside it).
 
 That snapshot predates this week's work, so refreshing it (below) is part of the plan.
 

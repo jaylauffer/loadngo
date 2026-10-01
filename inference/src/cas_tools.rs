@@ -866,6 +866,6 @@ mod tests {
             .call("cas_list", r#"{"archive": "pudding-20260917", "path": ""}"#)
             .unwrap();
         eprintln!("{listed}");
-        assert!(listed.contains("whole archive: 157,874 files"), "{listed}");
+        assert!(listed.contains("whole archive: 11,901 files"), "{listed}");
     }
 }

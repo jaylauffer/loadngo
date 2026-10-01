@@ -20,6 +20,22 @@ pub const ARCHIVE_ADD_LOG_FORMAT_V1: &str = "loadngo-archive-add-log-v1";
 pub const ARCHIVE_MERGE_LOG_FORMAT_V1: &str = "loadngo-archive-merge-log-v1";
 pub const DEFAULT_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 pub const ARCHIVE_COMPRESSION_FORMAT_V1: &str = "loadngo-archive-cas-compression-v1";
+/// How a valid `CACHEDIR.TAG` starts (<https://bford.info/cachedir/>). Cargo writes one in
+/// every target directory, whatever it is named (`target-android-build-std` too), and
+/// other tools mark their caches the same way.
+pub const CACHEDIR_TAG_SIGNATURE: &[u8; 43] = b"Signature: 8a477f597d28d172789f06886806bc55";
+
+/// Whether `directory` holds a valid `CACHEDIR.TAG`: regenerable build output, which
+/// ingest and add do not capture.
+#[must_use]
+pub fn is_build_cache(directory: &Path) -> bool {
+    let mut start = [0_u8; CACHEDIR_TAG_SIGNATURE.len()];
+    fs::File::open(directory.join("CACHEDIR.TAG"))
+        .and_then(|mut tag| tag.read_exact(&mut start))
+        .is_ok()
+        && &start == CACHEDIR_TAG_SIGNATURE
+}
+
 /// A root's compression setting, at `<root>/compression.json`. Without it (the default)
 /// new objects are stored as they are.
 pub const COMPRESSION_SETTINGS_FILE: &str = "compression.json";

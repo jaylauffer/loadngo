@@ -58,6 +58,13 @@ not record the source mount path or the staging mount path.
   manifest.
 - Directories and symlinks are represented in the manifest. Unsupported
   special files cause ingestion to stop rather than silently omitting data.
+- Since 2026-10-01 a directory is recorded only when something is stored
+  below it: an empty directory leaves no entry. To keep one, put a `.keep`
+  file in it. A directory holding a valid `CACHEDIR.TAG` is regenerable build
+  output and is skipped whole: Cargo tags every target directory, whatever it
+  is named (`target-android-build-std` too). Both are printed as they are
+  skipped and counted in the summary. `archive_cas_add` follows the same rules
+  inside a folder, but always records a folder named on its command line.
 - A `NotFound` entry returned immediately after directory enumeration is
   recorded as `unreadable` with its failed operation and OS error. Ingestion
   continues so every accessible file is preserved, but the manifest is marked
@@ -137,6 +144,18 @@ failures. The volume went from 49 to 37 GiB used. Afterwards
 `archive_cas_verify` re-hashed all 83,730 unique objects (51.1 GB
 uncompressed, 60 s; capture complete) and `archive_cas_sign verify` accepted
 the signature against the trusted key.
+
+Build output removed from `pudding-20260917`, 2026-10-01, at Jay's request:
+`archive_cas_remove` took out `build_tmp` (March tarball exports),
+`.loadngo-cas` (the March v0 pudding CAS), every `target-android-build-std`,
+the app bundles, harnesses and packages under `*/build/`, and
+`sng-rusty/.venv` (146,000 files, 38.7 GiB). Small hand-kept parts of `build/`
+stayed (`sng-rusty/build/loadngo-cas`, `playlists`, `voice-audit`,
+`qcoin/build/qcoin-quorum`). The new root `4d8babf2...` (11,901 files, 24.2 GiB)
+verified complete, was signed by `jay-macmini`, and replaced `d8ec110f...`
+(its delete log was kept); `archive_cas_gc --execute` removed 76,332
+objects, 14.16 GiB, and the volume went from 37 to 22 GiB used. A second
+`archive_cas_verify` afterwards: 7,399 objects, complete.
 
 ## Commands
 

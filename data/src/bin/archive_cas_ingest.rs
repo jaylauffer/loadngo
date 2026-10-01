@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
-use data::archive_cas::{ArchiveCasStorage, ArchiveEntry, ArchiveManifest};
+use data::archive_cas::{is_build_cache, ArchiveCasStorage, ArchiveEntry, ArchiveManifest};
 use data::archive_cas_unpack::{has_zips, unpack_zips, UnpackProgress, DEFAULT_MAX_DEPTH};
 use data::cli::{ArgDoc, Usage};
 use std::collections::BTreeMap;
@@ -37,6 +37,8 @@ fn run() -> Result<()> {
         &mut entries,
         &mut stats,
     )?;
+    // A journal from an earlier run may hold files from a directory now skipped.
+    drop_skipped(&mut entries, &stats.skipped_caches);
 
     let manifest = ArchiveManifest::new(
         args.archive_id,
@@ -81,6 +83,17 @@ fn run() -> Result<()> {
     println!("Archive root size: {}", manifest_object.size);
     println!("Files declared: {}", stats.files);
     println!("Directories declared: {}", stats.directories);
+    println!(
+        "Empty directories skipped: {} (put a .keep file in one to keep it)",
+        stats.skipped_empty_directories
+    );
+    println!(
+        "Build caches skipped (CACHEDIR.TAG): {}",
+        stats.skipped_caches.len()
+    );
+    for cache in &stats.skipped_caches {
+        println!("  {cache}");
+    }
     println!("Symlinks declared: {}", stats.symlinks);
     println!("Unreadable source entries: {}", stats.unreadable_entries);
     println!("Capture complete: {captured_complete}");
@@ -212,6 +225,10 @@ struct IngestStats {
     deduplicated_files: u64,
     journal_reused_files: u64,
     resumed_bytes: u64,
+    /// Directories with nothing stored below them, not recorded.
+    skipped_empty_directories: u64,
+    /// Directories holding a `CACHEDIR.TAG`, not captured.
+    skipped_caches: Vec<String>,
 }
 
 impl IngestStats {
@@ -234,6 +251,18 @@ impl IngestStats {
     }
 }
 
+/// Removes entries below any of `skipped` directories.
+fn drop_skipped(entries: &mut BTreeMap<String, ArchiveEntry>, skipped: &[String]) {
+    for directory in skipped {
+        let below = format!("{directory}/");
+        entries.retain(|path, _| path != directory && !path.starts_with(&below));
+    }
+}
+
+/// Captures what `absolute_directory` holds into `entries`. A directory is recorded only
+/// when something is stored below it, so empty directories leave no entry (a `.keep`
+/// file keeps one); a build cache (a valid `CACHEDIR.TAG`) is skipped whole. Returns whether
+/// anything was stored.
 fn capture_directory(
     store: &ArchiveCasStorage,
     journal: &mut IngestJournal,
@@ -241,7 +270,8 @@ fn capture_directory(
     relative_directory: &Path,
     entries: &mut BTreeMap<String, ArchiveEntry>,
     stats: &mut IngestStats,
-) -> Result<()> {
+) -> Result<bool> {
+    let mut stored = false;
     let mut children = fs::read_dir(absolute_directory)
         .with_context(|| format!("failed to read {}", absolute_directory.display()))?
         .collect::<std::result::Result<Vec<_>, _>>()
@@ -267,6 +297,7 @@ fn capture_directory(
                 );
                 entries.insert(portable_path, entry);
                 stats.unreadable_entries += 1;
+                stored = true;
                 continue;
             }
             Err(error) => {
@@ -277,23 +308,34 @@ fn capture_directory(
         let file_type = metadata.file_type();
 
         if file_type.is_dir() {
-            entries.insert(
-                portable_path.clone(),
-                ArchiveEntry::Directory {
-                    path: portable_path,
-                    modified_at_unix_secs: modified_at_unix_secs(&metadata),
-                },
-            );
-            stats.directories += 1;
-            capture_directory(
+            if is_build_cache(&absolute_path) {
+                eprintln!("skipped build cache (CACHEDIR.TAG): {portable_path}");
+                stats.skipped_caches.push(portable_path);
+                continue;
+            }
+            if capture_directory(
                 store,
                 journal,
                 &absolute_path,
                 &relative_path,
                 entries,
                 stats,
-            )?;
+            )? {
+                entries.insert(
+                    portable_path.clone(),
+                    ArchiveEntry::Directory {
+                        path: portable_path,
+                        modified_at_unix_secs: modified_at_unix_secs(&metadata),
+                    },
+                );
+                stats.directories += 1;
+                stored = true;
+            } else {
+                eprintln!("skipped empty directory: {portable_path}");
+                stats.skipped_empty_directories += 1;
+            }
         } else if file_type.is_file() {
+            stored = true;
             let modified_at_unix_secs = modified_at_unix_secs(&metadata);
             if let Some(object) = journal_reusable_object(
                 entries.get(&portable_path),
@@ -338,6 +380,7 @@ fn capture_directory(
                 },
             );
             stats.symlinks += 1;
+            stored = true;
         } else {
             bail!(
                 "unsupported special file in source: {}",
@@ -345,7 +388,7 @@ fn capture_directory(
             );
         }
     }
-    Ok(())
+    Ok(stored)
 }
 
 fn journal_reusable_object(
@@ -587,5 +630,78 @@ mod tests {
 
         let reopened = IngestJournal::open(directory.path(), "archive-1", "source").unwrap();
         assert_eq!(reopened.entries.get(entry.path()), Some(&entry));
+    }
+
+    #[test]
+    fn empty_directories_and_build_caches_are_not_captured() {
+        let directory = tempdir().unwrap();
+        let source = directory.path().join("source");
+        let tag = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache\n";
+        for (path, bytes) in [
+            ("src/main.rs", "fn main() {}"),
+            ("keep/.keep", ""),
+            ("target/CACHEDIR.TAG", tag),
+            ("target/debug/app", "binary"),
+            ("app/target-android-build-std/CACHEDIR.TAG", tag),
+            ("app/target-android-build-std/out.o", "object"),
+            ("app/notes.md", "notes"),
+            ("lookalike/CACHEDIR.TAG", "not a tag"),
+            ("lookalike/data.txt", "data"),
+        ] {
+            let path = source.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        for empty in ["empty", "nested/empty/deeper", "app/build/out"] {
+            fs::create_dir_all(source.join(empty)).unwrap();
+        }
+        let cas = directory.path().join("cas");
+        let store = ArchiveCasStorage::new(&cas).unwrap();
+        let mut journal = IngestJournal::open(&cas, "test", "test").unwrap();
+        // A file an earlier run journaled inside what is now a skipped cache.
+        let stale = ArchiveEntry::File {
+            path: "target/debug/old".to_string(),
+            object: ArchiveObject {
+                hash: CasHash::digest(b"old"),
+                size: 3,
+            },
+            modified_at_unix_secs: None,
+        };
+        let mut entries = BTreeMap::from([(stale.path().to_string(), stale)]);
+        let mut stats = IngestStats::default();
+        let stored = capture_directory(
+            &store,
+            &mut journal,
+            &source,
+            Path::new(""),
+            &mut entries,
+            &mut stats,
+        )
+        .unwrap();
+        drop_skipped(&mut entries, &stats.skipped_caches);
+
+        assert!(stored);
+        let paths: Vec<&str> = entries.keys().map(String::as_str).collect();
+        assert_eq!(
+            paths,
+            [
+                "app",
+                "app/notes.md",
+                "keep",
+                "keep/.keep",
+                "lookalike",
+                "lookalike/CACHEDIR.TAG",
+                "lookalike/data.txt",
+                "src",
+                "src/main.rs",
+            ]
+        );
+        assert_eq!(
+            stats.skipped_caches,
+            ["app/target-android-build-std", "target"]
+        );
+        // empty, nested, nested/empty, nested/empty/deeper, app/build, app/build/out
+        assert_eq!(stats.skipped_empty_directories, 6);
+        assert_eq!(stats.directories, 4);
     }
 }
