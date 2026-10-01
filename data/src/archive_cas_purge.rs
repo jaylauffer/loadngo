@@ -1,14 +1,20 @@
 //! Purge: the step that actually frees space in an Archive CAS root.
 //!
-//! Removing a file from an archive writes a new manifest and leaves the old one on
-//! disk, so the removed file's blob is still referenced and stays. A purge does both
-//! halves of reclaiming it, for every archive in the root at once:
+//! Removing a file from an archive writes a new version and leaves the old one on disk,
+//! so the removed file's blob is still referenced and stays. A purge reclaims it, for
+//! every archive in the root at once, without losing the history:
 //!
-//! 1. **Retire superseded manifests:** every manifest that a newer manifest of the same
-//!    archive names as `supersedes_archive_root`, with its signature and its delete or
-//!    add log.
-//! 2. **Delete unreferenced objects:** every blob under `objects/` that no remaining
-//!    manifest lists, including the retired manifests' own stored bytes.
+//! 1. **Retire superseded versions:** every version that a later version of the same
+//!    archive replaces, once a later version is signed by the trusted key. A retired
+//!    version keeps its manifest, its stored manifest object, its signature and its
+//!    logs: the record of what the archive was stays, and stays verifiable
+//!    (`archive_cas_verify` reports its dropped objects as dropped on retirement). A
+//!    superseded version with no signed later version is not retired.
+//! 2. **Delete unreferenced objects:** every blob under `objects/` that only retired
+//!    versions list.
+//!
+//! Deleting a whole archive ([`plan_archive_deletion`]) is the one operation that also
+//! deletes manifests: every version of that archive.
 //!
 //! Step 2 has two depths ([`Sweep`]). The default checks only the objects a retired
 //! manifest could have freed, one lookup each, which is all a purge after removals
@@ -27,17 +33,31 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 
 use crate::archive_cas::{ArchiveCasStorage, ArchiveEntry};
+use crate::archive_view::{list_archives, signed_successor, PublicKey};
 use crate::cas::CasHash;
 
-/// A manifest the purge retires, and every file of it that is deleted.
+/// A version the purge retires (or, deleting an archive, deletes).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetiredManifest {
     pub archive_id: String,
     pub root: CasHash,
-    /// The manifest that supersedes it, or `None` when the whole archive is deleted.
+    /// The version that supersedes it, or `None` when the whole archive is deleted.
     pub superseded_by: Option<CasHash>,
-    /// The manifest file, then its signature, delete log and add log where present.
+    /// The signed later version it is retired under.
+    pub signed_successor: Option<CasHash>,
+    /// Files of it that are deleted: none for a retired version, whose manifest,
+    /// signature and logs stay; for a deleted archive, the manifest file, then its
+    /// signature and logs where present.
     pub files: Vec<PathBuf>,
+}
+
+/// A superseded version left as it is because no later version of its archive is
+/// signed by the trusted key yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsignedSuccession {
+    pub archive_id: String,
+    pub root: CasHash,
+    pub superseded_by: CasHash,
 }
 
 /// An object no remaining manifest references.
@@ -56,6 +76,8 @@ pub struct PurgeObject {
 pub struct PurgePlan {
     pub cas_root: PathBuf,
     pub manifests: Vec<RetiredManifest>,
+    /// Superseded versions not retired: sign a later version, then plan again.
+    pub unsigned: Vec<UnsignedSuccession>,
     pub objects: Vec<PurgeObject>,
     /// Bytes of the retired manifests' files (signatures and logs included).
     pub manifest_file_bytes: u64,
@@ -65,8 +87,10 @@ pub struct PurgePlan {
 }
 
 impl PurgePlan {
+    /// Whether the plan deletes nothing. A version retired by an earlier purge stays
+    /// superseded, and is listed again with nothing left to delete.
     pub fn is_empty(&self) -> bool {
-        self.manifests.is_empty() && self.objects.is_empty()
+        self.file_count() == 0
     }
 
     pub fn object_bytes(&self) -> u64 {
@@ -153,17 +177,19 @@ fn file_size(path: &Path) -> u64 {
 }
 
 /// Works out what a purge of `store` deletes. Reads every manifest; looks up the objects
-/// the retired manifests could free, or with [`Sweep::Full`] lists every object name.
-/// Deletes nothing.
+/// the retired versions could free, or with [`Sweep::Full`] lists every object name.
+/// Signatures are checked against `trusted`; without it nothing is retired. Deletes
+/// nothing.
 ///
 /// # Errors
 /// An unreadable or non-canonical manifest, or an unreadable object directory.
 pub fn plan_purge(
     store: &ArchiveCasStorage,
     sweep: Sweep,
+    trusted: Option<&PublicKey>,
     progress: impl FnMut(PurgeProgress),
 ) -> Result<PurgePlan> {
-    plan(store, sweep, None, progress)
+    plan(store, sweep, None, trusted, progress)
 }
 
 /// Works out what deleting archive `archive_id` entirely deletes: every manifest of it
@@ -176,9 +202,10 @@ pub fn plan_purge(
 pub fn plan_archive_deletion(
     store: &ArchiveCasStorage,
     archive_id: &str,
+    trusted: Option<&PublicKey>,
     progress: impl FnMut(PurgeProgress),
 ) -> Result<PurgePlan> {
-    let plan = plan(store, Sweep::Retired, Some(archive_id), progress)?;
+    let plan = plan(store, Sweep::Retired, Some(archive_id), trusted, progress)?;
     if !plan.manifests.iter().any(|m| m.archive_id == archive_id) {
         bail!("no archive {archive_id:?} in {}", store.root().display());
     }
@@ -189,9 +216,11 @@ fn plan(
     store: &ArchiveCasStorage,
     sweep: Sweep,
     delete: Option<&str>,
+    trusted: Option<&PublicKey>,
     mut progress: impl FnMut(PurgeProgress),
 ) -> Result<PurgePlan> {
     let manifests = live_manifests(store, &mut progress)?;
+    let listings = list_archives(store.root(), trusted)?;
 
     // A manifest is superseded when a newer one of the same archive names it.
     let mut successor: BTreeMap<(String, CasHash), CasHash> = BTreeMap::new();
@@ -202,6 +231,7 @@ fn plan(
     }
 
     let mut retired = Vec::new();
+    let mut unsigned = Vec::new();
     let mut referenced = BTreeSet::new();
     let mut retired_roots = BTreeMap::new();
     let mut only_in_retired: BTreeMap<CasHash, String> = BTreeMap::new();
@@ -212,60 +242,71 @@ fn plan(
                 _ => None,
             })
         };
-        let retire = match successor.get(&(manifest.archive_id.clone(), *root)) {
-            Some(&next) => Some(Some(next)),
-            None if delete == Some(manifest.archive_id.as_str()) => Some(None),
-            None => None,
-        };
-        match retire {
-            Some(superseded_by) => {
-                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                let mut owned = vec![path.clone()];
-                for sidecar in [
-                    "signature",
-                    "delete-log",
-                    "add-log",
-                    "merge-log",
-                    "unpack-log",
-                ] {
-                    let side = store
-                        .manifests_root()
-                        .join(format!("{stem}.{sidecar}.json"));
-                    if side.exists() {
-                        owned.push(side);
-                    }
+        let superseded_by = successor
+            .get(&(manifest.archive_id.clone(), *root))
+            .copied();
+        let deleting = delete == Some(manifest.archive_id.as_str());
+        let signed = superseded_by
+            .and_then(|_| signed_successor(&listings, &manifest.archive_id, *root))
+            .map(|listing| listing.root);
+        if deleting {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let mut owned = vec![path.clone()];
+            for sidecar in [
+                "signature",
+                "delete-log",
+                "add-log",
+                "merge-log",
+                "unpack-log",
+            ] {
+                let side = store
+                    .manifests_root()
+                    .join(format!("{stem}.{sidecar}.json"));
+                if side.exists() {
+                    owned.push(side);
                 }
-                retired_roots.insert(
-                    *root,
-                    if superseded_by.is_some() {
-                        format!("superseded manifest of {}", manifest.archive_id)
-                    } else {
-                        format!("manifest of deleted archive {}", manifest.archive_id)
-                    },
-                );
-                for (file, hash) in files() {
-                    // A file of an archive being deleted was not removed by anyone; that
-                    // label wins over "removed file" from one of its superseded versions.
-                    let label = format!("{}:{file}", manifest.archive_id);
-                    if superseded_by.is_some() {
-                        only_in_retired
-                            .entry(hash)
-                            .or_insert_with(|| format!("removed file {label}"));
-                    } else {
-                        only_in_retired.insert(hash, format!("file {label}"));
-                    }
-                }
-                retired.push(RetiredManifest {
+            }
+            retired_roots.insert(
+                *root,
+                format!("manifest of deleted archive {}", manifest.archive_id),
+            );
+            for (file, hash) in files() {
+                // A file of an archive being deleted was not removed by anyone.
+                only_in_retired.insert(hash, format!("file {}:{file}", manifest.archive_id));
+            }
+            retired.push(RetiredManifest {
+                archive_id: manifest.archive_id.clone(),
+                root: *root,
+                superseded_by,
+                signed_successor: signed,
+                files: owned,
+            });
+        } else if let (Some(next), Some(signed)) = (superseded_by, signed) {
+            // Retired: the version's own record stays (manifest, its stored object,
+            // signature, logs); only objects no live version lists can go.
+            referenced.insert(*root);
+            for (file, hash) in files() {
+                only_in_retired
+                    .entry(hash)
+                    .or_insert_with(|| format!("removed file {}:{file}", manifest.archive_id));
+            }
+            retired.push(RetiredManifest {
+                archive_id: manifest.archive_id.clone(),
+                root: *root,
+                superseded_by: Some(next),
+                signed_successor: Some(signed),
+                files: Vec::new(),
+            });
+        } else {
+            if let Some(next) = superseded_by {
+                unsigned.push(UnsignedSuccession {
                     archive_id: manifest.archive_id.clone(),
                     root: *root,
-                    superseded_by,
-                    files: owned,
+                    superseded_by: next,
                 });
             }
-            None => {
-                referenced.insert(*root);
-                referenced.extend(files().map(|(_, hash)| hash));
-            }
+            referenced.insert(*root);
+            referenced.extend(files().map(|(_, hash)| hash));
         }
     }
 
@@ -314,6 +355,7 @@ fn plan(
     Ok(PurgePlan {
         cas_root: store.root().to_path_buf(),
         manifests: retired,
+        unsigned,
         objects,
         manifest_file_bytes,
         live: manifests
@@ -377,6 +419,8 @@ pub fn execute_purge(
 mod tests {
     use super::*;
     use crate::archive_cas::{ArchiveManifest, ArchiveObject};
+    use crate::archive_cas_sign::sign_manifest_and_write;
+    use loadngo_pq_crypto::{default_registry, PqSchemeRegistry, SignatureSchemeId};
     use tempfile::tempdir;
 
     fn file(store: &ArchiveCasStorage, path: &str, bytes: &[u8]) -> ArchiveEntry {
@@ -388,12 +432,35 @@ mod tests {
         }
     }
 
-    /// Two archives sharing one blob; `docs` then has `secret.conf` removed.
-    fn fixture() -> (tempfile::TempDir, ArchiveCasStorage, PathBuf, CasHash) {
+    struct Fixture {
+        _dir: tempfile::TempDir,
+        store: ArchiveCasStorage,
+        v1_path: PathBuf,
+        v1_root: CasHash,
+        v2: ArchiveManifest,
+        secret: CasHash,
+        key: PublicKey,
+        private: loadngo_pq_crypto::PrivateKey,
+    }
+
+    impl Fixture {
+        fn sign_v2(&self) -> CasHash {
+            sign_manifest_and_write(&self.store, &self.v2, "test", &self.key, &self.private, 3)
+                .unwrap();
+            self.v2.digest().unwrap()
+        }
+    }
+
+    /// Two archives sharing one blob; `docs` then has `secret.conf` removed (unsigned).
+    fn fixture() -> Fixture {
         let dir = tempdir().unwrap();
         let store = ArchiveCasStorage::new(dir.path().join("cas")).unwrap();
         let shared = file(&store, "shared.txt", b"in both archives");
         let secret = file(&store, "secret.conf", b"PrivateKey = abc");
+        let ArchiveEntry::File { object, .. } = &secret else {
+            unreachable!()
+        };
+        let secret_hash = object.hash;
         let docs = ArchiveManifest::new(
             "docs",
             "Documents",
@@ -401,7 +468,7 @@ mod tests {
             vec![shared.clone(), secret, file(&store, "keep.txt", b"kept")],
         )
         .unwrap();
-        let (docs_path, _) = store.write_manifest(&docs).unwrap();
+        let (v1_path, _) = store.write_manifest(&docs).unwrap();
         let other = ArchiveManifest::new("other", "Other", 1, vec![shared]).unwrap();
         store.write_manifest(&other).unwrap();
         let (v2, log) = docs
@@ -409,98 +476,142 @@ mod tests {
             .unwrap();
         let (v2_path, _) = store.write_manifest(&v2).unwrap();
         store.write_delete_log(&v2_path, &log).unwrap();
-        let v1_root = docs.digest().unwrap();
-        (dir, store, docs_path, v1_root)
+        let registry = default_registry();
+        let (key, private) = registry
+            .get(&SignatureSchemeId::Dilithium2)
+            .unwrap()
+            .keygen()
+            .unwrap();
+        Fixture {
+            _dir: dir,
+            v1_root: docs.digest().unwrap(),
+            store,
+            v1_path,
+            v2,
+            secret: secret_hash,
+            key,
+            private,
+        }
     }
 
     #[test]
-    fn plan_retires_the_superseded_manifest_and_its_unshared_objects_only() {
-        let (_dir, store, v1_path, v1_root) = fixture();
-        let before = store.object_hashes_with_progress(|_| {}).unwrap().len();
-        let plan = plan_purge(&store, Sweep::Full, |_| {}).unwrap();
+    fn a_retired_version_keeps_its_record_and_loses_only_what_no_live_version_lists() {
+        let f = fixture();
+        let v2_root = f.sign_v2();
+        let signature = f.store.manifests_root().join(format!(
+            "{}.signature.json",
+            f.v1_path.file_stem().unwrap().to_str().unwrap()
+        ));
+        fs::write(&signature, b"{}").unwrap();
+        let before = f.store.object_hashes_with_progress(|_| {}).unwrap().len();
+        let plan = plan_purge(&f.store, Sweep::Full, Some(&f.key), |_| {}).unwrap();
         assert_eq!(plan.manifests.len(), 1);
-        assert_eq!(plan.manifests[0].root, v1_root);
-        assert_eq!(plan.manifests[0].files, std::slice::from_ref(&v1_path));
-        let origins: BTreeSet<&str> = plan.objects.iter().map(|o| o.origin.as_str()).collect();
+        let retired = &plan.manifests[0];
+        assert_eq!(retired.root, f.v1_root);
+        assert_eq!(retired.signed_successor, Some(v2_root));
+        assert!(retired.files.is_empty(), "nothing of its record is deleted");
+        let origins: Vec<&str> = plan.objects.iter().map(|o| o.origin.as_str()).collect();
+        assert_eq!(origins, ["removed file docs:secret.conf"]);
         assert_eq!(
-            origins,
-            BTreeSet::from([
-                "removed file docs:secret.conf",
-                "superseded manifest of docs"
-            ])
-        );
-        assert_eq!(
-            store.object_hashes_with_progress(|_| {}).unwrap().len(),
+            f.store.object_hashes_with_progress(|_| {}).unwrap().len(),
             before,
             "planning deletes nothing"
         );
-
-        let outcome = execute_purge(&store, &plan, |_| {}).unwrap();
-        assert_eq!(outcome.objects_removed, 2);
-        assert_eq!(outcome.files_removed, 3);
-        assert!(!v1_path.exists());
         assert_eq!(
-            store.object_hashes_with_progress(|_| {}).unwrap().len(),
-            before - 2
+            plan.id(),
+            plan_purge(&f.store, Sweep::Full, Some(&f.key), |_| {})
+                .unwrap()
+                .id()
         );
-        // Everything the remaining manifests list is still there and verifies.
-        for path in store.list_manifests().unwrap() {
-            for entry in store.read_manifest(&path).unwrap().entries {
+
+        let outcome = execute_purge(&f.store, &plan, |_| {}).unwrap();
+        assert_eq!((outcome.objects_removed, outcome.files_removed), (1, 1));
+        assert!(!f.store.has_object(f.secret));
+        assert!(f.v1_path.exists() && signature.exists());
+        assert!(f.store.has_object(f.v1_root), "its stored manifest stays");
+        assert_eq!(
+            f.store.read_manifest(&f.v1_path).unwrap().digest().unwrap(),
+            f.v1_root
+        );
+        // Everything the live versions list is still there and verifies.
+        for path in f.store.list_manifests().unwrap() {
+            if path == f.v1_path {
+                continue;
+            }
+            for entry in f.store.read_manifest(&path).unwrap().entries {
                 if let ArchiveEntry::File { object, .. } = entry {
-                    store.verify_object(object).unwrap();
+                    f.store.verify_object(object).unwrap();
                 }
             }
         }
-        assert!(plan_purge(&store, Sweep::Full, |_| {}).unwrap().is_empty());
+        assert!(plan_purge(&f.store, Sweep::Full, Some(&f.key), |_| {})
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn nothing_is_retired_until_a_later_version_is_signed_by_the_trusted_key() {
+        let f = fixture();
+        for plan in [
+            plan_purge(&f.store, Sweep::Retired, Some(&f.key), |_| {}).unwrap(),
+            plan_purge(&f.store, Sweep::Retired, None, |_| {}).unwrap(),
+        ] {
+            assert!(plan.is_empty(), "{plan:?}");
+            assert_eq!(plan.unsigned.len(), 1);
+            assert_eq!(plan.unsigned[0].root, f.v1_root);
+        }
+        f.sign_v2();
+        assert!(plan_purge(&f.store, Sweep::Retired, None, |_| {})
+            .unwrap()
+            .is_empty());
+        let (other_key, _) = default_registry()
+            .get(&SignatureSchemeId::Dilithium2)
+            .unwrap()
+            .keygen()
+            .unwrap();
+        assert!(
+            plan_purge(&f.store, Sweep::Retired, Some(&other_key), |_| {})
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!plan_purge(&f.store, Sweep::Retired, Some(&f.key), |_| {})
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
     fn a_plan_is_refused_after_the_archive_changes() {
-        let (_dir, store, _, _) = fixture();
-        let plan = plan_purge(&store, Sweep::Full, |_| {}).unwrap();
+        let f = fixture();
+        f.sign_v2();
+        let plan = plan_purge(&f.store, Sweep::Full, Some(&f.key), |_| {}).unwrap();
         let late = ArchiveManifest::new("late", "Late", 3, vec![]).unwrap();
-        store.write_manifest(&late).unwrap();
-        let before = store.object_hashes_with_progress(|_| {}).unwrap().len();
-        assert!(execute_purge(&store, &plan, |_| {})
+        f.store.write_manifest(&late).unwrap();
+        let before = f.store.object_hashes_with_progress(|_| {}).unwrap().len();
+        assert!(execute_purge(&f.store, &plan, |_| {})
             .unwrap_err()
             .to_string()
             .contains("changed since this plan"));
         assert_eq!(
-            store.object_hashes_with_progress(|_| {}).unwrap().len(),
+            f.store.object_hashes_with_progress(|_| {}).unwrap().len(),
             before
         );
     }
 
     #[test]
-    fn signatures_and_logs_of_a_retired_manifest_are_listed_and_the_id_names_the_plan() {
-        let (_dir, store, v1_path, _) = fixture();
-        let stem = v1_path.file_stem().unwrap().to_str().unwrap().to_string();
-        let signature = store
-            .manifests_root()
-            .join(format!("{stem}.signature.json"));
-        fs::write(&signature, b"{}").unwrap();
-        let plan = plan_purge(&store, Sweep::Full, |_| {}).unwrap();
-        assert_eq!(plan.manifests[0].files, [v1_path, signature]);
-        assert_eq!(
-            plan.id(),
-            plan_purge(&store, Sweep::Full, |_| {}).unwrap().id()
-        );
-        assert_eq!(plan.bytes(), plan.object_bytes() + plan.manifest_file_bytes);
-    }
-
-    #[test]
     fn a_full_sweep_also_finds_strays_the_default_leaves() {
-        let (_dir, store, _, _) = fixture();
-        let stray = store
+        let f = fixture();
+        f.sign_v2();
+        let stray = f
+            .store
             .add_content(b"left by an interrupted run")
             .unwrap()
             .object;
-        let full = plan_purge(&store, Sweep::Full, |_| {}).unwrap();
+        let full = plan_purge(&f.store, Sweep::Full, Some(&f.key), |_| {}).unwrap();
         assert!(full
             .objects
             .iter()
             .any(|o| o.hash == stray.hash && o.origin == "not listed by any manifest"));
-        let retired = plan_purge(&store, Sweep::Retired, |_| {}).unwrap();
+        let retired = plan_purge(&f.store, Sweep::Retired, Some(&f.key), |_| {}).unwrap();
         let without_stray: Vec<_> = full
             .objects
             .iter()
@@ -513,15 +624,12 @@ mod tests {
 
     #[test]
     fn deleting_an_archive_keeps_the_objects_other_archives_still_list() {
-        let (_dir, store, v1_path, _) = fixture();
-        let plan = plan_archive_deletion(&store, "docs", |_| {}).unwrap();
+        let f = fixture();
+        let plan = plan_archive_deletion(&f.store, "docs", None, |_| {}).unwrap();
         assert_eq!(plan.manifests.len(), 2, "both versions of docs");
-        assert!(plan.manifests.iter().any(|m| m.superseded_by.is_none()));
+        assert!(plan.manifests.iter().all(|m| !m.files.is_empty()));
         let origins: BTreeSet<&str> = plan.objects.iter().map(|o| o.origin.as_str()).collect();
-        assert!(
-            origins.contains("removed file docs:secret.conf"),
-            "{origins:?}"
-        );
+        assert!(origins.contains("file docs:secret.conf"), "{origins:?}");
         assert!(
             origins.contains("manifest of deleted archive docs"),
             "{origins:?}"
@@ -532,24 +640,26 @@ mod tests {
             .iter()
             .any(|o| o.origin == "file docs:keep.txt"));
         assert!(!plan.objects.iter().any(|o| o.origin.contains("shared.txt")));
-        execute_purge(&store, &plan, |_| {}).unwrap();
-        assert!(!v1_path.exists());
-        let left: Vec<String> = store
+        execute_purge(&f.store, &plan, |_| {}).unwrap();
+        assert!(!f.v1_path.exists());
+        let left: Vec<String> = f
+            .store
             .list_manifests()
             .unwrap()
             .iter()
-            .map(|p| store.read_manifest(p).unwrap().archive_id)
+            .map(|p| f.store.read_manifest(p).unwrap().archive_id)
             .collect();
         assert_eq!(left, ["other"]);
-        for entry in store
-            .read_manifest(&store.list_manifests().unwrap()[0])
+        for entry in f
+            .store
+            .read_manifest(&f.store.list_manifests().unwrap()[0])
             .unwrap()
             .entries
         {
             if let ArchiveEntry::File { object, .. } = entry {
-                store.verify_object(object).unwrap();
+                f.store.verify_object(object).unwrap();
             }
         }
-        assert!(plan_archive_deletion(&store, "docs", |_| {}).is_err());
+        assert!(plan_archive_deletion(&f.store, "docs", None, |_| {}).is_err());
     }
 }

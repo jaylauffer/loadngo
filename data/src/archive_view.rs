@@ -58,8 +58,14 @@ impl Signature {
         }
     }
 
+    /// Whether the signature verified against the trusted key.
+    #[must_use]
+    pub fn is_verified(&self) -> bool {
+        matches!(self, Self::Verified { .. })
+    }
+
     /// The signature of archive `archive_id` at `root`, checked against `trusted`.
-    fn check(
+    pub(crate) fn check(
         store: &ArchiveCasStorage,
         archive_id: &str,
         root: CasHash,
@@ -120,9 +126,35 @@ pub struct ArchiveListing {
     pub created_at_unix_secs: u64,
     /// The root the manifest's file name records; [`ArchiveView::open`] checks it.
     pub root: CasHash,
+    /// The version this one supersedes, if any.
+    pub supersedes: Option<CasHash>,
     /// A newer manifest of the same archive supersedes this one.
     pub superseded: bool,
     pub signature: Signature,
+}
+
+/// The nearest later version of `archive_id` after `root` whose signature verified, if
+/// any: the signed record a retired version's data may be dropped under. `listings` is
+/// every version under one root, as [`list_archives`] returns them.
+#[must_use]
+pub fn signed_successor<'a>(
+    listings: &'a [ArchiveListing],
+    archive_id: &str,
+    root: CasHash,
+) -> Option<&'a ArchiveListing> {
+    let mut at = root;
+    // Each step moves to a version that names the last one; a chain cannot be longer
+    // than the versions there are.
+    for _ in 0..listings.len() {
+        let next = listings
+            .iter()
+            .find(|l| l.archive_id == archive_id && l.supersedes == Some(at))?;
+        if next.signature.is_verified() {
+            return Some(next);
+        }
+        at = next.root;
+    }
+    None
 }
 
 #[derive(serde::Deserialize)]
@@ -175,6 +207,7 @@ pub fn list_archives(cas_root: &Path, trusted: Option<&PublicKey>) -> Result<Vec
         if let Some(previous) = head.supersedes_archive_root {
             replaced.insert((head.archive_id.clone(), previous));
         }
+        let supersedes = head.supersedes_archive_root;
         let signature = Signature::check(&store, &head.archive_id, root, trusted);
         listings.push(ArchiveListing {
             cas_root: cas_root.to_path_buf(),
@@ -183,6 +216,7 @@ pub fn list_archives(cas_root: &Path, trusted: Option<&PublicKey>) -> Result<Vec
             source_label: head.source_label,
             created_at_unix_secs: head.created_at_unix_secs,
             root,
+            supersedes,
             superseded: false,
             signature,
         });

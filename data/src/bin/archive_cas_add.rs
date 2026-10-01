@@ -87,7 +87,7 @@ fn run() -> Result<()> {
         args.cas_root.display(),
         new_manifest.display()
     );
-    println!("  3. Once you're satisfied, archive_cas_prune_manifests to retire the old manifest.");
+    println!("  3. The old version stays as the record of what the archive was; archive_cas_purge frees nothing here, since an addition removes nothing.");
     Ok(())
 }
 

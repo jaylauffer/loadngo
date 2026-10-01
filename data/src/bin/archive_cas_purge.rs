@@ -1,6 +1,6 @@
 //! Frees the space removed files still take in an Archive CAS root: retires superseded
-//! manifests and deletes the objects nothing references any more, for every archive in
-//! the root. Prints the exact list by default; deletes only with `--execute <plan-id>`,
+//! versions that a signed later version replaces (their manifests and signatures stay)
+//! and deletes the objects only retired versions list, for every archive in the root. Prints the exact list by default; deletes only with `--execute <plan-id>`,
 //! and only if the plan it computes again has that id. See `data::archive_cas_purge`.
 
 use anyhow::{bail, Result};
@@ -8,6 +8,7 @@ use data::archive_cas::ArchiveCasStorage;
 use data::archive_cas_purge::{
     execute_purge, plan_archive_deletion, plan_purge, PurgePlan, PurgeProgress, Sweep,
 };
+use data::archive_cas_sign::{default_trusted_key, read_public_key};
 use data::cli::{ArgDoc, Usage};
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -25,6 +26,7 @@ fn run() -> Result<()> {
     let mut sweep = Sweep::Retired;
     let mut delete_archives = Vec::new();
     let mut yes = false;
+    let mut trusted_key = None;
     let mut args = data::cli::read_args(&usage(), true).into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -33,6 +35,7 @@ fn run() -> Result<()> {
             "--full" => sweep = Sweep::Full,
             "--delete-archive" => delete_archives.extend(args.next()),
             "--yes" => yes = true,
+            "--trusted-public-key" => trusted_key = args.next().map(PathBuf::from),
             other => bail!("unknown argument: {other}\n{}", usage().hint()),
         }
     }
@@ -40,10 +43,19 @@ fn run() -> Result<()> {
         bail!("missing --cas-root <archive-directory>\n{}", usage().hint());
     };
     let store = ArchiveCasStorage::new(&cas_root)?;
-    if !delete_archives.is_empty() {
-        return delete(&store, &delete_archives, yes);
+    let trusted = match &trusted_key {
+        Some(path) => Some(read_public_key(path)?),
+        None => default_trusted_key()?,
+    };
+    if trusted.is_none() {
+        eprintln!(
+            "No trusted public key (pass --trusted-public-key, or keep one *.dilithium2.pub in ~/.loadngo/keys): no version can be retired."
+        );
     }
-    let plan = plan_purge(&store, sweep, show)?;
+    if !delete_archives.is_empty() {
+        return delete(&store, &delete_archives, trusted.as_ref(), yes);
+    }
+    let plan = plan_purge(&store, sweep, trusted.as_ref(), show)?;
     eprintln!();
     print_plan(&plan);
     if plan.is_empty() {
@@ -76,10 +88,15 @@ fn run() -> Result<()> {
 
 /// Deletes each archive in turn, keeping its delete and add logs (the record of what was
 /// removed and added). Prints each plan; deletes only with `--yes`.
-fn delete(store: &ArchiveCasStorage, archives: &[String], yes: bool) -> Result<()> {
+fn delete(
+    store: &ArchiveCasStorage,
+    archives: &[String],
+    trusted: Option<&data::archive_view::PublicKey>,
+    yes: bool,
+) -> Result<()> {
     let mut freed = 0;
     for archive in archives {
-        let mut plan = plan_archive_deletion(store, archive, show)?;
+        let mut plan = plan_archive_deletion(store, archive, trusted, show)?;
         for manifest in &mut plan.manifests {
             manifest.files.retain(|file| {
                 let name = file.to_string_lossy();
@@ -127,8 +144,18 @@ fn show(progress: PurgeProgress) {
 
 fn print_plan(plan: &PurgePlan) {
     println!("Purge plan {} for {}", plan.id(), plan.cas_root.display());
+    for waiting in &plan.unsigned {
+        println!(
+            "Not retired: {} {} is superseded by {}, but no later version is signed by the trusted key.",
+            waiting.archive_id,
+            &waiting.root.to_hex()[..12],
+            &waiting.superseded_by.to_hex()[..12]
+        );
+    }
     if plan.is_empty() {
-        println!("Nothing to purge: no superseded manifests and no unreferenced objects.");
+        println!(
+            "Nothing to purge: nothing only retired versions list, and no unreferenced objects."
+        );
         return;
     }
     println!(
@@ -136,17 +163,20 @@ fn print_plan(plan: &PurgePlan) {
         human(plan.bytes()),
         plan.file_count()
     );
-    println!("\nSuperseded manifests ({}):", plan.manifests.len());
+    println!("\nVersions ({}):", plan.manifests.len());
     for manifest in &plan.manifests {
-        println!(
-            "  {} {} ({})",
-            manifest.archive_id,
-            manifest.root,
-            manifest.superseded_by.map_or_else(
-                || "archive deleted".to_string(),
-                |next| format!("superseded by {}", &next.to_hex()[..12])
-            )
-        );
+        let what = match (manifest.superseded_by, manifest.signed_successor) {
+            (_, Some(signed)) if manifest.files.is_empty() => format!(
+                "retired under signed version {}; manifest and signature kept",
+                &signed.to_hex()[..12]
+            ),
+            (None, _) => "archive deleted".to_string(),
+            (Some(next), _) => format!(
+                "deleted with its archive; superseded by {}",
+                &next.to_hex()[..12]
+            ),
+        };
+        println!("  {} {} ({what})", manifest.archive_id, manifest.root);
         for file in &manifest.files {
             println!("    - {}", file.display());
         }
@@ -196,6 +226,11 @@ fn usage() -> Usage {
         ),
         ArgDoc::switch("--yes", "with --delete-archive: actually delete (without it, prints the lists)"),
         ArgDoc::optional(
+            "--trusted-public-key",
+            "<hex-file>",
+            "key a later version must be signed with before an earlier one is retired (default: the one *.dilithium2.pub in ~/.loadngo/keys)",
+        ),
+        ArgDoc::optional(
             "--execute",
             "<plan-id>",
             "delete exactly the plan with this id, as printed by a run without --execute",
@@ -207,14 +242,15 @@ fn usage() -> Usage {
     ];
     const NOTES: &[&str] = &[
         "Without --execute, prints what would be deleted and deletes nothing.",
-        "Retires every superseded manifest (with its signature and delete/add log) and deletes every object no remaining manifest lists.",
+        "Retires every superseded version once a later version of its archive is signed by the trusted key, and deletes the objects only retired versions list.",
+        "A retired version keeps its manifest, stored manifest object, signature and logs, so the archive's history stays and archive_cas_verify can still check it.",
         "--execute recomputes the plan and deletes only if its id matches, so what is deleted is exactly the list you reviewed.",
         "By default checks only the objects the retired manifests could free, one lookup each; --full lists every object, which on a spinning USB drive runs at about 90 objects a second.",
     ];
     Usage {
         bin: "archive_cas_purge",
         invocation: "cargo run -p data --bin archive_cas_purge --",
-        about: "free the space removed files still take: retire superseded manifests and delete unreferenced objects",
+        about: "free the space removed files still take: retire superseded versions and delete the objects only they list",
         args: ARGS,
         examples: EXAMPLES,
         notes: NOTES,

@@ -1713,27 +1713,6 @@ impl ArchiveCasStorage {
         Ok(hashes)
     }
 
-    /// Removes one manifest file and, if present, its `.delete-log.json`
-    /// sidecar. Does not touch any signature file (`{stem}.signature.json`
-    /// lives in the same directory under the object-hash naming the signer
-    /// chose) -- callers that prune history are responsible for deciding
-    /// what to do with a signature that now describes a removed manifest.
-    pub fn remove_manifest_file(&self, manifest_path: &Path) -> Result<()> {
-        fs::remove_file(manifest_path)
-            .with_context(|| format!("failed to remove manifest {}", manifest_path.display()))?;
-        if let Some(stem) = manifest_path.file_stem().and_then(|stem| stem.to_str()) {
-            for kind in ["delete-log", "add-log"] {
-                let sidecar = self.manifests.join(format!("{stem}.{kind}.json"));
-                if sidecar.exists() {
-                    fs::remove_file(&sidecar).with_context(|| {
-                        format!("failed to remove {kind} {}", sidecar.display())
-                    })?;
-                }
-            }
-        }
-        Ok(())
-    }
-
     fn partial_path(&self, source_key: &str, stamp: SourceStamp) -> PathBuf {
         let mut hasher = blake3::Hasher::new();
         hasher.update(ARCHIVE_CAS_FORMAT_V1.as_bytes());
@@ -2253,8 +2232,8 @@ mod tests {
         // end in `.json` and sit in the same directory next to the manifest
         // they describe. Once a manifest was actually signed (the normal,
         // expected state for anything worth pruning/GC-ing), every caller
-        // of list_manifests -- archive_cas_gc's reference scan and
-        // archive_cas_prune_manifests's ancestor walk -- tried to parse the
+        // of list_manifests -- archive_cas_gc's reference scan and the
+        // (since removed) archive_cas_prune_manifests's ancestor walk -- tried to parse the
         // signature file as a manifest and failed outright.
         let directory = tempdir().unwrap();
         let store = ArchiveCasStorage::new(directory.path().join("cas")).unwrap();

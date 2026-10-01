@@ -1910,14 +1910,23 @@ impl BrowserApp {
     /// object only they listed. Shows the plan; deletes nothing.
     fn request_purge(&mut self) {
         let root = self.selected().cas_root.clone();
-        let planned = ArchiveCasStorage::new(&root)
-            .and_then(|store| plan_purge(&store, Sweep::Retired, |_| {}));
+        let planned = ArchiveCasStorage::new(&root).and_then(|store| {
+            plan_purge(&store, Sweep::Retired, self.trusted_key()?.as_ref(), |_| {})
+        });
         match planned {
             Ok(plan) if plan.is_empty() => {
-                self.message = Some(format!(
-                    "Nothing to purge in {}: no superseded manifests, and no objects only they list.",
-                    root.display()
-                ));
+                self.message = Some(if plan.unsigned.is_empty() {
+                    format!(
+                        "Nothing to purge in {}: no objects only retired versions list.",
+                        root.display()
+                    )
+                } else {
+                    format!(
+                        "Nothing to purge in {}: {} superseded version(s) wait for a later version signed by the trusted key.",
+                        root.display(),
+                        plan.unsigned.len()
+                    )
+                });
             }
             Ok(plan) => {
                 self.preview = None;
@@ -1935,8 +1944,9 @@ impl BrowserApp {
     fn request_archive_deletion(&mut self) {
         let root = self.selected().cas_root.clone();
         let archive_id = self.selected().manifest.archive_id.clone();
-        let planned = ArchiveCasStorage::new(&root)
-            .and_then(|store| plan_archive_deletion(&store, &archive_id, |_| {}));
+        let planned = ArchiveCasStorage::new(&root).and_then(|store| {
+            plan_archive_deletion(&store, &archive_id, self.trusted_key()?.as_ref(), |_| {})
+        });
         match planned {
             Ok(plan) => {
                 self.preview = None;
@@ -1976,6 +1986,15 @@ impl BrowserApp {
                     pending.title
                 ));
             }
+        }
+    }
+
+    /// The key a later version must be signed with before purge retires an earlier
+    /// one: the signing key given at launch, else the one in `~/.loadngo/keys`.
+    fn trusted_key(&self) -> anyhow::Result<Option<loadngo_pq_crypto::PublicKey>> {
+        match &self.signing {
+            Some(signing) => Ok(Some(signing.public_key.clone())),
+            None => data::archive_cas_sign::default_trusted_key(),
         }
     }
 
@@ -2020,7 +2039,7 @@ impl BrowserApp {
                     self.child_scroll = 0;
                     self.checked.clear();
                     self.message = Some(format!(
-                        "Removed {}. Wrote {}. Not yet signed -- run archive_cas_sign, then archive_cas_prune_manifests / archive_cas_gc when ready.",
+                        "Removed {}. Wrote {}. Not yet signed -- sign it, then Purge frees the removed files' space (the old version's manifest and signature stay).",
                         pending.label,
                         manifest_path.display()
                     ));

@@ -1,5 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use data::archive_cas::{ArchiveCasStorage, ArchiveEntry, ArchiveObject};
+use data::archive_cas_sign::{default_trusted_key, read_public_key};
+use data::archive_view::{list_archives, signed_successor};
 use data::cli::{ArgDoc, Usage};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -23,6 +25,20 @@ fn run() -> Result<()> {
     store
         .verify_object(manifest_object)
         .context("archive manifest is not present as a verified CAS object")?;
+
+    // A superseded version retired by a purge has lost the objects no live version
+    // lists; under a signed later version those are dropped on purpose, not missing.
+    let trusted = match &args.trusted_key {
+        Some(path) => Some(read_public_key(path)?),
+        None => default_trusted_key()?,
+    };
+    let listings = list_archives(&args.cas_root, trusted.as_ref())?;
+    let root = manifest_object.hash;
+    let superseded_by = listings
+        .iter()
+        .find(|l| l.archive_id == manifest.archive_id && l.supersedes == Some(root))
+        .map(|l| l.root);
+    let retired_under = signed_successor(&listings, &manifest.archive_id, root);
 
     let mut file_count = 0_u64;
     let mut logical_bytes = 0_u64;
@@ -51,10 +67,22 @@ fn run() -> Result<()> {
         bail!("archive manifest file count changed during verification");
     }
     let mut unique_object_bytes = 0_u64;
+    let (mut dropped, mut dropped_bytes) = (0_u64, 0_u64);
     for (index, object) in objects.iter().enumerate() {
-        store
-            .verify_object(*object)
-            .with_context(|| format!("failed to verify archive object {}", object.hash))?;
+        if retired_under.is_some() && !store.has_object(object.hash) {
+            dropped += 1;
+            dropped_bytes += object.size;
+            continue;
+        }
+        store.verify_object(*object).with_context(|| {
+            let mut context = format!("failed to verify archive object {}", object.hash);
+            if let Some(next) = superseded_by {
+                context.push_str(&format!(
+                    " (this version is superseded by {next}, but no later version is signed by the trusted key)"
+                ));
+            }
+            context
+        })?;
         unique_object_bytes = unique_object_bytes
             .checked_add(object.size)
             .ok_or_else(|| anyhow!("unique object byte count overflow"))?;
@@ -71,9 +99,22 @@ fn run() -> Result<()> {
     println!("Archive root object: {}", manifest_object.hash);
     println!("Files verified: {file_count}");
     println!("Logical file bytes verified: {logical_bytes}");
-    println!("Unique objects verified: {}", objects.len());
+    println!(
+        "Unique objects verified: {}",
+        objects.len() as u64 - dropped
+    );
     println!("Unique object bytes verified: {unique_object_bytes}");
-    println!("Blob verification: complete");
+    if let Some(signed) = retired_under {
+        println!(
+            "Retired version: superseded; later version {} is {}",
+            signed.root,
+            signed.signature.describe()
+        );
+        println!("Objects dropped on retirement: {dropped} ({dropped_bytes} bytes)");
+        println!("Blob verification: complete for every object still stored");
+    } else {
+        println!("Blob verification: complete");
+    }
     let unreadable = manifest.unreadable_entry_count();
     if unreadable > 0 {
         bail!(
@@ -95,17 +136,20 @@ fn run() -> Result<()> {
 struct Args {
     cas_root: PathBuf,
     manifest: PathBuf,
+    trusted_key: Option<PathBuf>,
 }
 
 impl Args {
     fn parse() -> Result<Self> {
         let mut cas_root = None;
         let mut manifest = None;
+        let mut trusted_key = None;
         let mut args = data::cli::read_args(&usage(), true).into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--cas-root" => cas_root = args.next().map(PathBuf::from),
                 "--manifest" => manifest = args.next().map(PathBuf::from),
+                "--trusted-public-key" => trusted_key = args.next().map(PathBuf::from),
                 other => return Err(anyhow!("unknown argument: {other}\n{}", usage().hint())),
             }
         }
@@ -114,6 +158,7 @@ impl Args {
                 .ok_or_else(|| anyhow!("missing --cas-root <directory>\n{}", usage().hint()))?,
             manifest: manifest
                 .ok_or_else(|| anyhow!("missing --manifest <file>\n{}", usage().hint()))?,
+            trusted_key,
         })
     }
 }
@@ -130,6 +175,11 @@ fn usage() -> Usage {
             "<archive-manifest.json>",
             "manifest to verify, from <cas-root>/manifests/",
         ),
+        ArgDoc::optional(
+            "--trusted-public-key",
+            "<hex-file>",
+            "key that decides whether a superseded version was retired under a signed later version (default: the one *.dilithium2.pub in ~/.loadngo/keys)",
+        ),
     ];
     const EXAMPLES: &[&str] = &[
         "cargo run -p data --bin archive_cas_verify -- --cas-root /Volumes/Backup/loadngo-archive-cas --manifest /Volumes/Backup/loadngo-archive-cas/manifests/photos-20260920-<hash>.json",
@@ -137,6 +187,7 @@ fn usage() -> Usage {
     const NOTES: &[&str] = &[
         "Re-hashes every distinct object once, so this reads the entire unique archive content from the volume.",
         "Exits non-zero if the manifest records any unreadable source entry, even though every present blob still verifies.",
+        "A superseded version that archive_cas_purge retired under a signed later version has lost the objects only it listed: those are counted as dropped on retirement, and every object still stored is verified.",
     ];
     Usage {
         bin: "archive_cas_verify",

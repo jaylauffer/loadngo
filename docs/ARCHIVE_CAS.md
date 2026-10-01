@@ -153,9 +153,13 @@ the app bundles, harnesses and packages under `*/build/`, and
 stayed (`sng-rusty/build/loadngo-cas`, `playlists`, `voice-audit`,
 `qcoin/build/qcoin-quorum`). The new root `4d8babf2...` (11,901 files, 24.2 GiB)
 verified complete, was signed by `jay-macmini`, and replaced `d8ec110f...`
-(its delete log was kept); `archive_cas_gc --execute` removed 76,332
+(its delete log was kept by hand); `archive_cas_gc --execute` removed 76,332
 objects, 14.16 GiB, and the volume went from 37 to 22 GiB used. A second
-`archive_cas_verify` afterwards: 7,399 objects, complete.
+`archive_cas_verify` afterwards: 7,399 objects, complete. Pruning deleted the
+`d8ec110f` manifest, signature and stored manifest object, so that version
+can no longer be checked; that is why `archive_cas_prune_manifests` was
+removed the same day (see "Changing an archive" below, and the lessons in
+[PUDDING_CAS_PQ_MODEL.md](PUDDING_CAS_PQ_MODEL.md)).
 
 ## Commands
 
@@ -235,6 +239,32 @@ is copied through a temporary sibling, then BLAKE3-checked against its archive
 object before it is published. This is intentionally a narrow recovery drill:
 it restores selected regular-file paths only, does not recreate symlinks, and
 does not yet reapply timestamps or ownership.
+
+## Changing an archive
+
+A change never edits a version in place: `archive_cas_remove`,
+`archive_cas_add`, `archive_cas_exclude` and the browser write a new version
+that names the one it supersedes. Freeing the space a removal leaves is a
+separate, deliberate step:
+
+1. Sign the new version (`archive_cas_sign sign`, or the browser's Sign).
+2. `archive_cas_purge --cas-root R` prints the plan;
+   `--execute <plan-id>` carries it out. A superseded version is **retired**
+   once a later version of its archive is signed by the trusted key
+   (`--trusted-public-key`, default: the one `*.dilithium2.pub` in
+   `~/.loadngo/keys`). A retired version keeps its manifest, its stored
+   manifest object, its signature and its logs; only the objects no live
+   version lists are deleted. A superseded version without a signed later
+   version is listed as not retired, and nothing of it is deleted.
+3. `archive_cas_verify` on a retired version verifies every object it still
+   has and counts the rest as dropped on retirement, naming the signed later
+   version.
+
+So the history of an archive stays: every version it had can be listed,
+checked against its signature and verified, even after its unique bytes are
+gone. Only `archive_cas_purge --delete-archive` deletes manifests, every
+version of that one archive. `archive_cas_gc` counts every manifest on disk,
+retired ones included, so it frees only strays an interrupted run left.
 
 ## Scope and future promotion
 

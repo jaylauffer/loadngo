@@ -182,6 +182,33 @@ pub fn read_public_key(path: &Path) -> Result<PublicKey> {
     read_key(path, |b| PublicKey::from_bytes(b).map_err(Into::into))
 }
 
+/// The trusted public key when none is named: the one `*.dilithium2.pub` file in
+/// `~/.loadngo/keys`, where `archive_cas_sign` keys live. `None` when there is no such
+/// file, or more than one (then a key must be named).
+///
+/// # Errors
+/// When the one key file found cannot be read.
+pub fn default_trusted_key() -> Result<Option<PublicKey>> {
+    let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) else {
+        return Ok(None);
+    };
+    let Ok(entries) = std::fs::read_dir(Path::new(&home).join(".loadngo").join("keys")) else {
+        return Ok(None);
+    };
+    let keys: Vec<_> = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(".dilithium2.pub"))
+        })
+        .collect();
+    match keys.as_slice() {
+        [key] => read_public_key(key).map(Some),
+        _ => Ok(None),
+    }
+}
+
 pub fn read_private_key(path: &Path) -> Result<PrivateKey> {
     read_key(path, |b| PrivateKey::from_bytes(b).map_err(Into::into))
 }

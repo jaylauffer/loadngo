@@ -50,8 +50,7 @@ fn run() -> Result<()> {
         args.cas_root.display(),
         manifest_path.display()
     );
-    println!("  2. Once you're satisfied, archive_cas_prune_manifests to retire the old manifest/signature.");
-    println!("  3. archive_cas_gc --dry-run to see what disk space the removal frees.");
+    println!("  2. archive_cas_purge --cas-root {} to free the removed files' space; the old version's manifest and signature stay.", args.cas_root.display());
     Ok(())
 }
 

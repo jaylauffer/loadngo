@@ -177,7 +177,8 @@ fn usage() -> Usage {
     const NOTES: &[&str] = &[
         "Dry-run by default; reports blob objects no manifest in the CAS root references.",
         "Scans every manifest still on disk, not just one archive id, before treating anything as orphaned.",
-        "The only step in the delete/GC toolchain that frees disk space, and the only irreversible one -- run archive_cas_verify on anything you still care about first if in doubt.",
+        "Every manifest on disk counts, retired versions included, so this frees only strays (objects an interrupted run left). To free the space removed files take, use archive_cas_purge: it retires the old version under a signed later one and keeps its manifest and signature.",
+        "Irreversible -- run archive_cas_verify on anything you still care about first if in doubt.",
     ];
     Usage {
         bin: "archive_cas_gc",

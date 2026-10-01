@@ -3,7 +3,7 @@
 Every standalone loadngo binary -- the Archive CAS family
 (`archive_cas_ingest`, `archive_cas_verify`, `archive_cas_sign`,
 `archive_cas_gc`, `archive_cas_exclude`, `archive_cas_remove`,
-`archive_cas_restore`, `archive_cas_prune_manifests`,
+`archive_cas_restore`, `archive_cas_purge`,
 `archive_cas_browser`), `pudding_cas_ingest`/`pudding_cas_verify`, and every
 test harness under `*/src/bin/` -- is run by hand, from memory, often months
 apart, by whichever agent or person is on call. There is no shell history to
