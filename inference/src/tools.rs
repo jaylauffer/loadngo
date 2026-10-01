@@ -169,7 +169,9 @@ pub fn numbered_lines(text: &str, start: usize, count: usize) -> String {
             );
             return out;
         }
-        let _ = writeln!(out, "{:>5}  {line}", i + 1);
+        // No space after the bar: a model copying a line for an exact-match edit took
+        // the two spaces that used to separate number and text as indentation.
+        let _ = writeln!(out, "{:>5}|{line}", i + 1);
     }
     if start.saturating_sub(1) + count < total {
         let _ = writeln!(
@@ -420,7 +422,7 @@ impl Tool for FsRead {
         "fs_read"
     }
     fn description(&self) -> &'static str {
-        "Read a text file on the local drive (read-only), with line numbers. At most 16 KiB per call; use line_start/line_count for more."
+        "Read a text file on the local drive (read-only). Each line is shown as number|text; the text starts right after the bar. At most 16 KiB per call; use line_start/line_count for more."
     }
     fn parameters(&self) -> Value {
         json!({"type": "object", "properties": {
@@ -715,7 +717,7 @@ mod tests {
         let dir = scratch("read");
         let tools = toolbox(&dir);
         let read = tools.call("fs_read", r#"{"path": "src/lib.rs"}"#).unwrap();
-        assert!(read.contains("    2  // needle here"));
+        assert!(read.contains("    2|// needle here"));
         let found = tools.call("fs_find", r#"{"pattern": "**/*.rs"}"#).unwrap();
         assert!(found.contains("src/nested/deep.rs") && !found.contains("target/"));
         let grep = tools.call("fs_grep", r#"{"pattern": "needle"}"#).unwrap();
