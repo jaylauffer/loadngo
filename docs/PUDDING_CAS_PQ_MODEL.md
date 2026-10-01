@@ -529,6 +529,8 @@ separate origins are the same, listing how they differ, and recording a
 signed resolution that keeps both origins. Byte equality is one proposal
 among several, not the definition of sameness.
 
+The design for that shared model is [RECONCILIATION.md](RECONCILIATION.md).
+
 ### What held up
 
 - An object is named by the hash of its uncompressed bytes, so compression
