@@ -204,10 +204,9 @@ The existing modified app `Cargo.lock` on dolores was left untouched.
   Clippy passed from macOS. Audio-crate formatting passed. This change is
   Linux-only and does not alter any shared enum or public API.
 
-The fix is not published to GitHub yet. Run the rebuilt executable directly
-on dolores; rebuilding against the app's unchanged published Git pin does
-not include this fix. After publication, advance the app's loadngo pin and
-rebuild normally. All validation GUI sessions were stopped afterward.
+The initial validation used a local path patch before publication. Bass
+Blaster's subsequent 0.1.3 dependency update pins this fix for normal Git
+dependency builds. All validation GUI sessions were stopped afterward.
 
 ## iOS backend (playback)
 
