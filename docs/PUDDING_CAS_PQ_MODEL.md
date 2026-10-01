@@ -498,9 +498,15 @@ synchronised between machines:
   `Undo::Clear()` later drops the contents and keeps the record. That is
   lesson 1: drop the data, keep the record.
 - `Moved`, `Merged` and `Deleted` are typed change records, each tied to the
-  entity's stable origin id. That is lesson 2, and it adds what the CAS
-  lacks: a stable identity, so a renamed or moved file is one subject with a
-  move record rather than a removal plus an addition.
+  entity's origin id. That is lesson 2. The origin id is provenance, not
+  content: it says which creation an entity descends from, so two entities
+  with identical contents from separate origins stay distinct, and one
+  entity keeps its identity while its contents change and it moves. The CAS
+  names content (the object hash) and records a path as an entry's
+  attribute, but has no provenance: across versions a file can only be
+  followed by matching paths or hashes. That breaks when a file is moved and
+  edited in the same change, and is ambiguous for duplicates; before the
+  cleanup, `pudding-20260917` had 157,874 files over 83,730 distinct objects.
 - A move chain is consolidated since the last concluded sync
   (`ConsolidateMovesSince`, `MakeCourse`); peers exchange chains, find
   discrepancies (`Conflict::Moved`, `Conflict::Deleted`), record the chosen
