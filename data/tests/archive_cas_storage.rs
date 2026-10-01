@@ -1,5 +1,5 @@
 use data::archive_cas::{
-    ArchiveCasStorage, ArchiveEntry, ArchiveManifest, ArchiveObject, ARCHIVE_MANIFEST_FORMAT_V2,
+    ArchiveCasStorage, ArchiveEntry, ArchiveManifest, ArchiveObject, ARCHIVE_MANIFEST_FORMAT_V3,
 };
 use data::cas::CasHash;
 use tempfile::tempdir;
@@ -44,7 +44,7 @@ fn manifest_explicitly_marks_an_unreadable_source_entry_incomplete() {
     )
     .unwrap();
 
-    assert_eq!(manifest.format, ARCHIVE_MANIFEST_FORMAT_V2);
+    assert_eq!(manifest.format, ARCHIVE_MANIFEST_FORMAT_V3);
     assert!(!manifest.is_complete());
     assert_eq!(manifest.unreadable_entry_count(), 1);
     assert!(manifest
@@ -72,15 +72,19 @@ fn owner_approved_exclusion_supersedes_an_unreadable_manifest_root() {
         .with_owner_approved_exclusion(
             "lost-entry.ipa",
             "owner-approved source exclusion",
+            "jay",
             1_700_000_001,
         )
         .unwrap();
 
     assert!(amended.is_complete());
     assert_eq!(amended.excluded_entry_count(), 1);
+    assert_eq!(amended.parents(), vec![unresolved.digest().unwrap()]);
     assert_eq!(
-        amended.supersedes_archive_root,
-        Some(unresolved.digest().unwrap())
+        amended.records[0].change,
+        data::archive_cas::ArchiveChange::Changed {
+            paths: vec!["lost-entry.ipa".to_string()]
+        }
     );
     assert!(matches!(
         amended.entries.as_slice(),

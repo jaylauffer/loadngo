@@ -43,7 +43,7 @@ fn a_purged_version_keeps_its_manifest_and_signature_and_verifies_as_retired() {
     let v1 =
         ArchiveManifest::new("docs", "Docs", 1, vec![secret, file("keep.txt", b"kept")]).unwrap();
     let (v1_path, _) = store.write_manifest(&v1).unwrap();
-    let (v2, _) = v1
+    let v2 = v1
         .with_entries_removed(&["secret.conf".to_string()], "leaked key", "jay", 2)
         .unwrap();
     let (v2_path, _) = store.write_manifest(&v2).unwrap();
@@ -131,4 +131,93 @@ fn a_purged_version_keeps_its_manifest_and_signature_and_verifies_as_retired() {
         !ok && out.contains("no later version is signed by the trusted key"),
         "{out}"
     );
+}
+
+#[test]
+fn upgrade_moves_old_logs_into_a_v3_version_and_restore_gets_them_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("cas");
+    let store = ArchiveCasStorage::new(&root).unwrap();
+    let object = store.add_content(b"kept").unwrap().object;
+    let mut v2 = ArchiveManifest::new(
+        "docs",
+        "Docs",
+        1,
+        vec![ArchiveEntry::File {
+            path: "keep.txt".into(),
+            object,
+            modified_at_unix_secs: None,
+        }],
+    )
+    .unwrap();
+    // A version written before v3, with a delete log beside it.
+    v2.format = data::archive_cas::ARCHIVE_MANIFEST_FORMAT_V2.into();
+    v2.supersedes_archive_root = Some(data::cas::CasHash::digest(b"long gone"));
+    let (v2_path, _) = store.write_manifest(&v2).unwrap();
+    let stem = v2_path.file_stem().unwrap().to_str().unwrap();
+    let log = root
+        .join("manifests")
+        .join(format!("{stem}.delete-log.json"));
+    let log_bytes = br#"{"format":"loadngo-archive-delete-log-v1","removed_paths":["x"]}"#;
+    std::fs::write(&log, log_bytes).unwrap();
+
+    let upgrade = env!("CARGO_BIN_EXE_archive_cas_upgrade");
+    let verify = env!("CARGO_BIN_EXE_archive_cas_verify");
+    let restore = env!("CARGO_BIN_EXE_archive_cas_restore");
+    let home = dir.path();
+    let (root_arg, log_arg) = (root.to_str().unwrap(), log.to_str().unwrap());
+    let base = [
+        "--cas-root",
+        root_arg,
+        "--archive",
+        "docs",
+        "--attach",
+        log_arg,
+    ];
+
+    let (ok, out) = run(upgrade, home, &[&base[..], &["--dry-run"]].concat());
+    assert!(ok && out.contains("Dry run: nothing written."), "{out}");
+    assert!(log.exists());
+
+    let (ok, out) = run(upgrade, home, &base);
+    assert!(
+        ok && out.contains("log files removed from manifests/: 1"),
+        "{out}"
+    );
+    assert!(!log.exists(), "the log now lives in the store");
+    let v3_path = out
+        .lines()
+        .find_map(|l| l.strip_prefix("New version: "))
+        .unwrap()
+        .to_string();
+    let v3 = store.read_manifest(&v3_path).unwrap();
+    assert_eq!(v3.format, data::archive_cas::ARCHIVE_MANIFEST_FORMAT_V3);
+    assert_eq!(v3.entries, v2.entries);
+    assert_eq!(v3.parents(), vec![v2.digest().unwrap()]);
+
+    let (ok, out) = run(
+        verify,
+        home,
+        &["--cas-root", root_arg, "--manifest", &v3_path],
+    );
+    assert!(ok && out.contains("Attachments verified"), "{out}");
+
+    let back = dir.path().join("restored");
+    let name = format!("{stem}.delete-log.json");
+    let (ok, out) = run(
+        restore,
+        home,
+        &[
+            "--cas-root",
+            root_arg,
+            "--manifest",
+            &v3_path,
+            "--destination",
+            back.to_str().unwrap(),
+            "--path",
+            &name,
+        ],
+    );
+    assert!(ok, "{out}");
+    assert_eq!(std::fs::read(back.join(&name)).unwrap(), log_bytes);
 }

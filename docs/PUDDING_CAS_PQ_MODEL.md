@@ -442,8 +442,13 @@ and for a merge the archives combined) belongs inside the new version's
 manifest, before its entries, so the root's hash and signature cover it and a
 lister can read it from the header.
 
-Not done yet: its format waits on the consolidation with Task below, so the
-store does not get a CAS-only record that Task then has to translate.
+Done 2026-10-01, as step 1 of [RECONCILIATION.md](RECONCILIATION.md):
+manifest v3 lists its `parents` (several for a merge) and its change
+`records` (`created`, `changed`, `moved`, `deleted`, `derived`, each with
+paths, actor, time and reason) before its entries; no tool writes a sidecar
+log any more, and `archive_cas_upgrade` moves an archive's old logs into a
+v3 version as unverified history. See "How a version was made" in
+[ARCHIVE_CAS.md](ARCHIVE_CAS.md).
 
 ### 3. Every version is one flat list
 

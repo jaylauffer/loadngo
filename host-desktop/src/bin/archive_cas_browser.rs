@@ -1130,17 +1130,13 @@ impl ArchiveCatalog {
                     .file_name()
                     .and_then(|name| name.to_str())
                     .unwrap_or_default();
-                // Signatures and delete/add/merge logs sit beside the manifests.
+                // Signatures, and logs written before manifest v3, sit beside the
+                // manifests.
                 if !name.ends_with(".json")
-                    || [
-                        ".signature.json",
-                        ".delete-log.json",
-                        ".add-log.json",
-                        ".merge-log.json",
-                        ".unpack-log.json",
-                    ]
-                    .iter()
-                    .any(|sidecar| name.ends_with(sidecar))
+                    || name.ends_with(".signature.json")
+                    || data::archive_cas::LEGACY_LOG_SUFFIXES
+                        .iter()
+                        .any(|sidecar| name.ends_with(sidecar))
                 {
                     continue;
                 }
@@ -1181,13 +1177,13 @@ impl ArchiveCatalog {
             );
         }
 
-        // A version is superseded when some other manifest's
-        // `supersedes_archive_root` names its root -- the append-only chain
-        // is the source of truth for "current," not recency of timestamp
+        // A version is superseded when some other manifest names its root as
+        // a parent (a later version, or an archive it was merged into) -- the
+        // chain is the source of truth for "current," not recency of timestamp
         // alone (a stray older file could otherwise look current).
         let superseded_roots: std::collections::BTreeSet<String> = archives
             .iter()
-            .filter_map(|archive| archive.manifest.supersedes_archive_root)
+            .flat_map(|archive| archive.manifest.parents())
             .map(|hash| hash.to_hex())
             .collect();
         for archive in &mut archives {
@@ -1233,9 +1229,8 @@ struct ArchiveRecord {
     manifest: ArchiveManifest,
     summary: ArchiveSummary,
     /// Set by `ArchiveCatalog::read` after loading every manifest: true when
-    /// some other manifest in the catalog names this one as its
-    /// `supersedes_archive_root`, i.e. this is history, not the current
-    /// version of its archive_id.
+    /// some other manifest in the catalog names this one as a parent, i.e.
+    /// this is history, not the current version of its archive_id.
     is_superseded: bool,
 }
 
@@ -1998,8 +1993,8 @@ impl BrowserApp {
         }
     }
 
-    /// Writes the superseding manifest and delete-log sidecar, then reloads
-    /// the catalog onto the new manifest. The old manifest, its signature,
+    /// Writes the new version, whose change record names the removed paths,
+    /// then reloads the catalog onto it. The old manifest, its signature,
     /// and every blob object are left untouched -- re-signing, history
     /// pruning, and blob GC are separate, deliberate steps run from the
     /// command line afterward.
@@ -2017,14 +2012,13 @@ impl BrowserApp {
             let actor = std::env::var("USER")
                 .or_else(|_| std::env::var("USERNAME"))
                 .unwrap_or_else(|_| "unknown".to_string());
-            let (amended, log) = manifest.with_entries_removed(
+            let amended = manifest.with_entries_removed(
                 &pending.paths,
                 "Removed via Archive CAS browser (manual review)",
                 actor,
                 now,
             )?;
             let (manifest_path, _root) = store.write_manifest(&amended)?;
-            store.write_delete_log(&manifest_path, &log)?;
             Ok(manifest_path)
         })();
         match result {
@@ -2397,8 +2391,8 @@ impl BrowserApp {
             .map(|(_, info)| info)
     }
 
-    /// The record whose `supersedes_archive_root` names `record`'s own
-    /// root, if `record.is_superseded`. `None` for a current version, even
+    /// The record that names `record`'s own root as a parent, if
+    /// `record.is_superseded`. `None` for a current version, even
     /// if the search hasn't run -- callers only care about this when
     /// `is_superseded` is already true.
     fn successor_of(&self, record: &ArchiveRecord) -> Option<&ArchiveRecord> {
@@ -2408,8 +2402,9 @@ impl BrowserApp {
         self.catalog.archives.iter().find(|candidate| {
             candidate
                 .manifest
-                .supersedes_archive_root
-                .is_some_and(|root| root.to_hex() == record.summary.root)
+                .parents()
+                .iter()
+                .any(|root| root.to_hex() == record.summary.root)
         })
     }
 
@@ -2651,7 +2646,7 @@ impl BrowserApp {
         // look identical in this list.
         let (version_label, version_color) = if archive.is_superseded {
             ("Superseded", MUTED)
-        } else if archive.manifest.supersedes_archive_root.is_some() {
+        } else if !archive.manifest.parents().is_empty() {
             ("Current (edited)", COMPLETE)
         } else {
             ("Current", COMPLETE)
@@ -2992,8 +2987,8 @@ impl BrowserApp {
                 ),
                 CAUTION,
             )
-        } else if record.manifest.supersedes_archive_root.is_some() {
-            ("Current (edits an earlier capture)".to_string(), COMPLETE)
+        } else if !record.manifest.parents().is_empty() {
+            ("Current (from an earlier version)".to_string(), COMPLETE)
         } else {
             ("Current".to_string(), COMPLETE)
         };

@@ -1,6 +1,6 @@
 //! Unpacks the zips in an archive (.zip, .ipa, .jar, .apk; zips inside them too), so
 //! their contents are stored and deduplicated as ordinary files. Writes a new version of
-//! the archive and an unpack log; deletes nothing. The zips' own bytes stay stored until
+//! the archive, whose change record names each zip; deletes nothing. The zips' own bytes stay stored until
 //! the superseded version is purged (archive_cas_purge, or the browser's Purge drive).
 
 use anyhow::{bail, Context, Result};
@@ -87,7 +87,7 @@ fn run() -> Result<()> {
         .duration_since(UNIX_EPOCH)
         .context("system clock is before the Unix epoch")?
         .as_secs();
-    let (unpacked, log) = unpack_zips(
+    let (unpacked, report) = unpack_zips(
         &store,
         &manifest,
         root,
@@ -106,27 +106,32 @@ fn run() -> Result<()> {
             UnpackProgress::Skipped { path, reason } => eprintln!("left whole {path}: {reason}"),
         },
     )?;
+    let Some(unpacked) = unpacked else {
+        println!(
+            "No zip could be unpacked ({} left whole); nothing written.",
+            report.skipped.len()
+        );
+        return Ok(());
+    };
     let (path, new_root) = store.write_manifest(&unpacked)?;
-    let log_path = store.write_sidecar(&path, "unpack-log", &log)?;
-    let zip_bytes: u64 = log.unpacked.iter().map(|z| z.object.size).sum();
+    let zip_bytes: u64 = report.unpacked.iter().map(|z| z.object.size).sum();
     println!("New version of {archive}: {}", path.display());
     println!(
-        "Root: {} (supersedes {})",
+        "Root: {} (made from {})",
         new_root.hash,
         &root.to_hex()[..12]
     );
-    println!("Unpack log: {}", log_path.display());
     println!(
         "Unpacked {} zips ({} stored); {} left whole.",
-        log.unpacked.len(),
+        report.unpacked.len(),
         gib(zip_bytes),
-        log.skipped.len()
+        report.skipped.len()
     );
     println!(
         "Members: {} newly stored ({}), {} already stored (deduplicated).",
-        log.new_objects,
-        gib(log.new_object_bytes),
-        log.reused_objects
+        report.new_objects,
+        gib(report.new_object_bytes),
+        report.reused_objects
     );
     println!();
     println!("Nothing was deleted. Purging the superseded version frees the zips' own bytes");
@@ -158,12 +163,12 @@ fn usage() -> Usage {
         ArgDoc::optional(
             "--reason",
             "<why>",
-            "recorded in the unpack log (required unless --dry-run)",
+            "recorded in the new version's change record (required unless --dry-run)",
         ),
         ArgDoc::optional(
             "--actor",
             "<who>",
-            "recorded in the unpack log (required unless --dry-run)",
+            "recorded in the new version's change record (required unless --dry-run)",
         ),
     ];
     const EXAMPLES: &[&str] = &[
@@ -172,7 +177,7 @@ fn usage() -> Usage {
     const NOTES: &[&str] = &[
         "Unpacks .zip, .ipa, .jar and .apk; Office documents (.docx, ...) stay whole.",
         "A zip with encrypted members, unsupported compression, unsafe names or a CRC mismatch is left whole and listed.",
-        "Writes a new version and an unpack log; deletes nothing.",
+        "Writes a new version whose change record names each zip unpacked; deletes nothing.",
     ];
     Usage {
         bin: "archive_cas_unpack",

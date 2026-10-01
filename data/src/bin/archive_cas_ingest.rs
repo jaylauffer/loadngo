@@ -71,9 +71,10 @@ fn run() -> Result<()> {
                 }
             },
         )?;
-        let (path, object) = store.write_manifest(&unpacked)?;
-        let log_path = store.write_sidecar(&path, "unpack-log", &log)?;
-        Some((path, object, log_path, log))
+        let written = unpacked
+            .map(|unpacked| store.write_manifest(&unpacked))
+            .transpose()?;
+        Some((written, log))
     };
 
     println!("Archive CAS root: {}", store.root().display());
@@ -102,7 +103,7 @@ fn run() -> Result<()> {
     println!("Deduplicated files: {}", stats.deduplicated_files);
     println!("Journal-reused files: {}", stats.journal_reused_files);
     println!("Resumed source bytes: {}", stats.resumed_bytes);
-    if let Some((path, object, log_path, log)) = unpacked {
+    if let Some((written, log)) = unpacked {
         println!(
             "Zips unpacked: {} ({} left whole)",
             log.unpacked.len(),
@@ -112,13 +113,14 @@ fn run() -> Result<()> {
             "Zip members newly stored: {} ({} bytes); already stored: {}",
             log.new_objects, log.new_object_bytes, log.reused_objects
         );
-        println!("Current manifest (zips unpacked): {}", path.display());
-        println!("Current root object: {}", object.hash);
-        println!("Unpack log: {}", log_path.display());
-        println!(
-            "The capture above is superseded; purging it frees the zips' own bytes \
-             (archive_cas_purge, or the browser's Purge drive)."
-        );
+        if let Some((path, object)) = written {
+            println!("Current manifest (zips unpacked): {}", path.display());
+            println!("Current root object: {}", object.hash);
+            println!(
+                "The capture above is superseded; purging it frees the zips' own bytes \
+                 (archive_cas_purge, or the browser's Purge drive)."
+            );
+        }
     }
     Ok(())
 }

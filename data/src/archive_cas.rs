@@ -15,9 +15,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const ARCHIVE_CAS_FORMAT_V1: &str = "loadngo-archive-cas-v1";
 pub const ARCHIVE_MANIFEST_FORMAT_V1: &str = "loadngo-archive-manifest-v1";
 pub const ARCHIVE_MANIFEST_FORMAT_V2: &str = "loadngo-archive-manifest-v2";
-pub const ARCHIVE_DELETE_LOG_FORMAT_V1: &str = "loadngo-archive-delete-log-v1";
-pub const ARCHIVE_ADD_LOG_FORMAT_V1: &str = "loadngo-archive-add-log-v1";
-pub const ARCHIVE_MERGE_LOG_FORMAT_V1: &str = "loadngo-archive-merge-log-v1";
+/// Adds parents (more than one for a merge), change records and attachments; see
+/// [`ArchiveManifest`].
+pub const ARCHIVE_MANIFEST_FORMAT_V3: &str = "loadngo-archive-manifest-v3";
+/// The file name endings of the sidecar logs written beside manifests before v3. They
+/// are not manifests; `archive_cas_upgrade` attaches them to a v3 version.
+pub const LEGACY_LOG_SUFFIXES: &[&str] = &[
+    ".delete-log.json",
+    ".add-log.json",
+    ".merge-log.json",
+    ".unpack-log.json",
+];
 pub const DEFAULT_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 pub const ARCHIVE_COMPRESSION_FORMAT_V1: &str = "loadngo-archive-cas-compression-v1";
 /// How a valid `CACHEDIR.TAG` starts (<https://bford.info/cachedir/>). Cargo writes one in
@@ -62,61 +70,139 @@ pub struct ArchiveCompression {
     pub level: i32,
 }
 
-/// A record of a manual content removal: which paths were dropped from a
-/// manifest, by whom, and why. Written as a sidecar next to the superseding
-/// manifest it describes; it is not itself a CAS object, so it carries no
-/// content-address guarantee of its own -- the manifest chain
-/// (`supersedes_archive_root`) is the tamper-evident record, this is the
-/// human-readable explanation alongside it.
+/// One change that made a version from its parents: what kind, the paths it named,
+/// who made it, when and why. A v3 manifest lists its records before its entries, so
+/// the root's hash and signature cover them, and a lister reads them from the header.
+/// See `docs/RECONCILIATION.md`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ArchiveDeleteLog {
-    pub format: String,
-    pub archive_id: String,
-    pub base_manifest_root: CasHash,
-    pub superseding_manifest_root: CasHash,
-    pub removed_at_unix_secs: u64,
+pub struct ArchiveRecord {
     pub actor: String,
+    pub at_unix_secs: u64,
     pub reason: String,
-    pub removed_paths: Vec<String>,
+    pub change: ArchiveChange,
 }
 
-/// A record of content added to an archive after it was captured: which paths, by
-/// whom, and why. The counterpart of [`ArchiveDeleteLog`], written as an
-/// `.add-log.json` sidecar next to the superseding manifest; the manifest chain is the
-/// tamper-evident record, this is the explanation.
+/// What an [`ArchiveRecord`] changed. Paths are as named by whoever made the change: a
+/// removed directory is one path, not one per file below it. What each path held before
+/// is in the parent version.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ArchiveAddLog {
-    pub format: String,
-    pub archive_id: String,
-    pub base_manifest_root: CasHash,
-    pub superseding_manifest_root: CasHash,
-    pub added_at_unix_secs: u64,
-    pub actor: String,
-    pub reason: String,
-    pub added_paths: Vec<String>,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ArchiveChange {
+    /// New entries (`archive_cas_add`), with any directories made to hold them.
+    Created { paths: Vec<String> },
+    /// Entries whose state changed in place: an unreadable entry excluded by its owner.
+    Changed { paths: Vec<String> },
+    /// Entries placed somewhere else: for a merge, each parent's tree under a folder.
+    Moved { moves: Vec<ArchiveMove> },
+    /// Entries removed, a directory with everything below it.
+    Deleted { paths: Vec<String> },
+    /// Files that became others: each zip became a folder of its members at its path.
+    Derived { paths: Vec<String> },
 }
 
-/// Why a merged manifest exists: which archives it combines, each under which folder.
-/// Written beside the merged manifest as `{stem}.merge-log.json`.
+/// One placement change in [`ArchiveChange::Moved`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ArchiveMergeLog {
-    pub format: String,
-    pub archive_id: String,
-    pub merged_manifest_root: CasHash,
-    pub merged_at_unix_secs: u64,
-    pub actor: String,
-    pub reason: String,
-    pub sources: Vec<ArchiveMergeSource>,
+pub struct ArchiveMove {
+    /// The parent version the entries come from.
+    pub parent: CasHash,
+    /// Their path there; empty for that version's whole tree.
+    pub from: String,
+    pub to: String,
 }
 
-/// One archive a merged manifest contains.
+/// A file kept with a version as it was found, not as a record of the version's own
+/// making: the sidecar logs that described changes before v3, attached unchanged by
+/// `archive_cas_upgrade`. Nothing vouches for what they say.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ArchiveMergeSource {
-    pub archive_id: String,
-    pub source_label: String,
-    pub manifest_root: CasHash,
-    /// The folder its entries sit under in the merged manifest.
-    pub under: String,
+pub struct ArchiveAttachment {
+    /// Its file name where it was found.
+    pub name: String,
+    pub object: ArchiveObject,
+}
+
+impl ArchiveRecord {
+    /// # Errors
+    /// An empty actor or reason.
+    pub fn new(
+        change: ArchiveChange,
+        actor: impl Into<String>,
+        reason: impl Into<String>,
+        at_unix_secs: u64,
+    ) -> Result<Self> {
+        let record = Self {
+            actor: actor.into(),
+            at_unix_secs,
+            reason: reason.into(),
+            change,
+        };
+        record.validate()?;
+        Ok(record)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.actor.trim().is_empty() {
+            bail!("a change record needs an actor");
+        }
+        if self.reason.trim().is_empty() {
+            bail!("a change record needs a reason");
+        }
+        let paths: Vec<&str> = match &self.change {
+            ArchiveChange::Created { paths }
+            | ArchiveChange::Changed { paths }
+            | ArchiveChange::Deleted { paths }
+            | ArchiveChange::Derived { paths } => paths.iter().map(String::as_str).collect(),
+            ArchiveChange::Moved { moves } => {
+                for one in moves {
+                    if !one.from.is_empty() {
+                        validate_relative_path(&one.from)?;
+                    }
+                }
+                moves.iter().map(|one| one.to.as_str()).collect()
+            }
+        };
+        if paths.is_empty() {
+            bail!("a change record names no paths");
+        }
+        for path in paths {
+            validate_relative_path(path)?;
+        }
+        Ok(())
+    }
+
+    /// `deleted 3 paths: a, b, c` and so on, for a listing.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        let (verb, names): (&str, Vec<String>) = match &self.change {
+            ArchiveChange::Created { paths } => ("created", paths.clone()),
+            ArchiveChange::Changed { paths } => ("changed", paths.clone()),
+            ArchiveChange::Deleted { paths } => ("deleted", paths.clone()),
+            ArchiveChange::Derived { paths } => ("unpacked", paths.clone()),
+            ArchiveChange::Moved { moves } => (
+                "moved",
+                moves
+                    .iter()
+                    .map(|one| {
+                        let from = if one.from.is_empty() { "/" } else { &one.from };
+                        format!("{from} of {} to {}", &one.parent.to_hex()[..12], one.to)
+                    })
+                    .collect(),
+            ),
+        };
+        const SHOWN: usize = 3;
+        let mut text = format!(
+            "{verb} {} {}",
+            names.len(),
+            if names.len() == 1 { "path" } else { "paths" }
+        );
+        for (index, name) in names.iter().take(SHOWN).enumerate() {
+            text.push_str(if index == 0 { ": " } else { ", " });
+            text.push_str(name);
+        }
+        if names.len() > SHOWN {
+            text.push_str(&format!(", and {} more", names.len() - SHOWN));
+        }
+        text
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,6 +218,17 @@ pub struct ArchiveIngestResult {
     pub resumed_bytes: u64,
 }
 
+/// One version of an archive: everything it holds (`entries`) and, from v3, how it was
+/// made. Its root is the BLAKE3 hash of its canonical bytes, which is what a signature
+/// signs.
+///
+/// - v1 and v2 name at most one version they replace (`supersedes_archive_root`); why
+///   was in sidecar logs beside the manifest file, outside the hash.
+/// - v3 names its `parents` (none for a fresh capture, one for an edit, one per source
+///   for a merge) and the `records` of the changes that made it from them, before its
+///   entries, so the root covers them. `unverified_history` holds files attached as
+///   found (the old sidecar logs); the root covers their bytes, nothing vouches for
+///   their content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArchiveManifest {
     pub format: String,
@@ -140,6 +237,12 @@ pub struct ArchiveManifest {
     pub created_at_unix_secs: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supersedes_archive_root: Option<CasHash>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parents: Vec<CasHash>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub records: Vec<ArchiveRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unverified_history: Vec<ArchiveAttachment>,
     pub entries: Vec<ArchiveEntry>,
 }
 
@@ -198,6 +301,7 @@ impl ArchiveEntry {
 }
 
 impl ArchiveManifest {
+    /// A v3 manifest with no parents and no records: a fresh capture.
     pub fn new(
         archive_id: impl Into<String>,
         source_label: impl Into<String>,
@@ -214,37 +318,91 @@ impl ArchiveManifest {
         }
         validate_manifest_entries(&mut entries)?;
         Ok(Self {
-            format: ARCHIVE_MANIFEST_FORMAT_V2.to_string(),
+            format: ARCHIVE_MANIFEST_FORMAT_V3.to_string(),
             archive_id,
             source_label,
             created_at_unix_secs,
             supersedes_archive_root: None,
+            parents: Vec::new(),
+            records: Vec::new(),
+            unverified_history: Vec::new(),
             entries,
         })
     }
 
-    /// One manifest holding every entry of `sources`, each source's entries under its
-    /// folder (`under`, a relative path such as `Untitled/Documents`), with directory
-    /// entries for those folders. Objects are referenced as they are; nothing is copied,
-    /// so the sources must live in the same CAS root as the merged manifest.
+    /// The versions this one was made from: v3 `parents`, or the one root a v1 or v2
+    /// manifest supersedes.
+    #[must_use]
+    pub fn parents(&self) -> Vec<CasHash> {
+        self.supersedes_archive_root
+            .into_iter()
+            .chain(self.parents.iter().copied())
+            .collect()
+    }
+
+    /// Every file entry's path and object.
+    pub fn file_objects(&self) -> impl Iterator<Item = (&str, ArchiveObject)> {
+        self.entries.iter().filter_map(|entry| match entry {
+            ArchiveEntry::File { path, object, .. } => Some((path.as_str(), *object)),
+            _ => None,
+        })
+    }
+
+    /// The objects of [`Self::unverified_history`]. They are part of the version's
+    /// record, so a purge keeps them even when it retires the version.
+    pub fn attached_objects(&self) -> impl Iterator<Item = ArchiveObject> + '_ {
+        self.unverified_history
+            .iter()
+            .map(|attached| attached.object)
+    }
+
+    /// The next version of this archive: `entries`, made from this one by `record`.
+    fn successor(&self, entries: Vec<ArchiveEntry>, record: ArchiveRecord) -> Result<Self> {
+        let parent = self.digest()?;
+        let mut next = Self::new(
+            self.archive_id.clone(),
+            self.source_label.clone(),
+            record.at_unix_secs,
+            entries,
+        )?;
+        next.parents = vec![parent];
+        next.records = vec![record];
+        Ok(next)
+    }
+
+    /// One manifest holding every entry of `sources` (folder, manifest, its root), each
+    /// source's entries under its folder (`under`, a relative path such as
+    /// `Untitled/Documents`), with directory entries for those folders. Each source is a
+    /// parent, and one `Moved` record says where each went. Objects are referenced as
+    /// they are; nothing is copied, so the sources must live in the same CAS root as the
+    /// merged manifest.
     ///
     /// # Errors
     /// Invalid id or label, a folder that is not a clean relative path, two sources
-    /// under the same folder, or a source entry colliding with another's.
+    /// under the same folder, a source entry colliding with another's, or an empty
+    /// actor or reason.
     pub fn merged(
         archive_id: impl Into<String>,
         source_label: impl Into<String>,
         created_at_unix_secs: u64,
-        sources: &[(&str, &ArchiveManifest)],
+        sources: &[(&str, &ArchiveManifest, CasHash)],
+        actor: impl Into<String>,
+        reason: impl Into<String>,
     ) -> Result<Self> {
         let mut entries = Vec::new();
         let mut folders = std::collections::BTreeSet::new();
-        for (under, source) in sources {
+        let mut moves = Vec::new();
+        for (under, source, root) in sources {
             let under = under.trim_matches('/');
             validate_relative_path(under)?;
             if !folders.insert(under.to_string()) {
                 bail!("two sources are merged under {under:?}");
             }
+            moves.push(ArchiveMove {
+                parent: *root,
+                from: String::new(),
+                to: under.to_string(),
+            });
             for entry in &source.entries {
                 let mut entry = entry.clone();
                 let path = format!("{under}/{}", entry.path());
@@ -273,20 +431,53 @@ impl ArchiveManifest {
                 modified_at_unix_secs: None,
             });
         }
-        Self::new(archive_id, source_label, created_at_unix_secs, entries)
+        let record = ArchiveRecord::new(
+            ArchiveChange::Moved { moves },
+            actor,
+            reason,
+            created_at_unix_secs,
+        )?;
+        let mut merged = Self::new(archive_id, source_label, created_at_unix_secs, entries)?;
+        merged.parents = sources.iter().map(|(_, _, root)| *root).collect();
+        merged.records = vec![record];
+        Ok(merged)
     }
 
     pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
-        if self.format != ARCHIVE_MANIFEST_FORMAT_V1 && self.format != ARCHIVE_MANIFEST_FORMAT_V2 {
+        let v1 = self.format == ARCHIVE_MANIFEST_FORMAT_V1;
+        let v3 = self.format == ARCHIVE_MANIFEST_FORMAT_V3;
+        if !v1 && !v3 && self.format != ARCHIVE_MANIFEST_FORMAT_V2 {
             bail!("unsupported archive manifest format {:?}", self.format);
         }
-        if self.format == ARCHIVE_MANIFEST_FORMAT_V1
-            && (!self.is_complete() || self.excluded_entry_count() > 0)
-        {
+        if v1 && (!self.is_complete() || self.excluded_entry_count() > 0) {
             bail!("archive manifest v1 cannot represent unresolved or excluded source entries");
         }
-        if self.format == ARCHIVE_MANIFEST_FORMAT_V1 && self.supersedes_archive_root.is_some() {
+        if v1 && self.supersedes_archive_root.is_some() {
             bail!("archive manifest v1 cannot represent a superseded archive root");
+        }
+        if v3 && self.supersedes_archive_root.is_some() {
+            bail!("archive manifest v3 names its parents, not a superseded root");
+        }
+        if !v3
+            && !(self.parents.is_empty()
+                && self.records.is_empty()
+                && self.unverified_history.is_empty())
+        {
+            bail!("only archive manifest v3 holds parents, change records or attachments");
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        if let Some(twice) = self.parents.iter().find(|parent| !seen.insert(**parent)) {
+            bail!("parent {twice} is named twice");
+        }
+        for record in &self.records {
+            record.validate()?;
+        }
+        for attached in &self.unverified_history {
+            validate_relative_path(&attached.name)
+                .with_context(|| format!("attachment name {:?}", attached.name))?;
+            if attached.name.contains('/') {
+                bail!("attachment name {:?} is not a file name", attached.name);
+            }
         }
         if !is_archive_id(&self.archive_id) {
             bail!("archive_id must use lowercase letters, digits, and hyphens");
@@ -329,11 +520,13 @@ impl ArchiveManifest {
     }
 
     /// Replaces one unresolved source entry with a declared owner-approved
-    /// exclusion, producing a new immutable manifest that links to this root.
+    /// exclusion, producing a new immutable manifest made from this one by a `Changed`
+    /// record.
     pub fn with_owner_approved_exclusion(
         &self,
         path: &str,
         reason: impl Into<String>,
+        actor: impl Into<String>,
         created_at_unix_secs: u64,
     ) -> Result<Self> {
         let reason = reason.into();
@@ -349,39 +542,33 @@ impl ArchiveManifest {
         }
         *entry = ArchiveEntry::Excluded {
             path: path.to_string(),
-            reason,
+            reason: reason.clone(),
         };
-        let mut amended = Self::new(
-            self.archive_id.clone(),
-            self.source_label.clone(),
+        let record = ArchiveRecord::new(
+            ArchiveChange::Changed {
+                paths: vec![path.to_string()],
+            },
+            actor,
+            reason,
             created_at_unix_secs,
-            entries,
         )?;
-        amended.supersedes_archive_root = Some(self.digest()?);
-        Ok(amended)
+        self.successor(entries, record)
     }
 
-    /// Produces a new manifest with `added` entries alongside every existing one, and a
-    /// log describing the addition. Missing parent directories are created as
-    /// directory entries; an added directory that already exists is kept as it is. A
-    /// file, symlink or other entry whose path is already taken is refused: remove the
-    /// old one first, so nothing is replaced silently. The objects the added files
-    /// point at must already be stored (see [`ArchiveCasStorage::ingest_file`]).
+    /// Produces a new manifest with `added` entries alongside every existing one, made
+    /// from this one by a `Created` record naming them. Missing parent directories are
+    /// created as directory entries (and named too); an added directory that already
+    /// exists is kept as it is. A file, symlink or other entry whose path is already
+    /// taken is refused: remove the old one first, so nothing is replaced silently. The
+    /// objects the added files point at must already be stored (see
+    /// [`ArchiveCasStorage::ingest_file`]).
     pub fn with_entries_added(
         &self,
         added: Vec<ArchiveEntry>,
         reason: impl Into<String>,
         actor: impl Into<String>,
         created_at_unix_secs: u64,
-    ) -> Result<(Self, ArchiveAddLog)> {
-        let reason = reason.into();
-        let actor = actor.into();
-        if reason.trim().is_empty() {
-            bail!("addition reason must not be empty");
-        }
-        if actor.trim().is_empty() {
-            bail!("addition actor must not be empty");
-        }
+    ) -> Result<Self> {
         if added.is_empty() {
             bail!("nothing given to add");
         }
@@ -430,49 +617,27 @@ impl ArchiveManifest {
             bail!("everything given is already in the archive");
         }
         added_paths.sort();
-        let base_root = self.digest()?;
-        let mut amended = Self::new(
-            self.archive_id.clone(),
-            self.source_label.clone(),
-            created_at_unix_secs,
-            entries.into_values().collect(),
-        )?;
-        amended.supersedes_archive_root = Some(base_root);
-        let log = ArchiveAddLog {
-            format: ARCHIVE_ADD_LOG_FORMAT_V1.to_string(),
-            archive_id: self.archive_id.clone(),
-            base_manifest_root: base_root,
-            superseding_manifest_root: amended.digest()?,
-            added_at_unix_secs: created_at_unix_secs,
+        let record = ArchiveRecord::new(
+            ArchiveChange::Created { paths: added_paths },
             actor,
             reason,
-            added_paths,
-        };
-        Ok((amended, log))
+            created_at_unix_secs,
+        )?;
+        self.successor(entries.into_values().collect(), record)
     }
 
-    /// Produces a new manifest with the named entries removed, and a log
-    /// describing the removal. A directory path also drops everything
-    /// nested under it. This never touches blob objects or other manifest
-    /// files -- it is a purely logical, append-only edit; reclaiming the
-    /// disk space of any now-unreferenced blob is a separate, explicit GC
-    /// step that must first confirm no other manifest in the CAS root still
-    /// references that blob.
+    /// Produces a new manifest with the named entries removed, made from this one by a
+    /// `Deleted` record naming `paths` as given. A directory path also drops everything
+    /// nested under it. This never touches blob objects or other manifest files -- it
+    /// is a purely logical, append-only edit; reclaiming the disk space of any
+    /// now-unreferenced blob is `archive_cas_purge`, once the new version is signed.
     pub fn with_entries_removed(
         &self,
         paths: &[String],
         reason: impl Into<String>,
         actor: impl Into<String>,
         created_at_unix_secs: u64,
-    ) -> Result<(Self, ArchiveDeleteLog)> {
-        let reason = reason.into();
-        let actor = actor.into();
-        if reason.trim().is_empty() {
-            bail!("removal reason must not be empty");
-        }
-        if actor.trim().is_empty() {
-            bail!("removal actor must not be empty");
-        }
+    ) -> Result<Self> {
         if paths.is_empty() {
             bail!("no paths given to remove");
         }
@@ -508,34 +673,42 @@ impl ArchiveManifest {
         if remaining.len() == self.entries.len() {
             bail!("removal selection matched no manifest entries");
         }
-        let removed_paths: Vec<String> = self
-            .entries
-            .iter()
-            .map(|entry| entry.path())
-            .filter(|path| is_removed(path))
-            .map(str::to_string)
-            .collect();
+        let mut named: Vec<String> = drop_exact.into_iter().map(str::to_string).collect();
+        named.sort();
+        let record = ArchiveRecord::new(
+            ArchiveChange::Deleted { paths: named },
+            actor,
+            reason,
+            created_at_unix_secs,
+        )?;
+        self.successor(remaining, record)
+    }
 
-        let base_root = self.digest()?;
-        let mut amended = Self::new(
+    /// The same entries as a v3 version made from this one with no change, carrying
+    /// `attachments` as [`Self::unverified_history`]: how an archive written before v3
+    /// keeps its old sidecar logs inside the store.
+    ///
+    /// # Errors
+    /// No attachments, or one without a name.
+    pub fn with_unverified_history(
+        &self,
+        attachments: Vec<ArchiveAttachment>,
+        created_at_unix_secs: u64,
+    ) -> Result<Self> {
+        if attachments.is_empty() {
+            bail!("nothing to attach");
+        }
+        let parent = self.digest()?;
+        let mut next = Self::new(
             self.archive_id.clone(),
             self.source_label.clone(),
             created_at_unix_secs,
-            remaining,
+            self.entries.clone(),
         )?;
-        amended.supersedes_archive_root = Some(base_root);
-        let superseding_root = amended.digest()?;
-        let log = ArchiveDeleteLog {
-            format: ARCHIVE_DELETE_LOG_FORMAT_V1.to_string(),
-            archive_id: self.archive_id.clone(),
-            base_manifest_root: base_root,
-            superseding_manifest_root: superseding_root,
-            removed_at_unix_secs: created_at_unix_secs,
-            actor,
-            reason,
-            removed_paths,
-        };
-        Ok((amended, log))
+        next.parents = vec![parent];
+        next.unverified_history = attachments;
+        next.canonical_bytes()?;
+        Ok(next)
     }
 }
 
@@ -1471,97 +1644,6 @@ impl ArchiveCasStorage {
         Ok((manifest, CasHash::digest(&bytes)))
     }
 
-    /// Writes a delete-log sidecar next to the manifest it describes. Refuses
-    /// to overwrite an existing sidecar, same as every other write path here.
-    pub fn write_delete_log(
-        &self,
-        manifest_path: &Path,
-        log: &ArchiveDeleteLog,
-    ) -> Result<PathBuf> {
-        let stem = manifest_path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .ok_or_else(|| {
-                anyhow!(
-                    "manifest path has no usable file stem: {}",
-                    manifest_path.display()
-                )
-            })?;
-        let path = self.manifests.join(format!("{stem}.delete-log.json"));
-        let bytes = serde_json::to_vec_pretty(log).context("failed to serialize delete log")?;
-        write_synced_file(&path, &bytes)
-            .with_context(|| format!("failed to write delete log {}", path.display()))?;
-        sync_parent(&path)?;
-        Ok(path)
-    }
-
-    /// Writes an [`ArchiveAddLog`] as `{manifest stem}.add-log.json` beside the manifest.
-    /// Writes `value` as the `{stem}.{kind}.json` sidecar of the manifest at
-    /// `manifest_path` (for example `kind` = `"unpack-log"`). Refuses to overwrite.
-    pub fn write_sidecar<T: Serialize>(
-        &self,
-        manifest_path: &Path,
-        kind: &str,
-        value: &T,
-    ) -> Result<PathBuf> {
-        let stem = manifest_path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .ok_or_else(|| {
-                anyhow!(
-                    "manifest path has no usable file stem: {}",
-                    manifest_path.display()
-                )
-            })?;
-        let path = self.manifests.join(format!("{stem}.{kind}.json"));
-        if path.exists() {
-            bail!("{} already exists", path.display());
-        }
-        let bytes = serde_json::to_vec_pretty(value)
-            .with_context(|| format!("failed to serialize {kind}"))?;
-        write_synced_file(&path, &bytes)
-            .with_context(|| format!("failed to write {kind} {}", path.display()))?;
-        sync_parent(&path)?;
-        Ok(path)
-    }
-
-    /// Writes a merge-log sidecar next to the merged manifest it describes.
-    pub fn write_merge_log(&self, manifest_path: &Path, log: &ArchiveMergeLog) -> Result<PathBuf> {
-        let stem = manifest_path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .ok_or_else(|| {
-                anyhow!(
-                    "manifest path has no usable file stem: {}",
-                    manifest_path.display()
-                )
-            })?;
-        let path = self.manifests.join(format!("{stem}.merge-log.json"));
-        let bytes = serde_json::to_vec_pretty(log).context("failed to serialize merge log")?;
-        write_synced_file(&path, &bytes)
-            .with_context(|| format!("failed to write merge log {}", path.display()))?;
-        sync_parent(&path)?;
-        Ok(path)
-    }
-
-    pub fn write_add_log(&self, manifest_path: &Path, log: &ArchiveAddLog) -> Result<PathBuf> {
-        let stem = manifest_path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .ok_or_else(|| {
-                anyhow!(
-                    "manifest path has no usable file stem: {}",
-                    manifest_path.display()
-                )
-            })?;
-        let path = self.manifests.join(format!("{stem}.add-log.json"));
-        let bytes = serde_json::to_vec_pretty(log).context("failed to serialize add log")?;
-        write_synced_file(&path, &bytes)
-            .with_context(|| format!("failed to write add log {}", path.display()))?;
-        sync_parent(&path)?;
-        Ok(path)
-    }
-
     /// Every canonical manifest currently readable under `manifests/`, newest
     /// paths mixed with old ones -- callers that need "what's still live"
     /// (GC) must include every manifest here, since blobs are globally
@@ -1578,11 +1660,10 @@ impl ArchiveCasStorage {
                     .file_name()
                     .and_then(|name| name.to_str())
                     .is_some_and(|name| {
-                        name.ends_with(".delete-log.json")
-                            || name.ends_with(".add-log.json")
-                            || name.ends_with(".merge-log.json")
-                            || name.ends_with(".unpack-log.json")
-                            || name.ends_with(".signature.json")
+                        name.ends_with(".signature.json")
+                            || LEGACY_LOG_SUFFIXES
+                                .iter()
+                                .any(|suffix| name.ends_with(suffix))
                     })
             {
                 paths.push(path);
@@ -2036,7 +2117,7 @@ mod tests {
     }
 
     #[test]
-    fn with_entries_removed_drops_a_single_file_and_supersedes() {
+    fn with_entries_removed_drops_a_single_file_and_records_why() {
         let directory = tempdir().unwrap();
         let store = ArchiveCasStorage::new(directory.path().join("cas")).unwrap();
         let entries = vec![
@@ -2046,18 +2127,39 @@ mod tests {
         let manifest = ArchiveManifest::new("archive-a", "test", 1, entries).unwrap();
         let base_root = manifest.digest().unwrap();
 
-        let (amended, log) = manifest
+        let amended = manifest
             .with_entries_removed(&["drop.txt".to_string()], "cleanup", "jay", 2)
             .unwrap();
 
         assert_eq!(amended.entries.len(), 1);
         assert_eq!(amended.entries[0].path(), "keep.txt");
-        assert_eq!(amended.supersedes_archive_root, Some(base_root));
-        assert_eq!(log.base_manifest_root, base_root);
-        assert_eq!(log.superseding_manifest_root, amended.digest().unwrap());
-        assert_eq!(log.removed_paths, vec!["drop.txt".to_string()]);
-        assert_eq!(log.actor, "jay");
-        assert_eq!(log.reason, "cleanup");
+        assert_eq!(amended.format, ARCHIVE_MANIFEST_FORMAT_V3);
+        assert_eq!(amended.parents(), vec![base_root]);
+        assert_eq!(amended.supersedes_archive_root, None);
+        assert_eq!(
+            amended.records,
+            vec![ArchiveRecord {
+                actor: "jay".into(),
+                at_unix_secs: 2,
+                reason: "cleanup".into(),
+                change: ArchiveChange::Deleted {
+                    paths: vec!["drop.txt".into()]
+                },
+            }]
+        );
+        // The record is inside the root: the same entries with another reason are
+        // another version.
+        let other = manifest
+            .with_entries_removed(&["drop.txt".to_string()], "other", "jay", 2)
+            .unwrap();
+        assert_eq!(other.entries, amended.entries);
+        assert_ne!(other.digest().unwrap(), amended.digest().unwrap());
+        assert!(manifest
+            .with_entries_removed(&["drop.txt".to_string()], " ", "jay", 2)
+            .is_err());
+        assert!(manifest
+            .with_entries_removed(&["drop.txt".to_string()], "cleanup", "", 2)
+            .is_err());
     }
 
     #[test]
@@ -2075,21 +2177,18 @@ mod tests {
         ];
         let manifest = ArchiveManifest::new("archive-a", "test", 1, entries).unwrap();
 
-        let (amended, log) = manifest
+        let amended = manifest
             .with_entries_removed(&["old".to_string()], "cleanup", "jay", 2)
             .unwrap();
 
         assert_eq!(amended.entries.len(), 1);
         assert_eq!(amended.entries[0].path(), "keep.txt");
-        let mut removed = log.removed_paths.clone();
-        removed.sort();
+        // One path for the directory, not one per entry below it.
         assert_eq!(
-            removed,
-            vec![
-                "old".to_string(),
-                "old/a.txt".to_string(),
-                "old/nested/b.txt".to_string(),
-            ]
+            amended.records[0].change,
+            ArchiveChange::Deleted {
+                paths: vec!["old".into()]
+            }
         );
     }
 
@@ -2142,14 +2241,11 @@ mod tests {
 
         // Remove archive-a's only entry -- archive-b still references the
         // same blob.
-        let (amended_a, log) = manifest_a
+        let amended_a = manifest_a
             .with_entries_removed(&["shared.bin".to_string()], "cleanup", "jay", 2)
             .unwrap();
         assert!(amended_a.entries.is_empty());
-        let (amended_manifest_path, _) = store.write_manifest(&amended_a).unwrap();
-        store
-            .write_delete_log(&amended_manifest_path, &log)
-            .unwrap();
+        store.write_manifest(&amended_a).unwrap();
 
         let mut referenced = std::collections::BTreeSet::new();
         for path in store.list_manifests().unwrap() {
@@ -2191,17 +2287,19 @@ mod tests {
             object,
             modified_at_unix_secs: Some(2),
         };
-        let (amended, log) = base
+        let amended = base
             .with_entries_added(vec![file("added/today/export.zip")], "export", "jay", 5)
             .unwrap();
+        assert_eq!(amended.parents(), vec![base.digest().unwrap()]);
         assert_eq!(
-            amended.supersedes_archive_root,
-            Some(base.digest().unwrap())
-        );
-        assert_eq!(log.superseding_manifest_root, amended.digest().unwrap());
-        assert_eq!(
-            log.added_paths,
-            ["added", "added/today", "added/today/export.zip"]
+            amended.records[0].change,
+            ArchiveChange::Created {
+                paths: vec![
+                    "added".into(),
+                    "added/today".into(),
+                    "added/today/export.zip".into()
+                ]
+            }
         );
         let paths: Vec<&str> = amended.entries.iter().map(ArchiveEntry::path).collect();
         assert_eq!(
@@ -2215,10 +2313,15 @@ mod tests {
             .to_string()
             .contains("already in the archive"));
         // Adding under an existing directory keeps it.
-        let (_, log) = amended
+        let more = amended
             .with_entries_added(vec![file("old/more.txt")], "x", "jay", 7)
             .unwrap();
-        assert_eq!(log.added_paths, ["old/more.txt"]);
+        assert_eq!(
+            more.records[0].change,
+            ArchiveChange::Created {
+                paths: vec!["old/more.txt".into()]
+            }
+        );
         assert!(base.with_entries_added(vec![], "x", "jay", 8).is_err());
         assert!(base
             .with_entries_added(vec![file("a")], " ", "jay", 8)
@@ -2226,7 +2329,7 @@ mod tests {
     }
 
     #[test]
-    fn list_manifests_excludes_delete_log_and_signature_sidecars() {
+    fn list_manifests_excludes_old_logs_and_signature_sidecars() {
         // A real bug: list_manifests originally excluded only
         // `.delete-log.json`, not `.signature.json` -- both of which also
         // end in `.json` and sit in the same directory next to the manifest
@@ -2240,11 +2343,14 @@ mod tests {
         let entries = vec![file_entry(&store, "a.txt", b"a")];
         let manifest = ArchiveManifest::new("archive-a", "test", 1, entries).unwrap();
         let (manifest_path, _) = store.write_manifest(&manifest).unwrap();
-        let (_amended, log) = manifest
-            .with_entries_removed(&["a.txt".to_string()], "cleanup", "jay", 2)
-            .unwrap();
-        store.write_delete_log(&manifest_path, &log).unwrap();
         let stem = manifest_path.file_stem().unwrap().to_str().unwrap();
+        for suffix in LEGACY_LOG_SUFFIXES {
+            fs::write(
+                manifest_path.with_file_name(format!("{stem}{suffix}")),
+                b"{\"format\":\"loadngo-archive-delete-log-v1\"}",
+            )
+            .unwrap();
+        }
         let signature_path = manifest_path.with_file_name(format!("{stem}.signature.json"));
         fs::write(&signature_path, b"{\"not\":\"a manifest\"}").unwrap();
 
@@ -2308,13 +2414,38 @@ mod tests {
             }],
         )
         .unwrap();
+        let docs_root = docs.digest().unwrap();
+        let music_root = music.digest().unwrap();
         let merged = ArchiveManifest::merged(
             "all",
             "Everything",
             3,
-            &[("Untitled/Documents", &docs), ("Music", &music)],
+            &[
+                ("Untitled/Documents", &docs, docs_root),
+                ("Music", &music, music_root),
+            ],
+            "jay",
+            "one archive",
         )
         .unwrap();
+        assert_eq!(merged.parents(), vec![docs_root, music_root]);
+        assert_eq!(
+            merged.records[0].change,
+            ArchiveChange::Moved {
+                moves: vec![
+                    ArchiveMove {
+                        parent: docs_root,
+                        from: String::new(),
+                        to: "Untitled/Documents".into(),
+                    },
+                    ArchiveMove {
+                        parent: music_root,
+                        from: String::new(),
+                        to: "Music".into(),
+                    },
+                ]
+            }
+        );
         let paths: Vec<&str> = merged.entries.iter().map(ArchiveEntry::path).collect();
         assert_eq!(
             paths,
@@ -2335,9 +2466,111 @@ mod tests {
         let (path, _) = store.write_manifest(&merged).unwrap();
         assert_eq!(store.read_manifest(&path).unwrap(), merged);
 
-        assert!(
-            ArchiveManifest::merged("all", "x", 3, &[("Same", &docs), ("Same", &music)]).is_err()
-        );
-        assert!(ArchiveManifest::merged("all", "x", 3, &[("../up", &docs)]).is_err());
+        let twice = [("Same", &docs, docs_root), ("Same", &music, music_root)];
+        assert!(ArchiveManifest::merged("all", "x", 3, &twice, "jay", "x").is_err());
+        let up = [("../up", &docs, docs_root)];
+        assert!(ArchiveManifest::merged("all", "x", 3, &up, "jay", "x").is_err());
+    }
+
+    #[test]
+    fn v2_manifests_keep_their_bytes_and_v3_fields_stay_out_of_them() {
+        let directory = tempdir().unwrap();
+        let store = ArchiveCasStorage::new(directory.path().join("cas")).unwrap();
+        let mut v2 =
+            ArchiveManifest::new("old", "Old", 1, vec![file_entry(&store, "a.txt", b"a")]).unwrap();
+        v2.format = ARCHIVE_MANIFEST_FORMAT_V2.into();
+        v2.supersedes_archive_root = Some(CasHash::digest(b"before"));
+        let bytes = v2.canonical_bytes().unwrap();
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        assert!(!text.contains("parents") && !text.contains("records"));
+        // Read back, it is the same bytes, so its root and signature still hold.
+        let (path, _) = store.write_manifest(&v2).unwrap();
+        let (read, root) = store.read_manifest_and_root(&path).unwrap();
+        assert_eq!(read.canonical_bytes().unwrap(), bytes);
+        assert_eq!(root, CasHash::digest(&bytes));
+        assert_eq!(read.parents(), vec![CasHash::digest(b"before")]);
+
+        let mut mixed = v2.clone();
+        mixed.parents = vec![CasHash::digest(b"x")];
+        assert!(mixed.canonical_bytes().is_err());
+        let mut v3 = v2.clone();
+        v3.format = ARCHIVE_MANIFEST_FORMAT_V3.into();
+        assert!(v3.canonical_bytes().is_err(), "v3 has no supersedes field");
+    }
+
+    #[test]
+    fn v3_lists_parents_and_records_before_entries() {
+        let directory = tempdir().unwrap();
+        let store = ArchiveCasStorage::new(directory.path().join("cas")).unwrap();
+        let base = ArchiveManifest::new(
+            "a",
+            "A",
+            1,
+            vec![
+                file_entry(&store, "keep.txt", b"k"),
+                file_entry(&store, "drop.txt", b"d"),
+            ],
+        )
+        .unwrap();
+        let next = base
+            .with_entries_removed(&["drop.txt".into()], "why", "jay", 2)
+            .unwrap();
+        let text = String::from_utf8(next.canonical_bytes().unwrap()).unwrap();
+        let at = |key: &str| text.find(&format!("\n  \"{key}\"")).unwrap();
+        assert!(at("parents") < at("records") && at("records") < at("entries"));
+        let (path, _) = store.write_manifest(&next).unwrap();
+        assert_eq!(store.read_manifest(&path).unwrap(), next);
+    }
+
+    #[test]
+    fn unverified_history_attaches_old_logs_to_an_unchanged_version() {
+        let directory = tempdir().unwrap();
+        let store = ArchiveCasStorage::new(directory.path().join("cas")).unwrap();
+        let base = ArchiveManifest::new("a", "A", 1, vec![file_entry(&store, "x", b"x")]).unwrap();
+        let log = store.add_content(b"{\"old\":\"log\"}").unwrap().object;
+        let attached = vec![ArchiveAttachment {
+            name: "a-1234.delete-log.json".into(),
+            object: log,
+        }];
+        let next = base.with_unverified_history(attached.clone(), 5).unwrap();
+        assert_eq!(next.entries, base.entries);
+        assert_eq!(next.parents(), vec![base.digest().unwrap()]);
+        assert!(next.records.is_empty());
+        assert_eq!(next.attached_objects().collect::<Vec<_>>(), vec![log]);
+        assert!(base.with_unverified_history(Vec::new(), 5).is_err());
+    }
+
+    #[test]
+    fn records_describe_themselves_briefly() {
+        let record = ArchiveRecord::new(
+            ArchiveChange::Deleted {
+                paths: vec!["a".into(), "b".into(), "c".into(), "d".into()],
+            },
+            "jay",
+            "why",
+            1,
+        )
+        .unwrap();
+        assert_eq!(record.describe(), "deleted 4 paths: a, b, c, and 1 more");
+        let record = ArchiveRecord::new(
+            ArchiveChange::Created {
+                paths: vec!["x/y".into()],
+            },
+            "jay",
+            "why",
+            1,
+        )
+        .unwrap();
+        assert_eq!(record.describe(), "created 1 path: x/y");
+        assert!(ArchiveRecord::new(ArchiveChange::Deleted { paths: vec![] }, "j", "w", 1).is_err());
+        assert!(ArchiveRecord::new(
+            ArchiveChange::Deleted {
+                paths: vec!["../x".into()]
+            },
+            "j",
+            "w",
+            1
+        )
+        .is_err());
     }
 }

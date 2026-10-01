@@ -3,21 +3,20 @@
 //! Zips inside zips are unpacked too, up to a depth. Every member is streamed into the
 //! store and checked against the CRC-32 its zip records.
 //!
-//! The result is a new manifest that supersedes the archive's current one, plus an
-//! unpack log naming every zip (its object and member count) and every zip left as it
-//! was, with the reason. Nothing is deleted: the zips' own objects stay until a purge
-//! retires the superseded manifest.
+//! The result is a new version made from the archive's current one by a `Derived`
+//! record naming every zip unpacked, plus a report for the caller to print (member
+//! counts, zips left whole and why). Nothing is deleted: the zips' own objects stay
+//! until a purge retires the parent version.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 
-use crate::archive_cas::{ArchiveCasStorage, ArchiveEntry, ArchiveManifest, ArchiveObject};
+use crate::archive_cas::{
+    ArchiveCasStorage, ArchiveChange, ArchiveEntry, ArchiveManifest, ArchiveObject, ArchiveRecord,
+};
 use crate::cas::CasHash;
 use crate::zip::{looks_like_zip, member_reader, read_entries};
-
-pub const ARCHIVE_UNPACK_LOG_FORMAT_V1: &str = "loadngo-archive-unpack-log-v1";
 
 /// Extensions whose files are zips to unpack. Office documents (.docx, .xlsx, ...) are
 /// zips too, but they are documents, and stay whole.
@@ -27,7 +26,7 @@ pub const UNPACK_EXTENSIONS: &[&str] = &["zip", "ipa", "jar", "apk"];
 pub const DEFAULT_MAX_DEPTH: usize = 3;
 
 /// A zip that was unpacked.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnpackedZip {
     /// Its path in the manifest; it is now a folder of its members.
     pub path: String,
@@ -38,21 +37,16 @@ pub struct UnpackedZip {
 }
 
 /// A zip left as it was.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkippedZip {
     pub path: String,
     pub reason: String,
 }
 
-/// What an unpack did: written beside the new manifest as `{stem}.unpack-log.json`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ArchiveUnpackLog {
-    pub format: String,
-    pub archive_id: String,
-    pub base_manifest_root: CasHash,
-    pub unpacked_at_unix_secs: u64,
-    pub actor: String,
-    pub reason: String,
+/// What an unpack did, for the caller to print. The new version's `Derived` record
+/// names the zips; this adds the counts and the zips left whole.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnpackReport {
     pub unpacked: Vec<UnpackedZip>,
     pub skipped: Vec<SkippedZip>,
     /// Member objects written that the store did not already hold, and their bytes.
@@ -264,12 +258,13 @@ fn unpack_one(
 }
 
 /// Unpacks every zip in `manifest` (whose root is `root`), and zips inside them up to
-/// `max_depth` levels, into the store. Returns the new manifest, superseding `root`, and
-/// its log. A zip that cannot be unpacked (encrypted, unsupported compression, unsafe
-/// names, a CRC mismatch) is left as a file and listed in the log.
+/// `max_depth` levels, into the store. Returns the new version, made from `root` by a
+/// `Derived` record naming each zip unpacked (`None` when none could be), and the
+/// report. A zip that cannot be unpacked (encrypted, unsupported compression, unsafe
+/// names, a CRC mismatch) is left as a file and listed in the report.
 ///
 /// # Errors
-/// When the new manifest is invalid.
+/// When the new manifest is invalid, or `actor` or `reason` is empty.
 #[allow(clippy::too_many_arguments)]
 pub fn unpack_zips(
     store: &ArchiveCasStorage,
@@ -280,7 +275,7 @@ pub fn unpack_zips(
     actor: &str,
     reason: &str,
     mut progress: impl FnMut(UnpackProgress<'_>),
-) -> Result<(ArchiveManifest, ArchiveUnpackLog)> {
+) -> Result<(Option<ArchiveManifest>, UnpackReport)> {
     let mut by_path: BTreeMap<String, ArchiveEntry> = manifest
         .entries
         .iter()
@@ -296,19 +291,7 @@ pub fn unpack_zips(
             _ => None,
         })
         .collect();
-    let mut log = ArchiveUnpackLog {
-        format: ARCHIVE_UNPACK_LOG_FORMAT_V1.to_string(),
-        archive_id: manifest.archive_id.clone(),
-        base_manifest_root: root,
-        unpacked_at_unix_secs: now_unix_secs,
-        actor: actor.to_string(),
-        reason: reason.to_string(),
-        unpacked: Vec::new(),
-        skipped: Vec::new(),
-        new_objects: 0,
-        new_object_bytes: 0,
-        reused_objects: 0,
-    };
+    let mut report = UnpackReport::default();
     while let Some((path, object, depth)) = queue.pop_front() {
         match unpack_one(store, &path, object) {
             Ok(unpacked) => {
@@ -326,10 +309,10 @@ pub fn unpack_zips(
                         queue.push_back((nested_path, nested_object, depth + 1));
                     }
                 }
-                log.new_objects += unpacked.new_objects;
-                log.new_object_bytes += unpacked.new_object_bytes;
-                log.reused_objects += unpacked.reused_objects;
-                log.unpacked.push(UnpackedZip {
+                report.new_objects += unpacked.new_objects;
+                report.new_object_bytes += unpacked.new_object_bytes;
+                report.reused_objects += unpacked.reused_objects;
+                report.unpacked.push(UnpackedZip {
                     path,
                     object,
                     members: unpacked.members,
@@ -341,10 +324,21 @@ pub fn unpack_zips(
                     path: &path,
                     reason: &reason,
                 });
-                log.skipped.push(SkippedZip { path, reason });
+                report.skipped.push(SkippedZip { path, reason });
             }
         }
     }
+    if report.unpacked.is_empty() {
+        return Ok((None, report));
+    }
+    let record = ArchiveRecord::new(
+        ArchiveChange::Derived {
+            paths: report.unpacked.iter().map(|zip| zip.path.clone()).collect(),
+        },
+        actor,
+        reason,
+        now_unix_secs,
+    )?;
     let mut unpacked = ArchiveManifest::new(
         manifest.archive_id.clone(),
         manifest.source_label.clone(),
@@ -352,8 +346,9 @@ pub fn unpack_zips(
         by_path.into_values().collect(),
     )
     .context("the unpacked manifest is invalid")?;
-    unpacked.supersedes_archive_root = Some(root);
-    Ok((unpacked, log))
+    unpacked.parents = vec![root];
+    unpacked.records = vec![record];
+    Ok((Some(unpacked), report))
 }
 
 #[cfg(test)]
@@ -461,6 +456,7 @@ mod tests {
             |_| {},
         )
         .unwrap();
+        let unpacked = unpacked.expect("two zips unpacked");
         let paths: Vec<&str> = unpacked.entries.iter().map(ArchiveEntry::path).collect();
         assert_eq!(
             paths,
@@ -484,7 +480,13 @@ mod tests {
             matches!(&unpacked.entries[6], ArchiveEntry::File { .. }),
             "bad.zip stays whole"
         );
-        assert_eq!(unpacked.supersedes_archive_root, Some(root));
+        assert_eq!(unpacked.parents(), vec![root]);
+        assert_eq!(
+            unpacked.records[0].change,
+            crate::archive_cas::ArchiveChange::Derived {
+                paths: vec!["Backup.ZIP".into(), "Backup.ZIP/nested.zip".into()]
+            }
+        );
         assert_eq!(log.unpacked.len(), 2);
         assert_eq!(log.skipped.len(), 1);
         assert!(

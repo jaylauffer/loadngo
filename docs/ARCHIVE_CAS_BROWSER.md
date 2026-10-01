@@ -82,9 +82,11 @@ actions. Either opens a confirmation dialog over the window; see below
 (added 2026-09-27; both use `data::archive_cas_purge`, as does the
 `archive_cas_purge` command):
 
-- **Purge drive**: for the drive the selected archive is on, every superseded manifest
-  (with its signature and delete/add log) and every object only those manifests
-  listed: the stored copies of files you removed, and the old manifests' own bytes.
+- **Purge drive**: for the drive the selected archive is on, retires every superseded
+  version that has a later version signed by the trusted key, and deletes every object
+  only retired versions listed: the stored copies of files you removed. Since
+  2026-10-01 a retired version keeps its manifest, signature and history (see
+  "Changing an archive" in [ARCHIVE_CAS.md](ARCHIVE_CAS.md)).
 - **Delete archive**: the selected archive entirely: all its manifests, and every
   object no other archive on the drive lists. Objects another archive shares stay.
 
@@ -103,17 +105,21 @@ not respond until they finish (seconds for a few hundred files).
 ## One archive per drive
 
 `archive_cas_merge` combines archives in one root into a single archive, each under its
-own folder, by writing one new manifest and a `.merge-log.json` naming every source and
-its root; no data is copied and the sources are unchanged. On 2026-09-28 the seven
+own folder, by writing one new manifest that names every source's current version as a
+parent, with a `moved` record saying where each went (until 2026-10-01: a
+`.merge-log.json` beside it); no data is copied and the sources are unchanged. On 2026-09-28 the seven
 archives on Loadngo Archive Staging became `loadngo-archive` (root `fa7c12d4...`,
 759,861 files: `Untitled/<folder>/` for the six Untitled archives, `Zhoenus II/` for
 `zhoenus-ii-20260915`), in 17.5 s. Its object set equals the sources' current manifests'
 exactly; the only objects outside it are three files removed from `untitled-documents`
 on 09-27/28, held by that archive's superseded versions. Retiring the sources with
-**Delete archive** then frees only their manifests.
+**Delete archive** then frees only their manifests. Since 2026-10-01 a purge retires a
+merge's sources under the signed merged archive instead.
 
-The browser skips signatures and delete/add/merge logs when listing manifests (it used
-to try to read them as manifests and report them as unreadable).
+The browser skips signatures and the old sidecar logs when listing manifests (it used
+to try to read them as manifests and report them as unreadable). A version is
+superseded when any later version names it as a parent; Remove writes a version whose
+`deleted` record names the removed paths.
 
 ## Zips are unpacked
 
@@ -123,8 +129,9 @@ so every file inside is stored and deduplicated like any other. Office documents
 whole. Members stream into the store (`ArchiveCasStorage::add_stream`) and are checked
 against the CRC-32 their zip records; a zip with encrypted members, compression other
 than stored/deflate, unsafe names (`..`) or a CRC mismatch is left whole and listed.
-It writes a new version of the archive and a `.unpack-log.json` (each zip's object and
-member count); nothing is deleted until the superseded version is purged. `--dry-run`
+It writes a new version of the archive, made from the old one by a `derived` record
+naming each zip (until 2026-10-01: an `.unpack-log.json` beside it); nothing is deleted
+until the superseded version is purged. `--dry-run`
 reads only the zips' central directories. The zip reader is loadngo's own
 (`data::zip`, Zip64 included); deflate comes from `flate2`/`miniz_oxide`.
 Since 2026-09-30 `archive_cas_ingest` does the same unpack for every new capture

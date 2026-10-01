@@ -1,11 +1,11 @@
-//! Adds files or folders to an existing archive, producing a new manifest that
-//! supersedes the old one and an add-log sidecar explaining the change. The new files
+//! Adds files or folders to an existing archive, producing a new version made from the
+//! old one, whose change record names what was added, by whom and why. The new files
 //! are stored (and hashed) first; the old manifest, its signature and every other file
 //! are left untouched. The counterpart of [`archive_cas_remove`].
 
 use anyhow::{anyhow, bail, Context, Result};
 use data::archive_cas::{
-    is_build_cache, ArchiveCasStorage, ArchiveEntry, ArchiveManifest, ArchiveObject,
+    is_build_cache, ArchiveCasStorage, ArchiveChange, ArchiveEntry, ArchiveManifest, ArchiveObject,
 };
 use data::cli::{ArgDoc, Usage};
 use std::fs;
@@ -59,20 +59,21 @@ fn run() -> Result<()> {
         capture(&store, source, &at, true, &mut added, &mut bytes)?;
     }
 
-    let (amended, log) =
-        manifest.with_entries_added(added, args.reason, args.actor, unix_now()?)?;
+    let amended = manifest.with_entries_added(added, args.reason, args.actor, unix_now()?)?;
     let (new_manifest, archive_root) = store.write_manifest(&amended)?;
-    let log_path = store.write_add_log(&new_manifest, &log)?;
+    let added_paths = match amended.records.first().map(|record| &record.change) {
+        Some(ArchiveChange::Created { paths }) => paths.as_slice(),
+        _ => &[],
+    };
 
     println!("Superseded archive root: {}", previous_root.hash);
     println!("New archive manifest: {}", new_manifest.display());
     println!("New archive root object: {}", archive_root.hash);
-    println!("Add log: {}", log_path.display());
     println!(
         "Entries added: {} ({bytes} bytes of files)",
-        log.added_paths.len()
+        added_paths.len()
     );
-    for path in &log.added_paths {
+    for path in added_paths {
         println!("  + {path}");
     }
     println!();
@@ -297,7 +298,7 @@ fn usage() -> Usage {
         ArgDoc::required(
             "--reason",
             "<why>",
-            "non-empty reason recorded in the add log",
+            "non-empty reason, recorded in the new version's change record",
         ),
         ArgDoc::required(
             "--actor",
@@ -309,7 +310,7 @@ fn usage() -> Usage {
         "cargo run -p data --bin archive_cas_add -- --cas-root \"/Volumes/Loadngo Archive Staging/loadngo-archive-cas\" --archive zhoenus-ii-20260915 --add ~/Downloads/export.zip --under added/2026-09-27 --reason \"LinkedIn export\" --actor jay",
     ];
     const NOTES: &[&str] = &[
-        "Stores the new files first, then writes a new, superseding manifest plus an add-log sidecar; the old manifest and its signature are untouched.",
+        "Stores the new files first, then writes a new version whose change record names what was added; the old manifest and its signature are untouched.",
         "A path already in the archive is refused; remove it first with archive_cas_remove to replace it.",
         "The new manifest is unsigned; verify and sign it with archive_cas_verify and archive_cas_sign.",
     ];

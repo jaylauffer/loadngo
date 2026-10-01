@@ -36,9 +36,9 @@ fn run() -> Result<()> {
     let root = manifest_object.hash;
     let superseded_by = listings
         .iter()
-        .find(|l| l.archive_id == manifest.archive_id && l.supersedes == Some(root))
+        .find(|l| l.parents.contains(&root))
         .map(|l| l.root);
-    let retired_under = signed_successor(&listings, &manifest.archive_id, root);
+    let retired_under = signed_successor(&listings, root);
 
     let mut file_count = 0_u64;
     let mut logical_bytes = 0_u64;
@@ -94,9 +94,36 @@ fn run() -> Result<()> {
             );
         }
     }
+    // Attachments are part of the version's record: a purge never drops them.
+    for attached in &manifest.unverified_history {
+        store.verify_object(attached.object).with_context(|| {
+            format!(
+                "failed to verify attachment {} ({})",
+                attached.name, attached.object.hash
+            )
+        })?;
+    }
     println!("Verified archive manifest: {}", args.manifest.display());
     println!("Archive id: {}", manifest.archive_id);
     println!("Archive root object: {}", manifest_object.hash);
+    for parent in manifest.parents() {
+        println!("Made from: {parent}");
+    }
+    for record in &manifest.records {
+        println!(
+            "Change: {} (by {}, at {}: {})",
+            record.describe(),
+            record.actor,
+            record.at_unix_secs,
+            record.reason
+        );
+    }
+    if !manifest.unverified_history.is_empty() {
+        println!(
+            "Attachments verified (unverified history, kept as found): {}",
+            manifest.unverified_history.len()
+        );
+    }
     println!("Files verified: {file_count}");
     println!("Logical file bytes verified: {logical_bytes}");
     println!(

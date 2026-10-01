@@ -1,6 +1,7 @@
 # Reconciliation: one model for Task sync and archive versions
 
-Status: design, 2026-10-01. Nothing here is implemented yet. It follows from
+Status: design, 2026-10-01. Step 1 of the order of work below is
+implemented (manifest v3); the rest is not. It follows from
 "Lessons From The First Edit Of A Signed Archive" in
 [PUDDING_CAS_PQ_MODEL.md](PUDDING_CAS_PQ_MODEL.md).
 
@@ -169,9 +170,9 @@ Jay, 2026-10-01:
   `Same` keeps all three origins, each with its author and time; none is
   demoted. Credit and naming are separate questions: the item still needs
   one id where bytes must name it (a parent in a tree, a reference in a
-  later record). Proposed, not yet agreed: that id is the hash of the `Same`
-  record, and a later record may name any joined origin, resolved through
-  the `Same` records. No origin is "canonical"; ordering by time is only
+  later record). That id is the hash of the `Same` record (agreed), and a
+  later record may name any joined origin, resolved through the `Same`
+  records. No origin is "canonical"; ordering by time is only
   for display.
 - **Agents resolve discrepancies; Jay approves.** An agent writes the `Same`,
   `Distinct`, `Changed` and `Moved` records and signs the consolidation as
@@ -179,9 +180,8 @@ Jay, 2026-10-01:
 - **Equal content at equal placement is `Same` without asking.** Anything
   less (equal content elsewhere, a name match) stays a proposal.
 
-Open:
-
-- **Existing archives.** There are two: `pudding-20260917` (Zhoenus II,
+- **Existing archives start from their current versions** (agreed). There
+  are two: `pudding-20260917` (Zhoenus II,
   root `4d8babf2`) and `loadngo-archive` (Loadngo Archive Staging, root
   `dfec4e4f`). The history that survives is 10 small sidecar logs: 9 delete
   logs and 1 add log, 7 of them for the archives later merged into
@@ -189,16 +189,27 @@ Open:
   no longer exist, and neither do the earlier manifests the surviving logs
   name. Rebuilding records from them would give a partial history that
   looks complete, naming versions that cannot be fetched or verified, under
-  a new signature. Recommended: start each archive's v3 history at its
-  current manifest, with no parent, and attach the old logs to that first
-  consolidation unchanged, marked as unverified history.
+  a new signature. So each archive's v3 history starts at its current
+  manifest, and the old logs are attached to the first v3 version unchanged,
+  as unverified history (`archive_cas_upgrade`). That version names the
+  current manifest as its parent: it exists and is signed, so naming it
+  reconstructs nothing, and it lets a purge retire the v2 manifest once the
+  v3 one is signed.
 
 ## Order of work
 
 1. **Records and consolidations in `data`**, BLAKE3 over canonical bytes,
    with the archive tools as the first caller: remove, add, exclude, unpack
    and merge write records into a consolidation instead of sidecar logs.
-   This is lesson 2.
+   This is lesson 2. Done 2026-10-01: a consolidation is a
+   `loadngo-archive-manifest-v3` (`data::archive_cas::ArchiveManifest`),
+   with `parents`, `records` (`ArchiveRecord`: `created`, `changed`,
+   `moved`, `deleted`, `derived`) and `unverified_history` before its
+   entries; purge, verify, listings, the browser and Kimi's `cas_archives`
+   follow parents across archives. Records name paths, since an archived
+   file's origin is its capture plus its path. Not in it yet: `Same` and
+   `Distinct`, which have no caller before step 2, and the tree is still
+   inline (step 3).
 2. **Proposals for archives**: `archive_cas_reconcile` lists proposals and
    discrepancies between two archives or folders (equal content, name and
    size, normalised text, zip relations), and records `Same` or `Distinct`.

@@ -1,6 +1,6 @@
-//! Removes named paths from an archive manifest, producing a new manifest
-//! that supersedes the old one and a delete-log sidecar explaining the
-//! change. Never touches blob objects, other manifest files, or signatures --
+//! Removes named paths from an archive manifest, producing a new version made
+//! from the old one, whose change record names the paths, who removed them and
+//! why. Never touches blob objects, other manifest files, or signatures --
 //! reclaiming disk space is [`archive_cas_gc`], and it must be run after
 //! re-signing the superseding manifest this tool writes.
 
@@ -30,17 +30,18 @@ fn run() -> Result<()> {
         .verify_object(previous_root)
         .context("source manifest is not present as a verified CAS object")?;
 
-    let (amended, log) =
+    let amended =
         manifest.with_entries_removed(&args.paths, args.reason, args.actor, unix_now()?)?;
     let (manifest_path, archive_root) = store.write_manifest(&amended)?;
-    let log_path = store.write_delete_log(&manifest_path, &log)?;
 
     println!("Superseded archive root: {}", previous_root.hash);
     println!("New archive manifest: {}", manifest_path.display());
     println!("New archive root object: {}", archive_root.hash);
-    println!("Delete log: {}", log_path.display());
-    println!("Entries removed: {}", log.removed_paths.len());
-    for path in &log.removed_paths {
+    println!(
+        "Entries removed: {} (named in its change record:)",
+        manifest.entries.len() - amended.entries.len()
+    );
+    for path in &args.paths {
         println!("  - {path}");
     }
     println!();
@@ -130,15 +131,15 @@ fn usage() -> Usage {
             "<manifest-path>",
             "manifest-relative path to remove; a directory path also removes everything nested under it",
         ),
-        ArgDoc::required("--reason", "<why>", "non-empty justification recorded in the delete log"),
+        ArgDoc::required("--reason", "<why>", "non-empty justification, recorded in the new version's change record"),
         ArgDoc::required("--actor", "<who>", "non-empty name of the person or agent removing these paths"),
     ];
     const EXAMPLES: &[&str] = &[
         "cargo run -p data --bin archive_cas_remove -- --cas-root /Volumes/Backup/loadngo-archive-cas --manifest /Volumes/Backup/loadngo-archive-cas/manifests/<archive>.json --path some/private/file.txt --reason \"owner-requested removal\" --actor jay",
     ];
     const NOTES: &[&str] = &[
-        "Writes a new, superseding manifest plus a delete-log sidecar; never touches blob objects, other manifests, or signatures.",
-        "Reclaiming the freed disk space is a separate step: archive_cas_gc.",
+        "Writes a new version whose change record names the paths, the actor and the reason; never touches blob objects, other manifests, or signatures.",
+        "Reclaiming the freed disk space is a separate step: archive_cas_purge, once the new version is signed.",
         "The superseding manifest is unsigned; sign it with archive_cas_sign before treating it as the archive of record.",
     ];
     Usage {

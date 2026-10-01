@@ -1,14 +1,11 @@
 //! Combines several archives in one Archive CAS root into a single archive, each under
-//! its own folder. Only a new manifest and a merge log are written: every object is
-//! already in the root and is referenced as it is. The source archives are left
-//! exactly as they were; retire them afterwards (the Archive CAS browser's Delete
-//! archive keeps every object the merged archive still lists).
+//! its own folder. Only a new manifest is written, naming each source's current version
+//! as a parent, with a change record saying where each went: every object is already
+//! in the root and is referenced as it is. The sources are left exactly as they were;
+//! once the merged archive is signed, a purge retires them.
 
 use anyhow::{anyhow, bail, Context, Result};
-use data::archive_cas::{
-    ArchiveCasStorage, ArchiveManifest, ArchiveMergeLog, ArchiveMergeSource,
-    ARCHIVE_MERGE_LOG_FORMAT_V1,
-};
+use data::archive_cas::{ArchiveCasStorage, ArchiveManifest};
 use data::archive_view::list_archives;
 use data::cli::{ArgDoc, Usage};
 use std::path::PathBuf;
@@ -53,35 +50,23 @@ fn run() -> Result<()> {
         .duration_since(UNIX_EPOCH)
         .context("system clock is before the Unix epoch")?
         .as_secs();
-    let sources: Vec<(&str, &ArchiveManifest)> = manifests
+    let sources: Vec<(&str, &ArchiveManifest, _)> = manifests
         .iter()
-        .map(|(under, manifest, _)| (under.as_str(), manifest))
+        .map(|(under, manifest, root)| (under.as_str(), manifest, *root))
         .collect();
-    let merged = ArchiveManifest::merged(&args.archive_id, &args.label, now, &sources)?;
+    let merged = ArchiveManifest::merged(
+        &args.archive_id,
+        &args.label,
+        now,
+        &sources,
+        args.actor,
+        args.reason,
+    )?;
     let (path, root) = store.write_manifest(&merged)?;
-    let log = ArchiveMergeLog {
-        format: ARCHIVE_MERGE_LOG_FORMAT_V1.to_string(),
-        archive_id: args.archive_id.clone(),
-        merged_manifest_root: root.hash,
-        merged_at_unix_secs: now,
-        actor: args.actor,
-        reason: args.reason,
-        sources: manifests
-            .iter()
-            .map(|(under, manifest, root)| ArchiveMergeSource {
-                archive_id: manifest.archive_id.clone(),
-                source_label: manifest.source_label.clone(),
-                manifest_root: *root,
-                under: under.clone(),
-            })
-            .collect(),
-    };
-    let log_path = store.write_merge_log(&path, &log)?;
 
     println!("Merged archive {} ({})", args.archive_id, args.label);
     println!("Manifest: {}", path.display());
     println!("Root: {}", root.hash);
-    println!("Merge log: {}", log_path.display());
     for (under, manifest, root) in &manifests {
         println!(
             "  {under}/  <- {} ({} files, root {})",
@@ -94,7 +79,7 @@ fn run() -> Result<()> {
     println!();
     println!("The source archives are unchanged. Next:");
     println!("  1. sign the merged manifest with archive_cas_sign (unsigned until then);");
-    println!("  2. retire each source archive with the browser's Delete archive: it keeps every object the merged archive lists.");
+    println!("  2. archive_cas_purge retires the sources, whose versions are its parents; their objects stay, since the merged archive lists them.");
     Ok(())
 }
 
@@ -172,14 +157,22 @@ fn usage() -> Usage {
             "<archive-id>=<folder>",
             "an archive to include, and the folder its contents go under",
         ),
-        ArgDoc::required("--reason", "<why>", "recorded in the merge log"),
-        ArgDoc::required("--actor", "<who>", "recorded in the merge log"),
+        ArgDoc::required(
+            "--reason",
+            "<why>",
+            "recorded in the merged version's change record",
+        ),
+        ArgDoc::required(
+            "--actor",
+            "<who>",
+            "recorded in the merged version's change record",
+        ),
     ];
     const EXAMPLES: &[&str] = &[
         "cargo run -p data --bin archive_cas_merge -- --cas-root \"/Volumes/Loadngo Archive Staging/loadngo-archive-cas\" --archive-id loadngo-archive --label \"Loadngo Archive\" --from untitled-documents-20260917=Untitled/Documents --from zhoenus-ii-20260915=\"Zhoenus II\" --reason \"one archive per drive\" --actor jay",
     ];
     const NOTES: &[&str] = &[
-        "Writes one new manifest and a merge log; copies no data and changes no source archive.",
+        "Writes one new manifest naming the sources as parents; copies no data and changes no source archive.",
         "Each source's current (not superseded) manifest is used.",
         "The merged manifest is unsigned; sign it with archive_cas_sign.",
     ];

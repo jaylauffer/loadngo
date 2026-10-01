@@ -48,8 +48,12 @@ fn run() -> Result<()> {
             bail!("supply exactly one of --path or --only-unreadable")
         }
     };
-    let amended =
-        manifest.with_owner_approved_exclusion(&excluded_path, args.reason, unix_now()?)?;
+    let amended = manifest.with_owner_approved_exclusion(
+        &excluded_path,
+        args.reason,
+        args.actor,
+        unix_now()?,
+    )?;
     let (manifest_path, archive_root) = store.write_manifest(&amended)?;
     println!("Superseded archive root: {}", previous_root.hash);
     println!("Archive manifest: {}", manifest_path.display());
@@ -72,6 +76,7 @@ struct Args {
     path: Option<String>,
     only_unreadable: bool,
     reason: String,
+    actor: String,
 }
 
 impl Args {
@@ -80,6 +85,7 @@ impl Args {
         let mut manifest = None;
         let mut path = None;
         let mut reason = None;
+        let mut actor = None;
         let mut only_unreadable = false;
         let mut args = data::cli::read_args(&usage(), true).into_iter();
         while let Some(arg) = args.next() {
@@ -89,6 +95,7 @@ impl Args {
                 "--path" => path = args.next(),
                 "--only-unreadable" => only_unreadable = true,
                 "--reason" => reason = args.next(),
+                "--actor" => actor = args.next(),
                 other => return Err(anyhow!("unknown argument: {other}\n{}", usage().hint())),
             }
         }
@@ -96,6 +103,10 @@ impl Args {
             reason.ok_or_else(|| anyhow!("missing --reason <text>\n{}", usage().hint()))?;
         if reason.trim().is_empty() {
             bail!("--reason must not be empty");
+        }
+        let actor = actor.ok_or_else(|| anyhow!("missing --actor <who>\n{}", usage().hint()))?;
+        if actor.trim().is_empty() {
+            bail!("--actor must not be empty");
         }
         Ok(Self {
             cas_root: cas_root.ok_or_else(|| {
@@ -110,6 +121,7 @@ impl Args {
             path,
             only_unreadable,
             reason,
+            actor,
         })
     }
 }
@@ -140,13 +152,18 @@ fn usage() -> Usage {
             "<owner-approved-scope-reason>",
             "non-empty, human-readable justification recorded in the new manifest",
         ),
+        ArgDoc::required(
+            "--actor",
+            "<who>",
+            "the person or agent excluding it, recorded in the new version's change record",
+        ),
     ];
     const EXAMPLES: &[&str] = &[
-        "cargo run -p data --bin archive_cas_exclude -- --cas-root /Volumes/Backup/loadngo-archive-cas --manifest /Volumes/Backup/loadngo-archive-cas/manifests/<unresolved>.json --only-unreadable --reason \"owner-approved source exclusion\"",
+        "cargo run -p data --bin archive_cas_exclude -- --cas-root /Volumes/Backup/loadngo-archive-cas --manifest /Volumes/Backup/loadngo-archive-cas/manifests/<unresolved>.json --only-unreadable --reason \"owner-approved source exclusion\" --actor jay",
     ];
     const NOTES: &[&str] = &[
         "Exactly one of --path or --only-unreadable is required, never both.",
-        "Writes a new, successor manifest linked to the original; it never edits or deletes the source receipt.",
+        "Writes a new version made from the original, with a change record naming the path, the actor and the reason; it never edits or deletes the source receipt.",
     ];
     Usage {
         bin: "archive_cas_exclude",

@@ -4,8 +4,9 @@
 //! so the removed file's blob is still referenced and stays. A purge reclaims it, for
 //! every archive in the root at once, without losing the history:
 //!
-//! 1. **Retire superseded versions:** every version that a later version of the same
-//!    archive replaces, once a later version is signed by the trusted key. A retired
+//! 1. **Retire superseded versions:** every version a later version names as a parent
+//!    (a newer version of the same archive, or an archive it was merged into), once a
+//!    later version is signed by the trusted key. A retired
 //!    version keeps its manifest, its stored manifest object, its signature and its
 //!    logs: the record of what the archive was stays, and stays verifiable
 //!    (`archive_cas_verify` reports its dropped objects as dropped on retirement). A
@@ -32,7 +33,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
-use crate::archive_cas::{ArchiveCasStorage, ArchiveEntry};
+use crate::archive_cas::ArchiveCasStorage;
 use crate::archive_view::{list_archives, signed_successor, PublicKey};
 use crate::cas::CasHash;
 
@@ -222,11 +223,12 @@ fn plan(
     let manifests = live_manifests(store, &mut progress)?;
     let listings = list_archives(store.root(), trusted)?;
 
-    // A manifest is superseded when a newer one of the same archive names it.
-    let mut successor: BTreeMap<(String, CasHash), CasHash> = BTreeMap::new();
+    // A manifest is superseded when a later one names it as a parent: a newer version
+    // of its archive, or an archive it was merged into.
+    let mut successor: BTreeMap<CasHash, CasHash> = BTreeMap::new();
     for (_, manifest, root) in &manifests {
-        if let Some(previous) = manifest.supersedes_archive_root {
-            successor.insert((manifest.archive_id.clone(), previous), *root);
+        for parent in manifest.parents() {
+            successor.insert(parent, *root);
         }
     }
 
@@ -237,17 +239,14 @@ fn plan(
     let mut only_in_retired: BTreeMap<CasHash, String> = BTreeMap::new();
     for (path, manifest, root) in &manifests {
         let files = || {
-            manifest.entries.iter().filter_map(|entry| match entry {
-                ArchiveEntry::File { path, object, .. } => Some((path, object.hash)),
-                _ => None,
-            })
+            manifest
+                .file_objects()
+                .map(|(path, object)| (path, object.hash))
         };
-        let superseded_by = successor
-            .get(&(manifest.archive_id.clone(), *root))
-            .copied();
+        let superseded_by = successor.get(root).copied();
         let deleting = delete == Some(manifest.archive_id.as_str());
         let signed = superseded_by
-            .and_then(|_| signed_successor(&listings, &manifest.archive_id, *root))
+            .and_then(|_| signed_successor(&listings, *root))
             .map(|listing| listing.root);
         if deleting {
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
@@ -274,6 +273,12 @@ fn plan(
                 // A file of an archive being deleted was not removed by anyone.
                 only_in_retired.insert(hash, format!("file {}:{file}", manifest.archive_id));
             }
+            for attached in &manifest.unverified_history {
+                only_in_retired.insert(
+                    attached.object.hash,
+                    format!("attached {}:{}", manifest.archive_id, attached.name),
+                );
+            }
             retired.push(RetiredManifest {
                 archive_id: manifest.archive_id.clone(),
                 root: *root,
@@ -283,8 +288,9 @@ fn plan(
             });
         } else if let (Some(next), Some(signed)) = (superseded_by, signed) {
             // Retired: the version's own record stays (manifest, its stored object,
-            // signature, logs); only objects no live version lists can go.
+            // signature, logs, attachments); only objects no live version lists can go.
             referenced.insert(*root);
+            referenced.extend(manifest.attached_objects().map(|object| object.hash));
             for (file, hash) in files() {
                 only_in_retired
                     .entry(hash)
@@ -307,6 +313,7 @@ fn plan(
             }
             referenced.insert(*root);
             referenced.extend(files().map(|(_, hash)| hash));
+            referenced.extend(manifest.attached_objects().map(|object| object.hash));
         }
     }
 
@@ -418,7 +425,7 @@ pub fn execute_purge(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::archive_cas::{ArchiveManifest, ArchiveObject};
+    use crate::archive_cas::{ArchiveAttachment, ArchiveEntry, ArchiveManifest, ArchiveObject};
     use crate::archive_cas_sign::sign_manifest_and_write;
     use loadngo_pq_crypto::{default_registry, PqSchemeRegistry, SignatureSchemeId};
     use tempfile::tempdir;
@@ -471,11 +478,10 @@ mod tests {
         let (v1_path, _) = store.write_manifest(&docs).unwrap();
         let other = ArchiveManifest::new("other", "Other", 1, vec![shared]).unwrap();
         store.write_manifest(&other).unwrap();
-        let (v2, log) = docs
+        let v2 = docs
             .with_entries_removed(&["secret.conf".to_string()], "test", "jay", 2)
             .unwrap();
-        let (v2_path, _) = store.write_manifest(&v2).unwrap();
-        store.write_delete_log(&v2_path, &log).unwrap();
+        store.write_manifest(&v2).unwrap();
         let registry = default_registry();
         let (key, private) = registry
             .get(&SignatureSchemeId::Dilithium2)
@@ -661,5 +667,68 @@ mod tests {
             }
         }
         assert!(plan_archive_deletion(&f.store, "docs", None, |_| {}).is_err());
+    }
+
+    #[test]
+    fn merged_sources_retire_under_the_signed_merged_archive_and_attachments_stay() {
+        let f = fixture();
+        // `docs` v1 carries an old log as unverified history; `other` stays as it was.
+        let log = f.store.add_content(b"{\"old\":\"log\"}").unwrap().object;
+        let docs = f.store.read_manifest(&f.v1_path).unwrap();
+        let docs = docs
+            .with_unverified_history(
+                vec![ArchiveAttachment {
+                    name: "docs.delete-log.json".into(),
+                    object: log,
+                }],
+                2,
+            )
+            .unwrap();
+        f.store.write_manifest(&docs).unwrap();
+        let other_path = f
+            .store
+            .list_manifests()
+            .unwrap()
+            .into_iter()
+            .find(|p| p.to_string_lossy().contains("/other-"))
+            .unwrap();
+        let (other, other_root) = f.store.read_manifest_and_root(&other_path).unwrap();
+        let docs_root = docs.digest().unwrap();
+        let merged = ArchiveManifest::merged(
+            "all",
+            "All",
+            4,
+            &[("Docs", &docs, docs_root), ("Other", &other, other_root)],
+            "jay",
+            "one archive",
+        )
+        .unwrap();
+        f.store.write_manifest(&merged).unwrap();
+
+        let unsigned = plan_purge(&f.store, Sweep::Full, Some(&f.key), |_| {}).unwrap();
+        assert!(unsigned.manifests.is_empty(), "nothing is retired unsigned");
+
+        sign_manifest_and_write(&f.store, &merged, "test", &f.key, &f.private, 5).unwrap();
+        let merged_root = merged.digest().unwrap();
+        let plan = plan_purge(&f.store, Sweep::Full, Some(&f.key), |_| {}).unwrap();
+        let retired: Vec<(&str, Option<CasHash>)> = plan
+            .manifests
+            .iter()
+            .map(|m| (m.archive_id.as_str(), m.signed_successor))
+            .collect();
+        // docs v1 (by the unsigned v2 and the attaching version), docs with history, and
+        // other: each is followed forward to the signed merged archive.
+        assert_eq!(retired.len(), 3, "{retired:?}");
+        assert!(retired
+            .iter()
+            .all(|(_, signed)| *signed == Some(merged_root)));
+        // The retired version holding the attachment keeps it; the merged archive and
+        // docs' live unsigned v2 between them list every file, so nothing goes.
+        assert!(plan.objects.iter().all(|o| o.hash != log.hash));
+        assert!(
+            plan.objects.is_empty(),
+            "the merged archive and the live v2 list everything: {:?}",
+            plan.objects
+        );
     }
 }

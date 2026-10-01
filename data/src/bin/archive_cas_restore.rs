@@ -53,6 +53,12 @@ fn run() -> Result<()> {
             }
             _ => None,
         })
+        // An attachment (an old log kept as unverified history) restores by its name.
+        .chain(manifest.unverified_history.iter().filter_map(|attached| {
+            let wanted = args.paths.contains(&attached.name);
+            let shadowed = manifest.entries.iter().any(|e| e.path() == attached.name);
+            (wanted && !shadowed).then_some((&attached.name, attached.object))
+        }))
         .collect::<Vec<_>>();
     if selected.len() != args.paths.len() {
         let missing = args
@@ -165,7 +171,7 @@ fn usage() -> Usage {
         ArgDoc::repeated(
             "--path",
             "<relative-file-path>",
-            "manifest-relative regular-file path to restore",
+            "manifest-relative regular-file path to restore, or the name of an attachment (an old log the version keeps as unverified history)",
         ),
     ];
     const EXAMPLES: &[&str] = &[

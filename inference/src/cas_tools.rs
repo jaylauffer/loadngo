@@ -335,7 +335,7 @@ impl Tool for CasArchives {
         "cas_archives"
     }
     fn description(&self) -> &'static str {
-        "List every Archive CAS archive on the attached drives, as the Archive CAS browser shows them: each drive, its compression setting and how far its last compression pass got (objects done and left), and each archive's name, label, date and whether it is signed. Use a name with cas_list (path \"\" gives the archive's file and object counts), cas_find, cas_read and cas_grep."
+        "List every Archive CAS archive on the attached drives, as the Archive CAS browser shows them: each drive, its compression setting and how far its last compression pass got (objects done and left), and each archive's name, label, date, whether it is signed, and the changes that made its current version. Use a name with cas_list (path \"\" gives the archive's file and object counts), cas_find, cas_read and cas_grep."
     }
     fn parameters(&self) -> Value {
         json!({"type": "object", "properties": {}})
@@ -363,6 +363,24 @@ impl Tool for CasArchives {
                     date(listing.created_at_unix_secs),
                     listing.signature.describe()
                 );
+                // How this version was made from earlier ones: its change records.
+                for record in &listing.records {
+                    let _ = writeln!(
+                        out,
+                        "    change: {} (by {}, {}: {})",
+                        record.describe(),
+                        record.actor,
+                        date(record.at_unix_secs),
+                        record.reason
+                    );
+                }
+                if listing.attachments > 0 {
+                    let _ = writeln!(
+                        out,
+                        "    keeps {} older change logs as unverified history",
+                        listing.attachments
+                    );
+                }
             }
         }
         for problem in unreadable {
@@ -676,8 +694,8 @@ mod tests {
                 ArchiveManifest::new("docs", "Docs", 1, vec![file(&store, "x", b"x")]).unwrap();
             store.write_manifest(&v1).unwrap();
             if root == &a {
-                let (v2, _) = v1
-                    .with_entries_removed(&["x".to_string()], "test", "jay", 2)
+                let v2 = v1
+                    .with_entries_removed(&["x".to_string()], "leaked", "jay", 2)
                     .unwrap();
                 store.write_manifest(&v2).unwrap();
             }
@@ -693,6 +711,11 @@ mod tests {
         assert!(names.iter().all(|n| n.starts_with("docs@")), "{names:?}");
         assert!(archives.view("docs").is_err(), "ambiguous without a drive");
         assert!(archives.view(&names[0]).is_ok());
+        let listed = CasArchives(Rc::new(archives)).call(&json!({})).unwrap();
+        assert!(
+            listed.contains("    change: deleted 1 path: x (by jay, 1970-01-01: leaked)"),
+            "{listed}"
+        );
     }
 
     #[test]

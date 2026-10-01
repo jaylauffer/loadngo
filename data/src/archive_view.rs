@@ -16,7 +16,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
-use crate::archive_cas::{ArchiveCasStorage, ArchiveEntry, ArchiveManifest, ArchiveObject};
+use crate::archive_cas::{
+    ArchiveCasStorage, ArchiveEntry, ArchiveManifest, ArchiveObject, ArchiveRecord,
+};
 use crate::archive_cas_sign::{
     present_root, read_public_key, signature_path, verify_signature, SignedArchiveRoot,
 };
@@ -126,33 +128,40 @@ pub struct ArchiveListing {
     pub created_at_unix_secs: u64,
     /// The root the manifest's file name records; [`ArchiveView::open`] checks it.
     pub root: CasHash,
-    /// The version this one supersedes, if any.
-    pub supersedes: Option<CasHash>,
-    /// A newer manifest of the same archive supersedes this one.
+    /// The versions this one was made from: a merge has one per source, a fresh capture
+    /// none.
+    pub parents: Vec<CasHash>,
+    /// How it was made from them (v3; none before).
+    pub records: Vec<ArchiveRecord>,
+    /// Old sidecar logs attached as found (v3).
+    pub attachments: usize,
+    /// A later version, of this archive or (by a merge) another, names this one as a
+    /// parent.
     pub superseded: bool,
     pub signature: Signature,
 }
 
-/// The nearest later version of `archive_id` after `root` whose signature verified, if
-/// any: the signed record a retired version's data may be dropped under. `listings` is
-/// every version under one root, as [`list_archives`] returns them.
+/// The nearest later version after `root`, following parents forward through any
+/// archive (a merge's sources continue in the merged archive), whose signature
+/// verified, if any: the signed record a retired version's data may be dropped under.
+/// `listings` is every version under one root, as [`list_archives`] returns them.
 #[must_use]
-pub fn signed_successor<'a>(
-    listings: &'a [ArchiveListing],
-    archive_id: &str,
-    root: CasHash,
-) -> Option<&'a ArchiveListing> {
-    let mut at = root;
-    // Each step moves to a version that names the last one; a chain cannot be longer
-    // than the versions there are.
-    for _ in 0..listings.len() {
-        let next = listings
-            .iter()
-            .find(|l| l.archive_id == archive_id && l.supersedes == Some(at))?;
-        if next.signature.is_verified() {
-            return Some(next);
+pub fn signed_successor(listings: &[ArchiveListing], root: CasHash) -> Option<&ArchiveListing> {
+    let mut seen = HashSet::from([root]);
+    let mut frontier = vec![root];
+    while !frontier.is_empty() {
+        let mut next = Vec::new();
+        for at in frontier {
+            for later in listings.iter().filter(|l| l.parents.contains(&at)) {
+                if later.signature.is_verified() {
+                    return Some(later);
+                }
+                if seen.insert(later.root) {
+                    next.push(later.root);
+                }
+            }
         }
-        at = next.root;
+        frontier = next;
     }
     None
 }
@@ -164,21 +173,44 @@ struct ManifestHead {
     created_at_unix_secs: u64,
     #[serde(default)]
     supersedes_archive_root: Option<CasHash>,
+    #[serde(default)]
+    parents: Vec<CasHash>,
+    #[serde(default)]
+    records: Vec<ArchiveRecord>,
+    #[serde(default)]
+    unverified_history: Vec<serde::de::IgnoredAny>,
 }
 
+/// Most bytes [`read_head`] reads looking for the end of a header.
+const MAX_HEAD_BYTES: u64 = 64 * 1024 * 1024;
+
 /// The fields before `entries` in a canonical manifest, read from the file's first bytes.
-/// A manifest can be hundreds of megabytes; its header is a few hundred bytes.
+/// A manifest can be hundreds of megabytes; its header is a few hundred bytes, more
+/// when its change records name many paths.
 fn read_head(path: &Path) -> Result<ManifestHead> {
-    let mut start = Vec::new();
-    fs::File::open(path)
+    const MARK: &[u8] = b"\n  \"entries\"";
+    let mut file = fs::File::open(path)
         .with_context(|| format!("failed to open {}", path.display()))?
-        .take(64 * 1024)
-        .read_to_end(&mut start)?;
-    let text = String::from_utf8_lossy(&start);
-    let Some(end) = text.find("\n  \"entries\"") else {
-        bail!("{} has no manifest header", path.display());
+        .take(MAX_HEAD_BYTES);
+    let mut start = Vec::new();
+    let mut chunk = vec![0_u8; 64 * 1024];
+    let end = loop {
+        let searched = start.len().saturating_sub(MARK.len());
+        let read = file.read(&mut chunk)?;
+        start.extend_from_slice(&chunk[..read]);
+        if let Some(at) = start[searched..]
+            .windows(MARK.len())
+            .position(|w| w == MARK)
+        {
+            break searched + at;
+        }
+        if read == 0 {
+            bail!("{} has no manifest header", path.display());
+        }
     };
-    let head = format!("{}\n}}", text[..end].trim_end_matches(','));
+    let text = std::str::from_utf8(&start[..end])
+        .with_context(|| format!("header of {} is not UTF-8", path.display()))?;
+    let head = format!("{}\n}}", text.trim_end_matches(','));
     serde_json::from_str(&head).with_context(|| format!("bad header in {}", path.display()))
 }
 
@@ -191,7 +223,7 @@ fn read_head(path: &Path) -> Result<ManifestHead> {
 pub fn list_archives(cas_root: &Path, trusted: Option<&PublicKey>) -> Result<Vec<ArchiveListing>> {
     let store = ArchiveCasStorage::new(cas_root)?;
     let mut listings = Vec::new();
-    let mut replaced = std::collections::BTreeSet::new();
+    let mut replaced = HashSet::new();
     for path in store.list_manifests()? {
         let Some(root) = path
             .file_stem()
@@ -204,10 +236,12 @@ pub fn list_archives(cas_root: &Path, trusted: Option<&PublicKey>) -> Result<Vec
         let Ok(head) = read_head(&path) else {
             continue;
         };
-        if let Some(previous) = head.supersedes_archive_root {
-            replaced.insert((head.archive_id.clone(), previous));
-        }
-        let supersedes = head.supersedes_archive_root;
+        let parents: Vec<CasHash> = head
+            .supersedes_archive_root
+            .into_iter()
+            .chain(head.parents)
+            .collect();
+        replaced.extend(parents.iter().copied());
         let signature = Signature::check(&store, &head.archive_id, root, trusted);
         listings.push(ArchiveListing {
             cas_root: cas_root.to_path_buf(),
@@ -216,13 +250,15 @@ pub fn list_archives(cas_root: &Path, trusted: Option<&PublicKey>) -> Result<Vec
             source_label: head.source_label,
             created_at_unix_secs: head.created_at_unix_secs,
             root,
-            supersedes,
+            parents,
+            records: head.records,
+            attachments: head.unverified_history.len(),
             superseded: false,
             signature,
         });
     }
     for listing in &mut listings {
-        listing.superseded = replaced.contains(&(listing.archive_id.clone(), listing.root));
+        listing.superseded = replaced.contains(&listing.root);
     }
     listings.sort_by(|a, b| {
         (&a.archive_id, a.created_at_unix_secs).cmp(&(&b.archive_id, b.created_at_unix_secs))
@@ -725,7 +761,7 @@ mod tests {
         )
         .unwrap();
         let (old_path, _) = store.write_manifest(&docs).unwrap();
-        let (newer, _) = docs
+        let newer = docs
             .with_entries_removed(&["wg.conf".to_string()], "test", "jay", 6)
             .unwrap();
         let (new_path, _) = store.write_manifest(&newer).unwrap();
@@ -747,6 +783,8 @@ mod tests {
         assert_eq!(listings[0].manifest_path, old_path);
         assert_eq!(listings[0].source_label, "Documents");
         assert_eq!(listings[1].created_at_unix_secs, 6);
+        assert_eq!(listings[1].parents, vec![docs.digest().unwrap()]);
+        assert_eq!(listings[1].records, newer.records);
 
         // A stranger's key does not verify the signed archive.
         let other = read_public_key(&stranger).unwrap();
@@ -762,6 +800,31 @@ mod tests {
         let view = ArchiveView::open(&cas, &listings[2].manifest_path, Some(&key)).unwrap();
         assert_eq!(view.signature().describe(), "signed by test-signer");
         assert_eq!(view.root(), listings[2].root);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_header_with_long_change_records_is_read_past_its_first_chunk() {
+        let dir = scratch("long-header");
+        let store = ArchiveCasStorage::new(&dir).unwrap();
+        // 5,000 removed paths of 40 bytes: a header of about 220 KB.
+        let entries: Vec<ArchiveEntry> = (0..5_001)
+            .map(|i| ArchiveEntry::Directory {
+                path: format!("a-directory-with-a-fairly-long-name-{i:05}"),
+                modified_at_unix_secs: None,
+            })
+            .collect();
+        let base = ArchiveManifest::new("long", "Long", 1, entries).unwrap();
+        let named: Vec<String> = (0..5_000)
+            .map(|i| format!("a-directory-with-a-fairly-long-name-{i:05}"))
+            .collect();
+        let next = base.with_entries_removed(&named, "tidy", "jay", 2).unwrap();
+        let (path, _) = store.write_manifest(&next).unwrap();
+        assert!(fs::metadata(&path).unwrap().len() > 200_000);
+        let listings = list_archives(&dir, None).unwrap();
+        let listed = listings.iter().find(|l| l.manifest_path == path).unwrap();
+        assert_eq!(listed.records, next.records);
+        assert_eq!(listed.parents, vec![base.digest().unwrap()]);
         fs::remove_dir_all(&dir).unwrap();
     }
 }

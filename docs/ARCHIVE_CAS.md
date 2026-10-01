@@ -27,15 +27,40 @@ loadngo-archive-cas/
 
 Each object is addressed by its BLAKE3-256 digest. A manifest is both written
 as a readable JSON receipt under `manifests/` and stored in `objects/` under
-the same digest; that CAS object is the archive root. Archive manifest v2 can
-also record a source entry that was enumerated but could not be reopened.
+the same digest; that CAS object is the archive root. A manifest can also
+record a source entry that was enumerated but could not be reopened.
 Such an entry has no blob object and makes the capture explicitly incomplete.
 An owner can later replace only an `unreadable` entry with a declared
-`excluded` entry. That creates a new immutable manifest root linked to the
+`excluded` entry. That creates a new immutable manifest root made from the
 unresolved root; it never edits or deletes the original receipt.
 
 The manifest records only paths relative to the captured source root. It does
 not record the source mount path or the staging mount path.
+
+### How a version was made (manifest v3)
+
+Since 2026-10-01 every new manifest is `loadngo-archive-manifest-v3`. Before its
+entries it lists:
+
+- `parents`: the versions it was made from. A fresh capture has none, an edit
+  one, a merge one per source archive.
+- `records`: the changes that made it from them, each with its kind, the paths
+  it named, the actor, the time and the reason: `created`
+  (`archive_cas_add`), `changed` (`archive_cas_exclude`), `moved` (a merge:
+  each parent's tree under its folder), `deleted` (`archive_cas_remove`, the
+  browser's Remove; a directory is one path) and `derived` (zips unpacked into
+  folders at the same path).
+- `unverified_history`: files kept as they were found. These are the sidecar
+  logs written before v3, attached by `archive_cas_upgrade`.
+
+All three are inside the root, so the hash and the signature cover why a
+version exists as well as what it holds; listings read them from the header
+without the entries. Before v3, a manifest named at most one
+`supersedes_archive_root`, and the reason sat in a `.delete-log.json`,
+`.add-log.json`, `.merge-log.json` or `.unpack-log.json` beside it, outside
+the hash. Those manifests still read and verify byte for byte; nothing writes
+the logs any more. The model this follows, shared with Task sync, is
+[RECONCILIATION.md](RECONCILIATION.md).
 
 ## Ingestion guarantees
 
@@ -79,9 +104,9 @@ not record the source mount path or the staging mount path.
 - Zips (`.zip`, `.ipa`, `.jar`, `.apk`, and zips inside them up to three levels)
   are unpacked into folders of their members after the capture, so their
   contents are stored and deduplicated like any other file (since 2026-09-30;
-  `--keep-zips` stores them whole). The unpacked version supersedes the
-  capture and has an `.unpack-log.json` beside it; a zip that cannot be
-  unpacked stays whole and is listed there. Nothing is deleted: the zips' own
+  `--keep-zips` stores them whole). The unpacked version is made from the
+  capture by a `derived` record naming each zip; a zip that cannot be
+  unpacked stays whole and is listed in the summary. Nothing is deleted: the zips' own
   bytes stay until the capture version is purged. Office documents stay whole.
   This is the same unpack as `archive_cas_unpack`, which does it for archives
   captured before.
@@ -203,7 +228,8 @@ cargo run -p data --bin archive_cas_exclude -- \
   --cas-root /path/to/writable/loadngo-archive-cas \
   --manifest /path/to/writable/loadngo-archive-cas/manifests/<unresolved>.json \
   --only-unreadable \
-  --reason "owner-approved source exclusion"
+  --reason "owner-approved source exclusion" \
+  --actor jay
 ```
 
 `--only-unreadable` succeeds only when the manifest has exactly one unresolved
@@ -238,13 +264,27 @@ Restore refuses an existing destination root and any existing file. Each output
 is copied through a temporary sibling, then BLAKE3-checked against its archive
 object before it is published. This is intentionally a narrow recovery drill:
 it restores selected regular-file paths only, does not recreate symlinks, and
-does not yet reapply timestamps or ownership.
+does not yet reapply timestamps or ownership. `--path` also takes the name of
+an attachment, to get an old sidecar log back from a version that keeps it.
+
+Move an archive's old sidecar logs into the store (each archive once):
+
+```sh
+cargo run -p data --bin archive_cas_upgrade -- \
+  --cas-root /path/to/loadngo-archive-cas --archive <archive-id> \
+  --attach /path/to/loadngo-archive-cas/manifests/<log>.delete-log.json --dry-run
+```
+
+It writes a v3 version with the same entries, made from the current one, that
+carries the logs unchanged; once their stored copies verify, the log files in
+`manifests/` are deleted. The new version is unsigned.
 
 ## Changing an archive
 
 A change never edits a version in place: `archive_cas_remove`,
-`archive_cas_add`, `archive_cas_exclude` and the browser write a new version
-that names the one it supersedes. Freeing the space a removal leaves is a
+`archive_cas_add`, `archive_cas_exclude`, `archive_cas_unpack`,
+`archive_cas_merge` and the browser write a new version that names the
+version or versions it was made from, with a record of the change. Freeing the space a removal leaves is a
 separate, deliberate step:
 
 1. Sign the new version (`archive_cas_sign sign`, or the browser's Sign).
@@ -252,8 +292,10 @@ separate, deliberate step:
    `--execute <plan-id>` carries it out. A superseded version is **retired**
    once a later version of its archive is signed by the trusted key
    (`--trusted-public-key`, default: the one `*.dilithium2.pub` in
-   `~/.loadngo/keys`). A retired version keeps its manifest, its stored
-   manifest object, its signature and its logs; only the objects no live
+   `~/.loadngo/keys`). A merge's sources are retired the same way under the
+   signed merged archive. A retired version keeps its manifest, its stored
+   manifest object, its signature, its attachments and any old logs; only the
+   objects no live
    version lists are deleted. A superseded version without a signed later
    version is listed as not retired, and nothing of it is deleted.
 3. `archive_cas_verify` on a retired version verifies every object it still
