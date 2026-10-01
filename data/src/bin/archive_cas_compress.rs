@@ -117,9 +117,11 @@ fn run() -> Result<()> {
         let mut last = last.lock().unwrap_or_else(|e| e.into_inner());
         if last.elapsed().as_secs() >= 10 {
             *last = Instant::now();
+            let done = report.examined + report.already_compressed;
             eprintln!(
-                "  {} objects, {} read, {} saved so far ({:.0} s)",
-                report.examined,
+                "  {done} of {} objects ({}), {} read, {} saved so far ({:.0} s)",
+                report.objects,
+                percent(done as u64, report.objects as u64),
                 gib(report.examined_bytes),
                 gib(report.saved_bytes()),
                 started.elapsed().as_secs_f64()
@@ -144,7 +146,8 @@ fn print_report(report: &CompressReport, dry_run: bool) {
         "compressed"
     };
     println!(
-        "Examined {} objects stored as they were ({}) in {:.0} s ({:.1} MiB/s).",
+        "Of {} objects, examined {} stored as they were ({}) in {:.0} s ({:.1} MiB/s).",
+        report.objects,
         report.examined,
         gib(report.examined_bytes),
         report.seconds,
@@ -219,6 +222,7 @@ fn usage() -> Usage {
         "Each object is hashed while compressed; a damaged .blob is reported and left alone. The .blob is removed only after the .zst decompresses to the same hash.",
         "Objects under 8 KiB, and those compressing by less than a sixteenth (media, archives), stay as they are; the latter are listed in compression-kept-raw.txt so a later pass skips them.",
         "Safe to stop and run again: it picks up where it left off.",
+        "A pass records how far it has got in compression-progress.json at the root, about every 10 s; Kimi's cas_archives shows it.",
         "Older builds of the browser and tools cannot read .zst objects: rebuild before using a compressed root.",
     ];
     Usage {

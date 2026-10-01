@@ -10,11 +10,14 @@
 //! or not, so a model's claims about a file can be checked against the same bytes.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use data::archive_view::{list_archives, ArchiveListing, ArchiveView, PublicKey};
+use data::archive_cas::ArchiveCasStorage;
+use data::archive_cas_compress::read_progress;
+use data::archive_view::{list_archives, ArchiveListing, ArchiveView, PublicKey, Tally};
 use serde_json::{json, Value};
 
 use crate::tools::{
@@ -52,6 +55,141 @@ fn drive(root: &Path) -> String {
         _ => None,
     };
     volume.map_or_else(|| root.display().to_string(), ToString::to_string)
+}
+
+/// `n` with thousands separators, the way people read counts.
+fn count(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
+/// `n` and a noun, singular or plural to match.
+fn counted(n: usize, one: &str, many: &str) -> String {
+    format!("{} {}", count(n), if n == 1 { one } else { many })
+}
+
+/// A byte total in the largest unit it reaches, to two decimals.
+#[allow(clippy::cast_precision_loss)] // shown to two decimals
+fn size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
+    if bytes < 1024 {
+        return format!("{bytes} bytes");
+    }
+    let mut value = bytes as f64 / 1024.0;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.2} {}", UNITS[unit])
+}
+
+/// A duration in seconds, roughly, in the units a person would say it in.
+fn span(secs: u64) -> String {
+    match secs {
+        0..=99 => format!("{secs} s"),
+        100..=5_999 => format!("{} min", secs / 60),
+        6_000..=172_799 => format!("{} h {} min", secs / 3_600, secs % 3_600 / 60),
+        _ => format!("{} days", secs / 86_400),
+    }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// A compression pass that has not recorded progress for this long has stopped (a
+/// running pass records it about every ten seconds).
+const PROGRESS_STALE_SECS: u64 = 120;
+
+/// What a drive's store does with new objects, and how far its last compression pass
+/// got ([`read_progress`]), as lines for `cas_archives`.
+fn store_status(root: &Path, now: u64) -> String {
+    let mut out = String::new();
+    match ArchiveCasStorage::new(root).map(|store| store.compression_level()) {
+        Ok(Some(level)) => {
+            let _ = writeln!(
+                out,
+                "  compression: new objects stored with zstd level {level}"
+            );
+        }
+        Ok(None) => out.push_str(
+            "  compression: off; objects stored as they are
+",
+        ),
+        Err(_) => {}
+    }
+    let Some(pass) = read_progress(root) else {
+        return out;
+    };
+    let quiet = now.saturating_sub(pass.updated_at_unix_secs);
+    let state = if pass.finished && pass.done() >= pass.objects {
+        format!("finished {} ago", span(quiet))
+    } else if pass.finished {
+        format!("stopped at its size limit {} ago", span(quiet))
+    } else if quiet <= PROGRESS_STALE_SECS {
+        format!("running (pid {}, updated {} ago)", pass.pid, span(quiet))
+    } else {
+        format!("stopped without finishing (no update for {})", span(quiet))
+    };
+    let resume = if !pass.finished && quiet > PROGRESS_STALE_SECS {
+        "; running archive_cas_compress again resumes it"
+    } else {
+        ""
+    };
+    #[allow(clippy::cast_precision_loss)] // a percentage to one decimal
+    let percent = pass.done() as f64 * 100.0 / pass.objects.max(1) as f64;
+    let _ = writeln!(
+        out,
+        "  compression pass at zstd level {}, started {} ago, {state}: {} of {} stored objects done ({percent:.1}%), {} left; {} compressed, saving {}; {} kept as they are; {} failed{resume}",
+        pass.level,
+        span(now.saturating_sub(pass.started_at_unix_secs)),
+        count(pass.done()),
+        count(pass.objects),
+        count(pass.objects.saturating_sub(pass.done())),
+        count(pass.compressed),
+        size(pass.saved_bytes),
+        count(pass.kept_small + pass.kept_incompressible),
+        count(pass.failed),
+    );
+    out
+}
+
+/// One line totalling what a directory of an archive holds.
+fn tally_line(dir: &str, tally: &Tally) -> String {
+    let mut line = format!(
+        "{}: {} ({}) in {}; {} ({}), as equal files are stored once",
+        if dir.trim_matches('/').is_empty() {
+            "whole archive"
+        } else {
+            dir
+        },
+        counted(tally.files, "file", "files"),
+        size(tally.bytes),
+        counted(tally.dirs, "directory", "directories"),
+        counted(tally.objects, "distinct object", "distinct objects"),
+        size(tally.object_bytes),
+    );
+    for (n, what) in [
+        (tally.links, "symlinks"),
+        (tally.unreadable, "entries the capture could not read"),
+        (tally.excluded, "entries excluded by the owner"),
+    ] {
+        if n > 0 {
+            let _ = write!(line, "; {} {what}", count(n));
+        }
+    }
+    line.push('\n');
+    line
 }
 
 /// A date for a Unix time, UTC.
@@ -197,7 +335,7 @@ impl Tool for CasArchives {
         "cas_archives"
     }
     fn description(&self) -> &'static str {
-        "List every Archive CAS archive on the attached drives, as the Archive CAS browser shows them: each drive, and each archive's name, label, date and whether it is signed. Use a name with cas_list, cas_find, cas_read and cas_grep."
+        "List every Archive CAS archive on the attached drives, as the Archive CAS browser shows them: each drive, its compression setting and how far its last compression pass got (objects done and left), and each archive's name, label, date and whether it is signed. Use a name with cas_list (path \"\" gives the archive's file and object counts), cas_find, cas_read and cas_grep."
     }
     fn parameters(&self) -> Value {
         json!({"type": "object", "properties": {}})
@@ -205,8 +343,7 @@ impl Tool for CasArchives {
     fn call(&self, _: &Value) -> Result<String, String> {
         let (all, unreadable) = self.0.current();
         let mut out = String::new();
-        let mut drives: Vec<&Path> = all.iter().map(|l| l.cas_root.as_path()).collect();
-        drives.dedup();
+        let now = unix_now();
         for root in self.0.roots() {
             let on_root: Vec<&ArchiveListing> = all.iter().filter(|l| l.cas_root == root).collect();
             let _ = writeln!(
@@ -216,6 +353,7 @@ impl Tool for CasArchives {
                 root.display(),
                 on_root.len()
             );
+            out.push_str(&store_status(&root, now));
             for listing in on_root {
                 let _ = writeln!(
                     out,
@@ -242,7 +380,7 @@ impl Tool for CasList {
         "cas_list"
     }
     fn description(&self) -> &'static str {
-        "List a directory in an archive (verified, read-only): kinds and sizes; cas_read gives each file's object hash."
+        "List a directory in an archive (verified, read-only): first a total of everything below it (files, bytes, directories, distinct objects), then each entry, with the files and bytes below each directory. path \"\" totals the whole archive. cas_read gives each file's object hash."
     }
     fn parameters(&self) -> Value {
         json!({"type": "object", "properties": {
@@ -254,6 +392,8 @@ impl Tool for CasList {
         let (view, mut out) = self.0.with_view(args)?;
         let path = str_arg(args, "path")?;
         let children = view.list(path).map_err(|e| format!("{e:#}"))?;
+        let tally = view.tally(path).map_err(|e| format!("{e:#}"))?;
+        out.push_str(&tally_line(path, &tally));
         // Kinds and sizes only: the root above identifies every entry, and per-entry
         // hashes would triple the prompt tokens a listing costs the model.
         for child in children.iter().take(LIST_ENTRIES) {
@@ -261,9 +401,20 @@ impl Tool for CasList {
                 Some(o) => {
                     let _ = writeln!(out, "{} {:>10}  {}", child.kind, o.size, child.name);
                 }
-                None => {
-                    let _ = writeln!(out, "{}  {}", child.kind, child.name);
-                }
+                None => match tally.subdirs.get(&child.name) {
+                    Some(&(files, bytes)) if child.kind == "dir" => {
+                        let _ = writeln!(
+                            out,
+                            "dir  {:>9} files {:>12}  {}",
+                            count(files),
+                            size(bytes),
+                            child.name
+                        );
+                    }
+                    _ => {
+                        let _ = writeln!(out, "{}  {}", child.kind, child.name);
+                    }
+                },
             }
         }
         if children.len() > LIST_ENTRIES {
@@ -286,7 +437,7 @@ impl Tool for CasFind {
         "cas_find"
     }
     fn description(&self) -> &'static str {
-        "Find files in an archive whose path matches a glob (* within a directory, ** across)."
+        "Find files in an archive whose path matches a glob (* within a directory, ** across). Shows the first 100 and counts every match: files, bytes and distinct objects."
     }
     fn parameters(&self) -> Value {
         json!({"type": "object", "properties": {
@@ -297,23 +448,36 @@ impl Tool for CasFind {
     fn call(&self, args: &Value) -> Result<String, String> {
         let (view, mut out) = self.0.with_view(args)?;
         let pattern = str_arg(args, "pattern")?;
-        let mut count = 0;
+        let (mut matches, mut bytes) = (0, 0);
+        let mut objects = HashSet::new();
         for (path, object) in view.files() {
             if glob_match(pattern, path) {
-                let _ = writeln!(
-                    out,
-                    "{path}  {} bytes  object {}",
-                    object.size,
-                    object.hash.to_hex()
-                );
-                count += 1;
-                if count >= MAX_MATCHES {
-                    out.push_str("[stopped at the match limit; narrow the pattern]\n");
-                    break;
+                matches += 1;
+                bytes += object.size;
+                objects.insert(object.hash);
+                if matches <= MAX_MATCHES {
+                    let _ = writeln!(
+                        out,
+                        "{path}  {} bytes  object {}",
+                        object.size,
+                        object.hash.to_hex()
+                    );
                 }
             }
         }
-        let _ = writeln!(out, "{count} matches");
+        if matches > MAX_MATCHES {
+            let _ = writeln!(
+                out,
+                "[shown: the first {MAX_MATCHES}; narrow the pattern to see the others]"
+            );
+        }
+        let _ = writeln!(
+            out,
+            "{} matches ({}), {} distinct objects",
+            count(matches),
+            size(bytes),
+            count(objects.len())
+        );
         Ok(out)
     }
 }
@@ -558,6 +722,109 @@ mod tests {
     }
 
     #[test]
+    fn listings_and_finds_count_everything_and_drives_show_compression_progress() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("cas");
+        let mut store = ArchiveCasStorage::new(&root).unwrap();
+        let mut entries = vec![ArchiveEntry::Directory {
+            path: "logs".into(),
+            modified_at_unix_secs: None,
+        }];
+        // 120 files, but only 3 distinct contents.
+        entries.extend((0..120).map(|i| {
+            file(
+                &store,
+                &format!("logs/{i:03}.log"),
+                format!("{}", i % 3).as_bytes(),
+            )
+        }));
+        entries.push(file(&store, "readme.txt", b"hello"));
+        store
+            .write_manifest(&ArchiveManifest::new("logs", "Logs", 1, entries).unwrap())
+            .unwrap();
+        store.set_compression(Some(3)).unwrap();
+        let mut archives = Archives::new(vec![root.clone()], None);
+        archives.discover = no_discovery;
+        let tools = toolbox(archives);
+
+        let listed = tools
+            .call("cas_list", r#"{"archive": "logs", "path": ""}"#)
+            .unwrap();
+        assert!(
+            listed.contains(
+                "whole archive: 121 files (125 bytes) in 1 directory; 4 distinct objects (8 bytes)"
+            ),
+            "{listed}"
+        );
+        assert!(
+            listed.contains("dir        120 files    120 bytes  logs"),
+            "{listed}"
+        );
+        let inside = tools
+            .call("cas_list", r#"{"archive": "logs", "path": "logs"}"#)
+            .unwrap();
+        assert!(inside.contains("logs: 120 files"), "{inside}");
+
+        let found = tools
+            .call("cas_find", r#"{"archive": "logs", "pattern": "**/*.log"}"#)
+            .unwrap();
+        assert!(found.contains("logs/099.log") && !found.contains("logs/100.log"));
+        assert!(
+            found.contains("[shown: the first 100;")
+                && found.contains("120 matches (120 bytes), 3 distinct objects"),
+            "{found}"
+        );
+
+        let drives = tools.call("cas_archives", "{}").unwrap();
+        assert!(
+            drives.contains("compression: new objects stored with zstd level 3"),
+            "{drives}"
+        );
+        assert!(!drives.contains("compression pass"), "{drives}");
+        let now = unix_now();
+        let pass = |updated: u64, finished: bool| {
+            format!(
+                r#"{{"level": 3, "pid": 7, "started_at_unix_secs": {}, "updated_at_unix_secs": {updated},
+                "finished": {finished}, "objects": 700000, "examined": 400000, "examined_bytes": 1,
+                "compressed": 120000, "saved_bytes": 199400000000, "kept_small": 250000,
+                "kept_incompressible": 30000, "failed": 0, "already_compressed": 61031}}"#,
+                now - 50_000
+            )
+        };
+        let progress = root.join(data::archive_cas_compress::PROGRESS_FILE);
+        std::fs::write(&progress, pass(now - 5, false)).unwrap();
+        let running = tools.call("cas_archives", "{}").unwrap();
+        assert!(
+            running.contains("started 13 h 53 min ago, running (pid 7, updated 5 s ago): 461,031 of 700,000 stored objects done (65.9%), 238,969 left; 120,000 compressed, saving 185.71 GiB; 280,000 kept as they are; 0 failed"),
+            "{running}"
+        );
+        std::fs::write(&progress, pass(now - 7_200, false)).unwrap();
+        let stopped = tools.call("cas_archives", "{}").unwrap();
+        assert!(
+            stopped.contains("stopped without finishing (no update for 2 h 0 min): 461,031 of")
+                && stopped.contains("0 failed; running archive_cas_compress again resumes it"),
+            "{stopped}"
+        );
+    }
+
+    #[test]
+    fn counts_and_sizes_read_the_way_people_say_them() {
+        assert_eq!(count(0), "0");
+        assert_eq!(count(999), "999");
+        assert_eq!(count(1_000), "1,000");
+        assert_eq!(count(461_031), "461,031");
+        assert_eq!(count(12_345_678), "12,345,678");
+        assert_eq!(counted(1, "file", "files"), "1 file");
+        assert_eq!(size(1_023), "1023 bytes");
+        assert_eq!(size(1_536), "1.50 KiB");
+        assert_eq!(size(733 << 30), "733.00 GiB");
+        assert_eq!(span(42), "42 s");
+        assert_eq!(span(900), "15 min");
+        assert_eq!(span(49_759), "13 h 49 min");
+        assert_eq!(span(3 * 86_400), "3 days");
+    }
+
+    #[test]
     fn drives_are_named_by_volume() {
         assert_eq!(
             drive(Path::new("/Volumes/Zhoenus II/pudding-cas")),
@@ -580,8 +847,9 @@ mod tests {
         let listed = tools.call("cas_archives", "{}").unwrap();
         eprintln!("{listed}");
         assert!(listed.contains("pudding-20260917"), "{listed}");
-        assert!(listed.contains("dolores-card-20260916"), "{listed}");
-        assert!(listed.contains("untitled-documents-20260917"), "{listed}");
+        // dolores-card-20260916 and untitled-documents-20260917 were merged into
+        // loadngo-archive on 2026-09-28.
+        assert!(listed.contains("loadngo-archive"), "{listed}");
         let start = std::time::Instant::now();
         let read = tools
             .call(
@@ -594,5 +862,10 @@ mod tests {
             read.contains("signed by") && read.contains("(verified)"),
             "{read}"
         );
+        let listed = tools
+            .call("cas_list", r#"{"archive": "pudding-20260917", "path": ""}"#)
+            .unwrap();
+        eprintln!("{listed}");
+        assert!(listed.contains("whole archive: 157,874 files"), "{listed}");
     }
 }

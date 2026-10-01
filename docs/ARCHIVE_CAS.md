@@ -22,6 +22,7 @@ loadngo-archive-cas/
   manifests/<archive-id>-<blake3-hex>.json
   compression.json                 present when new objects are compressed
   compression-kept-raw.txt         objects a compression pass left as they are
+  compression-progress.json        how far the last compression pass got
 ```
 
 Each object is addressed by its BLAKE3-256 digest. A manifest is both written
@@ -108,6 +109,13 @@ tools and the browser before using a compressed root.
   do objects that compress by less than a sixteenth: a 1 MiB sample of large
   objects is tried first so media and archives are skipped quickly. Those
   are listed in `compression-kept-raw.txt` and not retried.
+- A pass (not a dry run) records how far it has got in
+  `compression-progress.json` once it has listed the root's objects, about every
+  10 s after that, and when it ends: objects at the start, objects done, compressed
+  and kept, bytes saved, its pid, and whether it finished. Its log line reads
+  `N of M objects (P%)`. Kimi's `cas_archives` shows the record, and calls a pass
+  with no update for two minutes stopped. Passes started before 2026-10-01 write
+  no record.
 - Reading from an offset in a compressed object decompresses from its start;
   reading a compressed zip for unpacking decompresses it to a temporary file.
 

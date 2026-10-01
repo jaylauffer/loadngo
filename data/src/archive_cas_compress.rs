@@ -8,19 +8,117 @@
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::archive_cas::{ArchiveCasStorage, ArchiveObject, KeptRaw};
 use crate::cas::CasHash;
 
 /// Hashes of objects a pass found not worth compressing, one hex hash per line.
 pub const KEPT_RAW_FILE: &str = "compression-kept-raw.txt";
+
+/// How far a compression pass has got, at `<root>/compression-progress.json`: written
+/// when the pass has listed the root's objects, about every ten seconds after that, and
+/// when it ends. A dry run writes none.
+pub const PROGRESS_FILE: &str = "compression-progress.json";
+
+/// How often a pass rewrites [`PROGRESS_FILE`].
+const PROGRESS_EVERY: Duration = Duration::from_secs(10);
+
+/// The contents of [`PROGRESS_FILE`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompressProgress {
+    pub level: i32,
+    /// The process running the pass.
+    pub pid: u32,
+    pub started_at_unix_secs: u64,
+    pub updated_at_unix_secs: u64,
+    /// The pass has ended: every object was looked at, or `--max-gib` stopped it early
+    /// (then `done() < objects`).
+    pub finished: bool,
+    /// Objects stored when the pass began.
+    pub objects: usize,
+    /// Objects stored as they were that the pass has looked at ...
+    pub examined: usize,
+    pub examined_bytes: u64,
+    /// ... of which it compressed these, saving `saved_bytes` ...
+    pub compressed: usize,
+    pub saved_bytes: u64,
+    /// ... and kept these as they were.
+    pub kept_small: usize,
+    pub kept_incompressible: usize,
+    pub failed: usize,
+    /// Objects found already compressed.
+    pub already_compressed: usize,
+}
+
+impl CompressProgress {
+    /// Objects the pass is finished with.
+    #[must_use]
+    pub fn done(&self) -> usize {
+        self.examined + self.already_compressed
+    }
+}
+
+/// The last progress a compression pass recorded under `cas_root`, if any.
+#[must_use]
+pub fn read_progress(cas_root: &Path) -> Option<CompressProgress> {
+    serde_json::from_slice(&fs::read(cas_root.join(PROGRESS_FILE)).ok()?).ok()
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// Writes [`PROGRESS_FILE`] for a pass, at most every [`PROGRESS_EVERY`] until the end.
+struct ProgressRecord {
+    path: PathBuf,
+    level: i32,
+    objects: usize,
+    started_at_unix_secs: u64,
+    last: Mutex<Option<Instant>>,
+}
+
+impl ProgressRecord {
+    fn write(&self, report: &CompressReport, finished: bool) {
+        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+        if !finished && last.is_some_and(|at| at.elapsed() < PROGRESS_EVERY) {
+            return;
+        }
+        *last = Some(Instant::now());
+        let progress = CompressProgress {
+            level: self.level,
+            pid: std::process::id(),
+            started_at_unix_secs: self.started_at_unix_secs,
+            updated_at_unix_secs: unix_now(),
+            finished,
+            objects: self.objects,
+            examined: report.examined,
+            examined_bytes: report.examined_bytes,
+            compressed: report.compressed,
+            saved_bytes: report.saved_bytes(),
+            kept_small: report.kept_small,
+            kept_incompressible: report.kept_incompressible,
+            failed: report.failed.len(),
+            already_compressed: report.already_compressed,
+        };
+        // A status record: a pass that cannot write it still compresses.
+        let Ok(json) = serde_json::to_vec_pretty(&progress) else {
+            return;
+        };
+        let temp = self.path.with_extension("json.tmp");
+        if fs::write(&temp, json).is_ok() {
+            let _ = fs::rename(&temp, &self.path);
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct CompressOptions {
@@ -35,6 +133,8 @@ pub struct CompressOptions {
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct CompressReport {
+    /// Objects stored when the pass began.
+    pub objects: usize,
     /// Objects stored as they are that this pass looked at.
     pub examined: usize,
     pub examined_bytes: u64,
@@ -90,7 +190,24 @@ pub fn compress_objects(
         }
     };
     let hashes = store.object_hashes_with_progress(|_| {})?;
-    let report = Mutex::new(CompressReport::default());
+    let report = Mutex::new(CompressReport {
+        objects: hashes.len(),
+        ..CompressReport::default()
+    });
+    let record = (!options.dry_run).then(|| ProgressRecord {
+        path: store.root().join(PROGRESS_FILE),
+        level: options.level,
+        objects: hashes.len(),
+        started_at_unix_secs: unix_now().saturating_sub(started.elapsed().as_secs()),
+        last: Mutex::new(None),
+    });
+    let tick = |report: &CompressReport| {
+        progress(report);
+        if let Some(record) = &record {
+            record.write(report, false);
+        }
+    };
+    tick(&report.lock().unwrap_or_else(|e| e.into_inner()));
     let kept_record = Mutex::new(None::<fs::File>);
     let next = AtomicUsize::new(0);
     let stop = AtomicBool::new(false);
@@ -122,6 +239,7 @@ pub fn compress_objects(
             let Ok(metadata) = fs::metadata(&raw) else {
                 let mut report = report.lock().unwrap_or_else(|e| e.into_inner());
                 report.already_compressed += 1;
+                tick(&report);
                 continue;
             };
             let object = ArchiveObject {
@@ -141,7 +259,7 @@ pub fn compress_objects(
                 report.examined_bytes += object.size;
                 if kept.contains(&hash) {
                     report.kept_incompressible += 1;
-                    progress(&report);
+                    tick(&report);
                     continue;
                 }
             }
@@ -171,7 +289,7 @@ pub fn compress_objects(
                 }
                 Err(error) => report.failed.push((hash.to_hex(), format!("{error:#}"))),
             }
-            progress(&report);
+            tick(&report);
         }
     };
     let jobs = options.jobs.max(1);
@@ -192,6 +310,9 @@ pub fn compress_objects(
     results.into_iter().collect::<Result<()>>()?;
     let mut report = report.into_inner().unwrap_or_else(|e| e.into_inner());
     report.seconds = started.elapsed().as_secs_f64();
+    if let Some(record) = &record {
+        record.write(&report, true);
+    }
     Ok(report)
 }
 
@@ -253,6 +374,10 @@ mod tests {
             "a dry run changes nothing"
         );
         assert!(!kept_raw_path(&store).exists());
+        assert!(
+            read_progress(store.root()).is_none(),
+            "nor records progress"
+        );
 
         let report = compress_objects(
             &store,
@@ -274,6 +399,13 @@ mod tests {
         );
         assert!(report.failed.is_empty());
         assert!(report.saved_bytes() > 3_000_000);
+        let progress = read_progress(store.root()).unwrap();
+        assert!(progress.finished);
+        assert_eq!((progress.objects, progress.done()), (4, 4));
+        assert_eq!(
+            (progress.compressed, progress.saved_bytes, progress.level),
+            (2, report.saved_bytes(), 3)
+        );
         for (object, bytes) in objects.iter().zip([&big_text, &small_text, &random, &tiny]) {
             store.verify_object(*object).unwrap();
             assert_eq!(

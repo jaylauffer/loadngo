@@ -61,9 +61,9 @@ tokens as single ids (163595-163599). All read-only, all bounded:
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `cas_archives` | none | every drive with an Archive CAS root, and its current archives (superseded versions left out) with label, date and signature status |
-| `cas_list` | `path` (directory) | children with kind and size (hashes via `cas_read`/`cas_find`, to keep listings short); at most 200 entries |
-| `cas_find` | `pattern` (path glob) | matching paths from the manifest; at most 100 |
+| `cas_archives` | none | every drive with an Archive CAS root: its compression setting, how far its last compression pass got (`compression-progress.json`: objects done and left, saved bytes, running or stopped), and its current archives (superseded versions left out) with label, date and signature status |
+| `cas_list` | `path` (directory) | a total for everything below the directory (files, bytes, directories, distinct objects, symlinks, unreadable and excluded entries; `""` totals the whole archive), then children with kind and size, each directory with the files and bytes below it (hashes via `cas_read`/`cas_find`, to keep listings short); at most 50 entries |
+| `cas_find` | `pattern` (path glob) | matching paths from the manifest, the first 100 shown; every match is counted (files, bytes, distinct objects) |
 | `cas_read` | `path`, optional `line_start`, `line_count` | UTF-8 text, at most 16 KiB per call; binaries report size and hash only |
 | `cas_grep` | `pattern` (literal), optional `path_prefix` | matching lines with path:line, scanning at most 32 MiB of text per call |
 

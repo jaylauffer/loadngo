@@ -9,7 +9,7 @@
 //! object's digest equals the signed root. Every file read is BLAKE3-checked against
 //! the manifest before any byte is returned.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -87,6 +87,27 @@ impl Signature {
             Err(error) => Self::NotVerified(format!("{error:#}")),
         }
     }
+}
+
+/// What a directory of a snapshot holds, everything below it counted
+/// ([`ArchiveView::tally`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Tally {
+    pub files: usize,
+    /// The files' sizes added up ...
+    pub bytes: u64,
+    /// ... and the distinct contents among them, which is what the store holds: equal
+    /// files are stored once.
+    pub objects: usize,
+    pub object_bytes: u64,
+    pub dirs: usize,
+    pub links: usize,
+    /// Entries the capture could not read.
+    pub unreadable: usize,
+    /// Entries the owner excluded.
+    pub excluded: usize,
+    /// Each directory directly inside: the files below it and their bytes.
+    pub subdirs: BTreeMap<String, (usize, u64)>,
 }
 
 /// One archive manifest under a root, from its header alone (no entries read).
@@ -344,11 +365,8 @@ impl ArchiveView {
         path.trim_matches('/').trim_start_matches("./")
     }
 
-    /// Children of directory `dir` ("" or "." is the snapshot root).
-    ///
-    /// # Errors
-    /// When `dir` is not a directory in the snapshot.
-    pub fn list(&self, dir: &str) -> Result<Vec<ViewChild>> {
+    /// `dir` normalised, "" for the snapshot root.
+    fn directory<'a>(&self, dir: &'a str) -> Result<&'a str> {
         let dir = Self::normalise(dir);
         let dir = if dir == "." { "" } else { dir };
         if !dir.is_empty()
@@ -359,6 +377,15 @@ impl ArchiveView {
         {
             bail!("{dir} is not a directory in this snapshot");
         }
+        Ok(dir)
+    }
+
+    /// Children of directory `dir` ("" or "." is the snapshot root).
+    ///
+    /// # Errors
+    /// When `dir` is not a directory in the snapshot.
+    pub fn list(&self, dir: &str) -> Result<Vec<ViewChild>> {
+        let dir = self.directory(dir)?;
         Ok(self
             .children
             .get(dir)
@@ -378,6 +405,56 @@ impl ArchiveView {
                     .collect()
             })
             .unwrap_or_default())
+    }
+
+    /// Everything below directory `dir` ("" is the whole snapshot), counted. One pass
+    /// over the manifest's entries.
+    ///
+    /// # Errors
+    /// When `dir` is not a directory in the snapshot.
+    pub fn tally(&self, dir: &str) -> Result<Tally> {
+        let dir = self.directory(dir)?;
+        let prefix = if dir.is_empty() {
+            String::new()
+        } else {
+            format!("{dir}/")
+        };
+        let mut tally = Tally::default();
+        let mut seen = HashSet::new();
+        for entry in &self.manifest.entries {
+            let Some(rest) = entry.path().strip_prefix(prefix.as_str()) else {
+                continue;
+            };
+            if rest.is_empty() {
+                continue;
+            }
+            let child = rest.split_once('/').map(|(child, _)| child);
+            match entry {
+                ArchiveEntry::File { object, .. } => {
+                    tally.files += 1;
+                    tally.bytes += object.size;
+                    if seen.insert(object.hash) {
+                        tally.objects += 1;
+                        tally.object_bytes += object.size;
+                    }
+                    if let Some(child) = child {
+                        let below = tally.subdirs.entry(child.to_string()).or_default();
+                        below.0 += 1;
+                        below.1 += object.size;
+                    }
+                }
+                ArchiveEntry::Directory { .. } => {
+                    tally.dirs += 1;
+                    if child.is_none() {
+                        tally.subdirs.entry(rest.to_string()).or_default();
+                    }
+                }
+                ArchiveEntry::Symlink { .. } => tally.links += 1,
+                ArchiveEntry::Unreadable { .. } => tally.unreadable += 1,
+                ArchiveEntry::Excluded { .. } => tally.excluded += 1,
+            }
+        }
+        Ok(tally)
     }
 
     /// File paths in manifest order.
@@ -537,6 +614,51 @@ mod tests {
         )
         .unwrap();
         assert!(view.read_file("src/a.txt").is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_tally_counts_everything_below_a_directory_and_equal_files_once() {
+        let dir = scratch("tally");
+        let cas = dir.join("cas");
+        let store = ArchiveCasStorage::new(&cas).unwrap();
+        let same = store.add_content(b"same bytes").unwrap().object;
+        let other = store.add_content(b"other").unwrap().object;
+        let entries = [("a", None), ("a/b", None), ("e", None)]
+            .into_iter()
+            .chain([
+                ("a/x", Some(same)),
+                ("a/b/y", Some(same)),
+                ("z", Some(other)),
+            ])
+            .map(|(path, object)| match object {
+                Some(object) => ArchiveEntry::File {
+                    path: path.into(),
+                    object,
+                    modified_at_unix_secs: None,
+                },
+                None => ArchiveEntry::Directory {
+                    path: path.into(),
+                    modified_at_unix_secs: None,
+                },
+            })
+            .collect();
+        let manifest = ArchiveManifest::new("tally", "test", 1, entries).unwrap();
+        let (path, _) = store.write_manifest(&manifest).unwrap();
+        let view = ArchiveView::open(&cas, &path, None).unwrap();
+
+        let all = view.tally("").unwrap();
+        assert_eq!((all.files, all.bytes), (3, 25));
+        assert_eq!((all.objects, all.object_bytes), (2, 15));
+        assert_eq!(all.dirs, 3);
+        assert_eq!(all.subdirs.get("a"), Some(&(2, 20)));
+        assert_eq!(all.subdirs.get("e"), Some(&(0, 0)));
+        assert_eq!(all.subdirs.len(), 2, "{:?}", all.subdirs);
+
+        let a = view.tally("a/").unwrap();
+        assert_eq!((a.files, a.objects, a.dirs), (2, 1, 1));
+        assert_eq!(a.subdirs.get("b"), Some(&(1, 10)));
+        assert!(view.tally("z").is_err());
         let _ = fs::remove_dir_all(&dir);
     }
 
