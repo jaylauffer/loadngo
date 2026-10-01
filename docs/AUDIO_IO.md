@@ -40,8 +40,8 @@ or for monitoring it through speakers -- needs raw duplex device I/O
   tap" below.
 
 Device I/O goes through a per-platform backend (`src/backend`): CoreAudio's
-HAL directly on macOS, `cpal` on Linux and Windows until their own backends
-land -- see [AUDIO_BACKENDS.md](AUDIO_BACKENDS.md). Everything except `pitch`
+HAL directly on macOS, ALSA through `libasound` on Linux, and `cpal` on
+Windows -- see [AUDIO_BACKENDS.md](AUDIO_BACKENDS.md). Everything except `pitch`
 is gated to `cfg(any(target_os = "macos", target_os =
 "linux", target_os = "windows"))` -- desktop only. Mobile live-input
 capture (audio session categories, `AVAudioEngine`/`MediaRecorder`) is a

@@ -136,17 +136,78 @@ Backend-neutral pieces:
   switch, so `set_input_physical_format` reports `UnsupportedOnPlatform`.
   This is the one real capability difference from CoreAudio.
 - **`default` is a config alias, not a device.** Unlike CoreAudio's default
-  device, ALSA's `default` PCM can have no slave in one direction: any Pi has
-  a `default` that plays but cannot capture. Passing no device name therefore
-  prefers `default` (so PipeWire or dmix still routes, and the device stays
+  device, ALSA's `default` PCM can have no slave in one direction: a Pi whose
+  default points at HDMI plays but cannot capture. Passing no device name
+  therefore prefers `default` (so PipeWire or dmix still routes, and the device stays
   shared) but falls back to the first enumerated device in that direction
   when `default` won't open, rather than failing with a usable device listed.
+  Before probing, we inspect ALSA's expanded configuration for an `asym`
+  with the requested direction absent (including `empty`/`plug` wrappers
+  and PCM aliases). This avoids repeatedly opening a known playback-only
+  HDMI default during device refresh. Unknown routes still get probed;
+  ALSA's diagnostics and real stream errors remain enabled.
 - **Xruns** are recovered with `snd_pcm_recover` and counted -- they are this
   platform's equivalent of CoreAudio's overload notification. `-ENODEV` ends
   the thread and is reported as a disconnected device.
 - **The bindings are hand-written** (`ffi.rs`). ALSA's enums are implicit in
   its headers and can't be grepped out, so the constant values were read off
   `dolores` with a C probe rather than guessed.
+
+### What Rust replaces, and what ALSA still supplies
+
+`libasound` is a shared library, not a command-line tool. Our Rust backend
+calls it through `ffi.rs`: ALSA enumerates cards/PCMs, interprets the
+machine's audio configuration, negotiates hardware parameters, transfers
+samples and recovers underruns/overruns. Its `hw` plugin talks to the Linux
+kernel audio driver; `default` can route through software plugins. See the
+[ALSA PCM interface](https://www.alsa-project.org/alsa-doc/alsa-lib/pcm.html)
+and [PCM plugins](https://www.alsa-project.org/alsa-doc/alsa-lib/pcm_plugins.html).
+
+Loadngo already owns the higher-level monitoring, drift compensation,
+gain, recording taps, pitch detection and mixing in Rust. That supersedes
+`cpal` for Linux live input/monitoring, not `libasound` or kernel drivers.
+Replacing `libasound` would mean implementing the kernel device protocol,
+parameter negotiation and configuration/routing semantics ourselves. The
+warning here is an inappropriate capability probe, not evidence that this
+replacement would improve performance or reliability. Native PipeWire
+desktop playback is a separate backend; it does not remove the ALSA
+dependency from this instrument capture path.
+
+### Missing capture-slave regression: dolores, 2026-10-01
+
+Confirmed against installed ALSA 1.2.14 on dolores: card 0 is `vc4-hdmi-0`,
+card 1 is `vc4-hdmi-1`, and card 2 is `USB PnP Audio Device`. There is no
+user `~/.asoundrc` or `/etc/asound.conf`. ALSA expands `default` to an
+`empty` wrapper around the HDMI card's playback-only `asym`. Repeated
+device refresh was opening this route for capture even though the existing
+fallback correctly selected the USB interface.
+
+Validation used an isolated source snapshot of loadngo `f089b247` plus
+this fix, and Bass Blaster `d7b1653` with Cargo path patches to that snapshot.
+The existing modified app `Cargo.lock` on dolores was left untouched.
+
+- Muted, bounded 10-second Wayland GUI runs: original release executable
+  emitted **13** `capture slave is not defined` diagnostics; fixed release
+  executable emitted **0**. Both bound the GLES window and rendered a frame.
+- Linux `cargo test -p loadngo-audio-io --all-features`: **44 library tests
+  and 1 probe test passed**, including five new config/regression tests.
+  The subprocess regression proves repeated enumeration stays quiet while
+  a real invalid capture open still emits the diagnostic.
+- Four explicit `hardware_smoke` tests passed: device enumeration, default
+  monitor start/stop, recording tap, and converter capability probing.
+  USB capture was mono, 48 kHz, signed 16-bit; the 500 ms recording test
+  received **23,552 frames, zero drops**. Audible quality was not assessed.
+- Bass Blaster: **34 tests**, strict all-target/all-feature Clippy and
+  release build passed on dolores. The rebuilt executable is at
+  `~/pudding/sng-bass-blaster/target/release/sng-bass-blaster`.
+- macOS audio tests and strict Clippy passed; Linux-target check and strict
+  Clippy passed from macOS. Audio-crate formatting passed. This change is
+  Linux-only and does not alter any shared enum or public API.
+
+The fix is not published to GitHub yet. Run the rebuilt executable directly
+on dolores; rebuilding against the app's unchanged published Git pin does
+not include this fix. After publication, advance the app's loadngo pin and
+rebuild normally. All validation GUI sessions were stopped afterward.
 
 ## iOS backend (playback)
 

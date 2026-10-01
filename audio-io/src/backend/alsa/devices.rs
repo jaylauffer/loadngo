@@ -110,6 +110,12 @@ fn pcm_devices(card: c_int, direction: Direction) -> Vec<c_int> {
 /// belongs to no card -- a plugin PCM such as PipeWire's -- which is still
 /// exactly what a caller should be routed through.
 fn probe_default(direction: Direction) -> Option<Option<c_int>> {
+    // A playback-only HDMI default is ordinary. Inspect the expanded ALSA
+    // config before opening it, so device refresh doesn't print a missing
+    // capture-slave diagnostic every few seconds. Do not mute ALSA errors.
+    if super::config::default_lacks_direction(direction) {
+        return None;
+    }
     let pcm = Pcm::open("default", direction == Direction::Input, true).ok()?;
     let mut info: *mut ffi::SndPcmInfo = ptr::null_mut();
     // SAFETY: `pcm` is open for the duration; the info block is freed here.

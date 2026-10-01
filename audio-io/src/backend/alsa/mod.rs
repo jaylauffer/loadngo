@@ -12,6 +12,7 @@
 //!   `f32` (`pcm.rs`); the USB interface this was built against is `S16_LE`
 //!   only, where CoreAudio always hands over float.
 
+mod config;
 mod devices;
 mod ffi;
 mod formats;

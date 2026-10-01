@@ -15,6 +15,7 @@ pub type SndPcmHwParams = c_void;
 pub type SndPcmInfo = c_void;
 pub type SndCtl = c_void;
 pub type SndCtlCardInfo = c_void;
+pub type SndConfig = c_void;
 pub type Uframes = c_ulong;
 pub type Sframes = c_long;
 
@@ -36,6 +37,22 @@ pub const ESTRPIPE: c_int = 86;
 #[link(name = "asound")]
 extern "C" {
     pub fn snd_strerror(errnum: c_int) -> *const c_char;
+
+    pub fn snd_config_update_ref(config: *mut *mut SndConfig) -> c_int;
+    pub fn snd_config_unref(config: *mut SndConfig);
+    pub fn snd_config_search_definition(
+        config: *mut SndConfig,
+        base: *const c_char,
+        name: *const c_char,
+        result: *mut *mut SndConfig,
+    ) -> c_int;
+    pub fn snd_config_search(
+        config: *mut SndConfig,
+        key: *const c_char,
+        result: *mut *mut SndConfig,
+    ) -> c_int;
+    pub fn snd_config_get_string(config: *const SndConfig, value: *mut *const c_char) -> c_int;
+    pub fn snd_config_delete(config: *mut SndConfig) -> c_int;
 
     pub fn snd_pcm_open(
         pcm: *mut *mut SndPcm,
