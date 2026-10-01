@@ -92,9 +92,9 @@ What follows from putting the two together:
   first. Acceptance stays with the submitter's verification of the success criteria.
 
 Built: the chat checkpoint, in shadow mode (answers shown and saved, nothing acts on
-them), with the field names above. Not built: anything in the Task runtime. The first
-step there would be a submitter recording the same three answers beside each
-`TaskStatus` it receives, also in shadow.
+them), with the field names above. Not built: anything in the Task runtime. The
+recommendations for it, with the first run's results, are in
+[TASK_CHECKPOINT_RECOMMENDATIONS.md](TASK_CHECKPOINT_RECOMMENDATIONS.md).
 
 ## Still open
 

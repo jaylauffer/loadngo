@@ -277,6 +277,13 @@ The actual qcoin mint or anchor may happen immediately after that acknowledgemen
 or through a downstream authority path, but it must remain downstream of the
 positive acknowledgement.
 
+## Recommendations Not Yet Adopted
+
+[TASK_CHECKPOINT_RECOMMENDATIONS.md](TASK_CHECKPOINT_RECOMMENDATIONS.md) recommends a
+closed set of `TaskStatus.state` values, counted facts beside the worker's `note`, and
+typed System One checkpoints asked by the submitter in shadow mode. None of it is in
+the runtime.
+
 ## Execution Test Plan
 
 The intended lab validation matrix is documented in
