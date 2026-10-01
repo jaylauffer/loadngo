@@ -498,15 +498,22 @@ synchronised between machines:
   `Undo::Clear()` later drops the contents and keeps the record. That is
   lesson 1: drop the data, keep the record.
 - `Moved`, `Merged` and `Deleted` are typed change records, each tied to the
-  entity's origin id. That is lesson 2. The origin id is provenance, not
-  content: it says which creation an entity descends from, so two entities
-  with identical contents from separate origins stay distinct, and one
-  entity keeps its identity while its contents change and it moves. The CAS
-  names content (the object hash) and records a path as an entry's
-  attribute, but has no provenance: across versions a file can only be
-  followed by matching paths or hashes. That breaks when a file is moved and
-  edited in the same change, and is ambiguous for duplicates; before the
-  cleanup, `pudding-20260917` had 157,874 files over 83,730 distinct objects.
+  entity's origin id. That is lesson 2.
+- Origin does not decide sameness. Two tasks created on separate machines
+  may be the same task, or may differ only in arcane details; that is the
+  primary problem Task sync solves. A task's origin id records where it was
+  created (`CreateTextOriginId(title, created)`); its skeletal id
+  (`Task::GetSkeletalId`, a hash of the title) proposes that tasks from
+  different origins are the same; sync then lists their discrepancies, a
+  participant resolves them, and the resolution is recorded (`Merged`, a
+  consolidated id). The code notes the skeletal id is still crude: "Take
+  out trash" and "take out trash" do not match.
+- The CAS decides sameness by bytes alone: equal hashes are one object,
+  different hashes unrelated. So the same document captured twice with an
+  arcane difference (re-saved metadata, line endings, a zip and its unpacked
+  members, `loadngo-cpp` beside `loadngo-cpp.pre-mailmap-backup-20260820`)
+  is stored as unrelated content, and nothing can record that a person
+  judged two items the same or different.
 - A move chain is consolidated since the last concluded sync
   (`ConsolidateMovesSince`, `MakeCourse`); peers exchange chains, find
   discrepancies (`Conflict::Moved`, `Conflict::Deleted`), record the chosen
@@ -516,12 +523,11 @@ synchronised between machines:
   express.
 
 The Rust `data` crate already holds a stub port (`Entity` with `origin_id`,
-`MoveChain`, `Discrepancy`, `Sync`, `Participant`). One mutation record type
-for both would serve Task synchronisation and archive versions: a subject
-(stable origin id, or a path plus the object it held), a kind (added,
-deleted, moved, merged), from and to, actor (user and machine), time, hash
-and reason; versions and sync points both become signed consolidations of
-the records since the previous one.
+`MoveChain`, `Discrepancy`, `Sync`, `Participant`). What Task sync and
+archive versions share is reconciliation: proposing that items from
+separate origins are the same, listing how they differ, and recording a
+signed resolution that keeps both origins. Byte equality is one proposal
+among several, not the definition of sameness.
 
 ### What held up
 
