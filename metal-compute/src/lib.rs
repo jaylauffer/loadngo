@@ -10,10 +10,15 @@
 //! - `gemv_bf16`: `y = W x` with `W` bfloat16, row-major.
 //! - `gemv_mxfp4`: `y = W x` with `W` in OCP MX v1.0 MXFP4 (the layout of
 //!   `loadngo_weights::mxfp4::Mxfp4Matrix`: packed elements and one scale per 32).
+//! - `gemv_q8_0`, `gemm_q8_0`, `gemm_q8_0_tiled`: products with ggml's `Q8_0` (a
+//!   binary16 scale per 32 signed bytes), repacked for aligned loads.
 //! - `attention_split_key`: causal multi-head attention whose keys are split between a
 //!   per-head part and a part every head shares (multi-head latent attention's layout).
 //! - `attention_grouped`: causal grouped-query attention, optionally over a sliding
-//!   window, with keys and values in a ring of rows.
+//!   window, with keys and values in a ring of rows, and optionally a learned sink
+//!   logit per head.
+//! - Glue between products: norms, row copies and adds, rotary by halves from a cos/sin
+//!   table, gpt-oss's clamped SwiGLU.
 //! - `delta_rule_recurrence`: the delta-rule linear-attention recurrence with a decay per
 //!   key channel (Kimi Delta Attention), steps in order, state updated in place.
 //!

@@ -482,6 +482,9 @@ kernel void attention_split_key(
 // of the positions, each keeping an online softmax (running maximum, sum and weighted
 // values, lanes holding dim / 32 elements); the eight partial results are merged in
 // threadgroup memory. In float32 throughout.
+//
+// With `sinks` set, head h's softmax has one more logit, sinks[h] (gpt-oss's attention
+// sinks): it takes probability but adds no value. Otherwise the sinks buffer is not read.
 struct GroupedArgs {
     uint t;
     uint start;
@@ -491,6 +494,7 @@ struct GroupedArgs {
     uint window;
     uint slots;
     float scale;
+    uint sinks;
 };
 
 kernel void attention_grouped(
@@ -498,7 +502,8 @@ kernel void attention_grouped(
     device const float *k [[buffer(1)]],
     device const float *v [[buffer(2)]],
     device float *out [[buffer(3)]],
-    constant GroupedArgs &a [[buffer(4)]],
+    device const float *sinks [[buffer(4)]],
+    constant GroupedArgs &a [[buffer(5)]],
     uint group [[threadgroup_position_in_grid]],
     uint sg [[simdgroup_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]],
@@ -549,11 +554,12 @@ kernel void attention_grouped(
         part_acc[sg * 512 + lane + SIMD * i] = acc[i];
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    float total_max = -INFINITY;
+    const float sink = a.sinks != 0 ? sinks[head] : -INFINITY;
+    float total_max = sink;
     for (uint g = 0; g < 8; ++g) {
         total_max = max(total_max, part_max[g]);
     }
-    float total = 0.0f;
+    float total = sink == -INFINITY ? 0.0f : exp(sink - total_max);
     float weight[8];
     for (uint g = 0; g < 8; ++g) {
         // A simdgroup that saw no positions has maximum -inf and weight 0.
@@ -584,7 +590,8 @@ kernel void attention_grouped_tiled(
     device const float *k [[buffer(1)]],
     device const float *v [[buffer(2)]],
     device float *out [[buffer(3)]],
-    constant GroupedArgs &a [[buffer(4)]],
+    device const float *sinks [[buffer(4)]],
+    constant GroupedArgs &a [[buffer(5)]],
     uint group [[threadgroup_position_in_grid]],
     uint sg [[simdgroup_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]],
@@ -610,8 +617,10 @@ kernel void attention_grouped_tiled(
         diag[i] = 0.0f;
     }
     if (tid < 32) {
-        row_max[tid] = -INFINITY;
-        row_sum[tid] = 0.0f;
+        // A sink starts every row's softmax: its logit is the first maximum, exp(0) = 1
+        // the first sum.
+        row_max[tid] = a.sinks != 0 ? sinks[head] : -INFINITY;
+        row_sum[tid] = a.sinks != 0 ? 1.0f : 0.0f;
     }
     simdgroup_float8x8 o[32];
     for (uint t = 0; t < 32; ++t) {
@@ -1413,5 +1422,279 @@ kernel void attention_split_key_tiled(
     for (uint v = 0; v < 8; ++v) {
         simdgroup_multiply(o[v], dm, o[v]);
         simdgroup_store(o[v], ot + v * 8, (ulong)a.heads * a.dv);
+    }
+}
+
+// ggml Q8_0, repacked for aligned loads: `codes` holds each row's signed bytes in order
+// (rows * cols), `scales` one binary16 per 32 of them (rows * cols / 32); element c of
+// row r is scales[r * cols / 32 + c / 32] * codes[r * cols + c]. Needs cols % 32 == 0.
+// The same structure as the MXFP4 kernels above.
+template <uint ROWS>
+kernel void gemv_q8_0(
+    device const char *codes [[buffer(0)]],
+    device const half *scales [[buffer(1)]],
+    device const float *x [[buffer(2)]],
+    device float *y [[buffer(3)]],
+    constant GemvArgs &a [[buffer(4)]],
+    uint tg [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint sgs [[simdgroups_per_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]])
+{
+    const uint first = (tg * sgs + sg) * ROWS;
+    if (first >= a.rows) {
+        return;
+    }
+    const uint count = min(ROWS, a.rows - first);
+    const uint blocks = a.cols / 32;
+    device const char4 *c4 = (device const char4 *)codes;
+    device const float4 *x4 = (device const float4 *)x;
+    float acc[ROWS];
+    for (uint r = 0; r < ROWS; ++r) {
+        acc[r] = 0.0f;
+    }
+    for (uint b = lane; b < blocks; b += SIMD) {
+        float4 xs[8];
+        for (uint i = 0; i < 8; ++i) {
+            xs[i] = x4[8 * b + i];
+        }
+        for (uint r = 0; r < ROWS; ++r) {
+            if (r < count) {
+                const ulong row = first + r;
+                device const char4 *w = c4 + row * (a.cols / 4) + 8 * b;
+                float block = 0.0f;
+                for (uint i = 0; i < 8; ++i) {
+                    block += dot(float4(w[i]), xs[i]);
+                }
+                acc[r] += block * float(scales[row * blocks + b]);
+            }
+        }
+    }
+    for (uint r = 0; r < count; ++r) {
+        const float sum = simd_sum(acc[r]);
+        if (lane == 0) {
+            y[first + r] = sum;
+        }
+    }
+}
+
+template [[host_name("gemv_q8_0_r1")]] kernel void gemv_q8_0<1>(
+    device const char *, device const half *, device const float *, device float *,
+    constant GemvArgs &, uint, uint, uint, uint);
+template [[host_name("gemv_q8_0_r2")]] kernel void gemv_q8_0<2>(
+    device const char *, device const half *, device const float *, device float *,
+    constant GemvArgs &, uint, uint, uint, uint);
+template [[host_name("gemv_q8_0_r4")]] kernel void gemv_q8_0<4>(
+    device const char *, device const half *, device const float *, device float *,
+    constant GemvArgs &, uint, uint, uint, uint);
+
+// y[p] = W x[p] for n positions, W in repacked Q8_0, GEMM_N positions per pass over W.
+kernel void gemm_q8_0(
+    device const char *codes [[buffer(0)]],
+    device const half *scales [[buffer(1)]],
+    device const float *x [[buffer(2)]],
+    device float *y [[buffer(3)]],
+    constant GemmArgs &a [[buffer(4)]],
+    uint tg [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint sgs [[simdgroups_per_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]])
+{
+    const uint first = (tg * sgs + sg) * GEMM_ROWS;
+    if (first >= a.rows) {
+        return;
+    }
+    const uint count = min(GEMM_ROWS, a.rows - first);
+    const uint blocks = a.cols / 32;
+    device const char4 *c4 = (device const char4 *)codes;
+    for (uint p0 = 0; p0 < a.n; p0 += GEMM_N) {
+        const uint np = min(GEMM_N, a.n - p0);
+        float acc[GEMM_ROWS][GEMM_N];
+        for (uint r = 0; r < GEMM_ROWS; ++r) {
+            for (uint p = 0; p < GEMM_N; ++p) {
+                acc[r][p] = 0.0f;
+            }
+        }
+        for (uint b = lane; b < blocks; b += SIMD) {
+            for (uint r = 0; r < GEMM_ROWS; ++r) {
+                if (r < count) {
+                    const ulong row = first + r;
+                    device const char4 *w = c4 + row * (a.cols / 4) + 8 * b;
+                    const float scale = float(scales[row * blocks + b]);
+                    float4 wv[8];
+                    for (uint i = 0; i < 8; ++i) {
+                        wv[i] = float4(w[i]);
+                    }
+                    for (uint p = 0; p < GEMM_N; ++p) {
+                        if (p < np) {
+                            device const float4 *xp = (device const float4 *)(
+                                x + (ulong)(p0 + p) * a.x_stride) + 8 * b;
+                            float block = 0.0f;
+                            for (uint i = 0; i < 8; ++i) {
+                                block += dot(wv[i], xp[i]);
+                            }
+                            acc[r][p] += block * scale;
+                        }
+                    }
+                }
+            }
+        }
+        for (uint r = 0; r < count; ++r) {
+            for (uint p = 0; p < np; ++p) {
+                const float sum = simd_sum(acc[r][p]);
+                if (lane == 0) {
+                    y[(ulong)(p0 + p) * a.y_stride + first + r] = sum;
+                }
+            }
+        }
+    }
+}
+
+// gemm_q8_0 on the matrix units, as gemm_mxfp4_tiled: a 64-row by 32-position tile, the
+// weights of one 32-column block widened into threadgroup memory per step. Needs
+// rows % 64 == 0, cols % 32 == 0 and n % 32 == 0.
+kernel void gemm_q8_0_tiled(
+    device const char *codes [[buffer(0)]],
+    device const half *scales [[buffer(1)]],
+    device const float *x [[buffer(2)]],
+    device float *y [[buffer(3)]],
+    constant GemmArgs &a [[buffer(4)]],
+    uint group [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint tid [[thread_index_in_threadgroup]])
+{
+    threadgroup float wa[TILE_M * TILE_K];
+    threadgroup float xb[TILE_N * TILE_K];
+    const uint row_tiles = a.rows / TILE_M;
+    const uint r0 = (group % row_tiles) * TILE_M;
+    const uint p0 = (group / row_tiles) * TILE_N;
+    const uint blocks = a.cols / 32;
+    const uint rs = (sg % 4) * 16;
+    const uint ps = (sg / 4) * 16;
+    simdgroup_float8x8 acc[2][2];
+    for (uint i = 0; i < 2; ++i) {
+        for (uint j = 0; j < 2; ++j) {
+            acc[i][j] = simdgroup_float8x8(0.0f);
+        }
+    }
+    // Thread t widens 8 weights (row t / 4, eighth t % 4 of the block) and loads 4 x
+    // values (position t / 8, floats (t % 8) * 4 .. +4).
+    const uint wrow = tid / 4;
+    const uint part = tid % 4;
+    const uint xpos = tid / 8;
+    const uint xpart = tid % 8;
+    device const char4 *c4 = (device const char4 *)codes;
+    for (uint b = 0; b < blocks; ++b) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        {
+            const ulong row = r0 + wrow;
+            const float scale = float(scales[row * blocks + b]);
+            device const char4 *w = c4 + row * (a.cols / 4) + 8 * b + 2 * part;
+            const float4 lo = float4(w[0]) * scale;
+            const float4 hi = float4(w[1]) * scale;
+            threadgroup float4 *dst = (threadgroup float4 *)(wa + wrow * TILE_K + part * 8);
+            dst[0] = lo;
+            dst[1] = hi;
+            device const float4 *src =
+                (device const float4 *)(x + (ulong)(p0 + xpos) * a.x_stride + b * TILE_K);
+            ((threadgroup float4 *)(xb + xpos * TILE_K))[xpart] = src[xpart];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint k = 0; k < TILE_K; k += 8) {
+            simdgroup_float8x8 wm[2];
+            simdgroup_float8x8 xm[2];
+            for (uint i = 0; i < 2; ++i) {
+                simdgroup_load(wm[i], wa, TILE_K, ulong2(k, rs + i * 8));
+                simdgroup_load(xm[i], xb, TILE_K, ulong2(k, ps + i * 8), true);
+            }
+            for (uint i = 0; i < 2; ++i) {
+                for (uint j = 0; j < 2; ++j) {
+                    simdgroup_multiply_accumulate(acc[i][j], wm[i], xm[j], acc[i][j]);
+                }
+            }
+        }
+    }
+    for (uint i = 0; i < 2; ++i) {
+        for (uint j = 0; j < 2; ++j) {
+            device float *dst = y + (ulong)(p0 + ps + j * 8) * a.y_stride + r0 + rs + i * 8;
+            simdgroup_store(acc[i][j], dst, a.y_stride, ulong2(0, 0), true);
+        }
+    }
+}
+
+// dst[r][i] += src[r * src_stride + i] over `rows` rows of `width` floats; a src_stride
+// of 0 adds the same row (a bias) to every row.
+struct AddArgs {
+    uint rows;
+    uint width;
+    uint src_stride;
+};
+
+kernel void add_rows(
+    device float *dst [[buffer(0)]],
+    device const float *src [[buffer(1)]],
+    constant AddArgs &a [[buffer(2)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid < a.rows * a.width) {
+        const uint r = gid / a.width;
+        const uint i = gid % a.width;
+        dst[gid] += src[(ulong)r * a.src_stride + i];
+    }
+}
+
+// Rotary position embedding by halves, in place: x is [rows][heads][dim]; table holds,
+// per row, dim / 2 pairs (cos, sin). Element i of each head's first half turns with
+// element i of its second half by that pair.
+struct RotateArgs {
+    uint rows;
+    uint heads;
+    uint dim;
+};
+
+kernel void rotate_halves(
+    device float *x [[buffer(0)]],
+    device const float2 *table [[buffer(1)]],
+    constant RotateArgs &a [[buffer(2)]],
+    uint gid [[thread_position_in_grid]])
+{
+    const uint half_dim = a.dim / 2;
+    if (gid < a.rows * a.heads * half_dim) {
+        const uint i = gid % half_dim;
+        const uint row_head = gid / half_dim;
+        const uint row = row_head / a.heads;
+        device float *h = x + (ulong)row_head * a.dim;
+        const float2 cs = table[(ulong)row * half_dim + i];
+        const float x0 = h[i];
+        const float x1 = h[i + half_dim];
+        h[i] = x0 * cs.x - x1 * cs.y;
+        h[i + half_dim] = x1 * cs.x + x0 * cs.y;
+    }
+}
+
+// The clamped SwiGLU of gpt-oss's experts, over `rows` rows of `width`, biases broadcast:
+//   g = min(gate + gate_bias, limit),  u = clamp(up + up_bias, -limit, limit)
+//   out = (u + 1) * g * sigmoid(alpha * g)
+struct GluArgs {
+    uint rows;
+    uint width;
+    float limit;
+    float alpha;
+};
+
+kernel void clamped_swiglu(
+    device const float *gate [[buffer(0)]],
+    device const float *up [[buffer(1)]],
+    device const float *gate_bias [[buffer(2)]],
+    device const float *up_bias [[buffer(3)]],
+    device float *out [[buffer(4)]],
+    constant GluArgs &a [[buffer(5)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid < a.rows * a.width) {
+        const uint i = gid % a.width;
+        const float g = min(gate[gid] + gate_bias[i], a.limit);
+        const float u = clamp(up[gid] + up_bias[i], -a.limit, a.limit);
+        out[gid] = (u + 1.0f) * g / (1.0f + exp(-a.alpha * g));
     }
 }

@@ -62,7 +62,7 @@ fn ring(all: &[f32], s: GroupedShape, tiled: bool) -> Vec<f32> {
     out
 }
 
-fn reference(q: &[f32], k: &[f32], v: &[f32], s: GroupedShape) -> Vec<f32> {
+fn reference(q: &[f32], k: &[f32], v: &[f32], s: GroupedShape, sinks: Option<&[f32]>) -> Vec<f32> {
     let row = s.kv_heads * s.dim;
     let group = s.heads / s.kv_heads;
     let mut out = vec![0.0; s.t * s.heads * s.dim];
@@ -82,8 +82,10 @@ fn reference(q: &[f32], k: &[f32], v: &[f32], s: GroupedShape) -> Vec<f32> {
                         * f64::from(s.scale)
                 })
                 .collect();
-            let m = scores.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            let z: f64 = scores.iter().map(|x| (x - m).exp()).sum();
+            // A sink is one more logit that takes probability but carries no value.
+            let sink = sinks.map_or(f64::NEG_INFINITY, |s| f64::from(s[h]));
+            let m = scores.iter().copied().fold(sink, f64::max);
+            let z: f64 = scores.iter().map(|x| (x - m).exp()).sum::<f64>() + (sink - m).exp();
             for d in 0..s.dim {
                 let acc: f64 = scores
                     .iter()
@@ -103,6 +105,7 @@ fn max_error(
     s: GroupedShape,
     sharp: f32,
     tiled: bool,
+    sinks: Option<&[f32]>,
 ) -> f32 {
     let end = s.start + s.t;
     let rows = if tiled { s.t.next_multiple_of(32) } else { s.t };
@@ -121,6 +124,7 @@ fn max_error(
         upload(gpu, &kr),
         upload(gpu, &vr),
         gpu.buffer(out_len).unwrap(),
+        upload(gpu, sinks.unwrap_or(&[0.0])),
     ];
     let mut batch = gpu.batch(buffers, Dispatch::Serial).unwrap();
     let (qs, ks, vs, os) = (
@@ -129,15 +133,17 @@ fn max_error(
         Slice::new(2, 0, vr.len() * 4),
         Slice::new(3, 0, out_len),
     );
-    if tiled {
-        batch.attention_grouped_tiled(qs, ks, vs, os, s)
-    } else {
-        batch.attention_grouped(qs, ks, vs, os, s)
+    let sink_slice = Slice::new(4, 0, s.heads * 4);
+    match (tiled, sinks.is_some()) {
+        (true, false) => batch.attention_grouped_tiled(qs, ks, vs, os, s),
+        (false, false) => batch.attention_grouped(qs, ks, vs, os, s),
+        (true, true) => batch.attention_grouped_tiled_with_sinks((qs, ks, vs), sink_slice, os, s),
+        (false, true) => batch.attention_grouped_with_sinks((qs, ks, vs), sink_slice, os, s),
     }
     .unwrap();
     let done = run(proactor, batch);
     done.gpu_time.unwrap();
-    let want = reference(&want_q, &k, &v, s);
+    let want = reference(&want_q, &k, &v, s, sinks);
     done.buffers[3].as_f32()[..want.len()]
         .iter()
         .zip(&want)
@@ -191,7 +197,7 @@ fn matches_the_float64_definition() {
         (shape(5, 97, 4, 1, 64, 7, 12), 3.0),
         (shape(3, 2, 8, 2, 32, 16, 40), 1.0),
     ] {
-        let error = max_error(&gpu, &proactor, s, sharp, false);
+        let error = max_error(&gpu, &proactor, s, sharp, false, None);
         assert!(error < 2e-5, "{s:?} sharp {sharp}: max error {error}");
     }
 }
@@ -213,9 +219,36 @@ fn tiled_matches_the_float64_definition() {
         // A small window inside one tile, a ring of 64, sharp scores.
         (shape(40, 97, 4, 1, 64, 7, 64), 3.0),
     ] {
-        let error = max_error(&gpu, &proactor, s, sharp, true);
+        let error = max_error(&gpu, &proactor, s, sharp, true, None);
         // Matrix-unit products sum in another order than the float64 reference.
         assert!(error < 1e-4, "{s:?} sharp {sharp}: max error {error}");
+    }
+}
+
+#[test]
+fn sinks_take_probability_without_value_on_gpt_oss_shapes() {
+    let gpu = Gpu::new().unwrap();
+    let proactor = new_platform_proactor().unwrap();
+    let full = usize::MAX;
+    // 64 query heads over 8, 64 wide, scale 1/8; sinks from -3 to 3, some dominating.
+    let sinks: Vec<f32> = values(4, 64).iter().map(|x| x * 3.0).collect();
+    let gpt_oss = |t, start, window, slots| GroupedShape {
+        scale: 0.125,
+        ..shape(t, start, 64, 8, 64, window, slots)
+    };
+    for (s, tiled) in [
+        // Sliding layers: window 128, a ring of 128 + 512; decoding and wrapped passes.
+        (gpt_oss(1, 0, 128, 640), false),
+        (gpt_oss(1, 3000, 128, 640), false),
+        (gpt_oss(9, 700, 128, 640), false),
+        (gpt_oss(512, 0, 128, 640), true),
+        (gpt_oss(512, 2600, 128, 640), true),
+        // Full layers.
+        (gpt_oss(1, 4095, full, 4096), false),
+        (gpt_oss(300, 200, full, 4096), true),
+    ] {
+        let error = max_error(&gpu, &proactor, s, 1.0, tiled, Some(&sinks));
+        assert!(error < 1e-4, "{s:?} tiled {tiled}: max error {error}");
     }
 }
 

@@ -81,6 +81,9 @@ pub struct Gpu {
     wire_failures: AtomicUsize,
     bf16: [Pipeline; 3],
     mxfp4: [Pipeline; 3],
+    q8_0: [Pipeline; 3],
+    gemm_q8_0: Pipeline,
+    gemm_q8_0_tiled: Pipeline,
     gemm_bf16: Pipeline,
     gemm_mxfp4: Pipeline,
     gemm_mxfp4_tiled: Pipeline,
@@ -124,6 +127,13 @@ impl Gpu {
             pipeline("gemv_mxfp4_r2")?,
             pipeline("gemv_mxfp4_r4")?,
         ];
+        let q8_0 = [
+            pipeline("gemv_q8_0_r1")?,
+            pipeline("gemv_q8_0_r2")?,
+            pipeline("gemv_q8_0_r4")?,
+        ];
+        let gemm_q8_0 = pipeline("gemm_q8_0")?;
+        let gemm_q8_0_tiled = pipeline("gemm_q8_0_tiled")?;
         let gemm_bf16 = pipeline("gemm_bf16")?;
         let gemm_mxfp4 = pipeline("gemm_mxfp4")?;
         let gemm_mxfp4_tiled = pipeline("gemm_mxfp4_tiled")?;
@@ -144,11 +154,17 @@ impl Gpu {
             silu_mul: pipeline("silu_mul")?,
             rmsnorm: pipeline("rmsnorm_rows")?,
             copy_rows: pipeline("copy_rows")?,
+            add_rows: pipeline("add_rows")?,
+            rotate_halves: pipeline("rotate_halves")?,
+            clamped_swiglu: pipeline("clamped_swiglu")?,
         };
         for p in bf16
             .iter()
             .chain(&mxfp4)
+            .chain(&q8_0)
             .chain([
+                &gemm_q8_0,
+                &gemm_q8_0_tiled,
                 &gemm_bf16,
                 &gemm_mxfp4,
                 &gemm_mxfp4_tiled,
@@ -178,6 +194,9 @@ impl Gpu {
             wire_failures: AtomicUsize::new(0),
             bf16,
             mxfp4,
+            q8_0,
+            gemm_q8_0,
+            gemm_q8_0_tiled,
             gemm_bf16,
             gemm_mxfp4,
             gemm_mxfp4_tiled,
@@ -585,6 +604,7 @@ struct GroupedArgs {
     window: u32,
     slots: u32,
     scale: f32,
+    sinks: u32,
 }
 
 /// The shape of one [`Batch::attention_split_key`] dispatch.
@@ -636,10 +656,13 @@ struct Glue {
     silu_mul: Pipeline,
     rmsnorm: Pipeline,
     copy_rows: Pipeline,
+    add_rows: Pipeline,
+    rotate_halves: Pipeline,
+    clamped_swiglu: Pipeline,
 }
 
 impl Glue {
-    fn all(&self) -> [&Pipeline; 9] {
+    fn all(&self) -> [&Pipeline; 12] {
         [
             &self.conv,
             &self.conv_history,
@@ -650,6 +673,9 @@ impl Glue {
             &self.silu_mul,
             &self.rmsnorm,
             &self.copy_rows,
+            &self.add_rows,
+            &self.rotate_halves,
+            &self.clamped_swiglu,
         ]
     }
 }
@@ -682,6 +708,28 @@ struct StridedArgs {
     d: u32,
     stride: u32,
     eps: f32,
+}
+
+#[repr(C)]
+struct AddArgs {
+    rows: u32,
+    width: u32,
+    src_stride: u32,
+}
+
+#[repr(C)]
+struct RotateArgs {
+    rows: u32,
+    heads: u32,
+    dim: u32,
+}
+
+#[repr(C)]
+struct GluArgs {
+    rows: u32,
+    width: u32,
+    limit: f32,
+    alpha: f32,
 }
 
 #[repr(C)]
@@ -1081,6 +1129,31 @@ impl Batch<'_> {
         out: Slice,
         shape: GroupedShape,
     ) -> Result<(), Error> {
+        self.grouped(q, k, v, None, out, shape)
+    }
+
+    /// [`Self::attention_grouped`] with an attention sink per head: `sinks` holds one
+    /// logit per query head that joins each softmax, taking probability without adding
+    /// a value (gpt-oss).
+    pub fn attention_grouped_with_sinks(
+        &mut self,
+        (q, k, v): (Slice, Slice, Slice),
+        sinks: Slice,
+        out: Slice,
+        shape: GroupedShape,
+    ) -> Result<(), Error> {
+        self.grouped(q, k, v, Some(sinks), out, shape)
+    }
+
+    fn grouped(
+        &mut self,
+        q: Slice,
+        k: Slice,
+        v: Slice,
+        sinks: Option<Slice>,
+        out: Slice,
+        shape: GroupedShape,
+    ) -> Result<(), Error> {
         let GroupedShape {
             t,
             start,
@@ -1118,6 +1191,7 @@ impl Batch<'_> {
             window: narrow(window.min(end))?,
             slots: narrow(slots)?,
             scale,
+            sinks: u32::from(sinks.is_some()),
         };
         let groups = t * heads;
         narrow(groups)?;
@@ -1127,9 +1201,22 @@ impl Batch<'_> {
         self.check("v", &v, rows * kv_heads * dim * 4, 4)?;
         self.check("out", &out, t * heads * dim * 4, 4)?;
         self.check_output(&out, &[&q, &k, &v])?;
+        let sinks = self.sinks(sinks, heads, &q)?;
         let pipeline = self.gpu.attention_grouped.clone();
-        self.encode(&pipeline, &[q, k, v, out], &args, groups);
+        self.encode(&pipeline, &[q, k, v, out, sinks], &args, groups);
         Ok(())
+    }
+
+    /// The sinks slice to bind: the given one, checked, or `q` (not read) when there
+    /// are none.
+    fn sinks(&self, sinks: Option<Slice>, heads: usize, q: &Slice) -> Result<Slice, Error> {
+        match sinks {
+            Some(sinks) => {
+                self.check("sinks", &sinks, heads * 4, 4)?;
+                Ok(sinks)
+            }
+            None => Ok(Slice::new(q.buffer, q.offset, q.len)),
+        }
     }
 
     /// [`Self::attention_grouped`] on the matrix units, 32 new positions per threadgroup
@@ -1145,6 +1232,30 @@ impl Batch<'_> {
         q: Slice,
         k: Slice,
         v: Slice,
+        out: Slice,
+        shape: GroupedShape,
+    ) -> Result<(), Error> {
+        self.grouped_tiled(q, k, v, None, out, shape)
+    }
+
+    /// [`Self::attention_grouped_tiled`] with attention sinks, as
+    /// [`Self::attention_grouped_with_sinks`].
+    pub fn attention_grouped_tiled_with_sinks(
+        &mut self,
+        (q, k, v): (Slice, Slice, Slice),
+        sinks: Slice,
+        out: Slice,
+        shape: GroupedShape,
+    ) -> Result<(), Error> {
+        self.grouped_tiled(q, k, v, Some(sinks), out, shape)
+    }
+
+    fn grouped_tiled(
+        &mut self,
+        q: Slice,
+        k: Slice,
+        v: Slice,
+        sinks: Option<Slice>,
         out: Slice,
         shape: GroupedShape,
     ) -> Result<(), Error> {
@@ -1187,6 +1298,7 @@ impl Batch<'_> {
             window: narrow(window.min(end))?,
             slots: narrow(slots)?,
             scale,
+            sinks: u32::from(sinks.is_some()),
         };
         let groups = t.div_ceil(32) * heads;
         narrow(groups)?;
@@ -1201,8 +1313,9 @@ impl Batch<'_> {
         self.check("v", &v, rows * kv_heads * dim * 4, 4)?;
         self.check("out", &out, padded * heads * dim * 4, 4)?;
         self.check_output(&out, &[&q, &k, &v])?;
+        let sinks = self.sinks(sinks, heads, &q)?;
         let pipeline = self.gpu.attention_grouped_tiled.clone();
-        self.encode(&pipeline, &[q, k, v, out], &args, groups);
+        self.encode(&pipeline, &[q, k, v, out, sinks], &args, groups);
         Ok(())
     }
 
@@ -1548,6 +1661,199 @@ impl Batch<'_> {
         let pipeline = self.gpu.glue.copy_rows.clone();
         let groups = (rows * width).div_ceil(THREADS_PER_GROUP);
         self.encode(&pipeline, &[src, dst], &args, groups);
+        Ok(())
+    }
+
+    /// Checks a repacked `Q8_0` matrix: `codes` `rows * cols` signed bytes, `scales`
+    /// one little-endian binary16 per 32 of them. Needs `cols % 32 == 0`.
+    fn check_q8_0(
+        &self,
+        codes: &Slice,
+        scales: &Slice,
+        rows: usize,
+        cols: usize,
+    ) -> Result<(), Error> {
+        if !cols.is_multiple_of(32) {
+            return Err(Error::Dispatch(format!(
+                "Q8_0 rows of {cols} are not whole blocks"
+            )));
+        }
+        self.check("codes", codes, rows * cols, 16)?;
+        self.check("scales", scales, rows * cols / 32 * 2, 2)
+    }
+
+    /// `y = W x` for a `rows x cols` matrix in repacked ggml `Q8_0`: `codes` holds each
+    /// row's signed bytes in order, `scales` one binary16 per 32 (element `c` of row `r`
+    /// is `scales[(r * cols + c) / 32] * codes[r * cols + c]`). Needs `cols % 32 == 0`;
+    /// `codes` and `x` on 16-byte boundaries.
+    pub fn gemv_q8_0(
+        &mut self,
+        (codes, scales): (Slice, Slice),
+        x: Slice,
+        y: Slice,
+        rows: usize,
+        cols: usize,
+    ) -> Result<(), Error> {
+        let args = Self::shape(rows, cols)?;
+        self.check_q8_0(&codes, &scales, rows, cols)?;
+        self.check("x", &x, cols * 4, 16)?;
+        self.check("y", &y, rows * 4, 4)?;
+        self.check_output(&y, &[&codes, &scales, &x])?;
+        let pipeline = self.gpu.q8_0[self.gpu.rows.index()].clone();
+        let groups = rows.div_ceil(SIMDGROUPS_PER_GROUP * self.gpu.rows.count());
+        self.encode(&pipeline, &[codes, scales, x, y], &args, groups);
+        Ok(())
+    }
+
+    /// As [`Self::gemm_mxfp4`] for a repacked `Q8_0` matrix (see [`Self::gemv_q8_0`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn gemm_q8_0(
+        &mut self,
+        (codes, scales): (Slice, Slice),
+        x: Slice,
+        y: Slice,
+        rows: usize,
+        cols: usize,
+        n: usize,
+        (x_stride, y_stride): (usize, usize),
+    ) -> Result<(), Error> {
+        let (args, x_len, y_len) = Self::gemm_args(rows, cols, n, x_stride, y_stride)?;
+        self.check_q8_0(&codes, &scales, rows, cols)?;
+        self.check("x", &x, x_len, 16)?;
+        self.check("y", &y, y_len, 4)?;
+        self.check_output(&y, &[&codes, &scales, &x])?;
+        let pipeline = self.gpu.gemm_q8_0.clone();
+        let groups = rows.div_ceil(SIMDGROUPS_PER_GROUP * GEMM_ROWS);
+        self.encode(&pipeline, &[codes, scales, x, y], &args, groups);
+        Ok(())
+    }
+
+    /// As [`Self::gemm_mxfp4_tiled`] for a repacked `Q8_0` matrix. Needs
+    /// `rows % 64 == 0`, `cols % 32 == 0` and `n % 32 == 0` (pad the positions).
+    #[allow(clippy::too_many_arguments)]
+    pub fn gemm_q8_0_tiled(
+        &mut self,
+        (codes, scales): (Slice, Slice),
+        x: Slice,
+        y: Slice,
+        rows: usize,
+        cols: usize,
+        n: usize,
+        (x_stride, y_stride): (usize, usize),
+    ) -> Result<(), Error> {
+        if !rows.is_multiple_of(64) || !cols.is_multiple_of(32) || !n.is_multiple_of(32) {
+            return Err(Error::Dispatch(format!(
+                "tiled Q8_0 product needs rows % 64, cols % 32 and n % 32 == 0: {rows} x {cols}, n {n}"
+            )));
+        }
+        let (args, x_len, y_len) = Self::gemm_args(rows, cols, n, x_stride, y_stride)?;
+        self.check_q8_0(&codes, &scales, rows, cols)?;
+        self.check("x", &x, x_len, 16)?;
+        self.check("y", &y, y_len, 4)?;
+        self.check_output(&y, &[&codes, &scales, &x])?;
+        let pipeline = self.gpu.gemm_q8_0_tiled.clone();
+        let groups = rows / 64 * (n / 32);
+        narrow(groups)?;
+        self.encode(&pipeline, &[codes, scales, x, y], &args, groups);
+        Ok(())
+    }
+
+    /// `dst[r] += src[r * src_stride ..][..width]` for `rows` rows of `width` floats
+    /// (`dst` packed); `src_stride` 0 adds one row, a bias, to every row.
+    pub fn add_rows(
+        &mut self,
+        dst: Slice,
+        (src, src_stride): (Slice, usize),
+        rows: usize,
+        width: usize,
+    ) -> Result<(), Error> {
+        if rows == 0 || width == 0 || (src_stride != 0 && src_stride < width) {
+            return Err(Error::Dispatch(format!(
+                "unsupported add: {rows} x {width}, source stride {src_stride}"
+            )));
+        }
+        let args = AddArgs {
+            rows: narrow(rows)?,
+            width: narrow(width)?,
+            src_stride: narrow(src_stride)?,
+        };
+        narrow(rows * width)?;
+        self.check("dst", &dst, rows * width * 4, 4)?;
+        self.check("src", &src, ((rows - 1) * src_stride + width) * 4, 4)?;
+        self.check_output(&dst, &[&src])?;
+        let pipeline = self.gpu.glue.add_rows.clone();
+        let groups = (rows * width).div_ceil(THREADS_PER_GROUP);
+        self.encode(&pipeline, &[dst, src], &args, groups);
+        Ok(())
+    }
+
+    /// Rotary position embedding by halves, in place: `x` is `rows` rows of `heads`
+    /// heads of `dim` floats; `table` holds per row `dim / 2` pairs `(cos, sin)`, and
+    /// element `i` of a head's first half turns with element `i` of its second.
+    pub fn rotate_halves(
+        &mut self,
+        x: Slice,
+        table: Slice,
+        rows: usize,
+        (heads, dim): (usize, usize),
+    ) -> Result<(), Error> {
+        if rows == 0 || heads == 0 || dim == 0 || !dim.is_multiple_of(2) {
+            return Err(Error::Dispatch(format!(
+                "unsupported rotation: {rows} rows of {heads} x {dim}"
+            )));
+        }
+        let args = RotateArgs {
+            rows: narrow(rows)?,
+            heads: narrow(heads)?,
+            dim: narrow(dim)?,
+        };
+        narrow(rows * heads * dim)?;
+        self.check("x", &x, rows * heads * dim * 4, 4)?;
+        self.check("table", &table, rows * dim * 4, 8)?;
+        self.check_output(&x, &[&table])?;
+        let pipeline = self.gpu.glue.rotate_halves.clone();
+        let groups = (rows * heads * dim / 2).div_ceil(THREADS_PER_GROUP);
+        self.encode(&pipeline, &[x, table], &args, groups);
+        Ok(())
+    }
+
+    /// gpt-oss's clamped SwiGLU over `rows` rows of `width`, biases broadcast:
+    /// `g = min(gate + gb, limit)`, `u = clamp(up + ub, -limit, limit)`,
+    /// `out = (u + 1) * g * sigmoid(alpha * g)`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn clamped_swiglu(
+        &mut self,
+        (gate, up): (Slice, Slice),
+        (gate_bias, up_bias): (Slice, Slice),
+        out: Slice,
+        rows: usize,
+        width: usize,
+        (limit, alpha): (f32, f32),
+    ) -> Result<(), Error> {
+        if rows == 0 || width == 0 {
+            return Err(Error::Dispatch("empty clamped_swiglu".into()));
+        }
+        let args = GluArgs {
+            rows: narrow(rows)?,
+            width: narrow(width)?,
+            limit,
+            alpha,
+        };
+        narrow(rows * width)?;
+        for (name, slice) in [("gate", &gate), ("up", &up), ("out", &out)] {
+            self.check(name, slice, rows * width * 4, 4)?;
+        }
+        self.check("gate_bias", &gate_bias, width * 4, 4)?;
+        self.check("up_bias", &up_bias, width * 4, 4)?;
+        self.check_output(&out, &[&gate, &up, &gate_bias, &up_bias])?;
+        let pipeline = self.gpu.glue.clamped_swiglu.clone();
+        let groups = (rows * width).div_ceil(THREADS_PER_GROUP);
+        self.encode(
+            &pipeline,
+            &[gate, up, gate_bias, up_bias, out],
+            &args,
+            groups,
+        );
         Ok(())
     }
 
