@@ -84,15 +84,15 @@ pub struct DenseStats {
     pub weight_bytes: u64,
 }
 
-struct Surface {
+pub(crate) struct Surface {
     buffer: CFRetained<CVPixelBuffer>,
-    array: Retained<MLMultiArray>,
+    pub(crate) array: Retained<MLMultiArray>,
     rows: usize,
     cols: usize,
 }
 
 impl Surface {
-    fn new(rows: usize, cols: usize) -> Result<Self, String> {
+    pub(crate) fn new(rows: usize, cols: usize) -> Result<Self, String> {
         // SAFETY: public CoreVideo/Core ML constructors. The attributes dictionary is a
         // toll-free-bridged NSDictionary that outlives the call; the created pixel buffer
         // is owned by `buffer` (+1 from Create) and retained again by the array.
@@ -130,7 +130,7 @@ impl Surface {
     }
 
     /// Calls `row(r, dst)` for every row with that row's `cols` fp16 bit patterns.
-    fn fill(&mut self, mut row: impl FnMut(usize, &mut [u16])) -> Result<(), String> {
+    pub(crate) fn fill(&self, mut row: impl FnMut(usize, &mut [u16])) -> Result<(), String> {
         // SAFETY: the base address is valid for `rows * bytes_per_row` bytes while locked;
         // each row slice lies inside that span and only one exists at a time.
         unsafe {
@@ -456,7 +456,7 @@ fn convert_unit(
     Ok(())
 }
 
-fn f32_to_f16(dst: &mut [u16], src: &[f32]) -> bool {
+pub(crate) fn f32_to_f16(dst: &mut [u16], src: &[f32]) -> bool {
     if !src.iter().all(|v| v.abs() <= FP16_MAX) {
         return false;
     }

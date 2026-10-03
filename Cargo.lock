@@ -1568,6 +1568,8 @@ dependencies = [
  "block2 0.6.2",
  "half",
  "loadngo-inference",
+ "loadngo-metal-compute",
+ "loadngo-proactor",
  "objc2 0.6.4",
  "objc2-core-foundation",
  "objc2-core-ml",

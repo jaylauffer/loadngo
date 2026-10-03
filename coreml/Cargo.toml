@@ -8,6 +8,7 @@ description = "Public Core ML adapter for Loadngo local compute partitions"
 
 [dependencies]
 loadngo-inference = { path = "../inference" }
+loadngo-proactor = { path = "../proactor" }
 prost = "0.14.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -18,3 +19,8 @@ block2 = "0.6.2"
 objc2-core-video = "0.3.2"
 objc2-core-foundation = "0.3.2"
 half = "2.7.1"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# Only for the concurrency test: Neural Engine and GPU work on one proactor.
+loadngo-metal-compute = { path = "../metal-compute" }
+

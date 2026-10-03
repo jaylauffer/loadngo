@@ -166,3 +166,69 @@ Kimi K3 results on the released checkpoint are recorded in
 - No int8/int4 weight path: Core ML palettized weights need baked models.
 - No hardware execution trace; placement evidence is the compute plan plus the fp16
   error signature and timing, not an ANE counter.
+
+## Grouped-query attention on the Neural Engine, through the proactor (2026-10-03)
+
+Asked by Jay for Gemma 4 31B (kimi-k3-in-rust `docs/GEMMA.md`), whose prompts were
+attention-bound on the GPU. A prototype, not yet used by any model.
+
+**What it is.** `loadngo_coreml::model::encode_grouped_attention` writes a Core ML
+NeuralNetwork model, `o = softmax(q kᵀ + mask) v`, with grouped key/value heads (each
+broadcast across its query group by the batched products) and the window/causal limits
+as an additive fp16 mask. Inputs and output are two-dimensional fp16 in the decoder's
+own row layout (`q [queries][heads·dim]`, `k`, `v [keys][kv_heads·dim]`), so they can
+be IOSurface-backed and need no reordering on the CPU; reshapes and transposes inside
+the model make the head layout. An earlier layout, `k [kv_heads·keys][dim]`, had 24,576
+rows, past the Neural Engine's 16,384 per dimension, and Core ML put those layers (and,
+for one decoded token, the whole model) on the CPU.
+
+`loadngo_coreml::attention::AttentionEngine::submit` fills the surfaces, starts an
+asynchronous prediction (`predictionFromFeatures:completionHandler:`) and returns. Core
+ML's completion handler reads the result and posts it to the caller's loadngo proactor
+with `enqueue_work`, the path `loadngo-metal-compute` uses for GPU completions, so the
+result arrives as an ordinary proactor job and nothing blocks on the Neural Engine. Two
+input sets per shape let the next pass be written while one runs; a third concurrent
+submission is refused, not queued.
+
+**Correctness** (`coreml/tests/attention.rs`, float64 reference, inputs RMS-normalised
+per head as Gemma's q, k, v are): RMS error 0.5-2.2e-3 and max 0.3-2.6e-2 on outputs of
+RMS about 1. That is fp16; the GPU kernels are within 2e-5 (plain) and 1e-4 (tiled).
+Every layer of every shape below is planned on the Neural Engine.
+
+**Speed**, M4 Pro, the same shapes on the GPU (`metal-compute/tests/attention_grouped.rs`,
+`gemma_shapes_timing`, GPU time) and the Neural Engine (median of 20 back-to-back
+predictions, submission to completion handler, not counting the CPU fill):
+
+| Gemma 4 31B shape | GPU | Neural Engine | Neural Engine fill (CPU) |
+|---|---|---|---|
+| Sliding layer, 512-position pass, ring of 1,536 wrapped | 21.9 ms | 9.75 ms | 5.7 ms |
+| Sliding layer, first 512 positions | 6.1 ms | 5.7 ms | 2.8 ms |
+| Sliding layer, one token | 0.6 ms | 1.5 ms | 4.1 ms |
+| Full layer, 77 positions after 700 | 8.1 ms | 3.4 ms | 1.6 ms |
+| Full layer, one token at 1,500 | 1.7 ms | 2.2 ms | 2.0 ms |
+
+Compile and load is 150-300 ms per shape once Core ML has cached it (about 18 s the
+first time a shape is ever compiled on this Mac).
+
+**Concurrency** (`neural_engine_and_gpu_run_concurrently`): two GPU attention passes
+and four Neural Engine passes of the wrapped sliding shape take 64-70 ms and 74 ms on
+their own (141-144 ms in sequence) and 79 ms submitted together, every completion
+received on one proactor. Three runs agreed within 0.5 ms. The two devices overlap
+almost completely, and the GPU was not slowed.
+
+**What it means for Gemma.** Decoding stays on the GPU: one token is slower on the
+Neural Engine and a token's layers cannot overlap each other. For prompts, attention on
+the Neural Engine is 2.2-2.4x faster per pass where the window is full, and it can run
+while the GPU does other work. A layer's attention needs that layer's own q, k and v,
+so the overlap has to come from pipelining 512-position passes: the Neural Engine runs
+pass n's attention for layer l while the GPU runs pass n+1's projections. Before that is
+worth building:
+
+1. Keep each layer's keys and values in its Neural Engine surfaces and write only new
+   rows (as the GPU's ring copy does). The fill now rewrites them every pass and costs
+   2-6 ms, about half the Neural Engine time.
+2. Bucket the full layers' key count (every 256 positions is a new compiled shape now).
+3. Decide on accuracy: fp16 attention (RMS error ~1.5e-3) in place of fp32 on the GPU,
+   measured end to end as perplexity and KL against the GPU path, not per kernel.
+4. Restructure the prompt loop in kimi-k3-core's `gemma` from layer-major to a pipeline
+   over passes.

@@ -240,3 +240,86 @@ fn rejects_shapes_it_cannot_run() {
         );
     }
 }
+
+/// GPU time on Gemma 4 31B's attention shapes, the kernel kimi-k3-in-rust picks for each
+/// (tiled from 32 positions), to compare with loadngo-coreml's Neural Engine attention
+/// (`coreml/tests/attention.rs`, same cases):
+/// `cargo test --release -p loadngo-metal-compute --test attention_grouped -- --ignored --nocapture`
+#[test]
+#[ignore = "timing; run by hand on the Mac mini"]
+fn gemma_shapes_timing() {
+    let gpu = Gpu::new().unwrap();
+    let proactor = new_platform_proactor().unwrap();
+    let full = usize::MAX;
+    for (name, s) in [
+        (
+            "sliding, 512-position pass, wrapped",
+            shape(512, 2600, 32, 16, 256, 1024, 1536),
+        ),
+        (
+            "sliding, first 512 positions",
+            shape(512, 0, 32, 16, 256, 1024, 1536),
+        ),
+        (
+            "sliding, one token at 3000",
+            shape(1, 3000, 32, 16, 256, 1024, 1536),
+        ),
+        (
+            "full, 77 positions after 700",
+            shape(77, 700, 32, 4, 512, full, 32768),
+        ),
+        (
+            "full, one token at 1500",
+            shape(1, 1500, 32, 4, 512, full, 32768),
+        ),
+    ] {
+        let tiled = s.t >= 32;
+        let end = s.start + s.t;
+        let rows = if tiled { s.t.next_multiple_of(32) } else { s.t };
+        let kv_rows = if !tiled {
+            s.slots.min(end)
+        } else if s.slots < end {
+            s.slots
+        } else {
+            end.next_multiple_of(32)
+        };
+        let row = s.kv_heads * s.dim;
+        let q = values(1, rows * s.heads * s.dim);
+        let kv = values(2, kv_rows * row);
+        let out_len = rows * s.heads * s.dim * 4;
+        let mut times = Vec::new();
+        for _ in 0..6 {
+            let buffers = vec![
+                upload(&gpu, &q),
+                upload(&gpu, &kv),
+                upload(&gpu, &kv),
+                gpu.buffer(out_len).unwrap(),
+            ];
+            let mut batch = gpu.batch(buffers, Dispatch::Serial).unwrap();
+            let (qs, ks, vs, os) = (
+                Slice::new(0, 0, q.len() * 4),
+                Slice::new(1, 0, kv.len() * 4),
+                Slice::new(2, 0, kv.len() * 4),
+                Slice::new(3, 0, out_len),
+            );
+            if tiled {
+                batch.attention_grouped_tiled(qs, ks, vs, os, s)
+            } else {
+                batch.attention_grouped(qs, ks, vs, os, s)
+            }
+            .unwrap();
+            let started = std::time::Instant::now();
+            let done = run(&proactor, batch);
+            let wall = started.elapsed();
+            times.push((done.gpu_time.unwrap(), wall));
+        }
+        times.sort();
+        let (gpu_time, wall) = times[times.len() / 2];
+        eprintln!(
+            "{name}: {} kernel, median GPU {:.2} ms, wall {:.2} ms",
+            if tiled { "tiled" } else { "split" },
+            gpu_time.as_secs_f64() * 1e3,
+            wall.as_secs_f64() * 1e3
+        );
+    }
+}
