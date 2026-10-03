@@ -41,9 +41,14 @@ fn model() -> Model {
 
 /// Feeds the oracle's tokens in parts of the given sizes; returns the largest error.
 fn largest_error(chunk: usize, parts: &[usize], gpu_routing: bool) -> f32 {
+    largest_error_with(chunk, parts, gpu_routing, true)
+}
+
+fn largest_error_with(chunk: usize, parts: &[usize], gpu_routing: bool, pipeline: bool) -> f32 {
     let (ids, vocab, want) = oracle();
     let mut gpu = GpuModel::new(model(), chunk, 64).unwrap();
     gpu.gpu_routing = gpu_routing;
+    gpu.pipeline = pipeline;
     let mut session = gpu.session().unwrap();
     let mut at = 0;
     let mut worst = 0.0_f32;
@@ -84,4 +89,21 @@ fn passes_on_the_matrix_units_and_after_them() {
     eprintln!("33 then 7: largest logit error {worst:e}");
     let worst = largest_error(8, &[8, 8, 3, 8, 8, 5], true);
     eprintln!("chunks of 8: largest logit error {worst:e}");
+}
+
+#[test]
+fn consecutive_passes_interleave_through_the_proactor() {
+    // One call, several passes: pairs of passes interleaved layer by layer (and a last
+    // odd one alone), against the same passes one after another.
+    for (chunk, label) in [
+        (8, "chunks of 8: two pairs and one alone"),
+        (16, "chunks of 16: a pair and one alone"),
+        (32, "chunks of 32: a tiled pair"),
+    ] {
+        let paired = largest_error_with(chunk, &[40], true, true);
+        let alone = largest_error_with(chunk, &[40], true, false);
+        eprintln!(
+            "{label}: largest logit error {paired:e} interleaved, {alone:e} one after another"
+        );
+    }
 }

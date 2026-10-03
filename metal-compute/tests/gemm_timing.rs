@@ -273,3 +273,68 @@ fn time_submission_after_cpu_gaps() {
         );
     }
 }
+
+/// The tiled products on gpt-oss's expert shape (2,880 x 2,880): 32 products per batch,
+/// as many as one prompt pass runs per kind and layer, at the positions an expert gets
+/// (64 of a 512-position pass) and at a whole pass.
+#[test]
+#[ignore = "timing, run by hand"]
+fn time_tiled_products_on_expert_shapes() {
+    let gpu = Gpu::new().unwrap();
+    let proactor = new_platform_proactor().unwrap();
+    let (rows, cols, count) = (2880, 2880, 32);
+    for n in [64, 512] {
+        for kind in ["mxfp4", "q8_0", "bf16"] {
+            let weight_bytes = match kind {
+                "mxfp4" => rows * cols / 2,
+                "q8_0" => rows * cols,
+                _ => rows * cols * 2,
+            };
+            let scale_bytes = match kind {
+                "mxfp4" => rows * cols / 32,
+                _ => rows * cols / 16,
+            };
+            let mut buffers = vec![
+                gpu.buffer(weight_bytes * count).unwrap(),
+                gpu.buffer(scale_bytes * count).unwrap(),
+                gpu.buffer(n * cols * 4).unwrap(),
+                gpu.buffer(n * rows * 4 * count).unwrap(),
+            ];
+            // Finite weights and scales: small codes, scale bytes near 2^0.
+            buffers[0].as_bytes_mut().fill(0x11);
+            buffers[1]
+                .as_bytes_mut()
+                .fill(if kind == "mxfp4" { 120 } else { 0x20 });
+            buffers[2].as_f32_mut().fill(0.5);
+            for dispatch in [Dispatch::Serial, Dispatch::Concurrent] {
+                let mut best = f64::INFINITY;
+                for _ in 0..3 {
+                    let taken = std::mem::take(&mut buffers);
+                    let mut batch = gpu.batch(taken, dispatch).unwrap();
+                    for i in 0..count {
+                        let w = Slice::new(0, i * weight_bytes, weight_bytes);
+                        let s = Slice::new(1, i * scale_bytes, scale_bytes);
+                        let x = Slice::new(2, 0, n * cols * 4);
+                        let y = Slice::new(3, i * n * rows * 4, n * rows * 4);
+                        let strides = (cols, rows);
+                        match kind {
+                            "mxfp4" => batch.gemm_mxfp4_tiled(w, s, x, y, rows, cols, n, strides),
+                            "q8_0" => batch.gemm_q8_0_tiled((w, s), x, y, rows, cols, n, strides),
+                            _ => batch.gemm_bf16_tiled(w, x, y, rows, cols, n, strides),
+                        }
+                        .unwrap();
+                    }
+                    let done = run(&proactor, batch);
+                    best = best.min(done.gpu_time.unwrap().as_secs_f64());
+                    buffers = done.buffers;
+                }
+                let flops = 2.0 * (rows * cols * n * count) as f64;
+                eprintln!(
+                    "{kind:6} n {n:3} {dispatch:?}: {:7.2} ms for {count}, {:.2} TFLOPS",
+                    best * 1e3,
+                    flops / best / 1e12
+                );
+            }
+        }
+    }
+}

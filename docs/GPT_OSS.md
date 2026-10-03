@@ -124,6 +124,18 @@ and a copy of the router for prompts. Every submission completes on a loadngo pr
      from shared memory, and gathers them by expert; the GPU computes each chosen
      expert; the CPU adds the weighted results to the residual.
 
+- **Two prompt passes in a row** are interleaved layer by layer, each step triggered by
+  a completion the proactor delivers:
+  - when the first pass's attention for a layer finishes, the second's is queued at
+    once, and the CPU routes the first while the GPU works;
+  - when a pass's experts finish, the CPU adds them to its residual and that pass's
+    next attention is queued.
+
+  Attention stays in order, first pass then second, layer by layer: the second pass
+  sees the first's keys. The passes share the caches; their other buffers are double.
+  Each layer's experts run side by side in one concurrent batch, with barriers between
+  gate/up, SwiGLU, down and biases.
+
 Prompt passes take up to 512 positions. From 32 positions every product and the
 attention run on the matrix units. Sliding layers keep a ring of 640 rows (128 + 512);
 full layers keep `max_context` rows. `gpt_oss_generate --gpu --profile` prints where the
@@ -174,7 +186,7 @@ Decoding speed, as each step landed:
 At short context, decoding is near the bandwidth floor: about 2.5 GB per token at about
 200 GB/s is about 12.5 ms.
 
-Each 512-position prompt pass, from the profile:
+Each 512-position prompt pass, from the profile, before interleaving:
 
 | Part | Time | Share |
 |---|---:|---:|
@@ -183,7 +195,22 @@ Each 512-position prompt pass, from the profile:
 | Waiting between submissions | 0.13 s | 8% |
 | CPU routing, gathering and adding back | 0.11 s | 7% |
 
-The expert products run at about 2.2 TFLOPS of f32 on the matrix units.
+The expert products ran at about 2.2 TFLOPS of f32. Alone, the tiled kernels reach
+3.5-4.4 TFLOPS on the expert shape (`metal-compute/tests/gemm_timing.rs`,
+`time_tiled_products_on_expert_shapes`). In a pass, the 2,048 routed positions spread
+unevenly over 32 experts (18 to 161 each), and padding each to a multiple of 32 adds
+about 25% (2,544 padded rows).
+
+Interleaving two passes (`pass_pair`) took the 4,246-token prompt from 15.1-16.7 s to
+12.6-13.0 s (327-338 tokens/s). With two passes in flight the GPU overlaps one pass's
+experts with the other's attention: a pass now takes 1.40-1.44 s of wall time, less
+than the 1.51 s of GPU time it took alone. Per-submission GPU times in the profile
+overlap now and no longer add up to the wall time. Running a layer's experts
+concurrently, without interleaving, changed nothing (1.12 s per pass): the GPU was
+already busy within a pass.
+
+A 1,810-token chat prompt (summarize this document) read in 5.3 s (342 tokens/s); the
+answer was accurate, generated at 48.7 tokens/s. Decoding is unchanged at 57 tokens/s.
 
 ## The Neural Engine
 
@@ -207,11 +234,10 @@ proactor.
 
 ## Next
 
-1. **Prompts.**
-   - The expert products are two thirds of a pass; half-precision matrix units would
-     about double them.
-   - Pipelining two half-passes through the proactor would hide the CPU routing and
-     the gaps between submissions behind GPU work (about 15%).
+1. **Prompts.** The padding of each expert's positions to 32 costs about 25% of the
+   expert products. A tiled kernel with a 16-position tail, or one grouped dispatch
+   over all experts, would recover part of it. Half precision would not help much:
+   Apple GPUs run f16 and f32 arithmetic at the same rate.
 2. **Long-context decoding.** About 6 ms per token is still attention at 4k
    positions. Split each head's keys across threadgroups.
 3. **Tools in the chat format.** Declarations in the developer message, and calls on

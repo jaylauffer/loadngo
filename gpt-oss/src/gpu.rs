@@ -14,24 +14,34 @@
 //!   - the weighted combine into the residual.
 //!
 //!   Then the output.
-//! - **Several positions (a prompt)** take two submissions per layer:
+//! - **A prompt pass** takes two submissions per layer:
 //!   1. Attention: norm; q, k and v with biases; rotary; the new keys and values into
 //!      the layer's cache; grouped attention with sinks; the output projection and its
 //!      bias added to the residual; the norm before the experts.
 //!   2. Experts: the CPU routes each position from the normalized rows, read straight
 //!      from shared memory, and gathers them by expert. The GPU computes every chosen
-//!      expert. The CPU adds the weighted results to the residual.
+//!      expert, the experts side by side. The CPU adds the weighted results to the
+//!      residual.
+//! - **Two prompt passes in a row** are interleaved layer by layer, driven by the
+//!   proactor's completions:
+//!   - the second pass's attention is queued as soon as the first's finishes, so the
+//!     GPU works while the CPU routes and scatters;
+//!   - attention stays in order (first pass, then second, layer by layer), because the
+//!     second pass's positions see the first's keys.
+//!
+//!   The passes share the key/value caches; their other buffers are separate.
 //!
 //! Sliding layers keep their keys and values in a ring of `sliding_window + chunk` rows
 //! (rounded up to 32). Full layers keep `max_context` rows. From 32 positions the
 //! products and attention run on the matrix units.
 //!
 //! [`crate::model::Model`] stays the reference: `tests/gpu_oracle.rs` holds this path to
-//! transformers, both ways of routing.
+//! transformers, every way of running it.
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use loadngo_metal_compute::{
@@ -212,7 +222,9 @@ fn floats(gpu: &Gpu, v: &[f32]) -> Result<Arc<Resident>, GpuError> {
     Ok(gpu.resident(&bytes)?)
 }
 
-/// Shared buffers by position in a session's buffer list.
+/// A pass's working buffers, by position in a buffer set. A batch that touches the
+/// key/value caches gets the set followed by the caches, layer `l`'s keys at
+/// `CACHES + 2 * l` and values after them.
 const H: usize = 0;
 const X: usize = 1;
 const Q: usize = 2;
@@ -246,6 +258,7 @@ pub struct Profile {
     pub route: Duration,
     pub gather: Duration,
     pub scatter: Duration,
+    /// Wall time of the passes (two interleaved passes count their shared time once).
     pub total: Duration,
 }
 
@@ -314,6 +327,18 @@ fn f(buffer: usize, row: usize, width: usize, rows: usize) -> Slice {
     Slice::new(buffer, row * width * 4, rows * width * 4)
 }
 
+/// The positions of one prompt pass routed to each expert, and where their rows sit in
+/// the gathered buffers.
+struct Plan {
+    /// `(position, weight)` per expert.
+    by_expert: Vec<Vec<(usize, f32)>>,
+    /// `(expert, first row, rows)` for each expert that has positions.
+    runs: Vec<(usize, usize, usize)>,
+}
+
+/// GPU completions delivered by the proactor: which pass, and what finished.
+type Arrivals = Arc<Mutex<VecDeque<(usize, Completed)>>>;
+
 pub struct GpuModel {
     /// The CPU side: shape, router (for prompts), embedding and rotary frequencies. Its
     /// other matrices are released once they are in GPU memory.
@@ -330,12 +355,16 @@ pub struct GpuModel {
     /// Route single positions on the GPU (one submission per token); otherwise on the
     /// CPU, as prompts are.
     pub gpu_routing: bool,
+    /// Interleave consecutive prompt passes two at a time.
+    pub pipeline: bool,
     profile: RefCell<Profile>,
 }
 
-/// A conversation on the GPU: its buffers (caches included) and position.
+/// A conversation on the GPU: two sets of working buffers, the key/value caches, and
+/// the position reached.
 pub struct GpuSession {
-    buffers: Vec<Buffer>,
+    sets: [Vec<Buffer>; 2],
+    caches: Vec<Buffer>,
     len: usize,
     slots: Vec<usize>,
 }
@@ -348,6 +377,35 @@ impl GpuSession {
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
+}
+
+/// A set followed by the caches, as one batch's buffers.
+fn join(mut set: Vec<Buffer>, caches: Vec<Buffer>) -> Vec<Buffer> {
+    set.extend(caches);
+    set
+}
+
+/// The inverse of [`join`].
+fn unjoin(mut buffers: Vec<Buffer>) -> (Vec<Buffer>, Vec<Buffer>) {
+    let caches = buffers.split_off(CACHES);
+    (buffers, caches)
+}
+
+/// One of two interleaved prompt passes, as the scheduler sees it.
+struct Lane<'t> {
+    tokens: &'t [u32],
+    start: usize,
+    which: Option<Logits>,
+    /// Its buffer set, when no submission holds it.
+    set: Option<Vec<Buffer>>,
+    /// The layer whose attention it needs next (`layers`: the output; past it: done).
+    layer: usize,
+    /// Attention for `layer` may be submitted (its previous experts are in).
+    ready: bool,
+    /// What it has in flight: the phase, when encoding began and when it was committed.
+    flight: Option<(Phase, Instant, Instant)>,
+    plan: Option<Plan>,
+    logits: Vec<Vec<f32>>,
 }
 
 impl GpuModel {
@@ -417,6 +475,7 @@ impl GpuModel {
             chunk,
             max_context: max_context.next_multiple_of(32),
             gpu_routing: true,
+            pipeline: true,
             profile: RefCell::default(),
             model,
         })
@@ -438,31 +497,34 @@ impl GpuModel {
         // Every position is routed to `experts_used` experts; each expert's rows are
         // padded to 32 for the tiled products.
         let assigned = n * c.experts_used + 32 * c.experts;
-        let zeroed = |gpu: &Gpu, len: usize| -> Result<Buffer, GpuError> {
-            let mut buffer = gpu.buffer(len.max(16))?;
+        let zeroed = |len: usize| -> Result<Buffer, GpuError> {
+            let mut buffer = self.gpu.buffer(len.max(16))?;
             buffer.as_bytes_mut().fill(0);
             Ok(buffer)
         };
-        let g = &self.gpu;
-        let mut buffers = vec![
-            zeroed(g, n * c.hidden * 4)?,
-            zeroed(g, n * c.hidden * 4)?,
-            zeroed(g, n * q_width * 4)?,
-            zeroed(g, n * kv_width * 4)?,
-            zeroed(g, n * kv_width * 4)?,
-            zeroed(g, n * q_width * 4)?,
-            zeroed(g, n * c.hidden * 4)?,
-            zeroed(g, n * c.head_dim * 4)?,
-            zeroed(g, assigned * c.hidden * 4)?,
-            zeroed(g, assigned * c.expert_hidden * 4)?,
-            zeroed(g, assigned * c.expert_hidden * 4)?,
-            zeroed(g, assigned * c.expert_hidden * 4)?,
-            zeroed(g, assigned * c.hidden * 4)?,
-            zeroed(g, 32 * c.vocab * 4)?,
-            zeroed(g, c.experts * 4)?,
-            zeroed(g, c.experts_used * 4)?,
-            zeroed(g, c.experts_used * 4)?,
-        ];
+        let set = || -> Result<Vec<Buffer>, GpuError> {
+            Ok(vec![
+                zeroed(n * c.hidden * 4)?,
+                zeroed(n * c.hidden * 4)?,
+                zeroed(n * q_width * 4)?,
+                zeroed(n * kv_width * 4)?,
+                zeroed(n * kv_width * 4)?,
+                zeroed(n * q_width * 4)?,
+                zeroed(n * c.hidden * 4)?,
+                zeroed(n * c.head_dim * 4)?,
+                zeroed(assigned * c.hidden * 4)?,
+                zeroed(assigned * c.expert_hidden * 4)?,
+                zeroed(assigned * c.expert_hidden * 4)?,
+                zeroed(assigned * c.expert_hidden * 4)?,
+                zeroed(assigned * c.hidden * 4)?,
+                zeroed(32 * c.vocab * 4)?,
+                zeroed(c.experts * 4)?,
+                zeroed(c.experts_used * 4)?,
+                zeroed(c.experts_used * 4)?,
+            ])
+        };
+        let sets = [set()?, set()?];
+        let mut caches = Vec::with_capacity(2 * c.layers);
         let mut slots = Vec::with_capacity(c.layers);
         for l in 0..c.layers {
             let rows = if c.is_sliding(l) {
@@ -470,12 +532,13 @@ impl GpuModel {
             } else {
                 self.max_context
             };
-            buffers.push(zeroed(g, rows * kv_width * 4)?);
-            buffers.push(zeroed(g, rows * kv_width * 4)?);
+            caches.push(zeroed(rows * kv_width * 4)?);
+            caches.push(zeroed(rows * kv_width * 4)?);
             slots.push(rows);
         }
         Ok(GpuSession {
-            buffers,
+            sets,
+            caches,
             len: 0,
             slots,
         })
@@ -486,6 +549,15 @@ impl GpuModel {
         self.profile.take()
     }
 
+    fn record(&self, phase: Phase, (encoding, committed): (Instant, Instant), gpu: Duration) {
+        let mut profile = self.profile.borrow_mut();
+        let time = &mut profile.phases[phase as usize];
+        time.submissions += 1;
+        time.encode += committed - encoding;
+        time.gpu += gpu;
+        time.wall += committed.elapsed();
+    }
+
     /// Commits `batch`, encoded since `encoding`, and waits on the proactor until the
     /// GPU has finished; the time goes to `phase`.
     fn run(
@@ -494,31 +566,32 @@ impl GpuModel {
         phase: Phase,
         encoding: Instant,
     ) -> Result<Vec<Buffer>, GpuError> {
+        let arrivals: Arrivals = Arc::default();
         let committed = Instant::now();
-        let slot: Arc<Mutex<Option<Completed>>> = Arc::default();
-        let filled = Arc::clone(&slot);
-        batch.commit(&self.proactor.handle(), move |done| {
-            *filled
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(done);
-        });
+        self.submit(batch, &arrivals, 0);
         loop {
             self.proactor.run_once()?;
-            let done = slot
+            let done = arrivals
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take();
-            if let Some(done) = done {
-                let gpu = done.gpu_time?;
-                let mut profile = self.profile.borrow_mut();
-                let time = &mut profile.phases[phase as usize];
-                time.submissions += 1;
-                time.encode += committed - encoding;
-                time.gpu += gpu;
-                time.wall += committed.elapsed();
+                .unwrap_or_else(PoisonError::into_inner)
+                .pop_front();
+            if let Some((_, done)) = done {
+                self.record(phase, (encoding, committed), done.gpu_time?);
                 return Ok(done.buffers);
             }
         }
+    }
+
+    /// Commits `batch`; its completion arrives in `arrivals`, tagged `lane`, when the
+    /// proactor runs it.
+    fn submit(&self, batch: Batch<'_>, arrivals: &Arrivals, lane: usize) {
+        let arrivals = Arc::clone(arrivals);
+        batch.commit(&self.proactor.handle(), move |done| {
+            arrivals
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push_back((lane, done));
+        });
     }
 
     /// Feeds `tokens` at the session's next positions, in passes of at most `chunk`, and
@@ -536,29 +609,43 @@ impl GpuModel {
                 self.max_context
             )));
         }
+        let parts: Vec<&[u32]> = tokens.chunks(self.chunk).collect();
+        let want = |i: usize| match which {
+            Logits::All => Some(Logits::All),
+            Logits::Last => (i + 1 == parts.len()).then_some(Logits::Last),
+        };
         let mut out = Vec::new();
-        for (i, part) in tokens.chunks(self.chunk).enumerate() {
-            let last = (i + 1) * self.chunk >= tokens.len();
-            let want = match which {
-                Logits::All => Some(Logits::All),
-                Logits::Last => last.then_some(Logits::Last),
-            };
-            out.extend(self.pass(session, part, want)?);
+        let mut i = 0;
+        while i < parts.len() {
+            // Two prompt passes interleave; a single position (decoding) or a last odd
+            // pass runs alone.
+            if self.pipeline && i + 1 < parts.len() && parts[i].len() > 1 {
+                out.extend(self.pass_pair(
+                    session,
+                    [parts[i], parts[i + 1]],
+                    [want(i), want(i + 1)],
+                )?);
+                i += 2;
+            } else {
+                out.extend(self.pass(session, parts[i], want(i))?);
+                i += 1;
+            }
         }
         Ok(out)
     }
 
     /// Writes the embedding rows of `tokens` and the rotary table for positions
-    /// `start..`.
-    fn prepare(&self, buffers: &mut [Buffer], tokens: &[u32], start: usize) {
+    /// `start..` into a buffer set.
+    fn prepare(&self, set: &mut [Buffer], tokens: &[u32], start: usize) {
+        let began = Instant::now();
         let c = &self.model.config;
         let hidden = c.hidden;
         for (p, &token) in tokens.iter().enumerate() {
             self.model
-                .embed(token, &mut buffers[H].as_f32_mut()[p * hidden..][..hidden]);
+                .embed(token, &mut set[H].as_f32_mut()[p * hidden..][..hidden]);
         }
         let half = c.head_dim / 2;
-        let table = buffers[TABLE].as_f32_mut();
+        let table = set[TABLE].as_f32_mut();
         for p in 0..tokens.len() {
             for (i, &freq) in self.model.inv_freq.iter().enumerate() {
                 let (sin, cos) = ((start + p) as f64 * freq).sin_cos();
@@ -566,6 +653,7 @@ impl GpuModel {
                 table[(p * half + i) * 2 + 1] = (sin * self.model.rope_scale) as f32;
             }
         }
+        self.profile.borrow_mut().prepare += began.elapsed();
     }
 
     /// Layer `l`'s attention for `n` new positions from `start`, its output added to the
@@ -787,6 +875,17 @@ impl GpuModel {
         )
     }
 
+    /// The rows of logits a pass of `n` positions returns.
+    fn wanted(which: Option<Logits>, n: usize) -> std::ops::Range<usize> {
+        match which {
+            None => 0..0,
+            Some(Logits::Last) => n - 1..n,
+            Some(Logits::All) => 0..n,
+        }
+    }
+
+    /// One pass on its own: decoding (one submission per token when routed on the GPU)
+    /// or a prompt pass, one submission after another.
     fn pass(
         &self,
         session: &mut GpuSession,
@@ -796,13 +895,12 @@ impl GpuModel {
         let began = Instant::now();
         let n = tokens.len();
         let start = session.len;
-        let mut buffers = std::mem::take(&mut session.buffers);
-        self.prepare(&mut buffers, tokens, start);
-        self.profile.borrow_mut().prepare += began.elapsed();
+        let mut set = std::mem::take(&mut session.sets[0]);
+        self.prepare(&mut set, tokens, start);
+        let mut buffers = join(set, std::mem::take(&mut session.caches));
         let vocab = self.model.config.vocab;
         let mut out = Vec::new();
         if n == 1 && self.gpu_routing {
-            // The whole token in one submission.
             let encoding = Instant::now();
             let mut batch = self.gpu.batch(buffers, Dispatch::Serial)?;
             for l in 0..self.layers.len() {
@@ -822,14 +920,14 @@ impl GpuModel {
                 let mut batch = self.gpu.batch(buffers, Dispatch::Serial)?;
                 self.encode_attention(&mut batch, l, n, start, session.slots[l])?;
                 buffers = self.run(batch, Phase::Attention, encoding)?;
-                buffers = self.experts_routed_on_cpu(buffers, l, n)?;
+                let plan = self.route_and_gather(&mut buffers, l, n);
+                let encoding = Instant::now();
+                let mut batch = self.gpu.batch(buffers, Dispatch::Concurrent)?;
+                self.encode_experts(&mut batch, l, &plan)?;
+                buffers = self.run(batch, Phase::Experts, encoding)?;
+                self.scatter(&mut buffers, &plan);
             }
-            // Logits for the last position or all of them, at most 32 rows a submission.
-            let wanted = match which {
-                None => 0..0,
-                Some(Logits::Last) => n - 1..n,
-                Some(Logits::All) => 0..n,
-            };
+            let wanted = Self::wanted(which, n);
             for first in wanted.clone().step_by(32) {
                 let rows = (wanted.end - first).min(32);
                 let encoding = Instant::now();
@@ -840,7 +938,9 @@ impl GpuModel {
                 out.extend((0..rows).map(|r| logits[r * vocab..][..vocab].to_vec()));
             }
         }
-        session.buffers = buffers;
+        let (set, caches) = unjoin(buffers);
+        session.sets[0] = set;
+        session.caches = caches;
         session.len += n;
         let mut profile = self.profile.borrow_mut();
         profile.passes += 1;
@@ -849,73 +949,269 @@ impl GpuModel {
         Ok(out)
     }
 
-    /// Layer `l`'s experts for `n` positions: routed on the CPU from `X`, gathered by
-    /// expert, computed on the GPU, added to `H` on the CPU.
-    fn experts_routed_on_cpu(
+    /// Two consecutive prompt passes interleaved layer by layer. Each submission's
+    /// completion arrives through the proactor, and each one triggers the next step:
+    /// - an attention batch finishing hands the caches to the other pass's attention
+    ///   when that is due, then the CPU routes this pass while the GPU works;
+    /// - an experts batch finishing adds the results to the residual and makes this
+    ///   pass ready for the next layer's attention.
+    ///
+    /// Attention runs in order: first pass, then second, layer by layer. The caches go
+    /// to one attention batch at a time.
+    #[allow(clippy::too_many_lines)]
+    fn pass_pair(
         &self,
-        mut buffers: Vec<Buffer>,
-        l: usize,
-        n: usize,
-    ) -> Result<Vec<Buffer>, GpuError> {
+        session: &mut GpuSession,
+        parts: [&[u32]; 2],
+        which: [Option<Logits>; 2],
+    ) -> Result<Vec<Vec<f32>>, GpuError> {
+        let began = Instant::now();
+        let layers = self.layers.len();
+        let vocab = self.model.config.vocab;
+        let [s0, s1] = std::mem::take(&mut session.sets);
+        let mut lanes = [s0, s1]
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut set)| {
+                let start = session.len + if i == 0 { 0 } else { parts[0].len() };
+                self.prepare(&mut set, parts[i], start);
+                Lane {
+                    tokens: parts[i],
+                    start,
+                    which: which[i],
+                    set: Some(set),
+                    layer: 0,
+                    ready: true,
+                    flight: None,
+                    plan: None,
+                    logits: Vec::new(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut caches = Some(std::mem::take(&mut session.caches));
+        // The next attention due: (pass, layer).
+        let mut due = (0_usize, 0_usize);
+        let arrivals: Arrivals = Arc::default();
+        let mut failure: Option<GpuError> = None;
+
+        // Submits the due attention when its pass is ready and the caches are free.
+        let try_attention = |lanes: &mut [Lane<'_>],
+                             caches: &mut Option<Vec<Buffer>>,
+                             due: &mut (usize, usize)|
+         -> Result<(), GpuError> {
+            let (i, l) = *due;
+            if l >= layers
+                || caches.is_none()
+                || !lanes[i].ready
+                || lanes[i].layer != l
+                || lanes[i].set.is_none()
+            {
+                return Ok(());
+            }
+            let lane = &mut lanes[i];
+            let encoding = Instant::now();
+            let buffers = join(
+                lane.set.take().expect("checked"),
+                caches.take().expect("checked"),
+            );
+            let mut batch = self.gpu.batch(buffers, Dispatch::Serial)?;
+            self.encode_attention(
+                &mut batch,
+                l,
+                lane.tokens.len(),
+                lane.start,
+                session.slots[l],
+            )?;
+            lane.ready = false;
+            lane.flight = Some((Phase::Attention, encoding, Instant::now()));
+            self.submit(batch, &arrivals, i);
+            *due = if i == 0 { (1, l) } else { (0, l + 1) };
+            Ok(())
+        };
+
+        try_attention(&mut lanes, &mut caches, &mut due)?;
+        while lanes.iter().any(|lane| lane.layer <= layers) {
+            self.proactor.run_once()?;
+            loop {
+                let arrival = arrivals
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .pop_front();
+                let Some((i, done)) = arrival else { break };
+                let (phase, encoding, committed) =
+                    lanes[i].flight.take().expect("a batch in flight");
+                let gpu_time = match done.gpu_time {
+                    Ok(time) => time,
+                    Err(e) => {
+                        // Keep driving the other pass to completion so every buffer comes
+                        // back, then report.
+                        failure.get_or_insert(e.into());
+                        Duration::ZERO
+                    }
+                };
+                self.record(phase, (encoding, committed), gpu_time);
+                match phase {
+                    Phase::Attention => {
+                        let (set, back) = unjoin(done.buffers);
+                        caches = Some(back);
+                        lanes[i].set = Some(set);
+                        // Keep the GPU fed before the CPU works.
+                        try_attention(&mut lanes, &mut caches, &mut due)?;
+                        let lane = &mut lanes[i];
+                        let l = lane.layer;
+                        let mut set = lane.set.take().expect("just returned");
+                        let plan = self.route_and_gather(&mut set, l, lane.tokens.len());
+                        let encoding = Instant::now();
+                        let mut batch = self.gpu.batch(set, Dispatch::Concurrent)?;
+                        self.encode_experts(&mut batch, l, &plan)?;
+                        lane.plan = Some(plan);
+                        lane.flight = Some((Phase::Experts, encoding, Instant::now()));
+                        self.submit(batch, &arrivals, i);
+                    }
+                    Phase::Experts => {
+                        let lane = &mut lanes[i];
+                        let mut set = done.buffers;
+                        self.scatter(&mut set, &lane.plan.take().expect("planned"));
+                        lane.layer += 1;
+                        lane.ready = true;
+                        if lane.layer == layers {
+                            // The output, when this pass's logits are wanted.
+                            let wanted = Self::wanted(lane.which, lane.tokens.len());
+                            if wanted.is_empty() {
+                                lane.layer += 1;
+                                lane.set = Some(set);
+                            } else {
+                                let encoding = Instant::now();
+                                let mut batch = self.gpu.batch(set, Dispatch::Serial)?;
+                                // At most 32 rows a submission: the first group here, the
+                                // rest as each completes.
+                                let rows = wanted.len().min(32);
+                                self.encode_output(&mut batch, wanted.start, rows)?;
+                                lane.flight = Some((Phase::Output, encoding, Instant::now()));
+                                self.submit(batch, &arrivals, i);
+                            }
+                        } else {
+                            lane.set = Some(set);
+                            try_attention(&mut lanes, &mut caches, &mut due)?;
+                        }
+                    }
+                    Phase::Output => {
+                        let lane = &mut lanes[i];
+                        let wanted = Self::wanted(lane.which, lane.tokens.len());
+                        let first = wanted.start + lane.logits.len();
+                        let rows = (wanted.end - first).min(32);
+                        let set = done.buffers;
+                        {
+                            let logits = set[LOGITS].as_f32();
+                            lane.logits
+                                .extend((0..rows).map(|r| logits[r * vocab..][..vocab].to_vec()));
+                        }
+                        let next = first + rows;
+                        if next < wanted.end {
+                            let encoding = Instant::now();
+                            let mut batch = self.gpu.batch(set, Dispatch::Serial)?;
+                            self.encode_output(&mut batch, next, (wanted.end - next).min(32))?;
+                            lane.flight = Some((Phase::Output, encoding, Instant::now()));
+                            self.submit(batch, &arrivals, i);
+                        } else {
+                            lane.layer += 1;
+                            lane.set = Some(set);
+                        }
+                    }
+                    Phase::Token => unreachable!("decoding does not pair passes"),
+                }
+            }
+        }
+        let mut lanes = lanes.into_iter();
+        let (first, second) = (lanes.next().expect("two"), lanes.next().expect("two"));
+        let n = first.tokens.len() + second.tokens.len();
+        session.sets = [first.set.expect("returned"), second.set.expect("returned")];
+        session.caches = caches.expect("returned");
+        if let Some(e) = failure {
+            return Err(e);
+        }
+        session.len += n;
+        let mut profile = self.profile.borrow_mut();
+        profile.passes += 2;
+        profile.positions += n;
+        profile.total += began.elapsed();
+        let mut out = first.logits;
+        out.extend(second.logits);
+        Ok(out)
+    }
+
+    /// Routes `n` positions on the CPU from `X` and gathers their rows into `XE` by
+    /// expert, each expert's rows padded to 32 when its products run tiled.
+    fn route_and_gather(&self, set: &mut [Buffer], l: usize, n: usize) -> Plan {
         let c = &self.model.config;
-        let (hidden, eh) = (c.hidden, c.expert_hidden);
+        let hidden = c.hidden;
         let routing = Instant::now();
         let routes = route_all(
             &self.model,
             &self.model.layers[l],
-            buffers[X].as_f32(),
+            set[X].as_f32(),
             n,
             hidden,
         );
         let gathering = Instant::now();
-        self.profile.borrow_mut().route += gathering - routing;
         let mut by_expert: Vec<Vec<(usize, f32)>> = vec![Vec::new(); c.experts];
         for (p, route) in routes.iter().enumerate() {
             for &(e, w) in route {
                 by_expert[e].push((p, w));
             }
         }
-        // Each used expert's rows start at `base`, padded to 32 when tiled.
-        let mut plan = Vec::new();
+        let mut runs = Vec::new();
         let mut base = 0;
         for (e, rows) in by_expert.iter().enumerate() {
             if !rows.is_empty() {
                 let m = rows.len();
-                plan.push((e, base, m));
+                runs.push((e, base, m));
                 base += if m >= 32 { m.next_multiple_of(32) } else { m };
             }
         }
         {
-            let (x, xe) = two(&mut buffers, X, XE);
+            let (x, xe) = two(set, X, XE);
             let (x, xe) = (x.as_f32(), xe.as_f32_mut());
-            for &(e, at, _) in &plan {
+            for &(e, at, _) in &runs {
                 for (i, &(p, _)) in by_expert[e].iter().enumerate() {
                     xe[(at + i) * hidden..][..hidden].copy_from_slice(&x[p * hidden..][..hidden]);
                 }
             }
         }
-        let encoding = Instant::now();
-        self.profile.borrow_mut().gather += encoding - gathering;
+        let mut profile = self.profile.borrow_mut();
+        profile.route += gathering - routing;
+        profile.gather += gathering.elapsed();
+        Plan { by_expert, runs }
+    }
+
+    /// Layer `l`'s chosen experts on their gathered rows. The experts are independent:
+    /// each stage runs all of them at once, a barrier between stages.
+    fn encode_experts(&self, batch: &mut Batch<'_>, l: usize, plan: &Plan) -> Result<(), GpuError> {
+        let c = &self.model.config;
+        let (hidden, eh) = (c.hidden, c.expert_hidden);
         let experts = &self.layers[l].experts;
-        let mut batch = self.gpu.batch(buffers, Dispatch::Serial)?;
-        for &(e, at, m) in &plan {
-            let run = if m >= 32 { m.next_multiple_of(32) } else { m };
-            let gate = experts.gate.one(&mut batch, e);
+        let run_of = |m: usize| if m >= 32 { m.next_multiple_of(32) } else { m };
+        for &(e, at, m) in &plan.runs {
+            let run = run_of(m);
+            let gate = experts.gate.one(batch, e);
             mul_mxfp4(
-                &mut batch,
+                batch,
                 gate,
                 (eh, hidden),
                 (f(XE, at, hidden, run), f(GATE, at, eh, run)),
                 m,
             )?;
-            let up = experts.up.one(&mut batch, e);
+            let up = experts.up.one(batch, e);
             mul_mxfp4(
-                &mut batch,
+                batch,
                 up,
                 (eh, hidden),
                 (f(XE, at, hidden, run), f(UP, at, eh, run)),
                 m,
             )?;
+        }
+        batch.barrier();
+        for &(e, at, m) in &plan.runs {
             let gb = part(batch.attach(&experts.gate_bias), e, eh * 4);
             let ub = part(batch.attach(&experts.up_bias), e, eh * 4);
             batch.clamped_swiglu(
@@ -926,35 +1222,44 @@ impl GpuModel {
                 eh,
                 SWIGLU,
             )?;
-            let down = experts.down.one(&mut batch, e);
+        }
+        batch.barrier();
+        for &(e, at, m) in &plan.runs {
+            let run = run_of(m);
+            let down = experts.down.one(batch, e);
             mul_mxfp4(
-                &mut batch,
+                batch,
                 down,
                 (hidden, eh),
                 (f(HIDDEN, at, eh, run), f(YE, at, hidden, run)),
                 m,
             )?;
+        }
+        batch.barrier();
+        for &(e, at, m) in &plan.runs {
             let db = part(batch.attach(&experts.down_bias), e, hidden * 4);
             batch.add_rows(f(YE, at, hidden, m), (db, 0), m, hidden)?;
         }
-        let mut buffers = self.run(batch, Phase::Experts, encoding)?;
-        let scattering = Instant::now();
-        {
-            let (h, ye) = two(&mut buffers, H, YE);
-            let (h, ye) = (h.as_f32_mut(), ye.as_f32());
-            for &(e, at, _) in &plan {
-                for (i, &(p, w)) in by_expert[e].iter().enumerate() {
-                    for (o, &v) in h[p * hidden..][..hidden]
-                        .iter_mut()
-                        .zip(&ye[(at + i) * hidden..][..hidden])
-                    {
-                        *o += w * v;
-                    }
+        Ok(())
+    }
+
+    /// Adds each position's weighted expert results to its residual row in `H`.
+    fn scatter(&self, set: &mut [Buffer], plan: &Plan) {
+        let began = Instant::now();
+        let hidden = self.model.config.hidden;
+        let (h, ye) = two(set, H, YE);
+        let (h, ye) = (h.as_f32_mut(), ye.as_f32());
+        for &(e, at, _) in &plan.runs {
+            for (i, &(p, w)) in plan.by_expert[e].iter().enumerate() {
+                for (o, &v) in h[p * hidden..][..hidden]
+                    .iter_mut()
+                    .zip(&ye[(at + i) * hidden..][..hidden])
+                {
+                    *o += w * v;
                 }
             }
         }
-        self.profile.borrow_mut().scatter += scattering.elapsed();
-        Ok(buffers)
+        self.profile.borrow_mut().scatter += began.elapsed();
     }
 }
 
