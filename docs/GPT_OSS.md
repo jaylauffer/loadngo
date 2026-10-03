@@ -107,47 +107,83 @@ bytes). It is in the signed pudding CAS, and its verified local copy is
 ## The GPU path (`gpu`, macOS)
 
 `GpuModel` copies the weights into GPU memory in their file formats and releases the
-CPU copies; the CPU keeps the router, the embedding and the rotary frequencies. Each
-layer is two submissions, each completing on a loadngo proactor:
+CPU copies. A layer's experts sit one after another in one buffer per matrix and bias,
+so the GPU can pick them by index. The CPU keeps the embedding, the rotary frequencies
+and a copy of the router for prompts. Every submission completes on a loadngo proactor.
 
-1. **Attention.** Norm; q, k and v (`Q8_0`) with biases; rotary by halves from a
-   cos/sin table computed on the CPU in f64; the new rows into the layer's cache;
-   grouped attention with sinks; the output projection, its bias and the residual; the
-   norm before the experts.
-2. **Experts.** The CPU routes every position from the normalized rows, read straight
-   from shared memory, and gathers them by expert. The GPU computes each chosen expert:
-   MXFP4 gate and up, the clamped SwiGLU, down and its bias. The CPU adds the weighted
-   results to the residual.
+- **Decoding (one new position)** is one submission per token. For each layer:
+  attention, then the router (`gemv_f32`), `topk_softmax`, the chosen experts
+  (`gemv_mxfp4_selected` for gate, up and down), `clamped_swiglu_selected` and
+  `moe_combine` into the residual. Then the output.
+- **Prompts** take two submissions per layer:
+  1. Attention: norm; q, k and v (`Q8_0`) with biases; rotary by halves from a cos/sin
+     table computed on the CPU in f64; the new rows into the layer's cache; grouped
+     attention with sinks; the output projection, its bias and the residual; the norm
+     before the experts.
+  2. Experts: the CPU routes every position from the normalized rows, read straight
+     from shared memory, and gathers them by expert; the GPU computes each chosen
+     expert; the CPU adds the weighted results to the residual.
 
 Prompt passes take up to 512 positions. From 32 positions every product and the
 attention run on the matrix units. Sliding layers keep a ring of 640 rows (128 + 512);
-full layers keep `max_context` rows.
+full layers keep `max_context` rows. `gpt_oss_generate --gpu --profile` prints where the
+time went: per submission kind, the CPU encoding, the GPU's own execution time (Metal's
+timestamps, carried in the proactor completion) and the wall time; and the CPU work
+between submissions.
 
-The kernels added to `loadngo-metal-compute` for this:
+Kernels added to `loadngo-metal-compute` for this, each tested against float64:
 
 - `gemv_q8_0`, `gemm_q8_0`, `gemm_q8_0_tiled`;
-- sinks in `attention_grouped` and `attention_grouped_tiled`;
-- `add_rows`, `rotate_halves`, `clamped_swiglu`.
+- sinks in grouped attention;
+- `attention_grouped_narrow`: heads up to 128 wide, each lane scoring its own key;
+- `add_rows`, `rotate_halves`, `clamped_swiglu`;
+- for routing: `gemv_f32`, `topk_softmax`, `gemv_mxfp4_selected`,
+  `clamped_swiglu_selected`, `moe_combine`.
 
-They are tested against float64 (`metal-compute/tests/q8_0_and_gpt_oss_glue.rs`,
-`attention_grouped.rs`), with mutations caught: no sink gives an error of 0.96, a
-`Q8_0` without its scale 0.79.
+Mutations caught by the tests:
+
+- no sink (error 0.96);
+- a `Q8_0` without its scale (0.79);
+- the narrow kernel not rescaling (0.014).
+
+The routing test caught a real bug first: top-k overwrote its maximum before
+subtracting it (weight 0.16 for 0.46).
 
 **Evidence (2026-10-04, M4 Pro):**
 
-- **Tiny-model oracle.** Against transformers (`gpt-oss/tests/gpu_oracle.rs`): largest
-  logit error 2.3e-5 to 3.2e-5 for each of:
-  - one position at a time, through a sliding ring that wraps;
+- **Tiny-model oracle.** Against transformers (`gpt-oss/tests/gpu_oracle.rs`), the
+  largest logit error is 2.3e-5 to 3.2e-5 for each of:
+  - one position at a time through a wrapping ring, routed on the GPU and on the CPU;
   - passes of 8;
   - a 33-position pass on the matrix units.
 - **Real gpt-oss-20b** (`gpt_oss_generate --gpu`):
-  - "The capital of France is" -> " Paris." (as on the CPU), decoding at 40.1 tokens/s
-    (CPU: 2);
-  - a 4,246-token prompt (`docs/ARCHIVE_CAS.md`) in 15.1 s (282 tokens/s), then 23.4
-    tokens/s at that context;
+  - "The capital of France is" -> " Paris.";
+  - a 4,246-token prompt (`docs/ARCHIVE_CAS.md`) in 15.1-15.4 s (276-282 tokens/s);
   - chat, "In two sentences: why does a Rust program need both a borrow checker and
-    lifetimes?": a correct two-sentence answer, 85-token prompt in 0.9 s, 37 tokens/s;
+    lifetimes?": a correct two-sentence answer;
   - loads in 6.5-10.7 s; peak resident 29.6 GB during load.
+
+Decoding speed, as each step landed:
+
+| | Short context | After 4,246 tokens |
+|---|---:|---:|
+| Two submissions per layer, routed on the CPU | 25.9 ms (38-40 tokens/s) | 48.6 ms (20-23 tokens/s) |
+| Routed on the GPU, one submission per token | 16.6 ms (59 tokens/s) | 33.0 ms (30 tokens/s) |
+| + `attention_grouped_narrow` | 17.0 ms (57-59 tokens/s) | 22.8 ms (43 tokens/s) |
+
+At short context, decoding is near the bandwidth floor: about 2.5 GB per token at about
+200 GB/s is about 12.5 ms.
+
+Each 512-position prompt pass, from the profile:
+
+| Part | Time | Share |
+|---|---:|---:|
+| Experts' products (GPU) | 1.11 s | 66% |
+| Attention-phase products and attention (GPU) | 0.35 s | 20% |
+| Waiting between submissions | 0.13 s | 8% |
+| CPU routing, gathering and adding back | 0.11 s | 7% |
+
+The expert products run at about 2.2 TFLOPS of f32 on the matrix units.
 
 ## The Neural Engine
 
@@ -171,13 +207,16 @@ proactor.
 
 ## Next
 
-1. **Profile the GPU path.**
-   - Why decoding drops from 40 to 23 tokens/s by 4k positions.
-   - How much of a prompt is CPU routing, gathering and scattering.
-   - Then route on the GPU, so a layer is one submission.
-2. **Tools in the chat format.** Declarations in the developer message, and calls on
+1. **Prompts.**
+   - The expert products are two thirds of a pass; half-precision matrix units would
+     about double them.
+   - Pipelining two half-passes through the proactor would hide the CPU routing and
+     the gaps between submissions behind GPU work (about 15%).
+2. **Long-context decoding.** About 6 ms per token is still attention at 4k
+   positions. Split each head's keys across threadgroups.
+3. **Tools in the chat format.** Declarations in the developer message, and calls on
    the commentary channel to `functions.NAME`.
-3. **Load without the double copy.** Repack each tensor as it arrives (peak now
+4. **Load without the double copy.** Repack each tensor as it arrives (peak now
    29.6 GB).
-4. **The model service.** `network::model_service` runs this engine instead of
+5. **The model service.** `network::model_service` runs this engine instead of
    `llama-server`, keeping its by-hash model resolution.

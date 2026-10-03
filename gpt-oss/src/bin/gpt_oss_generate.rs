@@ -25,6 +25,7 @@ Options:
   --reasoning R  (optional)  with --chat: low, medium or high (default low)
   --gpu          (optional)  run on the GPU (macOS): weights in GPU memory, prompts in
                              passes of 512, up to 8192 positions
+  --profile      (optional)  with --gpu: where the prompt's and the reply's time went
   -h, --help                 this text
 
 Example:
@@ -47,7 +48,7 @@ fn main() {
         return;
     }
     let (mut path, mut tokens, mut text) = (None, None, None);
-    let (mut chat, mut reasoning, mut on_gpu) = (false, Reasoning::Low, false);
+    let (mut chat, mut reasoning, mut on_gpu, mut profile) = (false, Reasoning::Low, false, false);
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -65,6 +66,7 @@ fn main() {
             }
             "--chat" => chat = true,
             "--gpu" => on_gpu = true,
+            "--profile" => profile = true,
             "--reasoning" => {
                 reasoning = args
                     .next()
@@ -112,6 +114,9 @@ fn main() {
         start.elapsed().as_secs_f64(),
         prompt.len() as f64 / start.elapsed().as_secs_f64()
     );
+    if profile {
+        eprintln!("[prompt] {}", engine.profile());
+    }
     let start = Instant::now();
     let mut out = Vec::new();
     for _ in 0..tokens {
@@ -147,6 +152,9 @@ fn main() {
         start.elapsed().as_secs_f64(),
         out.len() as f64 / start.elapsed().as_secs_f64()
     );
+    if profile {
+        eprintln!("[reply] {}", engine.profile());
+    }
 }
 
 /// The CPU reference or the GPU path, behind one `feed`.
@@ -181,6 +189,15 @@ impl Engine {
             Self::Cpu(..) => "CPU".into(),
             #[cfg(target_os = "macos")]
             Self::Gpu(gpu, _) => format!("GPU: {}", gpu.device()),
+        }
+    }
+
+    /// The GPU profile since the last call (nothing on the CPU path).
+    fn profile(&self) -> String {
+        match self {
+            Self::Cpu(..) => "no profile on the CPU path".into(),
+            #[cfg(target_os = "macos")]
+            Self::Gpu(gpu, _) => gpu.take_profile().to_string(),
         }
     }
 

@@ -40,9 +40,10 @@ fn model() -> Model {
 }
 
 /// Feeds the oracle's tokens in parts of the given sizes; returns the largest error.
-fn largest_error(chunk: usize, parts: &[usize]) -> f32 {
+fn largest_error(chunk: usize, parts: &[usize], gpu_routing: bool) -> f32 {
     let (ids, vocab, want) = oracle();
-    let gpu = GpuModel::new(model(), chunk, 64).unwrap();
+    let mut gpu = GpuModel::new(model(), chunk, 64).unwrap();
+    gpu.gpu_routing = gpu_routing;
     let mut session = gpu.session().unwrap();
     let mut at = 0;
     let mut worst = 0.0_f32;
@@ -70,14 +71,17 @@ fn largest_error(chunk: usize, parts: &[usize]) -> f32 {
 #[test]
 fn one_position_at_a_time_through_a_wrapping_ring() {
     // Chunk 8: sliding layers keep (8 + 8) rounded up to 32 rows, so 40 positions wrap.
-    let worst = largest_error(8, &[1; 40]);
-    eprintln!("one at a time: largest logit error {worst:e}");
+    // Routed on the GPU: each token one submission.
+    let worst = largest_error(8, &[1; 40], true);
+    eprintln!("one at a time, routed on the GPU: largest logit error {worst:e}");
+    let worst = largest_error(8, &[1; 40], false);
+    eprintln!("one at a time, routed on the CPU: largest logit error {worst:e}");
 }
 
 #[test]
 fn passes_on_the_matrix_units_and_after_them() {
-    let worst = largest_error(40, &[33, 7]);
+    let worst = largest_error(40, &[33, 7], true);
     eprintln!("33 then 7: largest logit error {worst:e}");
-    let worst = largest_error(8, &[8, 8, 3, 8, 8, 5]);
+    let worst = largest_error(8, &[8, 8, 3, 8, 8, 5], true);
     eprintln!("chunks of 8: largest logit error {worst:e}");
 }

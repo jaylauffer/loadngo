@@ -84,6 +84,7 @@ pub struct Gpu {
     q8_0: [Pipeline; 3],
     gemm_q8_0: Pipeline,
     gemm_q8_0_tiled: Pipeline,
+    moe: Moe,
     gemm_bf16: Pipeline,
     gemm_mxfp4: Pipeline,
     gemm_mxfp4_tiled: Pipeline,
@@ -91,6 +92,7 @@ pub struct Gpu {
     attention: Pipeline,
     attention_wide: Pipeline,
     attention_grouped: Pipeline,
+    attention_grouped_narrow: Pipeline,
     attention_grouped_tiled: Pipeline,
     attention_tiled: Pipeline,
     recurrence: Pipeline,
@@ -132,6 +134,17 @@ impl Gpu {
             pipeline("gemv_q8_0_r2")?,
             pipeline("gemv_q8_0_r4")?,
         ];
+        let moe = Moe {
+            gemv_f32: pipeline("gemv_f32")?,
+            topk: pipeline("topk_softmax")?,
+            selected: [
+                pipeline("gemv_mxfp4_selected_r1")?,
+                pipeline("gemv_mxfp4_selected_r2")?,
+                pipeline("gemv_mxfp4_selected_r4")?,
+            ],
+            swiglu: pipeline("clamped_swiglu_selected")?,
+            combine: pipeline("moe_combine")?,
+        };
         let gemm_q8_0 = pipeline("gemm_q8_0")?;
         let gemm_q8_0_tiled = pipeline("gemm_q8_0_tiled")?;
         let gemm_bf16 = pipeline("gemm_bf16")?;
@@ -141,6 +154,7 @@ impl Gpu {
         let attention = pipeline("attention_split_key")?;
         let attention_wide = pipeline("attention_split_key_wide")?;
         let attention_grouped = pipeline("attention_grouped")?;
+        let attention_grouped_narrow = pipeline("attention_grouped_narrow")?;
         let attention_grouped_tiled = pipeline("attention_grouped_tiled")?;
         let attention_tiled = pipeline("attention_split_key_tiled")?;
         let recurrence = pipeline("delta_rule_recurrence")?;
@@ -172,11 +186,13 @@ impl Gpu {
                 &attention,
                 &attention_wide,
                 &attention_grouped,
+                &attention_grouped_narrow,
                 &attention_grouped_tiled,
                 &attention_tiled,
                 &recurrence,
             ])
             .chain(glue.all())
+            .chain(moe.all())
         {
             if p.maxTotalThreadsPerThreadgroup() < THREADS_PER_GROUP {
                 return Err(Error::Compile(format!(
@@ -197,6 +213,7 @@ impl Gpu {
             q8_0,
             gemm_q8_0,
             gemm_q8_0_tiled,
+            moe,
             gemm_bf16,
             gemm_mxfp4,
             gemm_mxfp4_tiled,
@@ -204,6 +221,7 @@ impl Gpu {
             attention,
             attention_wide,
             attention_grouped,
+            attention_grouped_narrow,
             attention_grouped_tiled,
             attention_tiled,
             recurrence,
@@ -710,6 +728,58 @@ struct StridedArgs {
     eps: f32,
 }
 
+/// The kernels that route positions to experts and run the chosen ones on the GPU.
+struct Moe {
+    gemv_f32: Pipeline,
+    topk: Pipeline,
+    selected: [Pipeline; 3],
+    swiglu: Pipeline,
+    combine: Pipeline,
+}
+
+impl Moe {
+    fn all(&self) -> [&Pipeline; 7] {
+        [
+            &self.gemv_f32,
+            &self.topk,
+            &self.selected[0],
+            &self.selected[1],
+            &self.selected[2],
+            &self.swiglu,
+            &self.combine,
+        ]
+    }
+}
+
+#[repr(C)]
+struct BiasedGemvArgs {
+    rows: u32,
+    cols: u32,
+    bias: u32,
+}
+
+#[repr(C)]
+struct TopkArgs {
+    n: u32,
+    experts: u32,
+    k: u32,
+}
+
+#[repr(C)]
+struct SelectedArgs {
+    rows: u32,
+    cols: u32,
+    k: u32,
+    x_stride: u32,
+    groups_per_matrix: u32,
+}
+
+#[repr(C)]
+struct CombineArgs {
+    width: u32,
+    k: u32,
+}
+
 #[repr(C)]
 struct AddArgs {
     rows: u32,
@@ -1202,7 +1272,13 @@ impl Batch<'_> {
         self.check("out", &out, t * heads * dim * 4, 4)?;
         self.check_output(&out, &[&q, &k, &v])?;
         let sinks = self.sinks(sinks, heads, &q)?;
-        let pipeline = self.gpu.attention_grouped.clone();
+        // Heads up to 128 wide score 32 keys per step, one per lane: far more of the
+        // cache in flight when decoding at long context.
+        let pipeline = if dim <= 128 {
+            self.gpu.attention_grouped_narrow.clone()
+        } else {
+            self.gpu.attention_grouped.clone()
+        };
         self.encode(&pipeline, &[q, k, v, out, sinks], &args, groups);
         Ok(())
     }
@@ -1853,6 +1929,203 @@ impl Batch<'_> {
             &[gate, up, gate_bias, up_bias, out],
             &args,
             groups,
+        );
+        Ok(())
+    }
+
+    /// `y = W x (+ b)` for a row-major float32 `rows x cols` matrix, one simdgroup per
+    /// row: for small matrices such as a router. Needs `cols % 4 == 0`; `w` and `x` on
+    /// 16-byte boundaries.
+    pub fn gemv_f32(
+        &mut self,
+        (w, bias): (Slice, Option<Slice>),
+        x: Slice,
+        y: Slice,
+        rows: usize,
+        cols: usize,
+    ) -> Result<(), Error> {
+        if rows == 0 || cols == 0 || !cols.is_multiple_of(4) {
+            return Err(Error::Dispatch(format!(
+                "unsupported f32 product {rows} x {cols}"
+            )));
+        }
+        let args = BiasedGemvArgs {
+            rows: narrow(rows)?,
+            cols: narrow(cols)?,
+            bias: u32::from(bias.is_some()),
+        };
+        self.check("weights", &w, rows * cols * 4, 16)?;
+        self.check("x", &x, cols * 4, 16)?;
+        self.check("y", &y, rows * 4, 4)?;
+        let b = match bias {
+            Some(b) => {
+                self.check("bias", &b, rows * 4, 4)?;
+                b
+            }
+            None => x,
+        };
+        self.check_output(&y, &[&w, &x, &b])?;
+        let pipeline = self.gpu.moe.gemv_f32.clone();
+        self.encode(
+            &pipeline,
+            &[w, x, b, y],
+            &args,
+            rows.div_ceil(SIMDGROUPS_PER_GROUP),
+        );
+        Ok(())
+    }
+
+    /// For each of `n` rows of `experts` logits: the `k` largest (equal logits: the
+    /// lower index first) into `ids` (`u32`, `n x k`) and their softmax over just those
+    /// into `weights` (`n x k`). Needs `k <= 16` and `k <= experts`.
+    pub fn topk_softmax(
+        &mut self,
+        logits: Slice,
+        (ids, weights): (Slice, Slice),
+        n: usize,
+        (experts, k): (usize, usize),
+    ) -> Result<(), Error> {
+        if n == 0 || k == 0 || k > 16 || k > experts {
+            return Err(Error::Dispatch(format!(
+                "unsupported top-{k} of {experts} over {n} rows"
+            )));
+        }
+        let args = TopkArgs {
+            n: narrow(n)?,
+            experts: narrow(experts)?,
+            k: narrow(k)?,
+        };
+        self.check("logits", &logits, n * experts * 4, 4)?;
+        self.check("ids", &ids, n * k * 4, 4)?;
+        self.check("weights", &weights, n * k * 4, 4)?;
+        self.check_output(&ids, &[&logits])?;
+        self.check_output(&weights, &[&logits, &ids])?;
+        let pipeline = self.gpu.moe.topk.clone();
+        self.encode(
+            &pipeline,
+            &[logits, ids, weights],
+            &args,
+            n.div_ceil(THREADS_PER_GROUP),
+        );
+        Ok(())
+    }
+
+    /// `y[j] = W[ids[j]] x[j]` for `j < k`: products with MXFP4 matrices chosen on the
+    /// GPU. `elements` and `scales` hold the matrices one after another, each `rows x
+    /// cols` laid out as in [`Self::gemv_mxfp4`]; `ids` holds `k` `u32` indices. `x[j]`
+    /// starts `j * x_stride` floats in (0: one `x` for all), `y[j]` at `j * rows`.
+    /// Needs `cols % 32 == 0`. Indices are not bounds-checked on the GPU: `matrices`,
+    /// how many the buffers hold, is checked here, and callers write `ids` with
+    /// [`Self::topk_softmax`] over that many.
+    #[allow(clippy::too_many_arguments)]
+    pub fn gemv_mxfp4_selected(
+        &mut self,
+        (elements, scales, matrices): (Slice, Slice, usize),
+        ids: Slice,
+        (x, x_stride): (Slice, usize),
+        y: Slice,
+        (rows, cols): (usize, usize),
+        k: usize,
+    ) -> Result<(), Error> {
+        let GemvArgs { .. } = Self::shape(rows, cols)?;
+        if !cols.is_multiple_of(32) || k == 0 || matrices == 0 || (x_stride != 0 && x_stride < cols)
+        {
+            return Err(Error::Dispatch(format!(
+                "unsupported selected MXFP4 product: {k} of {matrices} {rows} x {cols}, x stride {x_stride}"
+            )));
+        }
+        self.check("elements", &elements, matrices * rows * cols / 2, 16)?;
+        self.check("scales", &scales, matrices * rows * cols / 32, 1)?;
+        self.check("ids", &ids, k * 4, 4)?;
+        self.check("x", &x, ((k - 1) * x_stride + cols) * 4, 16)?;
+        self.check("y", &y, k * rows * 4, 4)?;
+        self.check_output(&y, &[&elements, &scales, &ids, &x])?;
+        let per = SIMDGROUPS_PER_GROUP * self.gpu.rows.count();
+        let groups_per_matrix = rows.div_ceil(per);
+        let args = SelectedArgs {
+            rows: narrow(rows)?,
+            cols: narrow(cols)?,
+            k: narrow(k)?,
+            x_stride: narrow(x_stride)?,
+            groups_per_matrix: narrow(groups_per_matrix)?,
+        };
+        let pipeline = self.gpu.moe.selected[self.gpu.rows.index()].clone();
+        self.encode(
+            &pipeline,
+            &[elements, scales, ids, x, y],
+            &args,
+            k * groups_per_matrix,
+        );
+        Ok(())
+    }
+
+    /// [`Self::clamped_swiglu`] over `k` rows whose biases are rows `ids[j]` of
+    /// `gate_bias` and `up_bias` (`experts x width` each).
+    #[allow(clippy::too_many_arguments)]
+    pub fn clamped_swiglu_selected(
+        &mut self,
+        (gate, up): (Slice, Slice),
+        (gate_bias, up_bias, experts): (Slice, Slice, usize),
+        ids: Slice,
+        out: Slice,
+        (k, width): (usize, usize),
+        (limit, alpha): (f32, f32),
+    ) -> Result<(), Error> {
+        if k == 0 || width == 0 || experts == 0 {
+            return Err(Error::Dispatch("empty clamped_swiglu_selected".into()));
+        }
+        let args = GluArgs {
+            rows: narrow(k)?,
+            width: narrow(width)?,
+            limit,
+            alpha,
+        };
+        for (name, slice) in [("gate", &gate), ("up", &up), ("out", &out)] {
+            self.check(name, slice, k * width * 4, 4)?;
+        }
+        self.check("gate_bias", &gate_bias, experts * width * 4, 4)?;
+        self.check("up_bias", &up_bias, experts * width * 4, 4)?;
+        self.check("ids", &ids, k * 4, 4)?;
+        self.check_output(&out, &[&gate, &up, &gate_bias, &up_bias, &ids])?;
+        let pipeline = self.gpu.moe.swiglu.clone();
+        let groups = (k * width).div_ceil(THREADS_PER_GROUP);
+        self.encode(
+            &pipeline,
+            &[gate, up, gate_bias, up_bias, ids, out],
+            &args,
+            groups,
+        );
+        Ok(())
+    }
+
+    /// `h += sum_j weights[j] * (y[j] + bias[ids[j]])` over `k` expert outputs of
+    /// `width` (`bias` is `experts x width`).
+    pub fn moe_combine(
+        &mut self,
+        h: Slice,
+        (y, bias, experts): (Slice, Slice, usize),
+        (ids, weights): (Slice, Slice),
+        (k, width): (usize, usize),
+    ) -> Result<(), Error> {
+        if k == 0 || width == 0 || experts == 0 {
+            return Err(Error::Dispatch("empty moe_combine".into()));
+        }
+        let args = CombineArgs {
+            width: narrow(width)?,
+            k: narrow(k)?,
+        };
+        self.check("h", &h, width * 4, 4)?;
+        self.check("y", &y, k * width * 4, 4)?;
+        self.check("bias", &bias, experts * width * 4, 4)?;
+        self.check("ids", &ids, k * 4, 4)?;
+        self.check("weights", &weights, k * 4, 4)?;
+        self.check_output(&h, &[&y, &bias, &ids, &weights])?;
+        let pipeline = self.gpu.moe.combine.clone();
+        self.encode(
+            &pipeline,
+            &[h, y, bias, ids, weights],
+            &args,
+            width.div_ceil(THREADS_PER_GROUP),
         );
         Ok(())
     }

@@ -1,11 +1,14 @@
-//! The `Q8_0` products (one position, several, and tiled) and the glue gpt-oss needs
-//! (row adds, rotary by halves, the clamped SwiGLU) against float64 references.
+//! The `Q8_0` products (one position, several, and tiled), the glue gpt-oss needs (row
+//! adds, rotary by halves, the clamped SwiGLU) and routing on the GPU (router, top-k,
+//! the chosen experts' products, biases and weighted combine) against float64
+//! references.
 #![cfg(target_os = "macos")]
 
 use std::sync::{Arc, Mutex};
 
 use loadngo_metal_compute::{Batch, Buffer, Completed, Dispatch, Gpu, Slice};
 use loadngo_proactor::{new_platform_proactor, PlatformPort, Proactor};
+use loadngo_weights::mxfp4::{quantize_block, Mxfp4Matrix};
 
 fn run(proactor: &Proactor<PlatformPort>, batch: Batch<'_>) -> Completed {
     let slot: Arc<Mutex<Option<Completed>>> = Arc::default();
@@ -266,4 +269,214 @@ fn glue_adds_rotates_and_gates_as_defined() {
         clamped += usize::from(g == 7.0) + usize::from(u.abs() == 7.0);
     }
     assert!(clamped > 20, "the clamps were exercised {clamped} times");
+}
+
+/// One MXFP4 matrix: element and scale bytes.
+fn mxfp4(rows: usize, cols: usize, seed: u64) -> (Vec<u8>, Vec<u8>) {
+    let v = values(seed, rows * cols);
+    let mut elements = vec![0_u8; rows * cols / 2];
+    let mut scales = Vec::new();
+    for (b, block) in v.chunks(32).enumerate() {
+        scales.push(quantize_block(block, &mut elements[b * 16..b * 16 + 16]));
+    }
+    (elements, scales)
+}
+
+#[test]
+fn routing_picks_runs_and_combines_experts_on_the_gpu() {
+    let gpu = Gpu::new().unwrap();
+    let proactor = new_platform_proactor().unwrap();
+    let (experts, k, hidden, width) = (8, 3, 64, 96);
+    // The router: logits = W x + b, with a tie between experts 2 and 5.
+    let router = values(21, experts * hidden);
+    let mut router_bias = values(22, experts);
+    let x = values(23, hidden);
+    let dot = |e: usize| -> f32 {
+        router[e * hidden..][..hidden]
+            .iter()
+            .zip(&x)
+            .map(|(a, b)| a * b)
+            .sum()
+    };
+    router_bias[5] = router_bias[2] + dot(2) - dot(5);
+    // Each expert: gate and up (width x hidden), down (hidden x width), and biases.
+    let mut gate = (Vec::new(), Vec::new());
+    let mut up = (Vec::new(), Vec::new());
+    let mut down = (Vec::new(), Vec::new());
+    for e in 0..experts as u64 {
+        for (m, (rows, cols), seed) in [
+            (&mut gate, (width, hidden), 100),
+            (&mut up, (width, hidden), 200),
+            (&mut down, (hidden, width), 300),
+        ] {
+            let (el, sc) = mxfp4(rows, cols, seed + e);
+            m.0.extend(el);
+            m.1.extend(sc);
+        }
+    }
+    let gate_bias: Vec<f32> = values(31, experts * width)
+        .iter()
+        .map(|v| v * 3.0)
+        .collect();
+    let up_bias = values(32, experts * width);
+    let down_bias = values(33, experts * hidden);
+    let h = values(34, hidden);
+    let bytes = |v: &[u8]| upload_bytes(&gpu, v);
+    let buffers = vec![
+        upload(&gpu, &router),               // 0
+        upload(&gpu, &router_bias),          // 1
+        upload(&gpu, &x),                    // 2
+        gpu.buffer(experts * 4).unwrap(),    // 3 logits
+        gpu.buffer(16 * 4).unwrap(),         // 4 ids
+        gpu.buffer(16 * 4).unwrap(),         // 5 weights
+        bytes(&gate.0),                      // 6
+        bytes(&gate.1),                      // 7
+        bytes(&up.0),                        // 8
+        bytes(&up.1),                        // 9
+        bytes(&down.0),                      // 10
+        bytes(&down.1),                      // 11
+        gpu.buffer(k * width * 4).unwrap(),  // 12 gate out
+        gpu.buffer(k * width * 4).unwrap(),  // 13 up out
+        gpu.buffer(k * width * 4).unwrap(),  // 14 hidden
+        gpu.buffer(k * hidden * 4).unwrap(), // 15 down out
+        upload(&gpu, &gate_bias),            // 16
+        upload(&gpu, &up_bias),              // 17
+        upload(&gpu, &down_bias),            // 18
+        upload(&gpu, &h),                    // 19
+    ];
+    let mut batch = gpu.batch(buffers, Dispatch::Serial).unwrap();
+    let f = |b: usize, n: usize| Slice::new(b, 0, n * 4);
+    let raw = |b: usize, n: usize| Slice::new(b, 0, n);
+    batch
+        .gemv_f32(
+            (f(0, router.len()), Some(f(1, experts))),
+            f(2, hidden),
+            f(3, experts),
+            experts,
+            hidden,
+        )
+        .unwrap();
+    batch
+        .topk_softmax(f(3, experts), (f(4, k), f(5, k)), 1, (experts, k))
+        .unwrap();
+    let ids = f(4, k);
+    batch
+        .gemv_mxfp4_selected(
+            (raw(6, gate.0.len()), raw(7, gate.1.len()), experts),
+            ids,
+            (f(2, hidden), 0),
+            f(12, k * width),
+            (width, hidden),
+            k,
+        )
+        .unwrap();
+    batch
+        .gemv_mxfp4_selected(
+            (raw(8, up.0.len()), raw(9, up.1.len()), experts),
+            ids,
+            (f(2, hidden), 0),
+            f(13, k * width),
+            (width, hidden),
+            k,
+        )
+        .unwrap();
+    batch
+        .clamped_swiglu_selected(
+            (f(12, k * width), f(13, k * width)),
+            (f(16, gate_bias.len()), f(17, up_bias.len()), experts),
+            ids,
+            f(14, k * width),
+            (k, width),
+            (7.0, 1.702),
+        )
+        .unwrap();
+    batch
+        .gemv_mxfp4_selected(
+            (raw(10, down.0.len()), raw(11, down.1.len()), experts),
+            ids,
+            (f(14, k * width), width),
+            f(15, k * hidden),
+            (hidden, width),
+            k,
+        )
+        .unwrap();
+    batch
+        .moe_combine(
+            f(19, hidden),
+            (f(15, k * hidden), f(18, down_bias.len()), experts),
+            (ids, f(5, k)),
+            (k, hidden),
+        )
+        .unwrap();
+    let done = run(&proactor, batch);
+    done.gpu_time.unwrap();
+
+    // The CPU's choice: highest logits, the lower index first on ties.
+    let logits: Vec<f32> = (0..experts).map(|e| dot(e) + router_bias[e]).collect();
+    let mut order: Vec<usize> = (0..experts).collect();
+    order.sort_by(|&a, &b| logits[b].total_cmp(&logits[a]).then(a.cmp(&b)));
+    let picked = &order[..k];
+    let got_ids: Vec<usize> = done.buffers[4].as_bytes()[..k * 4]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| u32::from_le_bytes(*b) as usize)
+        .collect();
+    assert_eq!(got_ids, picked, "logits {logits:?}");
+    let exps: Vec<f64> = picked
+        .iter()
+        .map(|&e| f64::from(logits[e] - logits[picked[0]]).exp())
+        .collect();
+    let total: f64 = exps.iter().sum();
+    for (j, &w) in done.buffers[5].as_f32()[..k].iter().enumerate() {
+        let error = (f64::from(w) - exps[j] / total).abs();
+        assert!(error < 1e-6, "weight {j}: {w} vs {}", exps[j] / total);
+    }
+    // The experts on the CPU, from the same MXFP4 bytes.
+    let matrix = |m: &(Vec<u8>, Vec<u8>), e: usize, rows: usize, cols: usize| -> Vec<f32> {
+        let (eb, sb) = (rows * cols / 2, rows * cols / 32);
+        let w = Mxfp4Matrix::new(&m.0[e * eb..][..eb], &m.1[e * sb..][..sb], rows, cols).unwrap();
+        let mut out = vec![0.0; rows * cols];
+        for r in 0..rows {
+            w.dequantize_row(r, &mut out[r * cols..][..cols]);
+        }
+        out
+    };
+    let mul = |w: &[f32], v: &[f32], rows: usize| -> Vec<f64> {
+        (0..rows)
+            .map(|r| {
+                w[r * v.len()..][..v.len()]
+                    .iter()
+                    .zip(v)
+                    .map(|(a, b)| f64::from(*a) * f64::from(*b))
+                    .sum()
+            })
+            .collect()
+    };
+    let mut want = h.iter().map(|&v| f64::from(v)).collect::<Vec<_>>();
+    for (j, &e) in picked.iter().enumerate() {
+        let g = mul(&matrix(&gate, e, width, hidden), &x, width);
+        let u = mul(&matrix(&up, e, width, hidden), &x, width);
+        let hid: Vec<f32> = (0..width)
+            .map(|i| {
+                let g = (g[i] + f64::from(gate_bias[e * width + i])).min(7.0);
+                let u = (u[i] + f64::from(up_bias[e * width + i])).clamp(-7.0, 7.0);
+                ((u + 1.0) * g / (1.0 + (-1.702 * g).exp())) as f32
+            })
+            .collect();
+        let y = mul(&matrix(&down, e, hidden, width), &hid, hidden);
+        for i in 0..hidden {
+            want[i] += exps[j] / total * (y[i] + f64::from(down_bias[e * hidden + i]));
+        }
+    }
+    for (i, (&got, &want)) in done.buffers[19].as_f32()[..hidden]
+        .iter()
+        .zip(&want)
+        .enumerate()
+    {
+        assert!(
+            (f64::from(got) - want).abs() < 1e-4 * want.abs().max(1.0),
+            "{i}: {got} vs {want}"
+        );
+    }
 }
