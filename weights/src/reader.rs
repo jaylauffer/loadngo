@@ -1,8 +1,9 @@
 //! Reading tensor bytes through `loadngo-proactor`.
 //!
-//! A [`TensorReader`] opens every shard of a [`ShardSet`] once and serves reads as
-//! positioned completion I/O on whichever port the platform uses: `io_uring` on Linux,
-//! IOCP on Windows, kqueue on macOS and iOS, epoll on Android. A batch of tensors is
+//! A [`TensorReader`] opens every shard of a [`ShardSet`] once, and a [`FileReader`] one
+//! file of any format. Both serve reads as positioned completion I/O on whichever port
+//! the platform uses: `io_uring` on Linux, IOCP on Windows, kqueue on macOS and iOS,
+//! epoll on Android. A batch of tensors is
 //! submitted in full before anything waits, so on ports that service reads concurrently
 //! the batch overlaps instead of queueing one read behind another.
 //!
@@ -118,25 +119,129 @@ impl<P: IoPort> TensorReader<P> {
             plans.push((name, shard, tensor.offset, len));
         }
 
-        // One chunk per (tensor, start); each is read into its own buffer and copied into
-        // place, so a short read of one chunk never shifts another.
-        let mut outputs: Vec<Vec<u8>> = plans.iter().map(|&(_, _, _, len)| vec![0; len]).collect();
-        let (tx, rx) = mpsc::channel::<(usize, usize, u64, usize, IoResult)>();
-        let handle = self.proactor.handle();
-        let mut pending = 0_usize;
-        let mut first_error: Option<ReadError> = None;
+        read_plans(
+            &self.proactor,
+            &self.files,
+            &plans
+                .iter()
+                .map(|&(name, file, offset, len)| Plan {
+                    name,
+                    file,
+                    offset,
+                    len,
+                })
+                .collect::<Vec<_>>(),
+            self.chunk_limit,
+        )
+    }
 
-        let submit = |tensor: usize,
-                      start: usize,
-                      want: usize,
-                      pending: &mut usize|
-         -> Result<(), ReadError> {
-            let (name, shard, base, _) = plans[tensor];
+    #[cfg(test)]
+    fn set_chunk_limit(&mut self, bytes: usize) {
+        self.chunk_limit = bytes.max(1);
+    }
+}
+
+/// Positioned reads of byte ranges from one file (a GGUF model, for example), through
+/// the same batched completion I/O as [`TensorReader`].
+pub struct FileReader<P: IoPort> {
+    path: PathBuf,
+    files: Vec<File>,
+    proactor: Proactor<P>,
+    chunk_limit: usize,
+}
+
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly",
+    target_os = "android",
+    windows
+))]
+impl FileReader<loadngo_proactor::PlatformPort> {
+    /// Opens `path` for reading on this platform's completion port.
+    pub fn open(path: &std::path::Path) -> Result<Self, ReadError> {
+        let proactor = loadngo_proactor::new_platform_proactor().map_err(ReadError::Proactor)?;
+        Self::with_proactor(path, proactor)
+    }
+}
+
+impl<P: IoPort> FileReader<P> {
+    /// Opens `path`, reading through `proactor`.
+    pub fn with_proactor(path: &std::path::Path, proactor: Proactor<P>) -> Result<Self, ReadError> {
+        let file = open_for_completion_reads(path).map_err(|source| ReadError::Open {
+            path: path.to_owned(),
+            source,
+        })?;
+        Ok(Self {
+            path: path.to_owned(),
+            files: vec![file],
+            proactor,
+            chunk_limit: MAX_CHUNK_BYTES,
+        })
+    }
+
+    /// The file this reader serves.
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    /// The bytes of each `(name, offset, len)` range, in the order asked; `name` labels
+    /// errors. Every chunk is submitted before the first completion is awaited. Errors
+    /// as for [`TensorReader::read_tensors`].
+    pub fn read_ranges(&self, ranges: &[(&str, u64, usize)]) -> Result<Vec<Vec<u8>>, ReadError> {
+        let plans: Vec<Plan<'_>> = ranges
+            .iter()
+            .map(|&(name, offset, len)| Plan {
+                name,
+                file: 0,
+                offset,
+                len,
+            })
+            .collect();
+        read_plans(&self.proactor, &self.files, &plans, self.chunk_limit)
+    }
+}
+
+/// One read: `len` bytes of `files[file]` from `offset`, reported as `name` on error.
+struct Plan<'a> {
+    name: &'a str,
+    file: usize,
+    offset: u64,
+    len: usize,
+}
+
+/// Reads every plan's bytes, all chunks submitted before the first completion is awaited.
+fn read_plans<P: IoPort>(
+    proactor: &Proactor<P>,
+    files: &[File],
+    plans: &[Plan<'_>],
+    chunk_limit: usize,
+) -> Result<Vec<Vec<u8>>, ReadError> {
+    // One chunk per (tensor, start); each is read into its own buffer and copied into
+    // place, so a short read of one chunk never shifts another.
+    let mut outputs: Vec<Vec<u8>> = plans.iter().map(|plan| vec![0; plan.len]).collect();
+    let (tx, rx) = mpsc::channel::<(usize, usize, u64, usize, IoResult)>();
+    let handle = proactor.handle();
+    let mut pending = 0_usize;
+    let mut first_error: Option<ReadError> = None;
+
+    let submit =
+        |tensor: usize, start: usize, want: usize, pending: &mut usize| -> Result<(), ReadError> {
+            let Plan {
+                name,
+                file: shard,
+                offset: base,
+                ..
+            } = plans[tensor];
             let offset = base + start as u64;
             let tx = tx.clone();
             handle
                 .read(
-                    raw_handle(&self.files[shard]),
+                    raw_handle(&files[shard]),
                     IoBuf::with_capacity(want),
                     offset,
                     move |result: IoResult| {
@@ -153,73 +258,65 @@ impl<P: IoPort> TensorReader<P> {
             Ok(())
         };
 
-        'submit: for (tensor, &(_, _, _, len)) in plans.iter().enumerate() {
-            let mut start = 0;
-            while start < len {
-                let want = (len - start).min(self.chunk_limit);
-                if let Err(error) = submit(tensor, start, want, &mut pending) {
-                    first_error = Some(error);
-                    break 'submit;
-                }
-                start += want;
+    'submit: for (tensor, &Plan { len, .. }) in plans.iter().enumerate() {
+        let mut start = 0;
+        while start < len {
+            let want = (len - start).min(chunk_limit);
+            if let Err(error) = submit(tensor, start, want, &mut pending) {
+                first_error = Some(error);
+                break 'submit;
             }
-        }
-
-        while pending > 0 {
-            if let Err(source) = self.proactor.run_once() {
-                first_error.get_or_insert(ReadError::Proactor(source));
-                break;
-            }
-            while let Ok((tensor, start, offset, want, result)) = rx.try_recv() {
-                pending -= 1;
-                if first_error.is_some() {
-                    continue;
-                }
-                let name = plans[tensor].0;
-                match result {
-                    Ok(transfer) => {
-                        let got = transfer.bytes_transferred as usize;
-                        let bytes = transfer.buf.into_vec();
-                        if got == 0 {
-                            first_error = Some(ReadError::Io {
-                                name: name.to_owned(),
-                                offset,
-                                source: io::Error::new(
-                                    io::ErrorKind::UnexpectedEof,
-                                    "the shard ended before the tensor did",
-                                ),
-                            });
-                            continue;
-                        }
-                        outputs[tensor][start..start + got].copy_from_slice(&bytes[..got]);
-                        if got < want {
-                            if let Err(error) =
-                                submit(tensor, start + got, want - got, &mut pending)
-                            {
-                                first_error = Some(error);
-                            }
-                        }
-                    }
-                    Err(source) => {
-                        first_error = Some(ReadError::Io {
-                            name: name.to_owned(),
-                            offset,
-                            source: normalise_eof(source),
-                        });
-                    }
-                }
-            }
-        }
-
-        match first_error {
-            Some(error) => Err(error),
-            None => Ok(outputs),
+            start += want;
         }
     }
 
-    #[cfg(test)]
-    fn set_chunk_limit(&mut self, bytes: usize) {
-        self.chunk_limit = bytes.max(1);
+    while pending > 0 {
+        if let Err(source) = proactor.run_once() {
+            first_error.get_or_insert(ReadError::Proactor(source));
+            break;
+        }
+        while let Ok((tensor, start, offset, want, result)) = rx.try_recv() {
+            pending -= 1;
+            if first_error.is_some() {
+                continue;
+            }
+            let name = plans[tensor].name;
+            match result {
+                Ok(transfer) => {
+                    let got = transfer.bytes_transferred as usize;
+                    let bytes = transfer.buf.into_vec();
+                    if got == 0 {
+                        first_error = Some(ReadError::Io {
+                            name: name.to_owned(),
+                            offset,
+                            source: io::Error::new(
+                                io::ErrorKind::UnexpectedEof,
+                                "the shard ended before the tensor did",
+                            ),
+                        });
+                        continue;
+                    }
+                    outputs[tensor][start..start + got].copy_from_slice(&bytes[..got]);
+                    if got < want {
+                        if let Err(error) = submit(tensor, start + got, want - got, &mut pending) {
+                            first_error = Some(error);
+                        }
+                    }
+                }
+                Err(source) => {
+                    first_error = Some(ReadError::Io {
+                        name: name.to_owned(),
+                        offset,
+                        source: normalise_eof(source),
+                    });
+                }
+            }
+        }
+    }
+
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(outputs),
     }
 }
 
@@ -324,6 +421,31 @@ mod tests {
         )
         .unwrap();
         expected
+    }
+
+    #[test]
+    fn a_file_reader_returns_ranges_byte_exact_across_chunks_and_reports_eof() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.bin");
+        let bytes: Vec<u8> = (0..100_000_u32).map(|i| (i * 7 + i / 251) as u8).collect();
+        fs::write(&path, &bytes).unwrap();
+        let mut reader = FileReader::open(&path).unwrap();
+        reader.chunk_limit = 4096;
+        let got = reader
+            .read_ranges(&[
+                ("tail", 90_000, 10_000),
+                ("head", 0, 5),
+                ("mid", 33_333, 20_001),
+            ])
+            .unwrap();
+        assert_eq!(got[0], bytes[90_000..]);
+        assert_eq!(got[1], bytes[..5]);
+        assert_eq!(got[2], bytes[33_333..53_334]);
+        let error = reader.read_ranges(&[("past", 99_990, 20)]).unwrap_err();
+        assert!(
+            matches!(error, ReadError::Io { ref name, .. } if name == "past"),
+            "{error}"
+        );
     }
 
     #[test]

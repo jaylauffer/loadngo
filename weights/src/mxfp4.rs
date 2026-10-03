@@ -103,6 +103,51 @@ fn e2m1_code(v: f32) -> u8 {
     code | (u8::from(v.is_sign_negative()) << 3)
 }
 
+/// Bytes in one ggml MXFP4 block: the scale, then 16 bytes of codes.
+pub const GGML_BLOCK_BYTES: usize = 17;
+
+/// Repacks ggml's MXFP4 blocks (GGUF type 39) into this module's layout, returning
+/// `(elements, scales)` for an [`Mxfp4Matrix`] of `rows` x `cols`.
+///
+/// A ggml block is the E8M0 scale byte, then 16 bytes whose low nibbles are elements
+/// 0-15 and high nibbles elements 16-31, with the OCP E2M1 codes (ggml's own decoder
+/// doubles the E2M1 values and halves the scale, which is the same number). Repacking
+/// moves the codes only, so it is exact.
+///
+/// # Panics
+/// When `cols` is not a whole number of blocks or `blocks` is not `rows` rows of them.
+pub fn ggml_to_ocp(blocks: &[u8], rows: usize, cols: usize) -> (Vec<u8>, Vec<u8>) {
+    assert_eq!(cols % BLOCK_SIZE, 0, "rows of whole blocks");
+    let per_row = cols / BLOCK_SIZE;
+    assert_eq!(
+        blocks.len(),
+        rows * per_row * GGML_BLOCK_BYTES,
+        "block bytes"
+    );
+    let mut elements = vec![0_u8; rows * cols / 2];
+    let mut scales = vec![0_u8; rows * per_row];
+    for (b, (block, packed)) in blocks
+        .as_chunks::<GGML_BLOCK_BYTES>()
+        .0
+        .iter()
+        .zip(elements.as_chunks_mut::<{ BLOCK_SIZE / 2 }>().0)
+        .enumerate()
+    {
+        scales[b] = block[0];
+        let code = |i: usize| {
+            if i < 16 {
+                block[1 + i] & 0x0f
+            } else {
+                block[1 + i - 16] >> 4
+            }
+        };
+        for (j, byte) in packed.iter_mut().enumerate() {
+            *byte = code(2 * j) | (code(2 * j + 1) << 4);
+        }
+    }
+    (elements, scales)
+}
+
 /// A row-major MXFP4 matrix borrowed from packed element and scale bytes.
 #[derive(Clone, Copy, Debug)]
 pub struct Mxfp4Matrix<'a> {
@@ -456,5 +501,20 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn ggml_blocks_repack_with_low_nibbles_first_then_high_nibbles() {
+        // Codes 0..15 in the low nibbles and 15..0 in the high ones, scale 2^1.
+        let mut block = vec![128_u8];
+        block.extend((0..16_u8).map(|j| j | ((15 - j) << 4)));
+        let (elements, scales) = ggml_to_ocp(&block, 1, 32);
+        let m = Mxfp4Matrix::new(&elements, &scales, 1, 32).unwrap();
+        let mut row = [0.0_f32; 32];
+        m.dequantize_row(0, &mut row);
+        for j in 0..16 {
+            assert_eq!(row[j], 2.0 * e2m1(j as u8), "element {j}");
+            assert_eq!(row[16 + j], 2.0 * e2m1(15 - j as u8), "element {}", 16 + j);
+        }
     }
 }
