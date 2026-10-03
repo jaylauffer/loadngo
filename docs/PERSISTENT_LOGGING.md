@@ -110,7 +110,10 @@ measurement.
   completion/wake and concurrent-shutdown regression tests. Affected-crate
   all-target/all-feature strict Clippy passed. Full workspace validation was
   restarted with targets on the main disk after the 2 GiB `/tmp` filesystem
-  filled; the temporary targets were removed to restore free space.
+  filled; the temporary targets were removed to restore free space. Whole
+  workspace Clippy then passed. The subsequent test run was stopped at Jay's
+  request to use CI for Linux validation; full Linux workspace tests are not
+  reported as passed.
 - iOS host all-target compilation and Android host library compilation with
   NDK 29 passed. Android's existing `file_dialog_harness` fails all-target
   compilation because its future is not `Send`; logging library compilation
@@ -122,3 +125,8 @@ measurement.
   The logging paths passed formatting checks and were left separate from
   those peer changes. No thermal or combat-balance claim follows from these
   checks.
+
+Subsequent work stays on the development Mac and lets CI check Linux. Direct
+Linux development/testing requires a specifically agreed need; sustained
+Linux work may instead use a Codex instance running there. No remote
+validation process remains running from this task.
