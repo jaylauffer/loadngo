@@ -39,7 +39,11 @@ bytes). It is in the signed pudding CAS, and its verified local copy is
   - `config`: the model's shape from `gpt-oss.*` metadata, and the YaRN frequencies.
   - `model`: the CPU reference forward pass with a key/value cache. Matrices stay in
     their file formats, and large products are split across the cores.
-  - `gpt_oss_generate`: greedy continuation from the command line.
+  - `chat`: the harmony chat format without tools: system, developer, user and earlier
+    assistant messages, with `read_reply` splitting a reply into its analysis and final
+    channels. Text that spells a control token stays text.
+  - `gpt_oss_generate`: greedy continuation, or one chat answer with `--chat`, from the
+    command line.
 
 ## Evidence (2026-10-04, M4 Pro Mac mini)
 
@@ -80,11 +84,30 @@ bytes). It is in the signed pudding CAS, and its verified local copy is
   - 0.5 s per token on the CPU;
   - peak memory 29 GB, because raw and repacked tensors coexist during load.
 
+- **Chat format.** Three conversations render token for token as gpt-oss's own chat
+  template does, through Jinja2 and Hugging Face `tokenizers` (244 tokens). They cover:
+  - instructions;
+  - an earlier answer, whose reasoning is dropped;
+  - low and high reasoning;
+  - another identity;
+  - Chinese, emoji and indentation.
+
+  The template is kept in kimi-k3-in-rust (`tests/fixtures/gpt-oss/chat_template.jinja`).
+  Test: `gpt-oss/tests/chat_parity.rs`; fixture: `scripts/gpt_oss_chat_fixture.py`.
+
+  One deliberate difference: `tokenizers` turns `<|start|>` typed inside a message into
+  the control token, so a user could forge a message boundary. Here it stays text
+  (tested).
+
+  Real model, `--chat 'What is the capital of France? Answer in one sentence.'` at low
+  reasoning: analysis "Answer: Paris.", final answer "Paris.", ended by `<|return|>`.
+  The 79-token prompt took 39.5 s, one position at a time on the CPU; then 16 tokens
+  at 0.47 s each.
+
 ## Next
 
-1. **The harmony chat format.** `<|start|>role<|message|>…<|end|>` and the channels,
-   checked against the template kept in kimi-k3-in-rust
-   (`tests/fixtures/gpt-oss/chat_template.jinja`).
+1. **Tools in the chat format.** Declarations in the developer message, and calls on
+   the commentary channel to `functions.NAME`.
 2. **The GPU.** The weights resident in Metal arenas, and the existing loadngo kernels
    for the products:
    - `gemm_mxfp4_tiled` and the GEMVs for the experts;
