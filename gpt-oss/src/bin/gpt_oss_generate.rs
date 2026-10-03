@@ -1,47 +1,76 @@
 //! Text continuation, one chat answer, or an interactive chat with a gpt-oss GGUF, on the
-//! GPU or the CPU reference path.
+//! GPU or the CPU reference path. In chat the model has loadngo's read-only tools: the
+//! local drive, the Archive CAS archives on attached drives, its own notes, and the web.
 
 use std::{
-    io::{BufRead, Read, Write},
+    io::Read,
     path::{Path, PathBuf},
     process::exit,
     time::Instant,
 };
 
 use loadngo_gpt_oss::{
-    chat::{read_reply, Conversation, Message, Reasoning},
+    chat::{
+        read_call, read_reply, tool_namespace, tool_result, Conversation, Message, Reasoning, Reply,
+    },
     model::Model,
     tokenizer::Tokenizer,
+};
+use loadngo_inference::{
+    cas_tools::{cas_tools, Archives},
+    memory_tools::{format_notes, MemoryStore},
+    tools::{FsTools, Toolbox},
+    web_tools::WebTools,
 };
 use loadngo_weights::gguf;
 
 const HELP: &str = "\
 gpt_oss_generate -- runs a gpt-oss GGUF greedily. With TEXT it continues the text; with
---chat and TEXT it answers TEXT as a question in the harmony chat format (the reasoning
-goes to stderr, the answer to stdout); with --chat and no TEXT it chats interactively,
-one message per line, `/reset` to start over and `/quit` (or end of input) to stop.
-Timings go to stderr.
+--chat and TEXT it answers TEXT as a question in the harmony chat format; with --chat
+and no TEXT it chats interactively, one message per line, `/reset` to start over and
+`/quit` (or Ctrl-D) to stop; on a terminal the arrow keys edit the line and Up/Down
+recall earlier ones. Answers go to stdout; reasoning, tool calls and
+timings to stderr.
+
+In chat the model has loadngo's tools, as Kimi does: fs_list, fs_read, fs_find and
+fs_grep on the local drive (read-only, relative paths from --base); cas_archives,
+cas_list, cas_find, cas_read and cas_grep over the Archive CAS archives on attached
+drives (signatures checked against --cas-key); memory_save, memory_search, memory_list
+and memory_forget over its notes (--memory); web_search and web_fetch (queries leave
+this machine). Nothing it can call edits files or runs commands.
 
 Usage:
   cargo run --release -p loadngo-gpt-oss --bin gpt_oss_generate -- [OPTIONS] [TEXT]
 
 Options:
-  --gguf PATH     (required)  the model file, e.g. the verified copy in ~/.loadngo/models
-  --blake3 HEX    (optional)  refuse the file unless its BLAKE3 is HEX (hashed while the
-                              model loads)
-  --tokens N      (optional)  tokens to generate (default 8; with --chat 2048)
-  --chat          (optional)  chat format: answer TEXT, or chat interactively without it
-  --reasoning R   (optional)  with --chat: low, medium or high (default low)
-  --show-reasoning (optional) in an interactive chat, print the reasoning too
-  --gpu           (optional)  run on the GPU (macOS): weights in GPU memory, prompts in
-                              passes of 512, up to 8192 positions
-  --profile       (optional)  with --gpu: where the prompt's and the reply's time went
-  -h, --help                  this text
+  --gguf PATH      (required)  the model file, e.g. the verified copy in ~/.loadngo/models
+  --blake3 HEX     (optional)  refuse the file unless its BLAKE3 is HEX (hashed while the
+                               model loads)
+  --tokens N       (optional)  tokens per reply round (default 8; with --chat 2048)
+  --chat           (optional)  chat format: answer TEXT, or chat interactively without it
+  --reasoning R    (optional)  with --chat: low, medium or high (default low)
+  --show-reasoning (optional)  in an interactive chat, print the reasoning too
+  --gpu            (optional)  run on the GPU (macOS): weights in GPU memory, prompts in
+                               passes of 512
+  --context N      (optional)  with --gpu: positions a conversation can reach (default
+                               16384)
+  --profile        (optional)  with --gpu: where the prompt's and the reply's time went
+  --base PATH      (optional)  where relative fs_* paths start (default: the current
+                               directory)
+  --cas-root PATH  (optional, repeatable)  an Archive CAS root beyond those found on
+                               attached drives
+  --cas-key PATH   (optional)  the public key archive signatures are checked against
+                               (default: ~/.loadngo/keys/*.pub)
+  --memory PATH    (optional)  the notes file (default ~/.loadngo/gpt-oss/memory.jsonl)
+  --no-tools       (optional)  chat without tools
+  --no-web         (optional)  without web_search and web_fetch
+  --no-memory      (optional)  without the memory tools
+  -h, --help                   this text
 
 Example:
   cargo run --release -p loadngo-gpt-oss --bin gpt_oss_generate -- --gpu --chat \\
       --gguf ~/.loadngo/models/56fcc05caeabd1f4f352f7b9d6762cad2035b860973c07a5c330a7fa3944e8e1.gguf \\
-      'What is the capital of France?'
+      --base ~/pudding 'Which archives are attached, and what is in the newest one?'
 ";
 
 fn fail(message: &str) -> ! {
@@ -49,6 +78,7 @@ fn fail(message: &str) -> ! {
     exit(2);
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct Options {
     path: PathBuf,
     blake3: Option<String>,
@@ -58,7 +88,15 @@ struct Options {
     reasoning: Reasoning,
     show_reasoning: bool,
     on_gpu: bool,
+    context: usize,
     profile: bool,
+    base: Option<PathBuf>,
+    cas_roots: Vec<PathBuf>,
+    cas_key: Option<PathBuf>,
+    memory: Option<PathBuf>,
+    tools: bool,
+    web: bool,
+    notes: bool,
 }
 
 fn options() -> Options {
@@ -67,51 +105,65 @@ fn options() -> Options {
         print!("{HELP}");
         exit(0);
     }
-    let (mut path, mut blake3, mut tokens, mut text) = (None, None, None, None);
-    let (mut chat, mut reasoning, mut show_reasoning, mut on_gpu, mut profile) =
-        (false, Reasoning::Low, false, false, false);
+    let mut o = Options {
+        path: PathBuf::new(),
+        blake3: None,
+        tokens: None,
+        text: None,
+        chat: false,
+        reasoning: Reasoning::Low,
+        show_reasoning: false,
+        on_gpu: false,
+        context: 16384,
+        profile: false,
+        base: None,
+        cas_roots: Vec::new(),
+        cas_key: None,
+        memory: None,
+        tools: true,
+        web: true,
+        notes: true,
+    };
+    let mut path = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         let mut value = |what: &str| {
             args.next()
                 .unwrap_or_else(|| fail(&format!("{arg} needs {what}")))
         };
+        let number = |text: String, name: &str| -> usize {
+            text.parse()
+                .unwrap_or_else(|_| fail(&format!("{name} needs a number")))
+        };
         match arg.as_str() {
             "--gguf" => path = Some(PathBuf::from(value("a path"))),
-            "--blake3" => blake3 = Some(value("a hash").to_ascii_lowercase()),
-            "--tokens" => {
-                tokens = Some(
-                    value("a number")
-                        .parse()
-                        .unwrap_or_else(|_| fail("--tokens needs a number")),
-                );
-            }
+            "--blake3" => o.blake3 = Some(value("a hash").to_ascii_lowercase()),
+            "--tokens" => o.tokens = Some(number(value("a number"), "--tokens")),
+            "--context" => o.context = number(value("a number"), "--context"),
             "--reasoning" => {
-                reasoning = Reasoning::parse(&value("low, medium or high"))
+                o.reasoning = Reasoning::parse(&value("low, medium or high"))
                     .unwrap_or_else(|| fail("--reasoning is low, medium or high"));
             }
-            "--chat" => chat = true,
-            "--show-reasoning" => show_reasoning = true,
-            "--gpu" => on_gpu = true,
-            "--profile" => profile = true,
+            "--base" => o.base = Some(PathBuf::from(value("a path"))),
+            "--cas-root" => o.cas_roots.push(PathBuf::from(value("a path"))),
+            "--cas-key" => o.cas_key = Some(PathBuf::from(value("a path"))),
+            "--memory" => o.memory = Some(PathBuf::from(value("a path"))),
+            "--chat" => o.chat = true,
+            "--show-reasoning" => o.show_reasoning = true,
+            "--gpu" => o.on_gpu = true,
+            "--profile" => o.profile = true,
+            "--no-tools" => o.tools = false,
+            "--no-web" => o.web = false,
+            "--no-memory" => o.notes = false,
             other if other.starts_with("--") => fail(&format!("unknown option {other}")),
-            other => text = Some(other.to_owned()),
+            other => o.text = Some(other.to_owned()),
         }
     }
-    if text.is_none() && !chat {
+    if o.text.is_none() && !o.chat {
         fail("no text to continue (or pass --chat for a conversation)");
     }
-    Options {
-        path: path.unwrap_or_else(|| fail("--gguf is required")),
-        blake3,
-        tokens,
-        text,
-        chat,
-        reasoning,
-        show_reasoning,
-        on_gpu,
-        profile,
-    }
+    o.path = path.unwrap_or_else(|| fail("--gguf is required"));
+    o
 }
 
 /// The file's BLAKE3, as lowercase hex.
@@ -130,6 +182,96 @@ fn hash_file(path: &Path) -> std::io::Result<String> {
         }
     }
     Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// The tools and what the conversation tells the model about them and its notes.
+fn toolbox(o: &Options) -> (Toolbox, String) {
+    let mut tools = Toolbox::default();
+    let base = o
+        .base
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| ".".into());
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut instructions = format!(
+        "You are running locally on Jay's Mac mini. Relative file paths start at {}. Use \
+         your tools to look things up instead of guessing, and name the files and archives \
+         you read. Your tools only read (and keep your notes): nothing here edits files or \
+         runs commands.",
+        base.display()
+    );
+    eprintln!(
+        "file tools: local drive, read-only, relative to {}",
+        base.display()
+    );
+    for tool in FsTools::new(&base, home.as_deref()).into_tools() {
+        tools.push(tool);
+    }
+    // Every Archive CAS root on the attached drives, plus --cas-root; signatures are
+    // checked against --cas-key, or the key kept on this Mac.
+    let key = match &o.cas_key {
+        Some(path) => Some(
+            data::archive_cas_sign::read_public_key(path)
+                .unwrap_or_else(|e| fail(&format!("CAS key {}: {e:#}", path.display()))),
+        ),
+        None => data::archive_cas_sign::default_trusted_key().ok().flatten(),
+    };
+    let archives = Archives::new(o.cas_roots.clone(), key);
+    let roots = archives.roots();
+    eprintln!(
+        "archive tools: {} Archive CAS root(s) attached ({})",
+        roots.len(),
+        roots
+            .iter()
+            .map(|r| r.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    for tool in cas_tools(archives) {
+        tools.push(tool);
+    }
+    if o.notes {
+        let path = o.memory.clone().unwrap_or_else(|| {
+            home.clone()
+                .unwrap_or_default()
+                .join(".loadngo/gpt-oss/memory.jsonl")
+        });
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let memory = MemoryStore::new(&path);
+        eprintln!(
+            "memory: {} (memory_save, memory_search, memory_list, memory_forget)",
+            path.display()
+        );
+        instructions.push_str(
+            "\n\nYou have notes that last across conversations: save facts, decisions and the \
+             state of ongoing work with memory_save when they will matter later, look them up \
+             with memory_search, and drop wrong or outdated ones with memory_forget.",
+        );
+        match memory.recall(4096) {
+            Ok(notes) if !notes.is_empty() => {
+                instructions.push_str(&format!(
+                    " Your most recent notes:\n{}",
+                    format_notes(&notes)
+                ));
+            }
+            Ok(_) => instructions.push_str(" You have no notes yet."),
+            Err(e) => eprintln!("memory: cannot read the notes: {e}"),
+        }
+        for tool in memory.into_tools() {
+            tools.push(tool);
+        }
+    }
+    if o.web {
+        eprintln!("web tools: web_search (DuckDuckGo) and web_fetch; queries leave this machine");
+        for tool in WebTools::new().into_tools() {
+            tools.push(tool);
+        }
+    } else {
+        eprintln!("web tools: off (--no-web)");
+    }
+    (tools, instructions)
 }
 
 fn main() {
@@ -158,7 +300,7 @@ fn main() {
         }
         (tokenizer, model)
     });
-    let mut engine = Engine::new(model, o.on_gpu);
+    let mut engine = Engine::new(model, o.on_gpu, o.context);
     eprintln!(
         "loaded in {:.1}s ({}{})",
         start.elapsed().as_secs_f64(),
@@ -169,56 +311,51 @@ fn main() {
             ""
         }
     );
-    let stops: Vec<u32> = ["<|return|>", "<|call|>"]
-        .iter()
-        .filter_map(|name| tokenizer.control(name))
-        .collect();
     let limit = o.tokens.unwrap_or(if o.chat { 2048 } else { 8 });
 
-    match (&o.text, o.chat) {
-        (Some(text), false) => {
-            let prompt = tokenizer.encode(text);
-            let out = generate(&mut engine, &prompt, limit, &o, |t| tokenizer.is_control(t));
-            println!("{text}{}", tokenizer.decode(&out));
-        }
-        (Some(text), true) => {
-            let mut conversation = Conversation::new(today());
-            conversation.reasoning = o.reasoning;
-            conversation.messages.push(Message::User(text.clone()));
-            let prompt = conversation
-                .prompt(&tokenizer)
-                .unwrap_or_else(|e| fail(&e.to_string()));
-            let out = generate(&mut engine, &prompt, limit, &o, |t| stops.contains(&t));
-            let reply = read_reply(&tokenizer, &out);
+    if !o.chat {
+        let text = o.text.as_deref().expect("checked in options()");
+        let prompt = tokenizer.encode(text);
+        let logits = feed_timed(&mut engine, &prompt, &o);
+        let out = decode(&mut engine, logits, limit, &o, |t| tokenizer.is_control(t));
+        println!("{text}{}", tokenizer.decode(&out));
+        return;
+    }
+    let mut chat = Chat::new(&tokenizer, &o);
+    match &o.text {
+        Some(text) => {
+            let reply = chat.turn(&mut engine, text, limit, &o);
             eprintln!("[reasoning] {}", reply.analysis.trim());
             println!("{}", reply.answer.trim());
-            if !reply.complete {
-                eprintln!("[the reply was cut off at {limit} tokens]");
-            }
         }
-        (None, _) => interactive(&mut engine, &tokenizer, &stops, limit, &o),
+        None => chat.interactive(&mut engine, limit, &o),
     }
 }
 
-/// Feeds `prompt` and generates greedily until `stop` or `limit` tokens.
-fn generate(
-    engine: &mut Engine,
-    prompt: &[u32],
-    limit: usize,
-    o: &Options,
-    stop: impl Fn(u32) -> bool,
-) -> Vec<u32> {
+/// Feeds `tokens` and reports the time; returns the logits after the last.
+fn feed_timed(engine: &mut Engine, tokens: &[u32], o: &Options) -> Vec<f32> {
     let start = Instant::now();
-    let mut logits = engine.feed(prompt);
+    let logits = engine.feed(tokens);
     eprintln!(
         "{} prompt tokens in {:.2}s ({:.0} tokens/s)",
-        prompt.len(),
+        tokens.len(),
         start.elapsed().as_secs_f64(),
-        prompt.len() as f64 / start.elapsed().as_secs_f64()
+        tokens.len() as f64 / start.elapsed().as_secs_f64()
     );
     if o.profile {
         eprintln!("[prompt] {}", engine.profile());
     }
+    logits
+}
+
+/// Generates greedily from `logits` until `stop` (included, not fed) or `limit` tokens.
+fn decode(
+    engine: &mut Engine,
+    mut logits: Vec<f32>,
+    limit: usize,
+    o: &Options,
+    stop: impl Fn(u32) -> bool,
+) -> Vec<u32> {
     let start = Instant::now();
     let mut out = Vec::new();
     for _ in 0..limit {
@@ -229,7 +366,7 @@ fn generate(
             .map(|(i, _)| i as u32)
             .expect("logits");
         out.push(next);
-        if stop(next) {
+        if stop(next) || engine.position() + 1 >= engine.context() {
             break;
         }
         logits = engine.feed(&[next]);
@@ -246,61 +383,141 @@ fn generate(
     out
 }
 
-/// A conversation on stdin. Each turn re-reads the whole conversation: harmony leaves
-/// earlier replies' reasoning out of the history, so the cached positions would not
-/// match it.
-fn interactive(
-    engine: &mut Engine,
-    tokenizer: &Tokenizer,
-    stops: &[u32],
-    limit: usize,
-    o: &Options,
-) {
-    let mut conversation = Conversation::new(today());
-    conversation.reasoning = o.reasoning;
-    eprintln!("chat: one message per line; /reset starts over, /quit stops");
-    let stdin = std::io::stdin();
-    loop {
-        eprint!("> ");
-        let _ = std::io::stderr().flush();
-        let mut line = String::new();
-        match stdin.lock().read_line(&mut line) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
+/// A conversation with the tools.
+struct Chat<'t> {
+    tokenizer: &'t Tokenizer,
+    conversation: Conversation,
+    tools: Option<Toolbox>,
+    call: u32,
+    stops: [u32; 2],
+}
+
+/// Longest tool result passed back, in characters; the tools bound their own output
+/// well below this, and the rest of the context stays for the reply.
+const MAX_RESULT_CHARS: usize = 24_000;
+
+impl<'t> Chat<'t> {
+    fn new(tokenizer: &'t Tokenizer, o: &Options) -> Self {
+        let mut conversation = Conversation::new(today());
+        conversation.reasoning = o.reasoning;
+        let tools = if o.tools {
+            let (tools, instructions) = toolbox(o);
+            conversation.tools =
+                Some(tool_namespace(&tools.declaration()).unwrap_or_else(|e| fail(&e)));
+            conversation.instructions = Some(instructions);
+            Some(tools)
+        } else {
+            eprintln!("tools: off (--no-tools)");
+            None
+        };
+        let control = |name| {
+            tokenizer
+                .control(name)
+                .unwrap_or_else(|| fail(&format!("no {name} token")))
+        };
+        Self {
+            tokenizer,
+            conversation,
+            tools,
+            call: control("<|call|>"),
+            stops: [control("<|return|>"), control("<|call|>")],
         }
-        let line = line.trim();
-        match line {
-            "" => continue,
-            "/quit" => break,
-            "/reset" => {
-                conversation.messages.clear();
-                eprintln!("[conversation cleared]");
-                continue;
-            }
-            _ => {}
-        }
-        conversation.messages.push(Message::User(line.to_owned()));
-        let prompt = conversation
-            .prompt(tokenizer)
+    }
+
+    /// One user message: the whole conversation is read again (harmony leaves earlier
+    /// replies' reasoning out of the history), then the model replies, calling tools as
+    /// often as it needs; each call's `<|call|>` and result are fed straight in.
+    fn turn(&mut self, engine: &mut Engine, text: &str, limit: usize, o: &Options) -> Reply {
+        self.conversation
+            .messages
+            .push(Message::User(text.to_owned()));
+        let prompt = self
+            .conversation
+            .prompt(self.tokenizer)
             .unwrap_or_else(|e| fail(&e.to_string()));
-        if prompt.len() + limit > engine.context() {
-            eprintln!("[the conversation is too long for the context; /reset to start over]");
-            conversation.messages.pop();
-            continue;
-        }
         engine.reset();
-        let out = generate(engine, &prompt, limit, o, |t| stops.contains(&t));
-        let reply = read_reply(tokenizer, &out);
-        if o.show_reasoning {
-            eprintln!("[reasoning] {}", reply.analysis.trim());
+        let mut logits = feed_timed(engine, &prompt, o);
+        let mut written = Vec::new();
+        loop {
+            let round = decode(engine, logits, limit, o, |t| self.stops.contains(&t));
+            written.extend_from_slice(&round);
+            if round.last() != Some(&self.call) {
+                break;
+            }
+            let Some(call) = read_call(self.tokenizer, &round) else {
+                eprintln!("[a tool call that could not be read; the turn stops]");
+                break;
+            };
+            let result = match &self.tools {
+                Some(tools) => tools
+                    .call(&call.name, &call.arguments)
+                    .unwrap_or_else(|e| format!("error: {e}")),
+                None => "error: tools are off".to_owned(),
+            };
+            let mut result: String = result.chars().take(MAX_RESULT_CHARS).collect();
+            eprintln!(
+                "[tool] {} {} -> {} characters",
+                call.name,
+                call.arguments.trim(),
+                result.chars().count()
+            );
+            let mut more = vec![self.call];
+            more.extend(
+                tool_result(self.tokenizer, &call.name, &result)
+                    .unwrap_or_else(|e| fail(&e.to_string())),
+            );
+            if engine.position() + more.len() + 512 > engine.context() {
+                result = "error: the result does not fit in what is left of the context".into();
+                more.truncate(1);
+                more.extend(
+                    tool_result(self.tokenizer, &call.name, &result)
+                        .unwrap_or_else(|e| fail(&e.to_string())),
+                );
+                if engine.position() + more.len() + 64 > engine.context() {
+                    eprintln!("[the context is full; the turn stops]");
+                    break;
+                }
+            }
+            logits = engine.feed(&more);
         }
-        println!("{}", reply.answer.trim());
+        let reply = read_reply(self.tokenizer, &written);
         if !reply.complete {
-            eprintln!("[the reply was cut off at {limit} tokens]");
+            eprintln!("[the reply did not finish]");
         }
-        conversation
+        self.conversation
             .messages
             .push(Message::Assistant(reply.answer.trim().to_owned()));
+        reply
+    }
+
+    fn interactive(&mut self, engine: &mut Engine, limit: usize, o: &Options) {
+        eprintln!(
+            "chat: one message per line (arrow keys edit, Up/Down recall); /reset starts over, \
+             /quit or Ctrl-D stops"
+        );
+        let mut editor = loadngo_line_editor::LineEditor::new();
+        loop {
+            let line = match editor.read_line("> ") {
+                Ok(Some(line)) => line,
+                Ok(None) => break,
+                Err(e) => fail(&format!("reading the terminal: {e}")),
+            };
+            match line.trim() {
+                "" => {}
+                "/quit" => break,
+                "/reset" => {
+                    self.conversation.messages.clear();
+                    eprintln!("[conversation cleared]");
+                }
+                text => {
+                    let reply = self.turn(engine, text, limit, o);
+                    if o.show_reasoning {
+                        eprintln!("[reasoning] {}", reply.analysis.trim());
+                    }
+                    println!("{}", reply.answer.trim());
+                }
+            }
+        }
     }
 }
 
@@ -332,17 +549,20 @@ enum Engine {
 }
 
 impl Engine {
-    fn new(model: Model, on_gpu: bool) -> Self {
+    fn new(model: Model, on_gpu: bool, context: usize) -> Self {
         if on_gpu {
             #[cfg(target_os = "macos")]
             {
-                let gpu = loadngo_gpt_oss::gpu::GpuModel::new(model, 512, 8192)
+                let gpu = loadngo_gpt_oss::gpu::GpuModel::new(model, 512, context)
                     .unwrap_or_else(|e| fail(&e.to_string()));
                 let session = gpu.session().unwrap_or_else(|e| fail(&e.to_string()));
                 return Self::Gpu(Box::new(gpu), session);
             }
             #[cfg(not(target_os = "macos"))]
-            fail("--gpu needs macOS");
+            {
+                let _ = context;
+                fail("--gpu needs macOS");
+            }
         }
         let session = model.session();
         Self::Cpu(Box::new(model), session)
@@ -362,6 +582,15 @@ impl Engine {
             Self::Cpu(model, _) => model.config.context_length,
             #[cfg(target_os = "macos")]
             Self::Gpu(gpu, _) => gpu.max_context,
+        }
+    }
+
+    /// Positions fed so far.
+    fn position(&self) -> usize {
+        match self {
+            Self::Cpu(_, session) => session.len(),
+            #[cfg(target_os = "macos")]
+            Self::Gpu(_, session) => session.len(),
         }
     }
 

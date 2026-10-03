@@ -96,3 +96,78 @@ fn control_tokens_typed_in_a_message_stay_text_and_replies_split_by_channel() {
     let cut = read_reply(&tokenizer, &reply[..reply.len() - 2]);
     assert_eq!((cut.answer.as_str(), cut.complete), ("Paris", false));
 }
+
+#[test]
+#[ignore = "needs gpt-oss-20b's GGUF (~/.loadngo/models or GPT_OSS_GGUF)"]
+fn tools_are_declared_called_and_answered_as_the_template_does() {
+    use loadngo_gpt_oss::chat::{read_call, tool_namespace, tool_result};
+    let tokenizer = tokenizer();
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/tools-parity.json")).unwrap();
+    let tools = tool_namespace(fixture["declaration"].as_str().unwrap()).unwrap();
+    let ids = |case: &Value| -> Vec<u32> {
+        case["ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| id.as_u64().unwrap() as u32)
+            .collect()
+    };
+    let cases = fixture["cases"].as_array().unwrap();
+
+    // A prompt declaring tools, token for token.
+    let mut conversation = Conversation::new("2026-10-04");
+    conversation.tools = Some(tools.clone());
+    conversation
+        .messages
+        .push(Message::User("What is in README.md?".into()));
+    assert_eq!(
+        conversation.prompt(&tokenizer).unwrap(),
+        ids(&cases[0]),
+        "{}",
+        cases[0]["text"]
+    );
+
+    // A call and its result: the template's tokens up to the call are our prompt's; its
+    // call parses back; what follows the call is our result message.
+    let want = ids(&cases[1]);
+    let mut conversation = Conversation::new("2026-10-04");
+    conversation.reasoning = Reasoning::Low;
+    conversation.tools = Some(tools);
+    conversation.instructions = Some("You are on Jay's Mac mini.".into());
+    conversation
+        .messages
+        .push(Message::User("Read README.md".into()));
+    let prompt = conversation.prompt(&tokenizer).unwrap();
+    let before_reply = prompt.len() - 2; // <|start|> assistant
+    assert_eq!(want[..before_reply], prompt[..before_reply]);
+    let call_end = want
+        .iter()
+        .rposition(|&t| Some(t) == tokenizer.control("<|call|>"))
+        .unwrap();
+    let call = read_call(&tokenizer, &want[before_reply..=call_end]).unwrap();
+    assert_eq!(
+        (call.name.as_str(), call.arguments.as_str()),
+        ("fs_read", r#"{"path": "README.md"}"#)
+    );
+    let result = tool_result(
+        &tokenizer,
+        "fs_read",
+        "line 1\n\"quoted\" ünïcode\ttab\\back",
+    )
+    .unwrap();
+    assert_eq!(want[call_end + 1..], result[..]);
+
+    // The order the model itself writes: channel first, then the recipient.
+    let mut generated = vec![tokenizer.control("<|channel|>").unwrap()];
+    generated.extend(tokenizer.encode("commentary to=functions.cas_archives "));
+    generated.push(tokenizer.control("<|constrain|>").unwrap());
+    generated.extend(tokenizer.encode("json"));
+    generated.push(tokenizer.control("<|message|>").unwrap());
+    generated.extend(tokenizer.encode("{}"));
+    generated.push(tokenizer.control("<|call|>").unwrap());
+    let call = read_call(&tokenizer, &generated).unwrap();
+    assert_eq!(
+        (call.name.as_str(), call.arguments.as_str()),
+        ("cas_archives", "{}")
+    );
+}

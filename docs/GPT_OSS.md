@@ -241,6 +241,75 @@ Checked 2026-10-04:
 Each chat turn re-reads the whole conversation: harmony leaves earlier replies'
 reasoning out of the history, so the cached positions would not match it.
 
+## Tools in chat
+
+The chat has loadngo's tools (`loadngo-inference`), as Kimi has them:
+
+- `fs_list`, `fs_read`, `fs_find`, `fs_grep`: the local drive, read-only, relative paths
+  from `--base` (the launcher passes `~/pudding`);
+- `cas_archives`, `cas_list`, `cas_find`, `cas_read`, `cas_grep`: every Archive CAS
+  root on the attached drives (plus `--cas-root`). Signatures are checked against
+  `--cas-key`; the launcher passes `~/.loadngo/keys/jay-macmini.dilithium2.pub`;
+- `memory_save`, `memory_search`, `memory_list`, `memory_forget`: notes in
+  `~/.loadngo/gpt-oss/memory.jsonl`. The newest 4 KB of notes open each conversation;
+- `web_search`, `web_fetch` (`--no-web` turns them off).
+
+Kimi's file editing (`text_read/write/edit`), terminal and board tools are in
+kimi-k3-in-rust (Apache 2.0), not in loadngo, so gpt-oss does not have them. Here
+nothing edits files or runs commands.
+
+The format is the template's (`chat`):
+
+- **Declaration.** `tool_namespace` renders the tools' JSON schemas as the
+  `functions` namespace in the developer message, and the system message gains the
+  line that tool calls go to the commentary channel.
+- **Calls.** `read_call` finds `to=functions.NAME` in the last header before
+  `<|call|>`, whether the model writes it before or after the channel.
+- **Results.** `tool_result` writes the result back JSON-encoded, then
+  `<|start|>assistant`.
+
+Within a turn, the model's tokens and each result are fed straight on, so the cache
+never needs re-reading. Across turns, the history keeps each answer but not the tool
+calls that led to it.
+
+Checked (`gpt-oss/tests/chat_parity.rs`, fixture `scripts/gpt_oss_tools_fixture.py`):
+
+- a prompt declaring tools matches the template rendered by Jinja2 (with transformers'
+  `tojson`) and tokenized by Hugging Face, token for token;
+- the template's call parses back to its tool and arguments, as does a call in the
+  order the model writes it;
+- the template's result message is exactly `tool_result`'s, for text with quotes,
+  newlines, tabs, a backslash and accents.
+
+On the real model, 2026-10-04:
+
+- **Archives.** "Which Archive CAS archives are attached?": its first call passed an
+  argument `cas_archives` does not take; the tool refused it, the model called again
+  correctly, and it named both attached archives with their real titles, signers and
+  dates.
+- **Files.** A crate description came back from `fs_read`, quoted exactly.
+- **Notes.** One run saved a note with `memory_save`, and the next run answered from
+  it.
+
+## Line editing
+
+`loadngo-line-editor` (`line-editor/`) gives the interactive chat line editing:
+
+- moving: arrow keys, Home/End and Ctrl-A/E;
+- words: Alt or Ctrl with an arrow, Alt-B/F, Ctrl-W;
+- deleting: Ctrl-U, Ctrl-K, Delete;
+- history: Up/Down step through the lines entered this session;
+- Ctrl-C abandons the line; Ctrl-D on an empty line ends input.
+
+On a Unix terminal it enters raw mode for each line and restores the settings when the
+line ends. Elsewhere (a pipe, a file, or Windows for now) it reads plain lines. The key
+decoding and the editing are pure and unit-tested. A run under `script` (a
+pseudo-terminal) edited, recalled and ended lines as typed.
+
+That run found a bug, now fixed. Entering raw mode with `TCSAFLUSH` threw away keys
+already typed, as when typing ahead while a reply prints; it now uses `TCSANOW`.
+Wrapped lines wider than the terminal are not redrawn correctly yet.
+
 ## The Neural Engine
 
 Jay asked whether gpt-oss can use it. Not for decoding:

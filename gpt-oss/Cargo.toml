@@ -9,7 +9,12 @@ description = "OpenAI's gpt-oss models from their GGUF files: the o200k tokenize
 [dependencies]
 blake3.workspace = true
 loadngo-weights = { path = "../weights" }
+# The chat tool: file, archive, memory and web tools, and the archive signing key.
+loadngo-inference = { path = "../inference", features = ["cas", "web"] }
+data = { path = "../data" }
+loadngo-line-editor = { path = "../line-editor" }
 regex-syntax = "0.8"
+serde_json.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]

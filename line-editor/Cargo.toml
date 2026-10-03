@@ -1,0 +1,10 @@
+[package]
+name = "loadngo-line-editor"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Terminal line editing for loadngo command-line tools: arrow keys, word moves, history; plain lines when not a terminal."
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

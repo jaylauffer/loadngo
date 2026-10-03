@@ -1,4 +1,4 @@
-//! gpt-oss's chat format, harmony, without tools.
+//! gpt-oss's chat format, harmony, with function tools.
 //!
 //! A conversation is a sequence of messages, each
 //! `<|start|>{role}<|message|>{text}<|end|>`:
@@ -25,9 +25,18 @@
 //! (`<|channel|>analysis<|message|>…<|end|>`), then
 //! `<|start|>assistant<|channel|>final<|message|>…` and `<|return|>`.
 //!
+//! Tools ([`tool_namespace`]) are declared in the developer message as a TypeScript-like
+//! `functions` namespace, and the system message adds that calls go to the commentary
+//! channel. The model calls one with a header naming `to=functions.NAME`, then the JSON
+//! arguments, then `<|call|>` ([`read_call`]). The result returns as
+//! `<|start|>functions.NAME to=assistant<|channel|>commentary<|message|>"…"<|end|>`, the
+//! text JSON-encoded ([`tool_result`]), and the reply goes on after `<|start|>assistant`.
+//!
 //! This follows the chat template shipped with the model, from which these strings are
 //! taken. Text goes through [`Tokenizer::encode`], so a message that spells a control
 //! token cannot forge one.
+
+use serde_json::Value;
 
 use crate::tokenizer::Tokenizer;
 
@@ -76,6 +85,8 @@ pub struct Conversation {
     pub date: String,
     pub reasoning: Reasoning,
     pub instructions: Option<String>,
+    /// The tools, rendered by [`tool_namespace`].
+    pub tools: Option<String>,
     pub messages: Vec<Message>,
 }
 
@@ -110,6 +121,7 @@ impl Conversation {
             date: date.into(),
             reasoning: Reasoning::Medium,
             instructions: None,
+            tools: None,
             messages: Vec::new(),
         }
     }
@@ -129,20 +141,27 @@ impl Conversation {
             out.extend(tokenizer.encode(text));
             out.push(c.end);
         };
-        let system = format!(
+        let mut system = format!(
             "{}\nKnowledge cutoff: {KNOWLEDGE_CUTOFF}\nCurrent date: {}\n\nReasoning: {}\n\n{CHANNELS}",
             self.identity,
             self.date,
             self.reasoning.name()
         );
+        if self.tools.is_some() {
+            system
+                .push_str("\nCalls to these tools must go to the commentary channel: 'functions'.");
+        }
         message(&mut out, "system", None, &system);
-        if let Some(instructions) = &self.instructions {
-            message(
-                &mut out,
-                "developer",
-                None,
-                &format!("# Instructions\n\n{instructions}\n\n"),
-            );
+        if self.instructions.is_some() || self.tools.is_some() {
+            let mut developer = String::new();
+            if let Some(instructions) = &self.instructions {
+                developer.push_str(&format!("# Instructions\n\n{instructions}\n\n"));
+            }
+            if let Some(tools) = &self.tools {
+                developer.push_str("# Tools\n\n");
+                developer.push_str(tools);
+            }
+            message(&mut out, "developer", None, &developer);
         }
         for m in &self.messages {
             match m {
@@ -213,4 +232,144 @@ pub fn read_reply(tokenizer: &Tokenizer, tokens: &[u32]) -> Reply {
     }
     flush(&current, &mut body, &mut reply);
     reply
+}
+
+/// The TypeScript-like type the chat template gives a JSON Schema property. Covers what
+/// loadngo's tools declare (strings, numbers, booleans, string enums and arrays of
+/// those); anything else is `any`.
+fn typescript(spec: &Value) -> String {
+    match spec.get("type").and_then(Value::as_str) {
+        Some("string") => match spec.get("enum").and_then(Value::as_array) {
+            Some(values) => values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|v| format!("\"{v}\""))
+                .collect::<Vec<_>>()
+                .join(" | "),
+            None => "string".into(),
+        },
+        Some("number" | "integer") => "number".into(),
+        Some("boolean") => "boolean".into(),
+        Some("array") => match spec.pointer("/items/type").and_then(Value::as_str) {
+            Some("string") => "string[]".into(),
+            Some("number" | "integer") => "number[]".into(),
+            Some("boolean") => "boolean[]".into(),
+            _ => "any[]".into(),
+        },
+        _ => "any".into(),
+    }
+}
+
+/// Renders tool declarations (a JSON array of `{"type": "function", "function": {name,
+/// description, parameters}}`, as `loadngo_inference::tools::Toolbox::declaration` gives
+/// them) as the chat template's `functions` namespace.
+///
+/// # Errors
+/// When the declarations are not that shape.
+pub fn tool_namespace(declarations: &str) -> Result<String, String> {
+    let list: Value =
+        serde_json::from_str(declarations).map_err(|e| format!("tool declarations: {e}"))?;
+    let list = list
+        .as_array()
+        .ok_or("tool declarations must be a JSON array")?;
+    let mut out = String::from("## functions\n\nnamespace functions {\n\n");
+    for tool in list {
+        let f = tool
+            .get("function")
+            .ok_or("a declaration has no `function`")?;
+        let name = f
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or("a tool has no name")?;
+        let description = f.get("description").and_then(Value::as_str).unwrap_or("");
+        out.push_str(&format!("// {description}\ntype {name} = "));
+        let params = f.get("parameters");
+        let properties = params
+            .and_then(|p| p.get("properties"))
+            .and_then(Value::as_object);
+        match properties {
+            Some(properties) if !properties.is_empty() => {
+                let required: Vec<&str> = params
+                    .and_then(|p| p.get("required"))
+                    .and_then(Value::as_array)
+                    .map(|r| r.iter().filter_map(Value::as_str).collect())
+                    .unwrap_or_default();
+                out.push_str("(_: {\n");
+                for (param, spec) in properties {
+                    if let Some(d) = spec.get("description").and_then(Value::as_str) {
+                        out.push_str(&format!("// {d}\n"));
+                    }
+                    let optional = if required.contains(&param.as_str()) {
+                        ""
+                    } else {
+                        "?"
+                    };
+                    out.push_str(&format!("{param}{optional}: {},\n", typescript(spec)));
+                }
+                out.push_str("}) => any;\n\n");
+            }
+            _ => out.push_str("() => any;\n\n"),
+        }
+    }
+    out.push_str("} // namespace functions");
+    Ok(out)
+}
+
+/// A tool call the model made.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolCall {
+    pub name: String,
+    /// The JSON arguments, as written.
+    pub arguments: String,
+}
+
+/// The tool call that ends `tokens` (generated tokens ending in `<|call|>`): the
+/// recipient from the last message header (`to=functions.NAME`, before or after the
+/// channel) and the text between that header's `<|message|>` and `<|call|>`.
+pub fn read_call(tokenizer: &Tokenizer, tokens: &[u32]) -> Option<ToolCall> {
+    let call = tokenizer.control("<|call|>")?;
+    let message = tokenizer.control("<|message|>")?;
+    let start = tokenizer.control("<|start|>");
+    let end = tokens.iter().rposition(|&t| t == call)?;
+    let body = tokens[..end].iter().rposition(|&t| t == message)?;
+    let header_from = tokens[..body]
+        .iter()
+        .rposition(|&t| Some(t) == start)
+        .map_or(0, |i| i + 1);
+    let header = tokenizer.decode(&tokens[header_from..body]);
+    let at = header.find("to=functions.")? + "to=functions.".len();
+    let name: String = header[at..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    if name.is_empty() {
+        return None;
+    }
+    Some(ToolCall {
+        name,
+        arguments: tokenizer.decode(&tokens[body + 1..end]),
+    })
+}
+
+/// A tool's result as the model reads it, followed by `<|start|>assistant` for the reply
+/// to go on: the text JSON-encoded, as the chat template's `tojson` does.
+///
+/// # Errors
+/// When the tokenizer lacks a control token the format needs.
+pub fn tool_result(
+    tokenizer: &Tokenizer,
+    name: &str,
+    result: &str,
+) -> Result<Vec<u32>, MissingControl> {
+    let c = Controls::of(tokenizer)?;
+    let mut out = vec![c.start];
+    out.extend(tokenizer.encode(&format!("functions.{name} to=assistant")));
+    out.push(c.channel);
+    out.extend(tokenizer.encode("commentary"));
+    out.push(c.message);
+    out.extend(tokenizer.encode(&Value::String(result.to_owned()).to_string()));
+    out.push(c.end);
+    out.push(c.start);
+    out.extend(tokenizer.encode("assistant"));
+    Ok(out)
 }

@@ -1614,6 +1614,9 @@ name = "loadngo-gpt-oss"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "data",
+ "loadngo-inference",
+ "loadngo-line-editor",
  "loadngo-metal-compute",
  "loadngo-proactor",
  "loadngo-weights",
@@ -1685,6 +1688,13 @@ dependencies = [
  "tempfile",
  "ureq",
  "url",
+]
+
+[[package]]
+name = "loadngo-line-editor"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
