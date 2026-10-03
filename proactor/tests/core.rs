@@ -1,4 +1,6 @@
-use loadngo_proactor::{ChannelPort, Completion, CompletionKind, Proactor};
+use loadngo_proactor::{
+    new_platform_proactor, ChannelPort, Completion, CompletionKind, CompletionPort, Proactor,
+};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -117,6 +119,52 @@ fn wake_interrupts_blocking_poll_for_earlier_deadline() {
     let (elapsed, report) = worker.join().unwrap();
     assert!(elapsed < Duration::from_secs(1));
     assert!(report.woke || report.dispatched_deferred > 0);
+}
+
+/// The deadline passes between turns, after its wake was already used: the next turn
+/// dispatches it on entry and must not then wait on an empty queue. It used to block
+/// forever, which hung kimi-k3-in-rust's thermal test on Windows, where IOCP's
+/// truncated millisecond waits made a poll end just before the deadline.
+fn a_turn_that_dispatches_the_last_deadline_on_entry_does_not_block<P: CompletionPort>(
+    proactor: Proactor<P>,
+) {
+    let handle = proactor.handle();
+    let (tx, rx) = mpsc::channel();
+    handle
+        .defer_for(
+            Duration::from_millis(20),
+            CompletionKind::Timer,
+            0,
+            move |_| {
+                tx.send(()).unwrap();
+            },
+        )
+        .unwrap();
+    // Takes the wake that scheduling posted; the deadline is still ahead.
+    assert_eq!(proactor.run_ready().unwrap().dispatched_deferred, 0);
+    thread::sleep(Duration::from_millis(40));
+
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || done_tx.send(proactor.run_once().unwrap()).unwrap());
+    let report = done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("run_once blocked after dispatching the only deadline");
+    assert_eq!(report.dispatched_deferred, 1);
+    rx.try_recv().unwrap();
+}
+
+#[test]
+fn a_passed_deadline_ends_the_turn_on_the_channel_port() {
+    a_turn_that_dispatches_the_last_deadline_on_entry_does_not_block(Proactor::new(
+        ChannelPort::new(),
+    ));
+}
+
+#[test]
+fn a_passed_deadline_ends_the_turn_on_the_platform_port() {
+    a_turn_that_dispatches_the_last_deadline_on_entry_does_not_block(
+        new_platform_proactor().unwrap(),
+    );
 }
 
 #[test]

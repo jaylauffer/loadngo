@@ -638,7 +638,12 @@ impl IocpPort {
 
     fn duration_to_timeout_ms(duration: Option<Duration>) -> u32 {
         match duration {
-            Some(duration) => duration.as_millis().min(u32::MAX as u128) as u32,
+            // Rounded up: a wait cut short by truncation returns before the deadline and
+            // spins on zero-millisecond waits until it passes.
+            Some(duration) => duration
+                .as_nanos()
+                .div_ceil(1_000_000)
+                .min(u128::from(INFINITE_TIMEOUT_MS - 1)) as u32,
             None => INFINITE_TIMEOUT_MS,
         }
     }

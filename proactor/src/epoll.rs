@@ -685,8 +685,9 @@ impl CompletionPort for EpollPort {
             Some(duration) => {
                 // epoll_wait's timeout is a plain millisecond c_int;
                 // clamp rather than overflow for a pathologically large
-                // deferred deadline.
-                i32::try_from(duration.as_millis()).unwrap_or(i32::MAX)
+                // deferred deadline, and round up: a truncated wait
+                // returns before the deadline and spins until it passes.
+                i32::try_from(duration.as_nanos().div_ceil(1_000_000)).unwrap_or(i32::MAX)
             }
         };
 

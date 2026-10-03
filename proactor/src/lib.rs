@@ -364,7 +364,13 @@ where
             return Ok(report);
         }
 
-        let timeout = {
+        // A deadline dispatched above is this turn's progress: poll without blocking.
+        // Waiting for the next deadline instead blocked forever when that dispatch had
+        // emptied the queue (a backend that wakes a little early, as millisecond waits
+        // used to, then finds the deadline passed at the start of its next turn).
+        let timeout = if report.dispatched_deferred > 0 {
+            Some(Duration::ZERO)
+        } else {
             let deferred = self
                 .shared
                 .deferred
