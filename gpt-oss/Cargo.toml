@@ -1,0 +1,15 @@
+[package]
+name = "loadngo-gpt-oss"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "OpenAI's gpt-oss models from their GGUF files: the o200k tokenizer, the harmony chat format and the forward pass, written from the published architecture."
+
+[dependencies]
+loadngo-weights = { path = "../weights" }
+regex-syntax = "0.8"
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

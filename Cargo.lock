@@ -1610,6 +1610,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "loadngo-gpt-oss"
+version = "0.1.0"
+dependencies = [
+ "loadngo-weights",
+ "regex-syntax",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "loadngo-host-core"
 version = "0.1.0"
 dependencies = [
