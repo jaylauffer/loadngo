@@ -208,6 +208,30 @@ Measured on the M4 Pro with the 4-bit experts, with no thermal warning at any po
 - `metal-compute/tests/gemm_timing.rs` holds the timing experiments (ignored tests, run
   by hand).
 
+## Grouped-query attention for Gemma 4 (2026-10-03)
+
+Gemma 4 31B (kimi-k3-in-rust `docs/GEMMA.md`) has grouped-query attention: 32 query
+heads over 16 KV heads (256 wide) on 50 sliding-window layers (window 1024) and over 4
+KV heads (512 wide) on 10 full layers. Keys and values sit in a ring of `slots` rows,
+position `s` in row `s % slots`. Two kernels, both against a float64 reference in
+`tests/attention_grouped.rs` (Gemma's shapes, ring wrap-around, 512-position passes):
+
+- `attention_grouped` (decoding and passes under 32 positions): one threadgroup per
+  (position, head); its eight simdgroups take interleaved runs of the visible positions
+  with an online softmax each, merged in threadgroup memory. Max error under 2e-5.
+- `attention_grouped_tiled` (prompt passes): 32 positions of one head per threadgroup,
+  32 keys per step on the matrix units, as `attention_split_key_tiled`. Rows are read up
+  to the next multiple of 32, so a ring's slots must be a multiple of 32. Max error
+  under 1e-4.
+
+Measured on the 31B with MXFP4 weights, a 6,014-token prompt, M4 Pro:
+
+| | first kernel (one simdgroup per position and head) | these two |
+|---|---|---|
+| Prompt | 373-392 s | 141 s (176 s before the model's GELU moved off one CPU thread) |
+| Attention per call, averaged over the prompt | 275-295 ms | 28 ms |
+| A new token at 6k context | 1.0-1.1 s | 0.26-0.39 s |
+
 ## M1, second stage: what we are attempting (in progress: attention, router, KDA and fused blocks done 2026-09-29)
 
 ### Prompts on the matrix units (2026-09-29, later)

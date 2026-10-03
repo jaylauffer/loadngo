@@ -471,6 +471,245 @@ kernel void attention_split_key(
     }
 }
 
+// Causal grouped-query attention with an optional sliding window (Gemma 4's layers).
+// Layouts, float32: q and out [t][heads][dim]; k and v [slots][kv_heads][dim], where
+// position s lives in row s % slots (a ring when slots is smaller than the positions).
+// New position i (absolute start + i) attends to positions max(0, start + i + 1 - window)
+// ..= start + i, head h to KV head h / (heads / kv_heads). Needs dim a multiple of 32 and
+// at most 512, and slots >= window + t when slots < start + t.
+//
+// One threadgroup per (new position, head). Its eight simdgroups take interleaved runs
+// of the positions, each keeping an online softmax (running maximum, sum and weighted
+// values, lanes holding dim / 32 elements); the eight partial results are merged in
+// threadgroup memory. In float32 throughout.
+struct GroupedArgs {
+    uint t;
+    uint start;
+    uint heads;
+    uint kv_heads;
+    uint dim;
+    uint window;
+    uint slots;
+    float scale;
+};
+
+kernel void attention_grouped(
+    device const float *q [[buffer(0)]],
+    device const float *k [[buffer(1)]],
+    device const float *v [[buffer(2)]],
+    device float *out [[buffer(3)]],
+    constant GroupedArgs &a [[buffer(4)]],
+    uint group [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]],
+    uint tid [[thread_index_in_threadgroup]])
+{
+    threadgroup float part_max[8];
+    threadgroup float part_sum[8];
+    threadgroup float part_acc[8 * 512];
+    const uint step = group / a.heads;
+    const uint head = group % a.heads;
+    const uint kv_head = head / (a.heads / a.kv_heads);
+    const uint n = a.dim / SIMD;
+    device const float *qt = q + ((ulong)step * a.heads + head) * a.dim;
+    float qv[16];
+    float acc[16];
+    for (uint i = 0; i < 16; ++i) {
+        qv[i] = i < n ? qt[lane + SIMD * i] : 0.0f;
+        acc[i] = 0.0f;
+    }
+    const uint last = a.start + step;
+    const uint first = last + 1 > a.window ? last + 1 - a.window : 0;
+    const ulong row = (ulong)a.kv_heads * a.dim;
+    float m = -INFINITY;
+    float l = 0.0f;
+    for (uint s = first + sg; s <= last; s += 8) {
+        const ulong at = (ulong)(s % a.slots) * row + (ulong)kv_head * a.dim;
+        device const float *kr = k + at;
+        device const float *vr = v + at;
+        float dot = 0.0f;
+        for (uint i = 0; i < n; ++i) {
+            dot += qv[i] * kr[lane + SIMD * i];
+        }
+        const float score = simd_sum(dot) * a.scale;
+        const float next = max(m, score);
+        const float keep = exp(m - next);
+        const float p = exp(score - next);
+        l = l * keep + p;
+        for (uint i = 0; i < n; ++i) {
+            acc[i] = acc[i] * keep + p * vr[lane + SIMD * i];
+        }
+        m = next;
+    }
+    if (lane == 0) {
+        part_max[sg] = m;
+        part_sum[sg] = l;
+    }
+    for (uint i = 0; i < n; ++i) {
+        part_acc[sg * 512 + lane + SIMD * i] = acc[i];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float total_max = -INFINITY;
+    for (uint g = 0; g < 8; ++g) {
+        total_max = max(total_max, part_max[g]);
+    }
+    float total = 0.0f;
+    float weight[8];
+    for (uint g = 0; g < 8; ++g) {
+        // A simdgroup that saw no positions has maximum -inf and weight 0.
+        weight[g] = part_max[g] == -INFINITY ? 0.0f : exp(part_max[g] - total_max);
+        total += part_sum[g] * weight[g];
+    }
+    device float *o = out + ((ulong)step * a.heads + head) * a.dim;
+    for (uint d = tid; d < a.dim; d += 256) {
+        float sum = 0.0f;
+        for (uint g = 0; g < 8; ++g) {
+            sum += part_acc[g * 512 + d] * weight[g];
+        }
+        o[d] = sum / total;
+    }
+}
+
+// attention_grouped for many new positions, on the matrix units (a prompt pass): a
+// threadgroup takes 32 new positions of one head and walks the keys its queries can see
+// 32 at a time, as attention_split_key_tiled does. Scores Q K^T (32 x 32) come from 8 x 8
+// matrix products; the softmax runs online per query row in threadgroup memory; the
+// output (32 x dim) stays in the simdgroups' matrices, rescaled by a diagonal matrix when
+// a row's maximum grows, plus P V. Needs dim a multiple of 16, at most 512. Reads rows up
+// to the next multiple of 32: q and out hold t rounded up; k and v hold the rows of
+// positions up to start + t rounded up to 32, which must be finite; when positions wrap
+// (slots < start + t), slots must be a multiple of 32 so a tile of 32 keys never wraps.
+kernel void attention_grouped_tiled(
+    device const float *q [[buffer(0)]],
+    device const float *k [[buffer(1)]],
+    device const float *v [[buffer(2)]],
+    device float *out [[buffer(3)]],
+    constant GroupedArgs &a [[buffer(4)]],
+    uint group [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]],
+    uint tid [[thread_index_in_threadgroup]])
+{
+    threadgroup float scores[32 * 32];
+    threadgroup float diag[4 * 64];
+    threadgroup float row_max[32];
+    threadgroup float row_sum[32];
+    const uint head = group % a.heads;
+    const uint q0 = (group / a.heads) * 32;
+    const uint kv_head = head / (a.heads / a.kv_heads);
+    const ulong q_stride = (ulong)a.heads * a.dim;
+    const ulong kv_stride = (ulong)a.kv_heads * a.dim;
+    // Simdgroup sg: query tile qi (8 queries), score key tiles kj0, kj0 + 1, and value
+    // columns vc0 .. vc0 + dim / 2 of the output.
+    const uint qi = sg / 2;
+    const uint kj0 = (sg % 2) * 2;
+    const uint half_dim = a.dim / 2;
+    const uint vc0 = (sg % 2) * half_dim;
+    const uint tiles = half_dim / 8;
+    for (uint i = tid; i < 4 * 64; i += 256) {
+        diag[i] = 0.0f;
+    }
+    if (tid < 32) {
+        row_max[tid] = -INFINITY;
+        row_sum[tid] = 0.0f;
+    }
+    simdgroup_float8x8 o[32];
+    for (uint t = 0; t < 32; ++t) {
+        o[t] = simdgroup_float8x8(0.0f);
+    }
+    const uint queries = min(32u, a.t - q0);
+    const uint first_query = a.start + q0;
+    const uint keys_from = first_query + 1 > a.window ? first_query + 1 - a.window : 0;
+    const uint keys_end = first_query + queries;
+    device const float *qt = q + (ulong)(q0 + qi * 8) * q_stride + (ulong)head * a.dim;
+    for (uint s0 = keys_from / 32 * 32; s0 < keys_end; s0 += 32) {
+        const ulong base = (ulong)(s0 % a.slots) * kv_stride + (ulong)kv_head * a.dim;
+        simdgroup_float8x8 sc[2] = {simdgroup_float8x8(0.0f), simdgroup_float8x8(0.0f)};
+        for (uint d = 0; d < a.dim; d += 8) {
+            simdgroup_float8x8 qm;
+            simdgroup_load(qm, qt + d, q_stride);
+            for (uint j = 0; j < 2; ++j) {
+                simdgroup_float8x8 km;
+                simdgroup_load(km, k + base + (ulong)((kj0 + j) * 8) * kv_stride + d,
+                               kv_stride, ulong2(0, 0), true);
+                simdgroup_multiply_accumulate(sc[j], qm, km, sc[j]);
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint j = 0; j < 2; ++j) {
+            simdgroup_store(sc[j], scores, 32, ulong2((kj0 + j) * 8, qi * 8));
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        // Online softmax: 8 threads per query row, 4 keys each.
+        {
+            const uint r = tid / 8;
+            const uint c0 = (tid % 8) * 4;
+            const uint last = first_query + r;
+            const uint first = last + 1 > a.window ? last + 1 - a.window : 0;
+            float p[4];
+            float local = -INFINITY;
+            for (uint c = 0; c < 4; ++c) {
+                const uint s = s0 + c0 + c;
+                const bool live = r < queries && s >= first && s <= last;
+                p[c] = live ? scores[r * 32 + c0 + c] * a.scale : -INFINITY;
+                local = max(local, p[c]);
+            }
+            local = max(local, simd_shuffle_xor(local, 1));
+            local = max(local, simd_shuffle_xor(local, 2));
+            local = max(local, simd_shuffle_xor(local, 4));
+            const float old = row_max[r];
+            const float next = max(old, local);
+            float sum = 0.0f;
+            for (uint c = 0; c < 4; ++c) {
+                p[c] = next == -INFINITY ? 0.0f : exp(p[c] - next);
+                sum += p[c];
+                scores[r * 32 + c0 + c] = p[c];
+            }
+            sum += simd_shuffle_xor(sum, 1);
+            sum += simd_shuffle_xor(sum, 2);
+            sum += simd_shuffle_xor(sum, 4);
+            const float keep = next == -INFINITY ? 1.0f : exp(old - next);
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+            if (tid % 8 == 0) {
+                row_max[r] = next;
+                row_sum[r] = row_sum[r] * keep + sum;
+                diag[(r / 8) * 64 + (r % 8) * 9] = keep;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        // o = diag(keep) o + P V over this simdgroup's value tiles.
+        simdgroup_float8x8 dm;
+        simdgroup_load(dm, diag + qi * 64, 8);
+        for (uint t = 0; t < tiles; ++t) {
+            simdgroup_multiply(o[t], dm, o[t]);
+        }
+        for (uint kk = 0; kk < 32; kk += 8) {
+            simdgroup_float8x8 pm;
+            simdgroup_load(pm, scores, 32, ulong2(kk, qi * 8));
+            device const float *vt = v + base + (ulong)kk * kv_stride + vc0;
+            for (uint t = 0; t < tiles; ++t) {
+                simdgroup_float8x8 vm;
+                simdgroup_load(vm, vt + t * 8, kv_stride);
+                simdgroup_multiply_accumulate(o[t], pm, vm, o[t]);
+            }
+        }
+    }
+    // out = diag(1 / sum) o.
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (tid < 32) {
+        const uint r = tid;
+        diag[(r / 8) * 64 + (r % 8) * 9] = row_sum[r] > 0.0f ? 1.0f / row_sum[r] : 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    simdgroup_float8x8 dm;
+    simdgroup_load(dm, diag + qi * 64, 8);
+    device float *ot = out + (ulong)(q0 + qi * 8) * q_stride + (ulong)head * a.dim + vc0;
+    for (uint t = 0; t < tiles; ++t) {
+        simdgroup_multiply(o[t], dm, o[t]);
+        simdgroup_store(o[t], ot + t * 8, q_stride);
+    }
+}
+
 // The delta-rule recurrence with a per-key-channel decay (Kimi Delta Attention; gated
 // DeltaNet when the decay is per head). Per head, with state S [dk][dv], for each step:
 //   S = diag(alpha) S;  u = S^T k;  S += k (beta (v - u))^T;  out = S^T q

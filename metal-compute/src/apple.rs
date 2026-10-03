@@ -87,6 +87,8 @@ pub struct Gpu {
     gemm_bf16_tiled: Pipeline,
     attention: Pipeline,
     attention_wide: Pipeline,
+    attention_grouped: Pipeline,
+    attention_grouped_tiled: Pipeline,
     attention_tiled: Pipeline,
     recurrence: Pipeline,
     glue: Glue,
@@ -128,6 +130,8 @@ impl Gpu {
         let gemm_bf16_tiled = pipeline("gemm_bf16_tiled")?;
         let attention = pipeline("attention_split_key")?;
         let attention_wide = pipeline("attention_split_key_wide")?;
+        let attention_grouped = pipeline("attention_grouped")?;
+        let attention_grouped_tiled = pipeline("attention_grouped_tiled")?;
         let attention_tiled = pipeline("attention_split_key_tiled")?;
         let recurrence = pipeline("delta_rule_recurrence")?;
         let glue = Glue {
@@ -151,6 +155,8 @@ impl Gpu {
                 &gemm_bf16_tiled,
                 &attention,
                 &attention_wide,
+                &attention_grouped,
+                &attention_grouped_tiled,
                 &attention_tiled,
                 &recurrence,
             ])
@@ -178,6 +184,8 @@ impl Gpu {
             gemm_bf16_tiled,
             attention,
             attention_wide,
+            attention_grouped,
+            attention_grouped_tiled,
             attention_tiled,
             recurrence,
             glue,
@@ -547,6 +555,37 @@ const ATTENTION_BLOCK: usize = 8;
 /// threadgroup's simdgroups (`attention_split_key_wide`) instead of giving each position
 /// one simdgroup: a single decoding position would otherwise walk the cache alone.
 const ATTENTION_WIDE_BELOW: usize = ATTENTION_BLOCK;
+
+/// The shape of one [`Batch::attention_grouped`] dispatch.
+#[derive(Clone, Copy, Debug)]
+pub struct GroupedShape {
+    /// New positions (queries).
+    pub t: usize,
+    /// The absolute position of the first of them.
+    pub start: usize,
+    pub heads: usize,
+    /// Key/value heads; `heads` is a multiple of it.
+    pub kv_heads: usize,
+    /// Width of every query, key and value head: a multiple of 32, at most 512.
+    pub dim: usize,
+    /// Positions each query sees, its own included; `usize::MAX` for all of them.
+    pub window: usize,
+    /// Rows in the key and value buffers; position `s` is in row `s % slots`.
+    pub slots: usize,
+    pub scale: f32,
+}
+
+#[repr(C)]
+struct GroupedArgs {
+    t: u32,
+    start: u32,
+    heads: u32,
+    kv_heads: u32,
+    dim: u32,
+    window: u32,
+    slots: u32,
+    scale: f32,
+}
 
 /// The shape of one [`Batch::attention_split_key`] dispatch.
 #[derive(Clone, Copy, Debug)]
@@ -1024,6 +1063,146 @@ impl Batch<'_> {
             self.gpu.attention.clone()
         };
         self.encode(&pipeline, &[q, kv, shared, out], &args, groups);
+        Ok(())
+    }
+
+    /// Causal grouped-query attention, optionally over a sliding window, with keys and
+    /// values in a ring of `slots` rows (see [`GroupedShape`]): `q` and `out`
+    /// `[t][heads][dim]`, `k` and `v` `[slots][kv_heads][dim]`, all float32.
+    ///
+    /// # Errors
+    /// [`Error::Dispatch`] for an unsupported shape, a ring too small for the window, or
+    /// slices that do not fit.
+    pub fn attention_grouped(
+        &mut self,
+        q: Slice,
+        k: Slice,
+        v: Slice,
+        out: Slice,
+        shape: GroupedShape,
+    ) -> Result<(), Error> {
+        let GroupedShape {
+            t,
+            start,
+            heads,
+            kv_heads,
+            dim,
+            window,
+            slots,
+            scale,
+        } = shape;
+        let end = start + t;
+        if t == 0
+            || kv_heads == 0
+            || heads % kv_heads != 0
+            || dim == 0
+            || dim % 32 != 0
+            || dim > 512
+            || window == 0
+            || slots == 0
+            || (slots < end && slots < window.saturating_add(t))
+        {
+            return Err(Error::Dispatch(format!(
+                "unsupported grouped attention shape {shape:?}"
+            )));
+        }
+        let narrow = |n: usize| {
+            u32::try_from(n).map_err(|_| Error::Dispatch(format!("{n} does not fit in u32")))
+        };
+        let args = GroupedArgs {
+            t: narrow(t)?,
+            start: narrow(start)?,
+            heads: narrow(heads)?,
+            kv_heads: narrow(kv_heads)?,
+            dim: narrow(dim)?,
+            window: narrow(window.min(end))?,
+            slots: narrow(slots)?,
+            scale,
+        };
+        let groups = t * heads;
+        narrow(groups)?;
+        let rows = slots.min(end);
+        self.check("q", &q, t * heads * dim * 4, 4)?;
+        self.check("k", &k, rows * kv_heads * dim * 4, 4)?;
+        self.check("v", &v, rows * kv_heads * dim * 4, 4)?;
+        self.check("out", &out, t * heads * dim * 4, 4)?;
+        self.check_output(&out, &[&q, &k, &v])?;
+        let pipeline = self.gpu.attention_grouped.clone();
+        self.encode(&pipeline, &[q, k, v, out], &args, groups);
+        Ok(())
+    }
+
+    /// [`Self::attention_grouped`] on the matrix units, 32 new positions per threadgroup
+    /// and 32 keys per step: for a prompt pass. Needs `dim` a multiple of 16 and, when
+    /// positions wrap (`slots < start + t`), `slots` a multiple of 32. Rows are read up to the next multiple of 32: `q` and
+    /// `out` hold `t` rounded up to 32 rows, and `k` and `v` the rows of positions up to
+    /// `start + t` rounded up, which must be finite (they are multiplied by zero).
+    ///
+    /// # Errors
+    /// [`Error::Dispatch`] for an unsupported shape or slices that do not fit.
+    pub fn attention_grouped_tiled(
+        &mut self,
+        q: Slice,
+        k: Slice,
+        v: Slice,
+        out: Slice,
+        shape: GroupedShape,
+    ) -> Result<(), Error> {
+        let GroupedShape {
+            t,
+            start,
+            heads,
+            kv_heads,
+            dim,
+            window,
+            slots,
+            scale,
+        } = shape;
+        let end = start + t;
+        // Positions wrap only when the slots are fewer than them.
+        let ring = slots < end;
+        if t == 0
+            || kv_heads == 0
+            || heads % kv_heads != 0
+            || dim == 0
+            || dim % 16 != 0
+            || dim > 512
+            || window == 0
+            || slots == 0
+            || (ring && (slots % 32 != 0 || slots < window.saturating_add(t)))
+        {
+            return Err(Error::Dispatch(format!(
+                "unsupported tiled grouped attention shape {shape:?}"
+            )));
+        }
+        let narrow = |n: usize| {
+            u32::try_from(n).map_err(|_| Error::Dispatch(format!("{n} does not fit in u32")))
+        };
+        let args = GroupedArgs {
+            t: narrow(t)?,
+            start: narrow(start)?,
+            heads: narrow(heads)?,
+            kv_heads: narrow(kv_heads)?,
+            dim: narrow(dim)?,
+            window: narrow(window.min(end))?,
+            slots: narrow(slots)?,
+            scale,
+        };
+        let groups = t.div_ceil(32) * heads;
+        narrow(groups)?;
+        let rows = if ring {
+            slots
+        } else {
+            end.next_multiple_of(32)
+        };
+        let padded = t.next_multiple_of(32);
+        self.check("q", &q, padded * heads * dim * 4, 4)?;
+        self.check("k", &k, rows * kv_heads * dim * 4, 4)?;
+        self.check("v", &v, rows * kv_heads * dim * 4, 4)?;
+        self.check("out", &out, padded * heads * dim * 4, 4)?;
+        self.check_output(&out, &[&q, &k, &v])?;
+        let pipeline = self.gpu.attention_grouped_tiled.clone();
+        self.encode(&pipeline, &[q, k, v, out], &args, groups);
         Ok(())
     }
 
