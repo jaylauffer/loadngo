@@ -143,4 +143,4 @@ function rather than in per-backend arms — see
 - `cargo run -p network --bin task-node -- ...`: standing worker node on top of `loadngo-proactor`.
 - `cargo run -p network --bin task_worker -- ...`: bounded/manual worker helper for a single listening window or a narrow local session.
 - `cargo run -p network --bin task_submitter -- ...`: submitter-side request, selection, verification, and qcoin reward closure flow.
-- `cargo run -p network --bin zhoenus_head_model -- --dry-run`: inspect the supervised local model service command for the Zhoenus talking head.
+- `cargo run --release -p network --bin zhoenus_head_model -- --dry-run`: where the Zhoenus talking-head model comes from (by BLAKE3 hash, from the Archive CAS) and the supervised `llama-server` command.

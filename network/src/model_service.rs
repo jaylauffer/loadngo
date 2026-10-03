@@ -1,4 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
+use data::archive_cas::{ArchiveCasStorage, ArchiveObject};
+use data::cas::CasHash;
 use std::{
     collections::VecDeque,
     fs,
@@ -39,10 +41,45 @@ impl BackendMode {
     }
 }
 
+/// gpt-oss-20b (ggml-org's `MXFP4_MOE` GGUF), as archived in the signed pudding CAS
+/// (`pudding-20260917` root `4d8babf2`, `loadngo/models/gpt-oss-20b-MXFP4_MOE.gguf`).
+pub const GPT_OSS_20B_HASH: &str =
+    "56fcc05caeabd1f4f352f7b9d6762cad2035b860973c07a5c330a7fa3944e8e1";
+pub const GPT_OSS_20B_BYTES: u64 = 12_109_565_760;
+
+/// The default model: gpt-oss-20b, by content.
+#[must_use]
+pub fn default_model() -> ArchiveObject {
+    ArchiveObject {
+        hash: GPT_OSS_20B_HASH
+            .parse()
+            .expect("GPT_OSS_20B_HASH is valid hex"),
+        size: GPT_OSS_20B_BYTES,
+    }
+}
+
+/// Where verified model copies live: `~/.loadngo/models`, one file per model, named by
+/// its BLAKE3 hash.
+#[must_use]
+pub fn default_model_cache() -> PathBuf {
+    std::env::var_os("HOME")
+        .map_or_else(|| PathBuf::from("."), PathBuf::from)
+        .join(".loadngo")
+        .join("models")
+}
+
+/// The model is named by content, never by a path: an Archive CAS object (BLAKE3 hash
+/// and size). It is restored once from a CAS root into `model_cache`, checked against
+/// its hash while copying, and the copy is hashed again at every launch before
+/// `llama-server` is given it. A file swapped into the cache is refused, not served.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelServerConfig {
     pub llama_server: PathBuf,
-    pub model_path: PathBuf,
+    pub model: ArchiveObject,
+    /// The Archive CAS root to restore the model from; `None` scans attached drives
+    /// (`data::cli::discover`) for a root that holds it.
+    pub cas_root: Option<PathBuf>,
+    pub model_cache: PathBuf,
     pub host: String,
     pub port: u16,
     pub backend: BackendMode,
@@ -57,7 +94,9 @@ impl Default for ModelServerConfig {
     fn default() -> Self {
         Self {
             llama_server: PathBuf::from("llama-server"),
-            model_path: PathBuf::from("/Users/jay/Downloads/gpt-oss-20b-mxfp4.gguf"),
+            model: default_model(),
+            cas_root: None,
+            model_cache: default_model_cache(),
             host: "127.0.0.1".to_string(),
             port: 8787,
             backend: BackendMode::Auto,
@@ -72,12 +111,6 @@ impl Default for ModelServerConfig {
 
 impl ModelServerConfig {
     pub fn validate(&self) -> Result<()> {
-        if !self.model_path.exists() {
-            bail!("model path does not exist: {}", self.model_path.display());
-        }
-        if !self.model_path.is_file() {
-            bail!("model path is not a file: {}", self.model_path.display());
-        }
         if self.health_path.is_empty() || !self.health_path.starts_with('/') {
             bail!("health path must start with '/': {}", self.health_path);
         }
@@ -85,6 +118,12 @@ impl ModelServerConfig {
             bail!("startup timeout must be greater than zero");
         }
         Ok(())
+    }
+
+    /// The verified copy's path (it may not exist yet).
+    pub fn cached_model_path(&self) -> PathBuf {
+        self.model_cache
+            .join(format!("{}.gguf", self.model.hash.to_hex()))
     }
 
     pub fn endpoint(&self) -> String {
@@ -99,10 +138,11 @@ impl ModelServerConfig {
         }
     }
 
-    pub fn llama_args_for_backend(&self, backend: BackendMode) -> Vec<String> {
+    /// `model` is the path [`resolve_model`] returned.
+    pub fn llama_args_for_backend(&self, model: &Path, backend: BackendMode) -> Vec<String> {
         let mut args = vec![
             "-m".to_string(),
-            self.model_path.display().to_string(),
+            model.display().to_string(),
             "--host".to_string(),
             self.host.clone(),
             "--port".to_string(),
@@ -256,6 +296,7 @@ impl CapturedLogs {
 
 pub fn start_model_server(config: &ModelServerConfig) -> Result<RunningModelServer> {
     config.validate()?;
+    let model = resolve_model(config)?;
     if health_probe(&config.host, config.port, &config.health_path).is_ok() {
         bail!(
             "model service endpoint already reports healthy at {}; stop the existing service or choose another port",
@@ -265,7 +306,7 @@ pub fn start_model_server(config: &ModelServerConfig) -> Result<RunningModelServ
 
     let mut last_failure = None;
     for backend in config.attempted_backends() {
-        match start_backend(config, backend) {
+        match start_backend(config, &model, backend) {
             Ok(server) => return Ok(server),
             Err(failure) => {
                 let should_retry = config.backend == BackendMode::Auto
@@ -291,9 +332,10 @@ pub fn start_model_server(config: &ModelServerConfig) -> Result<RunningModelServ
 
 fn start_backend(
     config: &ModelServerConfig,
+    model: &Path,
     backend: BackendMode,
 ) -> std::result::Result<RunningModelServer, StartupFailure> {
-    let args = config.llama_args_for_backend(backend);
+    let args = config.llama_args_for_backend(model, backend);
     let mut child = Command::new(&config.llama_server)
         .args(&args)
         .stdout(Stdio::piped())
@@ -473,11 +515,11 @@ fn parse_http_status(head: &str) -> Option<u16> {
     parts.next()?.parse().ok()
 }
 
-pub fn describe_command(config: &ModelServerConfig, backend: BackendMode) -> String {
+pub fn describe_command(config: &ModelServerConfig, model: &Path, backend: BackendMode) -> String {
     let mut parts = vec![shell_quote(&config.llama_server)];
     parts.extend(
         config
-            .llama_args_for_backend(backend)
+            .llama_args_for_backend(model, backend)
             .iter()
             .map(|arg| shell_quote(Path::new(arg))),
     );
@@ -495,19 +537,130 @@ fn shell_quote(path: &Path) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
 
-pub fn model_file_size(path: &Path) -> Result<u64> {
-    Ok(fs::metadata(path)
-        .with_context(|| format!("failed to stat model file: {}", path.display()))?
-        .len())
+/// Where the model would come from, found without copying or hashing anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelLocation {
+    /// A copy is in the cache; [`resolve_model`] hashes it before use.
+    Cached(PathBuf),
+    /// Not cached yet: [`resolve_model`] restores it from this CAS root.
+    InCas(PathBuf),
+}
+
+pub fn locate_model(config: &ModelServerConfig) -> Result<ModelLocation> {
+    let cached = config.cached_model_path();
+    if cached.exists() {
+        return Ok(ModelLocation::Cached(cached));
+    }
+    let hash = config.model.hash;
+    let holds = |root: &Path| {
+        data::cli::discover::is_archive_cas_root(root)
+            && ArchiveCasStorage::new(root).is_ok_and(|store| store.has_object(hash))
+    };
+    if let Some(root) = &config.cas_root {
+        if !data::cli::discover::is_archive_cas_root(root) {
+            bail!(
+                "not an Archive CAS root (no objects/ and manifests/): {}",
+                root.display()
+            );
+        }
+        if !holds(root) {
+            bail!(
+                "model {hash} is not in the Archive CAS at {}",
+                root.display()
+            );
+        }
+        return Ok(ModelLocation::InCas(root.clone()));
+    }
+    data::cli::discover::scan_for_cas_roots()
+        .into_iter()
+        .find(|root| holds(root))
+        .map(ModelLocation::InCas)
+        .ok_or_else(|| {
+            anyhow!(
+                "model {hash} is neither cached at {} nor in any attached Archive CAS; \
+                 attach the drive that holds it or pass --cas-root",
+                cached.display()
+            )
+        })
+}
+
+/// The verified model file to serve: restored from the CAS on first use (checked while
+/// copying, then made read-only), and hashed again on every call. A cached copy that
+/// does not match the model's hash and size is refused and left for inspection.
+pub fn resolve_model(config: &ModelServerConfig) -> Result<PathBuf> {
+    let cached = config.cached_model_path();
+    if let ModelLocation::InCas(root) = locate_model(config)? {
+        eprintln!(
+            "model_service: restoring {} ({} bytes) from {} to {}",
+            config.model.hash,
+            config.model.size,
+            root.display(),
+            cached.display()
+        );
+        fs::create_dir_all(&config.model_cache)
+            .with_context(|| format!("failed to create {}", config.model_cache.display()))?;
+        ArchiveCasStorage::new(&root)?.restore_object_to_path(config.model, &cached)?;
+        make_read_only(&cached)?;
+        return Ok(cached);
+    }
+    verify_model_file(&cached, config.model)?;
+    Ok(cached)
+}
+
+/// Hashes `path` (BLAKE3) and checks it is exactly `expected`.
+pub fn verify_model_file(path: &Path, expected: ArchiveObject) -> Result<()> {
+    let size = fs::metadata(path)
+        .with_context(|| format!("failed to stat {}", path.display()))?
+        .len();
+    if size != expected.size {
+        bail!(
+            "{} is {size} bytes, not the model's {}; refusing to serve it",
+            path.display(),
+            expected.size
+        );
+    }
+    let mut file =
+        fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buffer = vec![0_u8; 4 << 20];
+    loop {
+        let count = match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to read {}", path.display()))
+            }
+        };
+        hasher.update(&buffer[..count]);
+    }
+    let actual = CasHash::from_bytes(*hasher.finalize().as_bytes());
+    if actual != expected.hash {
+        bail!(
+            "{} hashes to {actual}, not the model's {}; refusing to serve it",
+            path.display(),
+            expected.hash
+        );
+    }
+    Ok(())
+}
+
+fn make_read_only(path: &Path) -> Result<()> {
+    let mut permissions = fs::metadata(path)?.permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(path, permissions)
+        .with_context(|| format!("failed to make {} read-only", path.display()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_startup_failure, describe_command, parse_http_status, BackendMode,
-        ModelServerConfig, StartupFailureKind,
+        classify_startup_failure, default_model, describe_command, locate_model, parse_http_status,
+        resolve_model, BackendMode, ModelLocation, ModelServerConfig, StartupFailureKind,
+        GPT_OSS_20B_BYTES,
     };
-    use std::{path::PathBuf, time::Duration};
+    use data::archive_cas::ArchiveCasStorage;
+    use std::{fs, path::Path, path::PathBuf, time::Duration};
 
     #[test]
     fn backend_mode_parse_accepts_expected_values() {
@@ -519,22 +672,16 @@ mod tests {
 
     #[test]
     fn cpu_backend_disables_device_offload() {
-        let config = ModelServerConfig {
-            model_path: PathBuf::from("/tmp/model.gguf"),
-            ..ModelServerConfig::default()
-        };
-        let args = config.llama_args_for_backend(BackendMode::Cpu);
+        let config = ModelServerConfig::default();
+        let args = config.llama_args_for_backend(Path::new("/tmp/model.gguf"), BackendMode::Cpu);
         assert!(args.windows(2).any(|pair| pair == ["--device", "none"]));
         assert!(args.windows(2).any(|pair| pair == ["--n-gpu-layers", "0"]));
     }
 
     #[test]
     fn metal_backend_requests_gpu_layers() {
-        let config = ModelServerConfig {
-            model_path: PathBuf::from("/tmp/model.gguf"),
-            ..ModelServerConfig::default()
-        };
-        let args = config.llama_args_for_backend(BackendMode::Metal);
+        let config = ModelServerConfig::default();
+        let args = config.llama_args_for_backend(Path::new("/tmp/model.gguf"), BackendMode::Metal);
         assert!(args
             .windows(2)
             .any(|pair| pair == ["--n-gpu-layers", "all"]));
@@ -573,12 +720,95 @@ mod tests {
     fn describe_command_quotes_spaces() {
         let config = ModelServerConfig {
             llama_server: PathBuf::from("/Applications/llama server"),
-            model_path: PathBuf::from("/tmp/model file.gguf"),
             startup_timeout: Duration::from_secs(1),
             ..ModelServerConfig::default()
         };
-        let command = describe_command(&config, BackendMode::Cpu);
+        let command =
+            describe_command(&config, Path::new("/tmp/model file.gguf"), BackendMode::Cpu);
         assert!(command.contains("'/Applications/llama server'"));
         assert!(command.contains("'/tmp/model file.gguf'"));
+    }
+
+    #[test]
+    fn the_default_model_is_gpt_oss_by_content_and_no_path_is_configured() {
+        let config = ModelServerConfig::default();
+        assert_eq!(config.model, default_model());
+        assert_eq!(config.model.size, GPT_OSS_20B_BYTES);
+        assert!(config
+            .cached_model_path()
+            .ends_with(format!(".loadngo/models/{}.gguf", config.model.hash)));
+    }
+
+    /// A CAS root holding one model, and a config that restores it into its own cache.
+    fn cas_with_model(bytes: &[u8]) -> (tempfile::TempDir, ModelServerConfig) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ArchiveCasStorage::new(dir.path().join("cas")).unwrap();
+        fs::create_dir_all(dir.path().join("cas/manifests")).unwrap();
+        let object = store.add_content(bytes).unwrap().object;
+        let config = ModelServerConfig {
+            model: object,
+            cas_root: Some(dir.path().join("cas")),
+            model_cache: dir.path().join("models"),
+            ..ModelServerConfig::default()
+        };
+        (dir, config)
+    }
+
+    #[test]
+    fn a_model_is_restored_from_the_cas_once_then_served_from_the_verified_cache() {
+        let (_dir, config) = cas_with_model(b"GGUF model bytes");
+        assert!(matches!(
+            locate_model(&config).unwrap(),
+            ModelLocation::InCas(_)
+        ));
+        let path = resolve_model(&config).unwrap();
+        assert_eq!(path, config.cached_model_path());
+        assert_eq!(fs::read(&path).unwrap(), b"GGUF model bytes");
+        assert!(fs::metadata(&path).unwrap().permissions().readonly());
+        // Later launches need no CAS: the copy is hashed instead.
+        let offline = ModelServerConfig {
+            cas_root: Some(PathBuf::from("/nonexistent-cas")),
+            ..config.clone()
+        };
+        assert_eq!(
+            locate_model(&offline).unwrap(),
+            ModelLocation::Cached(path.clone())
+        );
+        assert_eq!(resolve_model(&offline).unwrap(), path);
+    }
+
+    #[test]
+    fn a_swapped_cached_copy_is_refused_and_left_in_place() {
+        let (_dir, config) = cas_with_model(b"GGUF model bytes");
+        let path = resolve_model(&config).unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        fs::set_permissions(&path, permissions).unwrap();
+        // Same size, different bytes.
+        fs::write(&path, b"GGUF evil  bytes").unwrap();
+        let error = resolve_model(&config).unwrap_err().to_string();
+        assert!(error.contains("refusing to serve it"), "{error}");
+        assert_eq!(fs::read(&path).unwrap(), b"GGUF evil  bytes");
+        fs::write(&path, b"short").unwrap();
+        let error = resolve_model(&config).unwrap_err().to_string();
+        assert!(error.contains("refusing to serve it"), "{error}");
+    }
+
+    #[test]
+    fn a_root_without_the_model_or_not_a_cas_is_refused() {
+        let (dir, config) = cas_with_model(b"GGUF model bytes");
+        let missing = ModelServerConfig {
+            model: default_model(),
+            ..config.clone()
+        };
+        let error = locate_model(&missing).unwrap_err().to_string();
+        assert!(error.contains("is not in the Archive CAS"), "{error}");
+        let not_cas = ModelServerConfig {
+            cas_root: Some(dir.path().join("models-not-a-cas")),
+            ..config
+        };
+        let error = locate_model(&not_cas).unwrap_err().to_string();
+        assert!(error.contains("not an Archive CAS root"), "{error}");
     }
 }
