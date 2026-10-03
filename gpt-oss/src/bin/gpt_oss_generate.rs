@@ -23,6 +23,8 @@ Options:
   --tokens N     (optional)  tokens to generate (default 8; with --chat 512)
   --chat         (optional)  treat TEXT as a user message and print the final answer
   --reasoning R  (optional)  with --chat: low, medium or high (default low)
+  --gpu          (optional)  run on the GPU (macOS): weights in GPU memory, prompts in
+                             passes of 512, up to 8192 positions
   -h, --help                 this text
 
 Example:
@@ -45,7 +47,7 @@ fn main() {
         return;
     }
     let (mut path, mut tokens, mut text) = (None, None, None);
-    let (mut chat, mut reasoning) = (false, Reasoning::Low);
+    let (mut chat, mut reasoning, mut on_gpu) = (false, Reasoning::Low, false);
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -62,6 +64,7 @@ fn main() {
                 );
             }
             "--chat" => chat = true,
+            "--gpu" => on_gpu = true,
             "--reasoning" => {
                 reasoning = args
                     .next()
@@ -79,7 +82,12 @@ fn main() {
     let (file, _) = gguf::open(&path).unwrap_or_else(|e| fail(&e.to_string()));
     let tokenizer = Tokenizer::from_gguf(&file).unwrap_or_else(|e| fail(&e.to_string()));
     let model = Model::load(&path).unwrap_or_else(|e| fail(&e.to_string()));
-    eprintln!("loaded in {:.1}s", start.elapsed().as_secs_f64());
+    let mut engine = Engine::new(model, on_gpu);
+    eprintln!(
+        "loaded in {:.1}s ({})",
+        start.elapsed().as_secs_f64(),
+        engine.name()
+    );
 
     let tokens = tokens.unwrap_or(if chat { 512 } else { 8 });
     let prompt = if chat {
@@ -96,16 +104,13 @@ fn main() {
         .iter()
         .filter_map(|name| tokenizer.control(name))
         .collect();
-    let mut session = model.session();
     let start = Instant::now();
-    let mut logits = Vec::new();
-    for &id in &prompt {
-        logits = model.step(&mut session, id);
-    }
+    let mut logits = engine.feed(&prompt);
     eprintln!(
-        "{} prompt tokens in {:.1}s",
+        "{} prompt tokens in {:.2}s ({:.0} tokens/s)",
         prompt.len(),
-        start.elapsed().as_secs_f64()
+        start.elapsed().as_secs_f64(),
+        prompt.len() as f64 / start.elapsed().as_secs_f64()
     );
     let start = Instant::now();
     let mut out = Vec::new();
@@ -124,7 +129,7 @@ fn main() {
         } {
             break;
         }
-        logits = model.step(&mut session, next);
+        logits = engine.feed(&[next]);
     }
     if chat {
         let reply = read_reply(&tokenizer, &out);
@@ -137,11 +142,66 @@ fn main() {
         println!("{text}{}", tokenizer.decode(&out));
     }
     eprintln!(
-        "{} tokens in {:.1}s ({:.2} s/token)",
+        "{} tokens in {:.2}s ({:.1} tokens/s)",
         out.len(),
         start.elapsed().as_secs_f64(),
-        start.elapsed().as_secs_f64() / out.len().max(1) as f64
+        out.len() as f64 / start.elapsed().as_secs_f64()
     );
+}
+
+/// The CPU reference or the GPU path, behind one `feed`.
+enum Engine {
+    Cpu(Box<Model>, loadngo_gpt_oss::model::Session),
+    #[cfg(target_os = "macos")]
+    Gpu(
+        Box<loadngo_gpt_oss::gpu::GpuModel>,
+        loadngo_gpt_oss::gpu::GpuSession,
+    ),
+}
+
+impl Engine {
+    fn new(model: Model, on_gpu: bool) -> Self {
+        if on_gpu {
+            #[cfg(target_os = "macos")]
+            {
+                let gpu = loadngo_gpt_oss::gpu::GpuModel::new(model, 512, 8192)
+                    .unwrap_or_else(|e| fail(&e.to_string()));
+                let session = gpu.session().unwrap_or_else(|e| fail(&e.to_string()));
+                return Self::Gpu(Box::new(gpu), session);
+            }
+            #[cfg(not(target_os = "macos"))]
+            fail("--gpu needs macOS");
+        }
+        let session = model.session();
+        Self::Cpu(Box::new(model), session)
+    }
+
+    fn name(&self) -> String {
+        match self {
+            Self::Cpu(..) => "CPU".into(),
+            #[cfg(target_os = "macos")]
+            Self::Gpu(gpu, _) => format!("GPU: {}", gpu.device()),
+        }
+    }
+
+    /// Feeds tokens and returns the logits after the last.
+    fn feed(&mut self, tokens: &[u32]) -> Vec<f32> {
+        match self {
+            Self::Cpu(model, session) => {
+                let mut logits = Vec::new();
+                for &t in tokens {
+                    logits = model.step(session, t);
+                }
+                logits
+            }
+            #[cfg(target_os = "macos")]
+            Self::Gpu(gpu, session) => gpu
+                .feed(session, tokens, loadngo_gpt_oss::gpu::Logits::Last)
+                .unwrap_or_else(|e| fail(&e.to_string()))
+                .pop()
+                .expect("the last position's logits"),
+        }
+    }
 }
 
 /// Today's date in UTC as `YYYY-MM-DD` (days to civil date, Howard Hinnant's method).

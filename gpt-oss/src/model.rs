@@ -37,7 +37,7 @@ pub enum ModelError {
     Invalid(String),
 }
 
-enum Format {
+pub(crate) enum Format {
     F32(Vec<f32>),
     Q8(Vec<u8>),
     Mxfp4 { elements: Vec<u8>, scales: Vec<u8> },
@@ -45,9 +45,9 @@ enum Format {
 
 /// A row-major matrix in its stored format.
 pub struct Matrix {
-    rows: usize,
-    cols: usize,
-    format: Format,
+    pub(crate) rows: usize,
+    pub(crate) cols: usize,
+    pub(crate) format: Format,
 }
 
 impl Matrix {
@@ -72,6 +72,13 @@ impl Matrix {
         self.rows
     }
 
+    /// Frees the weights (the GPU holds its own copy); the matrix must not be used
+    /// after.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn release(&mut self) {
+        self.format = Format::F32(Vec::new());
+    }
+
     /// Row `r` widened into `out`.
     pub fn row(&self, r: usize, out: &mut [f32]) {
         match &self.format {
@@ -88,7 +95,7 @@ impl Matrix {
     }
 
     /// `y[i] = row(first + i) · x`.
-    fn mul_rows(&self, first: usize, y: &mut [f32], x: &[f32]) {
+    pub(crate) fn mul_rows(&self, first: usize, y: &mut [f32], x: &[f32]) {
         match &self.format {
             Format::F32(values) => {
                 for (i, out) in y.iter_mut().enumerate() {
@@ -141,40 +148,40 @@ fn f32s(bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-struct Expert {
-    gate: Matrix,
-    up: Matrix,
-    down: Matrix,
-    gate_bias: Vec<f32>,
-    up_bias: Vec<f32>,
-    down_bias: Vec<f32>,
+pub(crate) struct Expert {
+    pub(crate) gate: Matrix,
+    pub(crate) up: Matrix,
+    pub(crate) down: Matrix,
+    pub(crate) gate_bias: Vec<f32>,
+    pub(crate) up_bias: Vec<f32>,
+    pub(crate) down_bias: Vec<f32>,
 }
 
-struct Layer {
-    attn_norm: Vec<f32>,
-    q: Matrix,
-    k: Matrix,
-    v: Matrix,
-    o: Matrix,
-    q_bias: Vec<f32>,
-    k_bias: Vec<f32>,
-    v_bias: Vec<f32>,
-    o_bias: Vec<f32>,
-    sinks: Vec<f32>,
-    ffn_norm: Vec<f32>,
-    router: Matrix,
-    router_bias: Vec<f32>,
-    experts: Vec<Expert>,
+pub(crate) struct Layer {
+    pub(crate) attn_norm: Vec<f32>,
+    pub(crate) q: Matrix,
+    pub(crate) k: Matrix,
+    pub(crate) v: Matrix,
+    pub(crate) o: Matrix,
+    pub(crate) q_bias: Vec<f32>,
+    pub(crate) k_bias: Vec<f32>,
+    pub(crate) v_bias: Vec<f32>,
+    pub(crate) o_bias: Vec<f32>,
+    pub(crate) sinks: Vec<f32>,
+    pub(crate) ffn_norm: Vec<f32>,
+    pub(crate) router: Matrix,
+    pub(crate) router_bias: Vec<f32>,
+    pub(crate) experts: Vec<Expert>,
 }
 
 pub struct Model {
     pub config: Config,
-    embedding: Matrix,
-    output: Matrix,
-    output_norm: Vec<f32>,
-    layers: Vec<Layer>,
-    inv_freq: Vec<f64>,
-    rope_scale: f64,
+    pub(crate) embedding: Matrix,
+    pub(crate) output: Matrix,
+    pub(crate) output_norm: Vec<f32>,
+    pub(crate) layers: Vec<Layer>,
+    pub(crate) inv_freq: Vec<f64>,
+    pub(crate) rope_scale: f64,
 }
 
 /// A conversation's keys and values so far.
@@ -458,18 +465,36 @@ impl Model {
         logits
     }
 
-    fn experts(&self, layer: &Layer, x: &[f32], out: &mut [f32]) {
+    /// The experts `x` goes to and their weights: the `experts_used` highest router
+    /// logits (equal logits: the lower index first), softmaxed over just those.
+    pub(crate) fn route(&self, layer: &Layer, x: &[f32]) -> Vec<(usize, f32)> {
         let c = &self.config;
         let mut router = vec![0.0_f32; c.experts];
-        layer.router.mul_vec(&mut router, x);
+        layer.router.mul_rows(0, &mut router, x);
         add(&mut router, &layer.router_bias);
         let mut order: Vec<usize> = (0..c.experts).collect();
-        // Highest first; equal logits keep the lower index first.
         order.sort_by(|&a, &b| router[b].total_cmp(&router[a]).then(a.cmp(&b)));
         let picked = &order[..c.experts_used];
         let max = router[picked[0]];
         let weights: Vec<f32> = picked.iter().map(|&e| (router[e] - max).exp()).collect();
         let total: f32 = weights.iter().sum();
+        picked
+            .iter()
+            .zip(weights)
+            .map(|(&e, w)| (e, w / total))
+            .collect()
+    }
+
+    /// Row `token` of the embedding, widened into `out`.
+    pub fn embed(&self, token: u32, out: &mut [f32]) {
+        self.embedding.row(token as usize, out);
+    }
+
+    fn experts(&self, layer: &Layer, x: &[f32], out: &mut [f32]) {
+        let c = &self.config;
+        let routed = self.route(layer, x);
+        let picked: Vec<usize> = routed.iter().map(|&(e, _)| e).collect();
+        let weights: Vec<f32> = routed.iter().map(|&(_, w)| w).collect();
         out.fill(0.0);
         let results: Vec<Vec<f32>> = std::thread::scope(|scope| {
             let handles: Vec<_> = picked
@@ -505,7 +530,7 @@ impl Model {
         });
         for (y, &w) in results.iter().zip(&weights) {
             for (o, &v) in out.iter_mut().zip(y) {
-                *o += w / total * v;
+                *o += w * v;
             }
         }
     }

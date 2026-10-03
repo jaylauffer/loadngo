@@ -9,6 +9,26 @@ use crate::dtype::f16_to_f32;
 pub const BLOCK_SIZE: usize = 32;
 pub const BLOCK_BYTES: usize = 34;
 
+/// Splits `Q8_0` blocks into their signed bytes, in order, and their binary16 scales
+/// (little-endian, one per block): the layout GPU kernels load aligned. Moves bytes only.
+///
+/// # Panics
+/// When `blocks` is not whole blocks.
+pub fn split_blocks(blocks: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    assert!(
+        blocks.len().is_multiple_of(BLOCK_BYTES),
+        "whole Q8_0 blocks"
+    );
+    let n = blocks.len() / BLOCK_BYTES;
+    let mut codes = Vec::with_capacity(n * BLOCK_SIZE);
+    let mut scales = Vec::with_capacity(n * 2);
+    for block in blocks.as_chunks::<BLOCK_BYTES>().0 {
+        scales.extend_from_slice(&block[..2]);
+        codes.extend_from_slice(&block[2..]);
+    }
+    (codes, scales)
+}
+
 /// A row-major `Q8_0` matrix borrowed from its blocks.
 #[derive(Clone, Copy, Debug)]
 pub struct Q8Matrix<'a> {

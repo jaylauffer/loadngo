@@ -8,5 +8,7 @@
 
 pub mod chat;
 pub mod config;
+#[cfg(target_os = "macos")]
+pub mod gpu;
 pub mod model;
 pub mod tokenizer;

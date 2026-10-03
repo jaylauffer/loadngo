@@ -11,5 +11,9 @@ loadngo-weights = { path = "../weights" }
 regex-syntax = "0.8"
 thiserror.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+loadngo-metal-compute = { path = "../metal-compute" }
+loadngo-proactor = { path = "../proactor" }
+
 [dev-dependencies]
 serde_json.workspace = true
