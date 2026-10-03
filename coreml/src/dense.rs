@@ -159,6 +159,28 @@ impl Surface {
     }
 }
 
+impl Surface {
+    /// Calls `row(r, dst)` for each of `rows` (in order, each below the row count) with
+    /// that row's `cols` fp16 bit patterns, under one lock.
+    pub(crate) fn fill_rows(
+        &self,
+        rows: impl IntoIterator<Item = usize>,
+        mut row: impl FnMut(usize, &mut [u16]),
+    ) -> Result<(), String> {
+        let mut view = self.lock()?;
+        for r in rows {
+            if r >= self.rows {
+                self.unlock();
+                return Err(format!("row {r} outside a {}-row surface", self.rows));
+            }
+            // SAFETY: `r` is below the locked surface's row count; one slice at a time.
+            row(r, unsafe { view.row(r) });
+        }
+        self.unlock();
+        Ok(())
+    }
+}
+
 /// A locked surface's rows, written by the conversion thread. The engine holds the lock
 /// from [`Surface::lock`] until that thread reports back, then calls [`Surface::unlock`].
 struct View {

@@ -216,13 +216,47 @@ their own (141-144 ms in sequence) and 79 ms submitted together, every completio
 received on one proactor. Three runs agreed within 0.5 ms. The two devices overlap
 almost completely, and the GPU was not slowed.
 
+**Integrated into Gemma 4 (2026-10-03, later the same day, at Jay's request).**
+
+1. *Kept caches.* `KvCache` holds one layer's keys and values on the Neural Engine
+   between passes; a pass writes only its own rows unless the cache is missing or
+   behind (`a_kept_cache_matches_the_definition_across_passes`: fill, wrap-around,
+   single tokens and a jump back as after /undo, each against float64; only new rows
+   written, one full rewrite at the jump). `AttentionEngine::sync` writes a pass's rows
+   without predicting, for passes the GPU computes.
+2. *Key buckets.* A cache uses all its slots once they are within twice the position
+   bucket (a sliding layer's 1,536-slot ring from its first pass), otherwise powers of
+   two from 1,024, so a full layer is rebuilt once per bucket.
+3. *Accuracy end to end* (kimi `--compare attention`, 6,014-token text, 31B): GPU
+   attention against the CPU reference is exact (top-1 100%, KL 0.00000). Neural
+   Engine attention against the CPU reference: top-1 97.1%, KL mean 0.033 and median
+   0.0002, perplexity 749.1 -> 725.2. One position differs by 34 nats. A per-pass check
+   (`K3_NPU_CHECK=1`) found no faulty pass: across all 720 the largest difference from
+   the GPU is 0.13 on values of 4-6, fp16 rounding. That model is very confident on raw
+   text (the reference perplexity is itself 749), and with such peaked distributions
+   fp16 noise can flip an occasional prediction. For comparison, Kimi's Neural Engine
+   products agreed with its CPU reference at 93.0% top-1.
+4. *Pipeline.* kimi-k3-core's `gemma` runs prompt passes in pairs: per layer, pass 0's
+   attention is started on the Neural Engine
+   (`DenseAccel::grouped_attention_start`), then the GPU computes pass 1's previous
+   layer, then pass 0's attention is collected through the proactor
+   (`grouped_attention_finish`), and so on alternately. Same 6,014-token prompt: 140.5 s
+   with GPU attention, **112.6 s** with Neural Engine attention (-20%; the ceiling, all
+   attention removed, is about 107 s). Attention on the critical path fell from 37.2 ms
+   to 0.42 ms per layer. Each Neural Engine pass takes about 23 ms alongside the GPU
+   (9.75 ms alone) but is hidden behind the other pass's products. Decoding is unchanged
+   (0.26 s per token at 6k context, on the GPU).
+
+`--attention npu` turns it on; the default stays the GPU until Jay decides on the fp16
+accuracy.
+
 **What it means for Gemma.** Decoding stays on the GPU: one token is slower on the
 Neural Engine and a token's layers cannot overlap each other. For prompts, attention on
 the Neural Engine is 2.2-2.4x faster per pass where the window is full, and it can run
 while the GPU does other work. A layer's attention needs that layer's own q, k and v,
 so the overlap has to come from pipelining 512-position passes: the Neural Engine runs
-pass n's attention for layer l while the GPU runs pass n+1's projections. Before that is
-worth building:
+pass n's attention for layer l while the GPU runs pass n+1's projections. The steps
+this took, as planned before building them (all four are done; see above):
 
 1. Keep each layer's keys and values in its Neural Engine surfaces and write only new
    rows (as the GPU's ring copy does). The fill now rewrites them every pass and costs

@@ -7,7 +7,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use loadngo_coreml::attention::{AttentionEngine, AttentionOutput, AttentionPass};
+use loadngo_coreml::attention::{AttentionEngine, AttentionOutput, AttentionPass, KvCache};
 use loadngo_inference::compute::{ComputePolicy, DeviceKind};
 use loadngo_proactor::{new_platform_proactor, PlatformPort, Proactor};
 
@@ -97,11 +97,12 @@ fn run(
     engine: &mut AttentionEngine,
     proactor: &Proactor<PlatformPort>,
     pass: &AttentionPass<'_>,
+    cache: &mut Option<KvCache>,
 ) -> AttentionOutput {
     let slot: Arc<Mutex<Option<Result<AttentionOutput, String>>>> = Arc::default();
     let filled = Arc::clone(&slot);
     engine
-        .submit(pass, &proactor.handle(), move |result| {
+        .submit(pass, cache, &proactor.handle(), move |result| {
             *filled.lock().unwrap() = Some(result);
         })
         .unwrap();
@@ -136,7 +137,7 @@ fn measure(
         window: c.window,
         slots: c.slots,
     };
-    let done = run(engine, proactor, &pass);
+    let done = run(engine, proactor, &pass, &mut None);
     let want = reference(&q, &k, &v, c);
     let (mut worst, mut sq) = (0.0_f64, 0.0_f64);
     for (g, w) in done.out.iter().zip(&want) {
@@ -254,14 +255,15 @@ fn neural_engine_attention_timing() {
             window: c.window,
             slots: c.slots,
         };
-        let shape = AttentionEngine::shape_of(&pass);
+        let shape = AttentionEngine::shape_of(&pass).unwrap();
+        let mut cache = None;
         let started = Instant::now();
         engine.prepare(shape).unwrap();
         let load = started.elapsed();
-        run(&mut engine, &proactor, &pass);
+        run(&mut engine, &proactor, &pass, &mut cache);
         let fill_before = engine.stats().fill_s;
         let mut times: Vec<Duration> = (0..20)
-            .map(|_| run(&mut engine, &proactor, &pass).latency)
+            .map(|_| run(&mut engine, &proactor, &pass, &mut cache).latency)
             .collect();
         let fill = (engine.stats().fill_s - fill_before) / 20.0;
         times.sort();
@@ -355,8 +357,11 @@ fn neural_engine_and_gpu_run_concurrently() {
         }
         batch
     };
-    engine.prepare(AttentionEngine::shape_of(&pass)).unwrap();
-    run(&mut engine, &proactor, &pass);
+    let mut cache = None;
+    engine
+        .prepare(AttentionEngine::shape_of(&pass).unwrap())
+        .unwrap();
+    run(&mut engine, &proactor, &pass, &mut cache);
     let ms = |d: Duration| d.as_secs_f64() * 1e3;
     // Four GPU passes against four Neural Engine passes, so each side has work for a
     // comparable time; the Neural Engine runs its four one after another (two input
@@ -379,7 +384,7 @@ fn neural_engine_and_gpu_run_concurrently() {
     let npu_alone = {
         let started = Instant::now();
         for _ in 0..npu_passes {
-            run(&mut engine, &proactor, &pass);
+            run(&mut engine, &proactor, &pass, &mut cache);
         }
         started.elapsed()
     };
@@ -394,7 +399,7 @@ fn neural_engine_and_gpu_run_concurrently() {
         *flag.lock().unwrap() = Some(gpu_started.elapsed());
     });
     for _ in 0..npu_passes {
-        run(&mut engine, &proactor, &pass);
+        run(&mut engine, &proactor, &pass, &mut cache);
     }
     let npu_together = started.elapsed();
     while gpu_done.lock().unwrap().is_none() {
@@ -406,4 +411,103 @@ fn neural_engine_and_gpu_run_concurrently() {
         "alone: GPU {gpu_passes} passes {:.1} ms, Neural Engine {npu_passes} passes {:.1} ms (sum {:.1}); together: both done in {:.1} ms (GPU {:.1} ms, Neural Engine {:.1} ms)",
         ms(gpu_alone), ms(npu_alone), ms(gpu_alone + npu_alone), ms(both), ms(gpu_together), ms(npu_together),
     );
+}
+
+/// One layer's cache carried through a decoder's sequence of passes: prompt passes that
+/// fill and then wrap the ring, single tokens, and a jump back (a restored session) that
+/// must rewrite the cache. Each pass is checked against the float64 definition, and only
+/// new rows are written while the cache keeps up.
+#[test]
+fn a_kept_cache_matches_the_definition_across_passes() {
+    let mut engine = AttentionEngine::new(ComputePolicy::CpuAndNpu).unwrap();
+    let proactor = new_platform_proactor().unwrap();
+    // Gemma's sliding layers at a quarter of the heads, so the test stays quick.
+    let (heads_n, kvh, dim, window, slots) = (8, 4, 256, 1024, 1536);
+    let total = 3200;
+    let row = kvh * dim;
+    let k_all = heads(2, total * row, dim, 0.5);
+    let v_all = heads(3, total * row, dim, 1.0);
+    let mut cache = None;
+    for (start, t) in [
+        (0, 512),
+        (512, 512),
+        (1024, 512),
+        (1536, 512),
+        (2048, 1),
+        (2049, 1),
+        (2050, 300),
+        (1000, 37),
+    ] {
+        let c = Case {
+            t,
+            start,
+            heads: heads_n,
+            kv_heads: kvh,
+            dim,
+            window,
+            slots,
+        };
+        let q = heads(10 + start as u64, t * heads_n * dim, dim, 1.0);
+        let (k, v) = (ring(&k_all, &c), ring(&v_all, &c));
+        let pass = AttentionPass {
+            q: &q,
+            k: &k,
+            v: &v,
+            t,
+            start,
+            heads: heads_n,
+            kv_heads: kvh,
+            dim,
+            window,
+            slots,
+        };
+        let before = engine.stats().kv_rows;
+        let done = run(&mut engine, &proactor, &pass, &mut cache);
+        let wrote = engine.stats().kv_rows - before;
+        let want = reference(&q, &k_all, &v_all, &c);
+        let (mut worst, mut sq) = (0.0_f64, 0.0_f64);
+        for (g, w) in done.out.iter().zip(&want) {
+            let e = (f64::from(*g) - w).abs();
+            worst = worst.max(e);
+            sq += e * e;
+        }
+        let rms = (sq / want.len() as f64).sqrt();
+        assert!(
+            worst < 5e-2 && rms < 3e-3,
+            "pass at {start} (+{t}): max {worst}, rms {rms}"
+        );
+        if start == 1000 {
+            // Behind the cache, as after /undo: every position the ring holds is written.
+            assert_eq!(wrote, c.end().min(slots) as u64, "rewrite at {start}");
+        } else {
+            assert_eq!(wrote, t as u64, "only new rows at {start}");
+        }
+        assert_eq!(cache.as_ref().unwrap().synced(), c.end());
+    }
+    assert_eq!(engine.stats().kv_rewrites, 1);
+}
+
+/// The Neural Engine's error as a full layer's key count grows (512 queries; 32 heads
+/// over 4, 512 wide): `cargo test --release -p loadngo-coreml --test attention -- --ignored --nocapture long`
+#[test]
+#[ignore = "diagnostic; run by hand"]
+fn long_full_layer_error() {
+    let mut engine = AttentionEngine::new(ComputePolicy::CpuAndNpu).unwrap();
+    let proactor = new_platform_proactor().unwrap();
+    for start in [512, 1536, 3584, 5120] {
+        let c = Case {
+            t: 512,
+            start,
+            heads: 32,
+            kv_heads: 4,
+            dim: 512,
+            window: usize::MAX,
+            slots: 6014,
+        };
+        let (worst, rms, _) = measure(&mut engine, &proactor, &c);
+        eprintln!(
+            "full layer, {} keys: max error {worst:.2e}, rms {rms:.2e}",
+            c.end()
+        );
+    }
 }
