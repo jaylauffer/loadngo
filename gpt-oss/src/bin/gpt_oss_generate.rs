@@ -387,6 +387,8 @@ fn decode(
 struct Chat<'t> {
     tokenizer: &'t Tokenizer,
     conversation: Conversation,
+    /// The developer instructions; each turn puts the local date and time first.
+    instructions: Option<String>,
     tools: Option<Toolbox>,
     call: u32,
     stops: [u32; 2],
@@ -398,17 +400,16 @@ const MAX_RESULT_CHARS: usize = 24_000;
 
 impl<'t> Chat<'t> {
     fn new(tokenizer: &'t Tokenizer, o: &Options) -> Self {
-        let mut conversation = Conversation::new(today());
+        let mut conversation = Conversation::new(now().date);
         conversation.reasoning = o.reasoning;
-        let tools = if o.tools {
+        let (tools, instructions) = if o.tools {
             let (tools, instructions) = toolbox(o);
             conversation.tools =
                 Some(tool_namespace(&tools.declaration()).unwrap_or_else(|e| fail(&e)));
-            conversation.instructions = Some(instructions);
-            Some(tools)
+            (Some(tools), Some(instructions))
         } else {
             eprintln!("tools: off (--no-tools)");
-            None
+            (None, None)
         };
         let control = |name| {
             tokenizer
@@ -418,6 +419,7 @@ impl<'t> Chat<'t> {
         Self {
             tokenizer,
             conversation,
+            instructions,
             tools,
             call: control("<|call|>"),
             stops: [control("<|return|>"), control("<|call|>")],
@@ -428,6 +430,15 @@ impl<'t> Chat<'t> {
     /// replies' reasoning out of the history), then the model replies, calling tools as
     /// often as it needs; each call's `<|call|>` and result are fed straight in.
     fn turn(&mut self, engine: &mut Engine, text: &str, limit: usize, o: &Options) -> Reply {
+        // The local date and time, read again each turn: the system message's date, and
+        // the first line of the instructions with the weekday and offset, so the model
+        // has no reason to look them up.
+        let now = now();
+        self.conversation.date = now.date;
+        self.conversation.instructions = Some(match &self.instructions {
+            Some(instructions) => format!("{}\n\n{instructions}", now.said),
+            None => now.said,
+        });
         self.conversation
             .messages
             .push(Message::User(text.to_owned()));
@@ -521,11 +532,41 @@ impl<'t> Chat<'t> {
     }
 }
 
-/// Today's date in UTC as `YYYY-MM-DD` (days to civil date, Howard Hinnant's method).
-fn today() -> String {
-    let days = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() / 86_400) as i64;
+/// The date and time the chat tells the model.
+struct Now {
+    /// `YYYY-MM-DD`, local: the system message's "Current date".
+    date: String,
+    /// A sentence with the weekday, date, time and offset from UTC.
+    said: String,
+}
+
+const WEEKDAYS: [&str; 7] = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+];
+const MONTHS: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+
+/// `(year, month 1-12, day)` of a count of days since 1970-01-01 (Howard Hinnant's
+/// days-to-civil).
+fn civil(days: i64) -> (i64, usize, i64) {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
@@ -534,8 +575,63 @@ fn today() -> String {
     let mp = (5 * doy + 2) / 153;
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02}")
+    (yoe + era * 400 + i64::from(month <= 2), month as usize, day)
+}
+
+/// Now, in the machine's time zone. Until 2026-10-04 this was UTC: at 06:07 on Sunday 4
+/// October at +07 the model was told 2026-10-03, and answered "Wednesday, October 3".
+fn now() -> Now {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs()) as i64;
+    // Seconds east of UTC for the local zone (0, UTC, where it cannot be read).
+    let offset = local_offset(seconds);
+    let local = seconds + offset;
+    let days = local.div_euclid(86_400);
+    let (year, month, day) = civil(days);
+    let weekday = WEEKDAYS[(days + 4).rem_euclid(7) as usize];
+    let minute = local.rem_euclid(86_400) / 60;
+    let zone = if offset == 0 {
+        "UTC".to_owned()
+    } else {
+        let sign = if offset < 0 { '-' } else { '+' };
+        format!(
+            "UTC{sign}{:02}:{:02}",
+            offset.abs() / 3600,
+            offset.abs() % 3600 / 60
+        )
+    };
+    Now {
+        date: format!("{year:04}-{month:02}-{day:02}"),
+        said: format!(
+            "It is now {weekday}, {day} {} {year}, {:02}:{:02} local time ({zone}); the \
+             current date above is local too. Answer questions about the date or time from \
+             this; do not look them up.",
+            MONTHS[month - 1],
+            minute / 60,
+            minute % 60
+        ),
+    }
+}
+
+#[cfg(unix)]
+// tm_gmtoff is a C long: 64 bits here, 32 on 32-bit targets.
+#[allow(clippy::useless_conversion)]
+fn local_offset(seconds: i64) -> i64 {
+    let time = seconds as libc::time_t;
+    // SAFETY: localtime_r writes only into the tm it is given.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let filled = unsafe { !libc::localtime_r(&time, &mut tm).is_null() };
+    if filled {
+        i64::from(tm.tm_gmtoff)
+    } else {
+        0
+    }
+}
+
+#[cfg(not(unix))]
+fn local_offset(_seconds: i64) -> i64 {
+    0
 }
 
 /// The CPU reference or the GPU path, behind one `feed`.

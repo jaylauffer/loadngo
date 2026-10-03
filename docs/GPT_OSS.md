@@ -291,6 +291,45 @@ On the real model, 2026-10-04:
 - **Notes.** One run saved a note with `memory_save`, and the next run answered from
   it.
 
+### Field report: "What day is it today?" (Jay, 2026-10-04)
+
+Jay's first interactive session with the tools, at 06:07 on Sunday 4 October (+07):
+
+```text
+> What day is it today, what's the year and month as well?
+1302 prompt tokens in 3.96s (329 tokens/s)
+67 tokens in 1.25s (53.6 tokens/s)
+[tool] web_search {"query":"current date today"} -> 1758 characters
+[tool] web_fetch {"url":"https://todaydateandtime.com/today/"} -> 70 characters
+[tool] web_fetch {"url":"https://www.timeanddate.com/"} -> 63 characters
+[tool] web_fetch {"url":"https://worldtimeapi.org/api/timezone/Etc/UTC"} -> 186 characters
+[tool] web_fetch {"url":"https://todaysdateandtime.com/today/"} -> 6188 characters
+[tool] web_fetch {"url":"https://todaysdateandtime.com/today/","start":6067} -> 418 characters
+[tool] web_fetch {"url":"http://worldtimeapi.org/api/timezone/Etc/UTC"} -> 205 characters
+87 tokens in 2.05s (42.4 tokens/s)
+Today is **Wednesday, October 3, 2026**.
+The current year is **2026** and the month is **October**.
+```
+
+(Timing lines between the calls are left out.) Two faults:
+
+- **Ours.** `gpt_oss_generate` computed the system message's "Current date" in UTC.
+  At 06:07 +07 that was still Saturday 3 October, so the model was told 2026-10-03.
+- **The model's.** Despite having a date, it made 7 web calls (each query left this
+  Mac) for something it had been told, and still got the weekday wrong: 3 October 2026
+  was a Saturday, not a Wednesday.
+
+Fixed (`now()` in `gpt_oss_generate`):
+
+- The date is local, from `localtime_r`'s offset on Unix (UTC elsewhere, and so
+  labelled).
+- Every turn, the developer instructions open with the weekday, date, time and offset
+  ("It is now Sunday, 4 October 2026, 06:10 local time (UTC+07:00) ...") and tell the
+  model to answer date and time questions from that, without looking them up.
+
+The same question through `run-gpt-oss.sh` after the fix: "It's Sunday, 4 October 2026
+... Month: October, Year: 2026", with no tool calls.
+
 ## Line editing
 
 `loadngo-line-editor` (`line-editor/`) gives the interactive chat line editing:

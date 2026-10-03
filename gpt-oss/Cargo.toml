@@ -17,6 +17,10 @@ regex-syntax = "0.8"
 serde_json.workspace = true
 thiserror.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# The local date and time the chat tells the model.
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 loadngo-metal-compute = { path = "../metal-compute" }
 loadngo-proactor = { path = "../proactor" }
