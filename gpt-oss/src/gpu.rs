@@ -377,6 +377,12 @@ impl GpuSession {
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
+
+    /// Starts the conversation over. Cache rows past the new position are never read
+    /// before they are written again.
+    pub fn reset(&mut self) {
+        self.len = 0;
+    }
 }
 
 /// A set followed by the caches, as one batch's buffers.

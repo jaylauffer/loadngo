@@ -1613,6 +1613,7 @@ dependencies = [
 name = "loadngo-gpt-oss"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "loadngo-metal-compute",
  "loadngo-proactor",
  "loadngo-weights",

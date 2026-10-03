@@ -212,6 +212,35 @@ already busy within a pass.
 A 1,810-token chat prompt (summarize this document) read in 5.3 s (342 tokens/s); the
 answer was accurate, generated at 48.7 tokens/s. Decoding is unchanged at 57 tokens/s.
 
+## Running it
+
+`~/pudding/run-gpt-oss.sh` (outside any repository, at the workspace root):
+
+- With no text it starts an interactive chat: one message per line, `/reset` to start
+  over, `/quit` or Ctrl-D to stop.
+- With text it answers once; `--file PATH` puts a file's text before the question;
+  `--raw` continues the text instead of answering it.
+- `--reasoning`, `--tokens`, `--show-reasoning` and `--profile` pass through; `--cpu`
+  uses the reference path.
+
+It builds `gpt_oss_generate` in release and runs it on the GPU with the verified copy
+`~/.loadngo/models/<BLAKE3>.gguf`. `--blake3` checks the file's hash beside the load
+(9 s instead of about 7 s), and the tool refuses to run a file that does not match.
+When the copy is missing and the pudding CAS (Zhoenus II) is attached, the script first
+restores it with `archive_cas_restore`, which checks BLAKE3 as it copies.
+
+Checked 2026-10-04:
+
+- "What is the capital of France? One word." -> "Paris";
+- a two-turn chat that remembered a name from the first turn;
+- `--file docs/ZHOENUS_HEAD_MODEL_RUNNER.md` with a question about it: an accurate
+  one-sentence answer;
+- `--raw` continuation;
+- an unknown option refused in one line.
+
+Each chat turn re-reads the whole conversation: harmony leaves earlier replies'
+reasoning out of the history, so the cached positions would not match it.
+
 ## The Neural Engine
 
 Jay asked whether gpt-oss can use it. Not for decoding:
