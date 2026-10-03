@@ -497,6 +497,19 @@ pub fn desktop_render_backend_status() -> DesktopRenderBackendStatus {
     }
 }
 
+pub(crate) fn create_persistent_log(
+    config: loadngo_proactor::PersistentLogConfig,
+) -> Result<loadngo_proactor::PersistentLog, String> {
+    let proxy = lock_state()
+        .event_proxy
+        .clone()
+        .ok_or("Linux event proxy unavailable")?;
+    loadngo_proactor::PersistentLog::new_with_wake(proactor().handle.clone(), config, move || {
+        let _ = proxy.send_event(LinuxUserEvent::Wake);
+    })
+    .map_err(|error| error.to_string())
+}
+
 pub fn launch(
     window: WindowDescriptor,
     icon: Option<WindowIconSet>,
@@ -524,10 +537,12 @@ pub fn launch(
         let mut state = lock_state();
         state.event_proxy = Some(event_loop.create_proxy());
     }
+    crate::logging::initialize(&window);
     let mut app = LinuxApp::new(window, icon, shared, Box::pin(entry));
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("[loadngo/linux] event loop failed: {err}");
     }
+    crate::logging::shutdown();
 }
 
 pub fn capture_frame() -> HostFrame {

@@ -1,3 +1,15 @@
+// Route this crate's existing console diagnostics through the framework sink.
+// Qualified std::println!/eprintln! remain available inside logging itself to
+// avoid recursion. Applications opt in via log_info/log_error.
+#[allow(unused_macros)]
+macro_rules! println {
+    ($($argument:tt)*) => { $crate::logging::console_record(false, format_args!($($argument)*)) };
+}
+macro_rules! eprintln {
+    ($($argument:tt)*) => { $crate::logging::console_record(true, format_args!($($argument)*)) };
+}
+mod logging;
+pub use logging::{flush_logs, log_error, log_info, persistent_log_status};
 mod audio;
 pub use audio::*;
 /// Shared text-fitting policy. Deliberately *not* `cfg`-gated by platform —

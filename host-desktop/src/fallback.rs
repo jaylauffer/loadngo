@@ -284,6 +284,12 @@ pub fn desktop_render_backend_status() -> DesktopRenderBackendStatus {
     DesktopRenderBackendStatus::unavailable()
 }
 
+pub(crate) fn create_persistent_log(
+    _config: loadngo_proactor::PersistentLogConfig,
+) -> Result<loadngo_proactor::PersistentLog, String> {
+    Err("this fallback host has no proactor driver".into())
+}
+
 pub fn launch(
     window: WindowDescriptor,
     icon: Option<WindowIconSet>,

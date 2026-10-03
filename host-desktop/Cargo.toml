@@ -43,6 +43,7 @@ image.workspace = true
 loadngo-camera = { path = "../camera" }
 loadngo-host-core = { path = "../host-core" }
 loadngo-persistence = { path = "../persistence" }
+loadngo-proactor = { path = "../proactor" }
 loadngo-pq-crypto = { path = "../pq-crypto", optional = true }
 loadngo-renderer = { path = "../renderer" }
 loadngo-system-stats = { path = "../system-stats", optional = true }
@@ -73,7 +74,6 @@ rodio = { version = "0.17", features = ["vorbis"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 loadngo-gfx-metal = { path = "../gfx-metal" }
-loadngo-proactor = { path = "../proactor" }
 objc2 = "0.6.4"
 objc2-game-controller = { version = "0.3.2", default-features = false, features = [
     "std",
@@ -92,7 +92,6 @@ jni = "0.21.1"
 libc = "0.2"
 lewton = "0.10"
 loadngo-gfx-gles = { path = "../gfx-gles" }
-loadngo-proactor = { path = "../proactor" }
 ndk = { version = "0.8", default-features = false }
 ndk-context = "0.1"
 ndk-sys = "0.5"
@@ -107,7 +106,6 @@ coreaudio-sys = { version = "0.2", default-features = false, features = [
 ] }
 lewton = "0.10"
 loadngo-gfx-metal = { path = "../gfx-metal" }
-loadngo-proactor = { path = "../proactor" }
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", features = ["NSGeometry"] }
 objc2-ui-kit = { version = "0.3.2", features = ["UIGestureRecognizer", "UILongPressGestureRecognizer", "UIView", "UIWindow"] }
@@ -118,19 +116,16 @@ arboard = { version = "3", default-features = false, features = ["wayland-data-c
 fontdue = "0.9.3"
 libc = "0.2"
 loadngo-gfx-gles = { path = "../gfx-gles" }
-loadngo-proactor = { path = "../proactor" }
 softbuffer = "0.4"
 winit = { version = "0.30", default-features = false, features = ["wayland", "x11", "rwh_06"] }
 
 [target.'cfg(target_os = "netbsd")'.dependencies]
 libc = "0.2"
-loadngo-proactor = { path = "../proactor" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 arboard = "3"
 fontdue = "0.9.3"
 loadngo-gfx-dx12 = { path = "../gfx-dx12" }
-loadngo-proactor = { path = "../proactor" }
 softbuffer = "0.4"
 winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 windows.workspace = true

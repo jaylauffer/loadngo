@@ -356,6 +356,7 @@ fn text_metrics_cache() -> &'static Mutex<HashMap<u64, TextMetrics>> {
 }
 
 fn android_log(prio: i32, message: &str) {
+    crate::logging::persist(prio == ANDROID_LOG_ERROR, format_args!("{message}"));
     const TAG: &[u8] = b"loadngo\0";
     let mut buffer = [0u8; 512];
     let mut len = 0usize;
@@ -2096,6 +2097,7 @@ unsafe extern "C" fn on_destroy(_activity: *mut ndk_sys::ANativeActivity) {
     // stop() still matters: it lets EpollPort's own shutdown path cancel
     // any outstanding deferred timer cleanly rather than leaving one
     // registered against a fd table nothing will ever poll again.
+    crate::logging::shutdown();
     if let Some(proactor) = PROACTOR.get() {
         let _ = proactor.handle.stop();
     }
@@ -2105,11 +2107,19 @@ unsafe extern "C" fn on_destroy(_activity: *mut ndk_sys::ANativeActivity) {
     }
 }
 
+pub(crate) fn create_persistent_log(
+    config: loadngo_proactor::PersistentLogConfig,
+) -> Result<loadngo_proactor::PersistentLog, String> {
+    loadngo_proactor::PersistentLog::new(proactor().handle.clone(), config)
+        .map_err(|error| error.to_string())
+}
+
 pub fn launch(
-    _window: WindowDescriptor,
+    window: WindowDescriptor,
     _icon: Option<WindowIconSet>,
     entry: impl Future<Output = ()> + Send + 'static,
 ) {
+    crate::logging::initialize(&window);
     let mut state = app_state().lock().expect("android app state poisoned");
     if state.runtime_started {
         android_log_info("Android runtime launch skipped because it already started");
@@ -2127,13 +2137,14 @@ pub fn launch(
 }
 
 pub fn launch_with_factory<E, F>(
-    _window: WindowDescriptor,
+    window: WindowDescriptor,
     _icon: Option<WindowIconSet>,
     entry_factory: E,
 ) where
     E: FnOnce() -> F + Send + 'static,
     F: Future<Output = ()> + 'static,
 {
+    crate::logging::initialize(&window);
     let mut state = app_state().lock().expect("android app state poisoned");
     if state.runtime_started {
         android_log_info("Android runtime launch skipped because it already started");

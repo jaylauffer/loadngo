@@ -695,6 +695,29 @@ fn runtime_waker() -> Waker {
     with_mac_proactor(HostProactor::waker)
 }
 
+pub(crate) fn create_persistent_log(
+    config: loadngo_proactor::PersistentLogConfig,
+) -> Result<loadngo_proactor::PersistentLog, String> {
+    // NSApplication lives for the process. Capture it on the main thread;
+    // Apple's postEvent:atStart: explicitly supports posting from subthreads.
+    let app: *mut AnyObject = unsafe { msg_send![class!(NSApplication), sharedApplication] };
+    let app_address = app as usize;
+    with_mac_proactor(|proactor| {
+        loadngo_proactor::PersistentLog::new_with_wake(proactor.handle.clone(), config, move || {
+            objc2::rc::autoreleasepool(|_| unsafe {
+                let event: *mut AnyObject = msg_send![class!(NSEvent),
+                    otherEventWithType: 15u64, location: CGPoint { x: 0.0, y: 0.0 },
+                    modifierFlags: 0usize, timestamp: 0.0f64, windowNumber: 0isize,
+                    context: std::ptr::null_mut::<AnyObject>(), subtype: 31201i16,
+                    data1: 0isize, data2: 0isize];
+                let app = app_address as *mut AnyObject;
+                let _: () = msg_send![app, postEvent: event, atStart: false];
+            });
+        })
+    })
+    .map_err(|error| error.to_string())
+}
+
 pub fn launch(
     window: WindowDescriptor,
     icon: Option<WindowIconSet>,
@@ -703,10 +726,12 @@ pub fn launch(
     MAC_PROACTOR.with(|proactor| {
         *proactor.borrow_mut() = Some(new_mac_proactor());
     });
+    crate::logging::initialize(&window);
     // Setup's autoreleased objects are drained here; what must live on is retained in
     // the app state.
     objc2::rc::autoreleasepool(|_| start(window, icon, entry));
     run_event_loop();
+    crate::logging::shutdown();
     APP_STATE.with(|state| {
         state.borrow_mut().take();
     });
@@ -1497,6 +1522,12 @@ fn drain_proactor() {
 
 fn handle_event(event: *mut AnyObject) {
     let event_type: u64 = unsafe { msg_send![event, type] };
+    if event_type == 15 {
+        let subtype: i16 = unsafe { msg_send![event, subtype] };
+        if subtype == 31201 {
+            return;
+        }
+    }
     APP_STATE.with(|state| {
         let mut state = state.borrow_mut();
         let Some(state) = state.as_mut() else {

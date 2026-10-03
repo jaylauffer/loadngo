@@ -15,6 +15,8 @@ mod error;
 ))]
 mod file_offload;
 mod io_port;
+mod persistent_log;
+pub use persistent_log::{LogFlush, PersistentLog, PersistentLogConfig, PersistentLogStatus};
 #[cfg(windows)]
 mod iocp;
 #[cfg(any(

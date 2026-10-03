@@ -887,6 +887,19 @@ pub fn safe_area_insets() -> (f32, f32, f32, f32) {
     state.safe_area_insets
 }
 
+pub(crate) fn create_persistent_log(
+    config: loadngo_proactor::PersistentLogConfig,
+) -> Result<loadngo_proactor::PersistentLog, String> {
+    let proxy = lock_state()
+        .event_proxy
+        .clone()
+        .ok_or("iOS event proxy unavailable")?;
+    loadngo_proactor::PersistentLog::new_with_wake(proactor().handle.clone(), config, move || {
+        let _ = proxy.send_event(IosUserEvent::Wake);
+    })
+    .map_err(|error| error.to_string())
+}
+
 pub fn launch(
     window: WindowDescriptor,
     _icon: Option<WindowIconSet>,
@@ -917,8 +930,10 @@ pub fn launch(
             ),
         );
     }
+    crate::logging::initialize(&window);
     let mut app = IosApp::new(window, shared, Box::pin(entry));
     let _ = event_loop.run_app(&mut app);
+    crate::logging::shutdown();
 }
 
 pub fn capture_frame() -> HostFrame {
