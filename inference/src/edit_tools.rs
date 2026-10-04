@@ -40,6 +40,8 @@ pub const MAX_FILE_BYTES: usize = 1024 * 1024;
 const READ_LINES: usize = 400;
 /// Items shown in a partial read's outline of a Rust file.
 const OUTLINE_ITEMS: usize = 40;
+/// Files at least this long cannot be replaced by `text_write` with under half their lines.
+const SHRINK_GUARD_LINES: usize = 40;
 /// The workspace-root files no tool may change.
 const PROTECTED: [&str; 4] = [
     "AGENTS.md",
@@ -590,7 +592,9 @@ impl Tool for TextEdit {
             "path": {"type": "string"},
             "old_text": {"type": "string", "description": "the exact text to replace, unique in the file"},
             "new_text": {"type": "string", "description": "what replaces it"},
-            "revision": {"type": "string", "description": "optional: the revision text_read showed, to refuse the edit if the file changed since"}},
+            "revision": {"type": "string", "description": "optional: the revision text_read showed, to refuse the edit if the file changed since"},
+            "line_start": {"type": "integer", "description": "optional: about where old_text starts, to choose when it appears more than once"},
+            "line_count": {"type": "integer", "description": "optional: with line_start, the lines to look in"}},
             "required": ["path", "old_text", "new_text"]})
     }
     fn call(&self, args: &Value) -> Result<String, String> {
@@ -616,8 +620,31 @@ impl Tool for TextEdit {
         if old.is_empty() {
             return Err("old_text is empty; to write a whole file use text_write".into());
         }
-        let at: Vec<usize> = text.match_indices(&old).map(|(i, _)| i).collect();
+        let mut at: Vec<usize> = text.match_indices(&old).map(|(i, _)| i).collect();
         let line_of = |byte: usize| text[..byte].matches('\n').count() + 1;
+        // Where the model says it is looking chooses among several places (a few lines
+        // either side, as a model's count drifts).
+        if at.len() > 1 {
+            if let Some(start) = args.get("line_start").and_then(Value::as_u64) {
+                let count = args
+                    .get("line_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1)
+                    .max(1);
+                let (from, to) = (
+                    start.saturating_sub(3) as usize,
+                    (start + count + 3) as usize,
+                );
+                let near: Vec<usize> = at
+                    .iter()
+                    .copied()
+                    .filter(|&i| (from..=to).contains(&line_of(i)))
+                    .collect();
+                if near.len() == 1 {
+                    at = near;
+                }
+            }
+        }
         match at.len() {
             1 => {}
             0 => {
@@ -650,8 +677,8 @@ impl Tool for TextEdit {
             n => {
                 let lines: Vec<usize> = at.iter().map(|&i| line_of(i)).collect();
                 return Err(format!(
-                    "old_text appears {n} times in {} (lines {lines:?}); include more surrounding lines \
-                     so it appears once",
+                    "old_text appears {n} times in {} (lines {lines:?}); pass line_start with the line \
+                     you mean, or include more surrounding lines so it appears once",
                     target.shown
                 ));
             }
@@ -696,8 +723,19 @@ impl Tool for TextWrite {
         let existed = target.path.exists();
         session.may_write(&target)?;
         if existed {
-            let (_, now) = EditSession::current(&target)?;
+            let (text, now) = EditSession::current(&target)?;
             session.check_revision(&target, &now, args.get("revision").and_then(Value::as_str))?;
+            // A model that means to add a piece (a test, a function) sometimes writes only
+            // that piece, and the rest of the file is gone.
+            let (before, after) = (text.lines().count(), content.lines().count());
+            if before >= SHRINK_GUARD_LINES && after * 2 < before {
+                return Err(format!(
+                    "not written: text_write replaces the WHOLE file, and {} has {before} lines; \
+                     this content has {after}. To add or change part of a file use text_edit \
+                     (old_text: a few lines where it goes, new_text: those lines plus the addition)",
+                    target.shown
+                ));
+            }
         }
         let rev = session.commit(&target, content)?;
         Ok(format!(
@@ -929,6 +967,28 @@ mod tests {
             fs::read_to_string(dir.join("game/src/lib.rs")).unwrap(),
             "fn a() {\n    two();\n}\n\nfn b() {\n    three();\n}\n"
         );
+        // Text that appears twice: line_start chooses.
+        tools
+            .call("text_edit", r#"{"path":"game/src/lib.rs","old_text":"}\n","new_text":"} // b\n","line_start":7}"#)
+            .unwrap();
+        assert!(fs::read_to_string(dir.join("game/src/lib.rs"))
+            .unwrap()
+            .ends_with("    three();\n} // b\n"));
+        // A whole-file write that would drop most of a long file is refused.
+        let long: String = (0..60).map(|i| format!("// line {i}\n")).collect();
+        tools
+            .call(
+                "text_write",
+                &json!({"path":"game/src/long.rs","content":long}).to_string(),
+            )
+            .unwrap();
+        let piece = tools
+            .call(
+                "text_write",
+                r#"{"path":"game/src/long.rs","content":"// just a test\n"}"#,
+            )
+            .unwrap_err();
+        assert!(piece.contains("replaces the WHOLE file"), "{piece}");
     }
 
     #[test]
