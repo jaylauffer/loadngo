@@ -322,7 +322,8 @@ impl<'t> Chat<'t> {
         let mut failing: (String, usize) = (String::new(), 0);
         // Files changed since the last cargo run that succeeded, and whether the
         // verification note has been sent.
-        let (mut unchecked, mut gated) = (false, false);
+        // `wrote`: files changed this turn (the chat checks them when it ends).
+        let (mut unchecked, mut gated, mut wrote) = (false, false, false);
         // Revisions each file has had in this turn, for edits that undo earlier ones.
         let mut revisions: std::collections::HashMap<String, Vec<String>> = Default::default();
         let (mut asked_jay, mut checked_done, mut closed) = (false, false, false);
@@ -376,6 +377,7 @@ impl<'t> Chat<'t> {
             ) && ok
             {
                 unchecked = true;
+                wrote = true;
             }
             if call.name == "cargo" && result.contains("succeeded (exit 0)") {
                 unchecked = false;
@@ -489,7 +491,7 @@ impl<'t> Chat<'t> {
         if !reply.complete {
             eprintln!("[the reply did not finish]");
         }
-        if unchecked || gated {
+        if wrote {
             self.verify();
         }
         self.last_answer = reply.answer.trim().to_owned();

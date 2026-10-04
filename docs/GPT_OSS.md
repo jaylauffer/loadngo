@@ -500,7 +500,23 @@ row removed; the diffs are kept with the session's evidence.
   - The gate held back its first answer. The undo note fired twice.
   - Jev's checkpoints rose toward stuck (0.35) but stayed under the threshold.
 
-  Not yet shown: a run that finishes this task with passing checks.
+- **Run 6** stopped by hand. The model meant to add a test, and `text_write` replaced the
+  600-line `lib.rs` with the 8-line test (the session had edited the file, so the write
+  was allowed). It then tried `git show HEAD:src/lib.rs` to recover. Added: `text_write`
+  refuses to replace a file of 40 lines or more with under half of them, and points to
+  `text_edit`. `text_edit` now takes `line_start`/`line_count`, which the model kept
+  passing; they choose among several matches.
+- **Run 7 completed the task**: 22 tool calls, the 4-hunk diff in pudding
+  `reviews/2026-10-04-gpt-oss-evidence/`. It added the variant (documented as Alt-D),
+  mapped `ESC d`, and implemented the deletion with the existing `word_end` (the span Alt-F
+  moves over). It added an assertion to the existing word-editing test. It ran
+  `cargo test` four times while it settled what the test should expect, then
+  `cargo clippy`, and reported accurately.
+  - Checked by hand: `cargo test` 5 pass, `clippy --all-targets --all-features -D warnings`
+    and `fmt --check` are clean, and the diff is minimal and correct.
+  - The chat's own check did not run: it ran only when the model's last `cargo` run had
+    not passed. It now runs whenever a turn wrote files.
+  - The change is left uncommitted for Jay, as the handoff says.
 
 ## Line editing
 
