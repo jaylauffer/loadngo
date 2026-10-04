@@ -535,7 +535,7 @@ pseudo-terminal) edited, recalled and ended lines as typed.
 
 That run found a bug, now fixed. Entering raw mode with `TCSAFLUSH` threw away keys
 already typed, as when typing ahead while a reply prints; it now uses `TCSANOW`.
-Wrapped lines wider than the terminal are not redrawn correctly yet.
+Lines wider than the terminal wrap: each redraw starts from the line's first row, places the cursor by row and column (wide characters that do not fit move to the next row, as the terminal moves them), and Enter or Ctrl-C first moves below the whole line. Jay's chat showed the old redraw, which started from the current row and so printed the line again on every key once it wrapped. Checked in a 20-column pseudo-terminal read back through a terminal emulator (pyte): typing, Home, End, insertion, Ctrl-W, wide characters, Enter from the first row, and at the bottom of the screen. A window resized while a line is being edited may still leave stray rows.
 
 ## The Neural Engine
 

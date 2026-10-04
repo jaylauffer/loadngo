@@ -366,8 +366,9 @@ impl LineEditor {
     fn edit(&mut self, prompt: &str, raw: &unix::Raw) -> io::Result<Option<String>> {
         let mut err = io::stderr();
         let mut keys = Keys::default();
+        let mut screen = Screen::default();
         self.line.clear();
-        draw(&mut err, prompt, &self.line)?;
+        draw(&mut err, prompt, &self.line, unix::columns(), &mut screen)?;
         loop {
             let bytes = raw.read()?;
             if bytes.is_empty() {
@@ -380,8 +381,15 @@ impl LineEditor {
                 decoded = keys.flush();
             }
             for key in decoded {
-                match self.line.apply(key) {
-                    Outcome::Editing => draw(&mut err, prompt, &self.line)?,
+                let outcome = self.line.apply(key);
+                if outcome != Outcome::Editing {
+                    // Below the whole line, wherever the cursor was in it.
+                    screen.move_to_end(&mut err)?;
+                }
+                match outcome {
+                    Outcome::Editing => {
+                        draw(&mut err, prompt, &self.line, unix::columns(), &mut screen)?;
+                    }
                     Outcome::Submit => {
                         write!(err, "\r\n")?;
                         err.flush()?;
@@ -403,15 +411,97 @@ impl LineEditor {
     }
 }
 
-/// Redraws the prompt and line, then puts the cursor back in place.
+/// Where the last drawing left the cursor, in rows below the line's first row, and how
+/// many rows below it the line ends: a line longer than the terminal is wide wraps.
+#[derive(Default)]
 #[cfg_attr(not(unix), allow(dead_code))]
-fn draw(out: &mut impl Write, prompt: &str, line: &Line) -> io::Result<()> {
-    let text = line.text();
-    let behind: usize = text.chars().skip(line.cursor()).map(width).sum();
-    write!(out, "\r{prompt}{text}\x1b[K")?;
-    if behind > 0 {
-        write!(out, "\x1b[{behind}D")?;
+struct Screen {
+    cursor_row: usize,
+    end_row: usize,
+    end_column: usize,
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
+impl Screen {
+    /// Moves the cursor to the end of the line (before a newline, or `^C`, ends it).
+    fn move_to_end(&mut self, out: &mut impl Write) -> io::Result<()> {
+        if self.end_row > self.cursor_row {
+            write!(out, "\x1b[{}B", self.end_row - self.cursor_row)?;
+        }
+        write!(out, "\r")?;
+        if self.end_column > 0 {
+            write!(out, "\x1b[{}C", self.end_column)?;
+        }
+        self.cursor_row = self.end_row;
+        Ok(())
     }
+}
+
+/// The row and column after `chars` on a terminal `columns` wide, starting at the top
+/// left. A character that does not fit in the rest of a row goes to the next one; a row
+/// filled exactly leaves the column at `columns` (the terminal's pending wrap).
+#[cfg_attr(not(unix), allow(dead_code))]
+fn place(chars: impl Iterator<Item = char>, columns: usize) -> (usize, usize) {
+    let (mut row, mut column) = (0, 0);
+    for c in chars {
+        let w = width(c);
+        if w == 0 {
+            continue;
+        }
+        if column + w > columns {
+            row += 1;
+            column = 0;
+        }
+        column += w;
+    }
+    (row, column)
+}
+
+/// Redraws the prompt and line from the line's first row, which may be above the cursor
+/// when the line wraps, then puts the cursor back in place.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn draw(
+    out: &mut impl Write,
+    prompt: &str,
+    line: &Line,
+    columns: usize,
+    screen: &mut Screen,
+) -> io::Result<()> {
+    let columns = columns.max(2);
+    let text: Vec<char> = line.text().chars().collect();
+    if screen.cursor_row > 0 {
+        write!(out, "\x1b[{}A", screen.cursor_row)?;
+    }
+    let shown: String = text.iter().collect();
+    write!(out, "\r\x1b[J{prompt}{shown}")?;
+    let (mut end_row, mut end_column) = place(prompt.chars().chain(text.iter().copied()), columns);
+    if end_column == columns {
+        // A full last row: start the next one, so the cursor has a defined place.
+        write!(out, "\r\n")?;
+        end_row += 1;
+        end_column = 0;
+    }
+    let cursor = line.cursor();
+    let (mut row, mut column) = place(
+        prompt.chars().chain(text[..cursor].iter().copied()),
+        columns,
+    );
+    let next = text.get(cursor).map_or(1, |&c| width(c));
+    if column == columns || column + next > columns {
+        // The next character starts the following row.
+        row += 1;
+        column = 0;
+    }
+    if end_row > row {
+        write!(out, "\x1b[{}A", end_row - row)?;
+    }
+    write!(out, "\r")?;
+    if column > 0 {
+        write!(out, "\x1b[{column}C")?;
+    }
+    screen.cursor_row = row;
+    screen.end_row = end_row;
+    screen.end_column = end_column;
     out.flush()
 }
 
@@ -484,6 +574,19 @@ mod unix {
             }
             Ok(n > 0)
         }
+    }
+
+    /// The terminal's width in columns (80 when it cannot be read).
+    pub fn columns() -> usize {
+        // SAFETY: TIOCGWINSZ writes one winsize into `size`.
+        unsafe {
+            let mut size: libc::winsize = std::mem::zeroed();
+            if libc::ioctl(libc::STDERR_FILENO, libc::TIOCGWINSZ, &mut size) == 0 && size.ws_col > 0
+            {
+                return usize::from(size.ws_col);
+            }
+        }
+        80
     }
 
     impl Drop for Raw {
@@ -591,7 +694,51 @@ mod tests {
         typed(&mut line, "a中b".as_bytes());
         typed(&mut line, b"\x1b[D\x1b[D");
         let mut out = Vec::new();
-        draw(&mut out, "> ", &line).unwrap();
-        assert_eq!(String::from_utf8(out).unwrap(), "\r> a中b\x1b[K\x1b[3D");
+        draw(&mut out, "> ", &line, 80, &mut Screen::default()).unwrap();
+        // The cursor goes before 中: column 3.
+        assert_eq!(String::from_utf8(out).unwrap(), "\r\x1b[J> a中b\r\x1b[3C");
+    }
+
+    #[test]
+    fn a_wrapped_line_is_redrawn_from_its_first_row() {
+        // 10 columns: "> " and 15 characters take two rows.
+        let mut line = Line::default();
+        typed(&mut line, b"abcdefghijklmno");
+        let mut screen = Screen::default();
+        let mut out = Vec::new();
+        draw(&mut out, "> ", &line, 10, &mut screen).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "\r\x1b[J> abcdefghijklmno\r\x1b[7C"
+        );
+        assert_eq!((screen.cursor_row, screen.end_row), (1, 1));
+        // Home: the next drawing goes up a row first, and leaves the cursor on the first.
+        typed(&mut line, b"\x01");
+        let mut out = Vec::new();
+        draw(&mut out, "> ", &line, 10, &mut screen).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "\x1b[1A\r\x1b[J> abcdefghijklmno\x1b[1A\r\x1b[2C"
+        );
+        assert_eq!((screen.cursor_row, screen.end_row), (0, 1));
+        // Enter from there moves below the line before the newline.
+        let mut out = Vec::new();
+        screen.move_to_end(&mut out).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "\x1b[1B\r\x1b[7C");
+    }
+
+    #[test]
+    fn full_rows_and_wide_characters_wrap_where_the_terminal_wraps_them() {
+        // Exactly one full row: the cursor starts the next row.
+        let mut line = Line::default();
+        typed(&mut line, b"abcdefgh");
+        let mut screen = Screen::default();
+        let mut out = Vec::new();
+        draw(&mut out, "> ", &line, 10, &mut screen).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "\r\x1b[J> abcdefgh\r\n\r");
+        assert_eq!((screen.cursor_row, screen.end_row), (1, 1));
+        // A wide character that does not fit in the last column goes to the next row.
+        assert_eq!(place("> abcdefg中".chars(), 10), (1, 2));
+        assert_eq!(place("> abcdef中".chars(), 10), (0, 10));
     }
 }
