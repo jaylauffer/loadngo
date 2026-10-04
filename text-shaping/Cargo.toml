@@ -1,0 +1,11 @@
+[package]
+name = "loadngo-text-shaping"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Per-run font fallback and shaping (Thai, Sinhala, Simplified Chinese) for the fontdue-based loadngo hosts."
+
+[dependencies]
+fontdue = "0.9.3"
+rustybuzz = "0.20.1"

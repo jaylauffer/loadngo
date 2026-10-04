@@ -115,14 +115,63 @@ blocked on this session's missing NDK cross-compiler outside
 this change); Windows blocked on this session's known MSVC/`blake3`
 cross-compile gap (also pre-existing).
 
+## Thai, Sinhala and Simplified Chinese on Linux, Windows and Android (2026-10-04)
+
+Jay's working languages are English, Thai, Mandarin (Simplified) and
+Sinhala. The trigger was sng-bass-blaster on dolores listing an AirPlay
+speaker whose name is Thai (`ห้องนั่งเล่น`, "living room") as boxes.
+
+The Linux, Windows and Android hosts draw with `fontdue` one character at a
+time from one font, so a missing character was a box, and Thai and Sinhala
+(marks stacked around the base letter; vowel signs that reorder or split;
+conjuncts) were wrong even where a font had the glyphs. The new crate
+`text-shaping` (`loadngo-text-shaping`) fixes both for those hosts:
+
+- **Bundled faces** (`text-shaping/fonts/`, SIL OFL 1.1, licences beside
+  them, embedded with `include_bytes!` and parsed on first use): Noto Sans
+  Thai, Noto Sans Sinhala, and Noto Sans SC subset to GB2312 (6,763
+  hanzi, plus ASCII and CJK/fullwidth punctuation; 2.0 MB). A Chinese
+  character outside GB2312 still draws as a missing glyph.
+- **Fallback per character.** The host's own font keeps every character it
+  can draw, so Latin text lays out exactly as before (no shaping, no
+  allocation). Thai and Sinhala always go to their bundled face, even if
+  the host font has glyphs of its own, because they need shaping. Simplified
+  Chinese is used only for characters the host font lacks. ZWJ/ZWNJ/ZWSP
+  stay in the run before them (Sinhala conjuncts need U+200D).
+- **Shaping** with `rustybuzz` (HarfBuzz port) per run, then glyph-indexed
+  rasterization with `fontdue`. Linux and Windows `measure_text_impl` /
+  `draw_text_line` and Android's `line_rendered_width` / both glyph loops
+  call the crate; Android keeps its own rules (space advance of at least
+  0.3 em, ink-extent measuring) through `layout_line_with_space_floor` and
+  `glyph_metrics`.
+
+Not covered: macOS and iOS do not use `fontdue` and are untouched (Thai and
+Sinhala there are not checked). Lines are still wrapped at spaces only and
+truncated by `char`, so Thai/Chinese paragraphs do not break between words
+and an ellipsis can cut a Thai cluster in two (UAX #14 / grapheme
+boundaries are the next piece). Left-to-right only; no Arabic or Hebrew.
+
+Evidence (2026-10-04): the shaping tests compare `rustybuzz` glyph ids,
+offsets and advances with real HarfBuzz 14.3.0 `hb-shape` output for five
+Sinhala strings (ZWJ conjuncts, split vowel, anusvara, kssa ligature) and
+three Thai strings; 17 crate tests, and 8 mutations of the crate
+(advances, offsets, scale, joiners, script ownership, space floor) are each
+caught. `host-desktop`: 45 tests, strict clippy `--all-targets
+--all-features` and fmt clean on macOS and on dolores (Linux); Windows lib
+type-checks and passes clippy via the pure-blake3 route; Android lib
+type-checks (its clippy has 6 pre-existing errors, none in changed code).
+Not run: a Windows or Android device. On dolores, sng-bass-blaster built
+against this loadngo showed the Broadcast list with `ห้องนั่งเล่น`, a Simplified
+Chinese + English name, a Sinhala name with a ZWJ conjunct, and Thai +
+Latin, all as text (screenshots with `grim`; I cannot read Sinhala, so its
+correctness rests on the HarfBuzz comparison).
+
 ## Explicitly not done yet
 
-- **Font glyph-coverage wiring.** The `fallback_fonts` mechanism in
-  `loadngo/renderer` is still unused by any game, and no broad-coverage
-  font is bundled yet. Without this, a real (non-English, non-Latin-only)
-  locale catalog could parse and look up fine while still rendering as
-  tofu/missing glyphs on screen. English-only adoption (the current plan
-  for `sng-roguelite` and `sng-zhoenus`) doesn't need this yet.
+- **Font glyph-coverage wiring** is done for Thai, Sinhala and Simplified
+  Chinese on the `fontdue` hosts (section above); `FontCatalogManifest.fallback_fonts`
+  itself is still unused by any game, and other scripts (Cyrillic, Arabic,
+  Hebrew, other CJK) have no bundled face.
 - **`sng-rusty` stays untouched.** Explicit user direction (2026-09-03):
   it's a visual novel engine, already text-heavy, with its own working
   voiceover tooling built around `stable_line_id`-style content hashing.

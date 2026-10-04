@@ -1026,19 +1026,16 @@ fn measure_text_impl(
 ) -> TextMetrics {
     let layout = software_text_line_layout(font, font_size, font_scale);
     let mut max_width = 0.0f32;
-    let mut current_width = 0.0f32;
-    let mut line_count = 1usize;
-    for ch in text.chars() {
-        if ch == '\n' {
-            max_width = max_width.max(current_width);
-            current_width = 0.0;
-            line_count += 1;
-            continue;
-        }
-        let metrics = font.font.metrics(ch, layout.px);
-        current_width += metrics.advance_width.max(metrics.width as f32);
+    let mut line_count = 0usize;
+    // Widths come from `loadngo-text-shaping`, which keeps the host font's
+    // own advances for what it can draw and shapes Thai, Sinhala and
+    // Simplified Chinese with the bundled faces.
+    for line in text.split('\n') {
+        max_width = max_width.max(loadngo_text_shaping::line_width(
+            &font.font, line, layout.px,
+        ));
+        line_count += 1;
     }
-    max_width = max_width.max(current_width);
     TextMetrics {
         width: max_width,
         height: layout.line_height.max(1.0) * line_count as f32,
@@ -1971,11 +1968,12 @@ fn draw_text_line(
     clip_rect: Option<UiRect>,
 ) {
     let layout = software_text_line_layout(font, font_size, 1.0);
-    let mut pen_x = x as f32;
-    for ch in text.chars() {
-        let (metrics, bitmap) = font.font.rasterize(ch, layout.px);
-        let glyph_x = pen_x.round() as i32 + metrics.xmin;
-        let glyph_y = (baseline_y - metrics.height as f32 - metrics.ymin as f32).round() as i32;
+    let shaped = loadngo_text_shaping::layout_line(&font.font, text, layout.px);
+    for placed in &shaped.glyphs {
+        let (metrics, bitmap) = loadngo_text_shaping::rasterize(&font.font, placed, layout.px);
+        let glyph_x = (x as f32 + placed.x).round() as i32 + metrics.xmin;
+        let glyph_y =
+            (baseline_y - placed.y - metrics.height as f32 - metrics.ymin as f32).round() as i32;
         for gy in 0..metrics.height {
             for gx in 0..metrics.width {
                 let alpha = bitmap[gy * metrics.width + gx] as f32 / 255.0;
@@ -1992,7 +1990,6 @@ fn draw_text_line(
                 }
             }
         }
-        pen_x += metrics.advance_width;
     }
 }
 
@@ -2168,6 +2165,65 @@ mod tests {
         assert!(
             left_edge_alpha > 0,
             "the left edge of the block was clipped"
+        );
+    }
+    fn ink_pixels(request: &TextRequest) -> usize {
+        let (_, image) = rasterize_text_command(request).expect("text should rasterize");
+        image
+            .rgba8
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| pixel[3] > 64)
+            .count()
+    }
+
+    #[test]
+    fn latin_measuring_is_what_it_was_before_shaping() {
+        let font = default_font();
+        let text = "Living Room 4";
+        let px = software_text_line_layout(font, 18, 1.0).px;
+        let by_hand: f32 = text
+            .chars()
+            .map(|ch| {
+                let metrics = font.font.metrics(ch, px);
+                metrics.advance_width.max(metrics.width as f32)
+            })
+            .sum();
+        assert_eq!(measure_text_impl(text, font, 18, 1.0).width, by_hand);
+        // Two lines: the wider one sets the width, the count sets the height.
+        let two = measure_text_impl("Living Room 4\nab", font, 18, 1.0);
+        assert_eq!(two.width, by_hand);
+        assert_eq!(
+            two.height,
+            measure_text_impl(text, font, 18, 1.0).height * 2.0
+        );
+    }
+
+    #[test]
+    fn thai_sinhala_and_chinese_measure_and_draw_with_the_bundled_faces() {
+        let font = default_font();
+        for text in ["ห้องนั่งเล่น", "ශ්\u{200D}රී ලංකා", "你好，世界"]
+        {
+            let width = measure_text_impl(text, font, 18, 1.0).width;
+            assert!(width > 18.0, "{text:?} measured {width}");
+            let mut request = sample_text_request();
+            request.text = text.to_string();
+            request.rect.width = 400.0;
+            assert!(ink_pixels(&request) > 80, "{text:?} drew almost nothing");
+        }
+    }
+
+    #[test]
+    fn thai_marks_are_placed_by_the_shaper_not_given_their_own_advance() {
+        // "ที่" is one consonant with a vowel and a tone mark stacked above
+        // it. Drawn character by character it would be three advances wide.
+        let font = default_font();
+        let one = measure_text_impl("ท", font, 24, 1.0).width;
+        let stacked = measure_text_impl("ที่", font, 24, 1.0).width;
+        assert!(
+            (stacked - one).abs() < one * 0.2,
+            "stacked marks widened the cluster: {one} vs {stacked}"
         );
     }
 }

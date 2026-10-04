@@ -948,19 +948,16 @@ fn measure_text_impl(
 ) -> TextMetrics {
     let layout = software_text_line_layout(font, font_size, font_scale);
     let mut max_width = 0.0f32;
-    let mut current_width = 0.0f32;
-    let mut line_count = 1usize;
-    for ch in text.chars() {
-        if ch == '\n' {
-            max_width = max_width.max(current_width);
-            current_width = 0.0;
-            line_count += 1;
-            continue;
-        }
-        let metrics = font.font.metrics(ch, layout.px);
-        current_width += metrics.advance_width.max(metrics.width as f32);
+    let mut line_count = 0usize;
+    // Widths come from `loadngo-text-shaping`, which keeps the host font's
+    // own advances for what it can draw and shapes Thai, Sinhala and
+    // Simplified Chinese with the bundled faces.
+    for line in text.split('\n') {
+        max_width = max_width.max(loadngo_text_shaping::line_width(
+            &font.font, line, layout.px,
+        ));
+        line_count += 1;
     }
-    max_width = max_width.max(current_width);
     TextMetrics {
         width: max_width,
         height: layout.line_height.max(1.0) * line_count as f32,
@@ -1985,11 +1982,12 @@ fn draw_text_line(
     clip_rect: Option<UiRect>,
 ) {
     let layout = software_text_line_layout(font, font_size, 1.0);
-    let mut pen_x = x as f32;
-    for ch in text.chars() {
-        let (metrics, bitmap) = font.font.rasterize(ch, layout.px);
-        let glyph_x = pen_x.round() as i32 + metrics.xmin;
-        let glyph_y = (baseline_y - metrics.height as f32 - metrics.ymin as f32).round() as i32;
+    let shaped = loadngo_text_shaping::layout_line(&font.font, text, layout.px);
+    for placed in &shaped.glyphs {
+        let (metrics, bitmap) = loadngo_text_shaping::rasterize(&font.font, placed, layout.px);
+        let glyph_x = (x as f32 + placed.x).round() as i32 + metrics.xmin;
+        let glyph_y =
+            (baseline_y - placed.y - metrics.height as f32 - metrics.ymin as f32).round() as i32;
         for gy in 0..metrics.height {
             for gx in 0..metrics.width {
                 let alpha = bitmap[gy * metrics.width + gx] as f32 / 255.0;
@@ -2006,7 +2004,6 @@ fn draw_text_line(
                 }
             }
         }
-        pen_x += metrics.advance_width;
     }
 }
 

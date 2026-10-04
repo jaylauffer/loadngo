@@ -1126,21 +1126,24 @@ fn software_text_line_layout(
 ///
 /// Anything that decides how much text fits must call this, not re-derive it.
 fn line_rendered_width(font: &SoftwareFont, line: &str, px: f32) -> f32 {
-    let mut cursor = 0.0f32;
+    // Placed by `loadngo-text-shaping`, the same layout `draw_text` draws.
+    let shaped =
+        loadngo_text_shaping::layout_line_with_space_floor(&font.inner, line, px, px * 0.3);
     let mut ink_extent = 0.0f32;
-    for character in line.chars() {
-        let metrics = font.inner.metrics(character, px);
-        if character == ' ' {
-            cursor += metrics.advance_width.max(px * 0.3);
+    for placed in &shaped.glyphs {
+        let metrics = loadngo_text_shaping::glyph_metrics(&font.inner, placed, px);
+        if matches!(
+            placed.source,
+            loadngo_text_shaping::GlyphSource::Primary(' ')
+        ) {
             continue;
         }
         // A glyph's ink can reach past its advance (overhangs, italics), and
         // `draw_text` places it at `cursor + xmin`, so the rightmost pixel is
         // what actually has to fit — not the pen position.
-        ink_extent = ink_extent.max(cursor + metrics.xmin as f32 + metrics.width as f32);
-        cursor += metrics.advance_width;
+        ink_extent = ink_extent.max(placed.x + metrics.xmin as f32 + metrics.width as f32);
     }
-    ink_extent.max(cursor)
+    ink_extent.max(shaped.advance)
 }
 
 fn font_text_metrics(
@@ -2710,19 +2713,18 @@ impl OwnedSoftwareSurface {
                 }
             };
             let baseline_y = origin_y + line_index as f32 * line_step + baseline_offset;
-            for ch in line.chars() {
-                if ch == ' ' {
-                    let metrics = font.inner.metrics(ch, px);
-                    cursor_x += metrics.advance_width.max(px * 0.3);
-                    continue;
-                }
-                let (metrics, bitmap) = font.inner.rasterize(ch, px);
+            // `loadngo-text-shaping` places each glyph: host-font glyphs by
+            // plain advance (a space by at least 0.3 em), Thai, Sinhala and
+            // Simplified Chinese shaped from the bundled faces.
+            let shaped =
+                loadngo_text_shaping::layout_line_with_space_floor(&font.inner, line, px, px * 0.3);
+            for placed in &shaped.glyphs {
+                let (metrics, bitmap) = loadngo_text_shaping::rasterize(&font.inner, placed, px);
                 if metrics.width == 0 || metrics.height == 0 || bitmap.is_empty() {
-                    cursor_x += metrics.advance_width;
                     continue;
                 }
-                let glyph_x = cursor_x + metrics.xmin as f32;
-                let glyph_y = baseline_y - metrics.height as f32 - metrics.ymin as f32;
+                let glyph_x = cursor_x + placed.x + metrics.xmin as f32;
+                let glyph_y = baseline_y - placed.y - metrics.height as f32 - metrics.ymin as f32;
                 for row in 0..metrics.height {
                     for col in 0..metrics.width {
                         let coverage = bitmap[row * metrics.width + col];
@@ -2747,7 +2749,6 @@ impl OwnedSoftwareSurface {
                         self.write_pixel(px, py, color, 1.0);
                     }
                 }
-                cursor_x += metrics.advance_width;
             }
         }
     }
@@ -3705,19 +3706,18 @@ fn draw_software_text(
             }
         };
         let baseline_y = origin_y + line_index as f32 * line_step + baseline_offset;
-        for ch in line.chars() {
-            if ch == ' ' {
-                let metrics = font.inner.metrics(ch, px);
-                cursor_x += metrics.advance_width.max(px * 0.3);
-                continue;
-            }
-            let (metrics, bitmap) = font.inner.rasterize(ch, px);
+        // `loadngo-text-shaping` places each glyph: host-font glyphs by
+        // plain advance (a space by at least 0.3 em), Thai, Sinhala and
+        // Simplified Chinese shaped from the bundled faces.
+        let shaped =
+            loadngo_text_shaping::layout_line_with_space_floor(&font.inner, line, px, px * 0.3);
+        for placed in &shaped.glyphs {
+            let (metrics, bitmap) = loadngo_text_shaping::rasterize(&font.inner, placed, px);
             if metrics.width == 0 || metrics.height == 0 || bitmap.is_empty() {
-                cursor_x += metrics.advance_width;
                 continue;
             }
-            let glyph_x = cursor_x + metrics.xmin as f32;
-            let glyph_y = baseline_y - metrics.height as f32 - metrics.ymin as f32;
+            let glyph_x = cursor_x + placed.x + metrics.xmin as f32;
+            let glyph_y = baseline_y - placed.y - metrics.height as f32 - metrics.ymin as f32;
             for row in 0..metrics.height {
                 for col in 0..metrics.width {
                     let coverage = bitmap[row * metrics.width + col];
@@ -3743,7 +3743,6 @@ fn draw_software_text(
                     canvas.blend_pixel(px, py, color, 1.0);
                 }
             }
-            cursor_x += metrics.advance_width;
         }
     }
 }
