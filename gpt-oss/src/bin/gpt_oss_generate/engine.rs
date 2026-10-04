@@ -4,7 +4,8 @@
 
 use loadngo_gpt_oss::model::{Model, Session};
 
-/// Positions a side session holds: a Jev state and its questions.
+/// Positions a GPU side session holds: a Jev state and its questions.
+#[cfg(target_os = "macos")]
 const SIDE_CAPACITY: usize = 4096;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
