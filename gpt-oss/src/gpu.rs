@@ -367,6 +367,11 @@ pub struct GpuSession {
     caches: Vec<Buffer>,
     len: usize,
     slots: Vec<usize>,
+    /// Positions the session can hold (its full layers' cache rows).
+    capacity: usize,
+    /// How far back [`GpuSession::truncate`] may go: the sliding rings keep this many
+    /// rows beyond the window.
+    rewind: usize,
 }
 
 impl GpuSession {
@@ -382,6 +387,28 @@ impl GpuSession {
     /// before they are written again.
     pub fn reset(&mut self) {
         self.len = 0;
+    }
+
+    /// Positions the session can hold.
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Goes back to position `len`, as if nothing after it had been fed: to ask several
+    /// questions after one shared beginning. Allowed back at most one pass (`chunk`)
+    /// positions, while the sliding layers' rings still hold the window before `len`.
+    ///
+    /// # Errors
+    /// When `len` is ahead of the session or further back than that.
+    pub fn truncate(&mut self, len: usize) -> Result<(), GpuError> {
+        if len > self.len || self.len - len > self.rewind {
+            return Err(GpuError::Invalid(format!(
+                "cannot go back from position {} to {len} (at most {} back)",
+                self.len, self.rewind
+            )));
+        }
+        self.len = len;
+        Ok(())
     }
 }
 
@@ -496,6 +523,13 @@ impl GpuModel {
     }
 
     pub fn session(&self) -> Result<GpuSession, GpuError> {
+        self.session_holding(self.max_context)
+    }
+
+    /// A session for at most `capacity` positions (rounded up to 32, and no more than
+    /// `max_context`): smaller full-layer caches, for short side conversations.
+    pub fn session_holding(&self, capacity: usize) -> Result<GpuSession, GpuError> {
+        let capacity = capacity.next_multiple_of(32).min(self.max_context);
         let c = &self.model.config;
         let n = self.chunk.next_multiple_of(32);
         let q_width = c.heads * c.head_dim;
@@ -536,7 +570,7 @@ impl GpuModel {
             let rows = if c.is_sliding(l) {
                 (c.sliding_window + self.chunk).next_multiple_of(32)
             } else {
-                self.max_context
+                capacity
             };
             caches.push(zeroed(rows * kv_width * 4)?);
             caches.push(zeroed(rows * kv_width * 4)?);
@@ -547,6 +581,8 @@ impl GpuModel {
             caches,
             len: 0,
             slots,
+            capacity,
+            rewind: self.chunk,
         })
     }
 
@@ -608,11 +644,11 @@ impl GpuModel {
         tokens: &[u32],
         which: Logits,
     ) -> Result<Vec<Vec<f32>>, GpuError> {
-        if session.len + tokens.len() > self.max_context {
+        if session.len + tokens.len() > session.capacity {
             return Err(GpuError::Invalid(format!(
-                "{} positions exceed the context of {}",
+                "{} positions exceed the session's {}",
                 session.len + tokens.len(),
-                self.max_context
+                session.capacity
             )));
         }
         let parts: Vec<&[u32]> = tokens.chunks(self.chunk).collect();

@@ -199,6 +199,18 @@ impl Session {
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
+
+    /// Goes back to position `len`, as if nothing after it had been fed.
+    pub fn truncate(&mut self, len: usize) {
+        if len < self.len {
+            let per = |v: &Vec<f32>| v.len() / self.len.max(1);
+            for v in self.keys.iter_mut().chain(self.values.iter_mut()) {
+                let width = per(v);
+                v.truncate(len * width);
+            }
+            self.len = len;
+        }
+    }
 }
 
 /// The tensors of a file, read in one batch through the proactor.

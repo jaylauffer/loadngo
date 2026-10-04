@@ -1684,7 +1684,9 @@ dependencies = [
 name = "loadngo-inference"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "data",
+ "loadngo-proactor",
  "serde_json",
  "tempfile",
  "ureq",

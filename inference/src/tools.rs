@@ -240,11 +240,10 @@ impl FsTools {
         &self.base
     }
 
-    /// Resolves and checks `path`; returns the canonical path.
+    /// Resolves and checks `path`; returns the canonical path. An empty path is the
+    /// workspace itself, as models often write it for "here".
     fn resolve(&self, path: &str) -> Result<PathBuf, String> {
-        if path.is_empty() {
-            return Err("empty path".into());
-        }
+        let path = if path.trim().is_empty() { "." } else { path };
         let expanded = if let Some(rest) = path.strip_prefix("~/") {
             std::env::var_os("HOME")
                 .map(|h| PathBuf::from(h).join(rest))
@@ -449,16 +448,28 @@ impl Tool for FsRead {
         let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         let text = as_text(&bytes)
             .ok_or_else(|| format!("{} is binary ({} bytes)", path.display(), bytes.len()))?;
-        Ok(format!(
+        let (first, count) = (
+            usize_arg(args, "line_start", 1).max(1),
+            usize_arg(args, "line_count", 400).max(1),
+        );
+        let mut out = format!(
             "{} ({} bytes)\n{}",
             path.display(),
             bytes.len(),
-            numbered_lines(
-                text,
-                usize_arg(args, "line_start", 1).max(1),
-                usize_arg(args, "line_count", 400).max(1)
-            )
-        ))
+            numbered_lines(text, first, count)
+        );
+        // A window of Rust source comes with the file's items, so a model sees what lies
+        // outside it (the impl it is in, the tests module) without searching.
+        if path.extension().is_some_and(|e| e == "rs")
+            && (first > 1 || first + count <= text.lines().count())
+        {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str("Outline of the whole file:\n");
+            out.push_str(&crate::rust_text::outline(text, 40));
+        }
+        Ok(out)
     }
 }
 

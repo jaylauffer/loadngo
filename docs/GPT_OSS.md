@@ -254,9 +254,11 @@ The chat has loadngo's tools (`loadngo-inference`), as Kimi has them:
   `~/.loadngo/gpt-oss/memory.jsonl`. The newest 4 KB of notes open each conversation;
 - `web_search`, `web_fetch` (`--no-web` turns them off).
 
-Kimi's file editing (`text_read/write/edit`), terminal and board tools are in
-kimi-k3-in-rust (Apache 2.0), not in loadngo, so gpt-oss does not have them. Here
-nothing edits files or runs commands.
+- editing and checking (since 2026-10-04, below): `text_read`, `text_edit`,
+  `text_write`, `cargo`, `git`.
+
+Kimi's own editing, terminal and board tools are in kimi-k3-in-rust (Apache 2.0). The
+loadngo editing tools are separate, written fresh.
 
 The format is the template's (`chat`):
 
@@ -329,6 +331,176 @@ Fixed (`now()` in `gpt_oss_generate`):
 
 The same question through `run-gpt-oss.sh` after the fix: "It's Sunday, 4 October 2026
 ... Month: October, Year: 2026", with no tool calls.
+
+## Editing, checking and Jev (2026-10-04)
+
+Jay asked for editing, for Jev to be used where possible, for the agent to complete
+meaningful tasks, and for local content to come before web searches.
+
+### The tools (`loadngo-inference`, feature `work`)
+
+- **`text_read`, `text_edit`, `text_write`** (`edit_tools`).
+  - Edits are UTF-8 text inside the workspace (`--base`).
+  - `text_read` shows numbered lines and the file's revision (a BLAKE3 prefix).
+  - `text_edit` replaces text that appears exactly once, so it needs no prior read. A
+    `revision`, when given in any form (a model may pass the whole header), must still
+    be current.
+  - `text_write` creates a file, or replaces a whole file the model has read.
+  - A `text_read` gutter copied into `old_text` is taken off, line by line: a model
+    may copy some lines with their `  574|` and type others without.
+  - **`text_format`** runs `rustfmt` (the edition from the nearest `Cargo.toml`) on a
+    Rust file the session wrote, so `cargo fmt --check` passes without the model
+    re-typing whitespace.
+- **Refused edits**, under `COLLABORATION.md`:
+  - paths outside the workspace, symbolic links, `..`;
+  - `.git`, build output (`target`, `node_modules`, `CACHEDIR.TAG` directories),
+    `.loadngo`, files a repository ignores, and secrets;
+  - the root's `AGENTS.md`, `CLAUDE.md`, `COLLABORATION.md` and `AGENT-BOARD.md`;
+  - a file with uncommitted changes the session did not make;
+  - a path another agent holds on the board.
+- **Board claims** (`board`). The first write in a repository claims it on
+  `AGENT-BOARD.md` as `gpt-oss`, listing the files written. When the chat ends the
+  claim becomes a handoff with the files left uncommitted, the request, and the last
+  answer. Nothing is committed or pushed; Jay reviews.
+- **`cargo`** runs `check`, `test`, `clippy`, `build`, or `fmt --check` in a directory
+  with a `Cargo.toml`. **`git`** runs `status`, `diff`, `log` or `show`.
+  - Neither uses a shell. Arguments that reach elsewhere or run other programs are
+    refused: `--manifest-path`, `--config`, `--target-dir`, `-Z`, git's `-c`,
+    `--output`, external diff and text conversion.
+  - Each child runs under a loadngo proactor (`work_tools::run`): reader threads post
+    the output as completed jobs, and a proactor deadline kills a child that overruns
+    (20 min for cargo, 60 s for git). The end of each stream comes back with the exit
+    status.
+
+### Jev in the tool loop
+
+System One (`inference::system_one`) answers typed questions with a probability per
+option. gpt-oss is its `LabelModel`:
+
+- The questions run in a side session of the same GPU model (4,096 positions), so the
+  conversation's cache is untouched.
+- The state is read once. Each question is read after it, then the session goes back to
+  the state's end (`GpuSession::truncate`, tested against transformers).
+- The next token's scores over `A`, `B`, … are the answer.
+
+Two uses (`gpt_oss_generate/jev.rs`, `agent.rs`):
+
+- **Checkpoints.** Every 6 tool calls, over Jay's request and a one-line summary of each
+  call:
+  - `state` is one of `in-progress`, `needs-input`, `complete`, `stuck`;
+  - `repeating` is a true/false question.
+
+  The answers act, rather than shadowing as in Kimi's chat:
+  - stuck at 0.5 or more, or repeating at 0.7 or more, puts a note on the next tool
+    result to change approach or answer;
+  - the second time, the tools close for the turn and the model is told to answer with
+    what it has;
+  - `needs-input` at 0.6 or more asks it to put the question to Jay; `complete` at 0.7
+    or more asks it to check its changes, then answer.
+- **The web gate.** Before a web search or fetch, while no local tool has been tried in
+  the turn, Jev judges whether the request is about Jay's projects, files, archives,
+  notes or this machine. At 0.5 or more the call is not sent, and the model is told to
+  look in the workspace, the archives or its notes first.
+
+Prefer local content: the instructions also say so, and they lay out the method: find,
+`text_read`, `text_edit`, check with `cargo` and `git diff`, then report what changed and
+how it was checked.
+
+### Checks the chat makes itself
+
+The model's own report is not trusted (see the real-task runs below):
+
+- **Failed calls are shown.** The first 220 characters of every error result go to
+  stderr, so a failing run can be read afterwards.
+- **A failing tool, three times in a row,** gets a note on its result to read the file
+  again or try another way.
+- **The verification gate.** When the model answers after changing files with no
+  `cargo` run that succeeded since, the answer is held back once. The chat ends it as a
+  message and adds a user message: run `cargo test`, `clippy` and `fmt --check` in the
+  crate you changed, fix what fails, and do not say a check passed unless it ran.
+- **An independent check.** When a turn that changed files ends, the chat runs
+  `cargo check` and `cargo test` itself in each crate it changed (the nearest directory
+  with a `Cargo.toml`), prints `[verify]` lines, and puts the result in the board
+  handoff: "Checked by the chat: … passes", or "NEEDS JAY: … FAILS".
+
+`--no-edit` and `--no-jev` turn these off. `--context` now defaults to 32,768.
+
+### Evidence: a seeded task
+
+The setup: a scratch workspace with a board and a crate whose `median` is wrong for
+even counts, so its test fails. The request: "In the demo crate, cargo test fails. Find
+the bug, fix it, and show me that the tests pass."
+
+- **First run.** The model found and fixed the bug, ran `cargo check` and `cargo test`,
+  and handed off on the board. It needed 13 calls, because `text_edit` then refused
+  edits without a prior `text_read`, and it passed the whole `text_read` header as the
+  revision; it fell back to `text_write`. The checkpoint saw the loop forming (repeating
+  0.48).
+- **The fix.** Unique `old_text` is enough for an edit, and a revision is read from any
+  text.
+- **Second run.** 8 calls: list, find, read, one `text_edit`, `cargo check`, a checkpoint
+  (in progress 0.86, repeating 0.26), `cargo test`, then the answer.
+- **Checked by hand both times:** the tests pass, the diff is only the fix, and the board
+  holds gpt-oss's handoff listing `src/lib.rs` as uncommitted.
+
+### Evidence: a real task in loadngo
+
+The request, run through `run-gpt-oss.sh --no-web`: "In loadngo's line editor
+(loadngo/line-editor), Alt-D should delete the word after the cursor, the way Ctrl-W
+deletes the word before it. Add it with a unit test, then run that crate's tests and
+clippy, and tell me what you changed." Each run was reverted afterwards, and its board
+row removed; the diffs are kept with the session's evidence.
+
+- **Run 1.** The library change was right, but the test went into a new file, did not
+  test the Alt-D decoding, and failed `cargo fmt --check`. Added: `text_format`; the
+  instructions name the existing tests module, `fmt --check`, and `fs_grep` (contents)
+  against `fs_find` (names).
+- **Run 2.** Adding the test failed: the model copied `text_read`'s line numbers on some
+  lines of `old_text` and not others. It said honestly that it could not finish. Added:
+  line-by-line gutter removal, and a note after three failures of one tool in a row.
+- **Run 3.** It added the key mapping but not the enum variant, so the crate did not
+  compile, ran no `cargo` command, and answered that the change "compiles and passes
+  clippy". This is the failure that matters for dispatching work: the model's report
+  cannot be taken on trust. Added: the verification gate, the chat's own check and the
+  shown errors (above).
+- **Run 4.** The machinery worked: the gate held the answer back, the chat's
+  `cargo check` failed, and the board handoff read "NEEDS JAY: … FAILS"; the model
+  answered "I'm unable to resolve the compilation errors". The work itself failed:
+  - it never saw the existing `apply`, so it wrote a second, 120-line `apply_key`;
+  - it searched for the tests module with `fs_find` and a mistyped `#[cfg(test]`;
+  - it flipped one closing brace in and out three times, running `cargo test` between;
+  - a revision it read before its own earlier edits was refused as stale;
+  - Jev's checkpoints never flagged it (stuck at most 0.26, repeating 0.55).
+
+  Added:
+  - **A bracket check** (`inference::rust_text`). A Rust edit or write that leaves
+    brackets unbalanced, in a file that balanced before, is refused with the line
+    numbers. The reader skips strings, raw strings, characters, lifetimes and nested
+    comments, and finds every Rust file in loadngo, kimi, sng-roguelite, sng-mahjong and
+    qcoin balanced.
+  - **An outline.** A partial `fs_read` or `text_read` of a `.rs` file ends with the
+    file's items and their lines (functions, `impl` blocks, modules, `#[cfg(test)]`).
+  - **Own revisions.** A revision made stale only by the session's own writes is
+    accepted.
+  - **Undo detection.** An edit that puts a file back to a revision it had earlier in
+    the turn gets a note to stop going back and forth and read the error's lines.
+    Undoing is mechanical to see, and Jev did not see it.
+  - An empty `path` for the fs tools is the workspace (the model wrote `""` three
+    times).
+- **Run 5**, with those fixes, got much further; a power cut ended it before the turn
+  finished (its diff is in pudding `reviews/2026-10-04-gpt-oss-evidence/`).
+  - It found the code and the tests module from the outline, with no searching for it.
+  - It wrote the enum variant, the Alt-D decoding, the deletion, and a test in the
+    existing tests module.
+  - The bracket check refused one edit that would have left an extra `}`; the file never
+    broke.
+  - Two mistakes remained:
+    - it pasted the new match arm twice;
+    - its test expected two Left arrows to move two words, not two characters.
+  - The gate held back its first answer. The undo note fired twice.
+  - Jev's checkpoints rose toward stuck (0.35) but stayed under the threshold.
+
+  Not yet shown: a run that finishes this task with passing checks.
 
 ## Line editing
 

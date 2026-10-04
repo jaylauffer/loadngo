@@ -107,3 +107,39 @@ fn consecutive_passes_interleave_through_the_proactor() {
         );
     }
 }
+
+#[test]
+fn a_session_goes_back_and_reads_on_as_if_never_ahead() {
+    let (ids, vocab, want) = oracle();
+    let check = |logits: &[f32], pos: usize| {
+        let error = logits
+            .iter()
+            .zip(&want[pos * vocab..][..vocab])
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0, f32::max);
+        assert!(error < TOLERANCE, "position {pos}: max error {error}");
+    };
+    // GPU: a sliding ring of (8 + 8) rounded up to 32 rows; 30 positions in, back 6.
+    let gpu = GpuModel::new(model(), 8, 64).unwrap();
+    let mut session = gpu.session_holding(64).unwrap();
+    gpu.feed(&mut session, &ids[..30], Logits::Last).unwrap();
+    assert!(
+        session.truncate(12).is_err(),
+        "further back than the ring allows"
+    );
+    session.truncate(24).unwrap();
+    let logits = gpu.feed(&mut session, &ids[24..27], Logits::All).unwrap();
+    for (i, row) in logits.iter().enumerate() {
+        check(row, 24 + i);
+    }
+    // CPU reference: the same.
+    let cpu = model();
+    let mut session = cpu.session();
+    for &id in &ids[..30] {
+        cpu.step(&mut session, id);
+    }
+    session.truncate(24);
+    for (i, &id) in ids[24..27].iter().enumerate() {
+        check(&cpu.step(&mut session, id), 24 + i);
+    }
+}

@@ -7,14 +7,20 @@
 //! its host proactor/offload path, never run inference in paint/input callbacks.
 #![forbid(unsafe_code)]
 
+pub mod board;
 #[cfg(feature = "cas")]
 pub mod cas_tools;
 pub mod compute;
+#[cfg(feature = "work")]
+pub mod edit_tools;
 pub mod memory_tools;
+pub mod rust_text;
 pub mod system_one;
 pub mod tools;
 #[cfg(feature = "web")]
 pub mod web_tools;
+#[cfg(feature = "work")]
+pub mod work_tools;
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};

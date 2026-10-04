@@ -13,10 +13,14 @@ data = { path = "../data", optional = true }
 # `web` feature: web_search / web_fetch tools (the only tools that leave the machine).
 ureq = { version = "2.12", optional = true }
 url = { version = "2.5", optional = true }
+# `work` feature: editing, building and reviewing tools (`edit_tools`, `work_tools`).
+blake3 = { workspace = true, optional = true }
+loadngo-proactor = { path = "../proactor", optional = true }
 
 [features]
 cas = ["dep:data"]
 web = ["dep:ureq", "dep:url"]
+work = ["dep:blake3", "dep:loadngo-proactor"]
 
 [dev-dependencies]
 tempfile = "3"

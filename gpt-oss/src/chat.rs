@@ -373,3 +373,70 @@ pub fn tool_result(
     out.extend(tokenizer.encode("assistant"));
     Ok(out)
 }
+
+/// The start of a typed question for System One (Jev): a system message, then `state`
+/// opening a user message. Questions about one state share these tokens, so they are
+/// read once ([`judge_question`] completes each).
+///
+/// # Errors
+/// When the tokenizer lacks a control token the format needs.
+pub fn judge_state(
+    tokenizer: &Tokenizer,
+    date: &str,
+    state: &str,
+) -> Result<Vec<u32>, MissingControl> {
+    let c = Controls::of(tokenizer)?;
+    let system = format!(
+        "You judge text carefully and answer each question with the letter of one option.\n\
+         Knowledge cutoff: {KNOWLEDGE_CUTOFF}\nCurrent date: {date}\n\nReasoning: low\n\n{CHANNELS}"
+    );
+    let mut out = vec![c.start];
+    out.extend(tokenizer.encode("system"));
+    out.push(c.message);
+    out.extend(tokenizer.encode(&system));
+    out.push(c.end);
+    out.push(c.start);
+    out.extend(tokenizer.encode("user"));
+    out.push(c.message);
+    out.extend(tokenizer.encode(&format!("{state}\n\n")));
+    Ok(out)
+}
+
+/// The rest of a Jev question after [`judge_state`]: the question with its lettered
+/// options, then the answer's start in the final channel, so the next token is the
+/// letter.
+///
+/// # Errors
+/// When the tokenizer lacks a control token the format needs.
+pub fn judge_question(tokenizer: &Tokenizer, question: &str) -> Result<Vec<u32>, MissingControl> {
+    let c = Controls::of(tokenizer)?;
+    let mut out = tokenizer.encode(&format!(
+        "{}\nAnswer with the letter only.",
+        question.trim_end()
+    ));
+    out.push(c.end);
+    out.push(c.start);
+    out.extend(tokenizer.encode("assistant"));
+    out.push(c.channel);
+    out.extend(tokenizer.encode("final"));
+    out.push(c.message);
+    Ok(out)
+}
+
+/// Ends the model's answer as a finished message (`<|end|>`, as the history shows earlier
+/// answers) and adds `text` as a new user message, then `<|start|>assistant` for the
+/// reply: for a note the chat itself sends before an answer reaches the user.
+///
+/// # Errors
+/// When the tokenizer lacks a control token the format needs.
+pub fn follow_up(tokenizer: &Tokenizer, text: &str) -> Result<Vec<u32>, MissingControl> {
+    let c = Controls::of(tokenizer)?;
+    let mut out = vec![c.end, c.start];
+    out.extend(tokenizer.encode("user"));
+    out.push(c.message);
+    out.extend(tokenizer.encode(text));
+    out.push(c.end);
+    out.push(c.start);
+    out.extend(tokenizer.encode("assistant"));
+    Ok(out)
+}
