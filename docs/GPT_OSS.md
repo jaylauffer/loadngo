@@ -526,6 +526,15 @@ row removed; the diffs are kept with the session's evidence.
 - words: Alt or Ctrl with an arrow, Alt-B/F, Ctrl-W;
 - deleting: Ctrl-U, Ctrl-K, Delete;
 - history: Up/Down step through the lines entered this session;
+
+On a Mac, Alt is the Option key, and the letter is lowercase (Option-Shift-D sends a
+capital `D`, which nothing uses). An Alt key reaches the editor as Escape followed by the
+letter, so on any terminal pressing Escape, letting go, then `d` does the same. Terminal
+and iTerm2 type `∂` for Option-D unless Option is set to act as Meta:
+- Terminal: Settings → Profiles → Keyboard → "Use Option as Meta key";
+- iTerm2: Settings → Profiles → Keys → Left Option key: Esc+.
+
+Option with the left or right arrow moves by word without that setting.
 - Ctrl-C abandons the line; Ctrl-D on an empty line ends input.
 
 On a Unix terminal it enters raw mode for each line and restores the settings when the
