@@ -119,6 +119,13 @@ Operator configuration, as flags on the existing binaries:
 | `task-node`, `task_worker` | `--reward-payee <scheme>=<payee>` | accept this scheme, paid to this payee; repeatable; none means work unrewarded |
 | `task-node`, `task_worker` | `--reward-verify <scheme>=<command>` | optional check of a settlement reference |
 
+A payee is all a worker needs in order to be paid, and it is given when the node is
+launched. The task node holds no keys and no balance; spending and balances belong
+to a wallet for that scheme, run by the operator apart from the node. For QCoin the
+payee is an owner script hash; how an operator makes one, and the stages from
+proof-only rewards to a wallet, are in the qcoin repository's
+`docs/TASK_REWARDS.md`.
+
 Why a command and not a Rust trait: operators choose at run time without
 rebuilding; loadngo links nothing scheme-specific; each scheme's code stays in
 its own repository. Settlement happens once per Task, so starting a process
@@ -144,13 +151,15 @@ loadngo <-> qcoin cycle ends: qcoin depends on loadngo, never the reverse.
 |---|---|---|
 | 1 | Reward fields in the Task messages; `accepted` set from verification alone | `data/src/p2pmsg.rs`, `task_submitter`, `task-node`, `task_worker`, `task_ack` |
 | 2 | Settler contract, `--reward` / `--reward-payee` / `--reward-verify`, offloaded settlement; no-reward path tested with no QCoin present | `network` |
-| 3 | `qcoin-node task-reward settle` / `verify`, moved from `task_runtime.rs` and `task_submitter` | qcoin |
+| 3 | `qcoin-node task-reward settle` / `verify`, moved from `task_runtime.rs` and `task_submitter`; `qcoin-node payee` and the standard payee script (stage 1 of qcoin `docs/TASK_REWARDS.md`) | qcoin |
 | 4 | Remove `qcoin-types` from `network` and the loadngo workspace; update the QCoin-specific statements in the other Task docs | loadngo |
 
 ### Open
 
-- **QCoin payee.** What a worker gives as its QCoin payee: presumably an owner
-  script hash it holds keys for, replacing the hashed node id.
+- **QCoin payee.** Decided (Jay, 2026-10-06): supplied at launch with
+  `--reward-payee`, no wallet on the task node. The QCoin details and their own open
+  questions are in qcoin `docs/TASK_REWARDS.md`; spending a key-locked output needs
+  a qcoin ledger fix first.
 - **Wire compatibility.** Change the messages in place (every peer is in the
   lab, and dolores's `loadngo-task-node` service is disabled), or keep reading
   `qcoin_tx_hint` for one release.
