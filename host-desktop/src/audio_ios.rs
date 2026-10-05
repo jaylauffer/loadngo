@@ -37,11 +37,13 @@ use coreaudio_sys::{
 };
 use lewton::inside_ogg::OggStreamReader;
 
+use super::mobile_mix::{
+    decode_clip_file, stereo_volume, ActiveVoice, CachedClip, Voices, OUTPUT_SAMPLE_RATE,
+};
 use super::{SfxPlayRequest, SfxSettings, SfxVoiceId};
 
 /// The rate the unit runs at. Chosen because 21 of the 23 shipped assets are
 /// already 48 kHz, so only the two 44.1 kHz music tracks need converting.
-const OUTPUT_SAMPLE_RATE: f64 = 48_000.0;
 const OUTPUT_CHANNELS: u32 = 2;
 /// Frames per chunk handed from the decoder thread to the mixer. At 48 kHz
 /// this is ~85 ms, so eight queued chunks give the decoder about two thirds
@@ -145,78 +147,7 @@ fn send_chunk(tx: &SyncSender<Chunk>, chunk: Chunk) -> Result<(), ()> {
     }
 }
 
-/// A whole effect, decoded once and kept. Interleaved stereo at the output
-/// rate, so the render callback only has to add and scale.
-#[derive(Clone)]
-struct CachedClip {
-    samples: Arc<Vec<f32>>,
-}
-
-fn decode_clip(path: &str) -> Result<CachedClip, String> {
-    let file = File::open(path).map_err(|err| format!("Missing SFX {path}: {err}"))?;
-    let mut reader = OggStreamReader::new(BufReader::new(file))
-        .map_err(|err| format!("Failed to read SFX {path}: {err}"))?;
-    let source_rate = f64::from(reader.ident_hdr.audio_sample_rate);
-    let source_channels = usize::from(reader.ident_hdr.audio_channels).max(1);
-    let mut interleaved: Vec<f32> = Vec::new();
-    while let Some(packet) = reader
-        .read_dec_packet_itl()
-        .map_err(|err| format!("Failed to decode SFX {path}: {err}"))?
-    {
-        for frame in packet.chunks(source_channels) {
-            let left = f32::from(frame[0]) / 32_768.0;
-            let right = if source_channels > 1 {
-                f32::from(frame[1]) / 32_768.0
-            } else {
-                left
-            };
-            interleaved.push(left);
-            interleaved.push(right);
-        }
-    }
-    if interleaved.is_empty() {
-        return Err(format!("SFX {path} contains no audio samples"));
-    }
-    // Effects ship at 48 kHz already; resample only if that ever changes.
-    let samples = if (source_rate - OUTPUT_SAMPLE_RATE).abs() < f64::EPSILON {
-        interleaved
-    } else {
-        resample_interleaved(&interleaved, source_rate / OUTPUT_SAMPLE_RATE)
-    };
-    Ok(CachedClip {
-        samples: Arc::new(samples),
-    })
-}
-
-fn resample_interleaved(input: &[f32], ratio: f64) -> Vec<f32> {
-    let frames = input.len() / 2;
-    if frames < 2 {
-        return input.to_vec();
-    }
-    let mut out = Vec::with_capacity(((frames as f64 / ratio) as usize + 1) * 2);
-    let mut position = 0.0f64;
-    while (position.floor() as usize) + 1 < frames {
-        let index = position.floor() as usize;
-        let fraction = (position - position.floor()) as f32;
-        for channel in 0..2 {
-            let a = input[index * 2 + channel];
-            let b = input[(index + 1) * 2 + channel];
-            out.push(a + (b - a) * fraction);
-        }
-        position += ratio;
-    }
-    out
-}
-
 // ------------------------------------------------------------------ mixing
-
-struct ActiveVoice {
-    samples: Arc<Vec<f32>>,
-    cursor: usize,
-    left: f32,
-    right: f32,
-    looped: bool,
-}
 
 struct MusicPlayback {
     chunks: Receiver<Chunk>,
@@ -231,7 +162,7 @@ struct MixerState {
     /// One-pole state for the bass shelf, per channel.
     bass_state: [f32; 2],
     bass_boost: f32,
-    voices: Vec<(u64, ActiveVoice)>,
+    voices: Voices,
 }
 
 impl MixerState {
@@ -291,29 +222,8 @@ impl MixerState {
     }
 
     fn mix_voices(&mut self, out: &mut [f32]) {
-        self.voices.retain_mut(|(_, voice)| {
-            let mut index = 0;
-            while index < out.len() {
-                if voice.cursor + 1 >= voice.samples.len() {
-                    if !voice.looped {
-                        return false;
-                    }
-                    voice.cursor = 0;
-                }
-                out[index] += voice.samples[voice.cursor] * voice.left;
-                out[index + 1] += voice.samples[voice.cursor + 1] * voice.right;
-                voice.cursor += 2;
-                index += 2;
-            }
-            true
-        });
+        self.voices.mix(out);
     }
-}
-
-/// Pan law shared with the Android backend: a linear left/right split.
-fn stereo_volume(volume: f32, pan: f32) -> (f32, f32) {
-    let pan = pan.clamp(-1.0, 1.0);
-    (volume * (1.0 - pan.max(0.0)), volume * (1.0 + pan.min(0.0)))
 }
 
 // ------------------------------------------------------------------ output
@@ -672,9 +582,9 @@ impl VoiceController {
         if !ensure_output() {
             return Err("iOS audio output unavailable".to_string());
         }
-        let clip = decode_clip(path)?;
+        let clip = decode_clip_file(path)?;
         if let Ok(mut state) = mixer().lock() {
-            state.voices.push((
+            state.voices.list.push((
                 0,
                 ActiveVoice {
                     samples: clip.samples,
@@ -701,12 +611,12 @@ impl VoiceController {
         mixer()
             .lock()
             .ok()
-            .is_some_and(|state| state.voices.iter().any(|(id, _)| *id == 0))
+            .is_some_and(|state| state.voices.contains(0))
     }
 
     pub fn stop(&mut self) {
         if let Ok(mut state) = mixer().lock() {
-            state.voices.retain(|(id, _)| *id != 0);
+            state.voices.remove(0);
         }
     }
 
@@ -751,6 +661,16 @@ impl SfxController {
         Ok(())
     }
 
+    /// Decodes `path` now so its first `play` does not. Still on the calling
+    /// thread for the moment; moving it onto the proactor is step 5 of
+    /// `docs/GAME_AUDIO_RUNTIME.md`.
+    pub fn preload_path(&mut self, path: &str) -> Result<(), String> {
+        if path.is_empty() {
+            return Err("SFX path must not be empty".to_string());
+        }
+        self.load_clip(path).map(|_| ())
+    }
+
     pub fn play(&mut self, request: SfxPlayRequest<'_>) -> Result<Option<SfxVoiceId>, String> {
         let request = request.normalized();
         if request.path.is_empty() {
@@ -776,7 +696,7 @@ impl SfxController {
         let Ok(mut state) = mixer().lock() else {
             return Ok(None);
         };
-        state.voices.push((
+        state.voices.list.push((
             id.value(),
             ActiveVoice {
                 samples: clip.samples,
@@ -794,16 +714,17 @@ impl SfxController {
 
     pub fn stop(&mut self, voice: SfxVoiceId) {
         if let Ok(mut state) = mixer().lock() {
-            state.voices.retain(|(id, _)| *id != voice.value());
+            state.voices.remove(voice.value());
         }
         self.voices.remove(&voice);
         self.order.retain(|candidate| *candidate != voice);
     }
 
     pub fn stop_all(&mut self) {
-        let ids: Vec<u64> = self.voices.keys().map(|id| id.value()).collect();
         if let Ok(mut state) = mixer().lock() {
-            state.voices.retain(|(id, _)| !ids.contains(id));
+            for id in self.voices.keys() {
+                state.voices.remove(id.value());
+            }
         }
         self.voices.clear();
         self.order.clear();
@@ -815,10 +736,9 @@ impl SfxController {
         let Ok(state) = mixer().lock() else {
             return;
         };
-        let live: Vec<u64> = state.voices.iter().map(|(id, _)| *id).collect();
-        drop(state);
-        self.voices.retain(|id, _| live.contains(&id.value()));
-        self.order.retain(|id| live.contains(&id.value()));
+        self.voices
+            .retain(|id, _| state.voices.contains(id.value()));
+        self.order.retain(|id| state.voices.contains(id.value()));
     }
 
     pub fn set_mix_volume(&mut self, volume: f32) {
@@ -844,7 +764,7 @@ impl SfxController {
         mixer()
             .lock()
             .ok()
-            .is_some_and(|state| state.voices.iter().any(|(id, _)| *id == voice.value()))
+            .is_some_and(|state| state.voices.contains(voice.value()))
     }
 
     pub fn frame_demand(&self) -> Option<Duration> {
@@ -855,7 +775,7 @@ impl SfxController {
         if let Some(clip) = self.clips.get(path) {
             return Ok(clip.clone());
         }
-        let clip = decode_clip(path)?;
+        let clip = decode_clip_file(path)?;
         self.clips.insert(path.to_string(), clip.clone());
         Ok(clip)
     }
@@ -872,7 +792,7 @@ impl SfxController {
             };
             self.voices.remove(&oldest);
             if let Ok(mut state) = mixer().lock() {
-                state.voices.retain(|(id, _)| *id != oldest.value());
+                state.voices.remove(oldest.value());
             }
         }
         true

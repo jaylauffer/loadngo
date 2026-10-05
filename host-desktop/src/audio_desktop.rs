@@ -865,6 +865,15 @@ impl SfxController {
         Ok(())
     }
 
+    /// Effects here decode on first play or come from `preload_embedded`, so
+    /// there is nothing to start early.
+    pub fn preload_path(&mut self, path: &str) -> Result<(), String> {
+        if path.is_empty() {
+            return Err("SFX path must not be empty".to_string());
+        }
+        Ok(())
+    }
+
     pub fn play(&mut self, request: SfxPlayRequest<'_>) -> Result<Option<SfxVoiceId>, String> {
         let request = request.normalized();
         if request.path.is_empty() {

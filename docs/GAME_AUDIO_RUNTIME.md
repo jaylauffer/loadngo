@@ -76,7 +76,7 @@ from a dedicated thread that sleeps in 10 ms steps while its queue is full.
 
 | Host | Effects | Music | Against the contract |
 | --- | --- | --- | --- |
-| Android | new `MediaPlayer` per effect, on the main thread | one `MediaPlayer` per track | fails 1-6; measured above |
+| Android | AAudio mixer since step 2; clips read through the proactor | one `MediaPlayer` per track | effects meet 1-3 and 6 (measured below); music (4) and thermal (5) open |
 | iOS | RemoteIO mixer, clips cached | `lewton` on a dedicated thread, 10 ms sleeps for backpressure | 3 holds; first play decodes on the game thread (2); music thread sleeps (4); no thermal budget (5) |
 | Desktop | `rodio` by default; native mixer behind `native-desktop-audio` | same | not yet assessed against this contract |
 
@@ -93,7 +93,17 @@ Each step ships on its own, keeps every host building, and names its gate.
    the completion; `play` admits a voice and returns. Music stays on its
    `MediaPlayer` for this step. Gate on the Xiaomi: `play` p99 under 0.5 ms in
    the `[loadngo-sfx]` report, combat windows at 58 fps or better, and Jay's
-   ear for clicks, latency and missing sounds.
+   ear for clicks, latency and missing sounds. *Built 2026-10-05.* Jay
+   completed a full run on the Xiaomi (`logcat-play-3-aaudio-mixer.txt` in
+   the evidence directory): `play` took 7-80 us on average per 5 s window, at
+   most 0.40 ms, and sound calls took 0.02-0.06% of the time (72-84% before);
+   no effect was dropped as not ready; AAudio opened at 48 kHz stereo float
+   with a 192-frame burst. All 45 five-second windows ran at 58.8 fps or
+   better (mean 59.5), p99 frame interval under 20 ms, against 18-33 fps in
+   combat before. The one long interval (1.5 s) was during activity start.
+   Jay's listening check is still to report. The output stops after 3 s of
+   silence and reopens on the next effect; an AAudio error (such as a
+   headset unplugged) is recovered on the proactor thread at the next play.
 3. **Android music onto the same stream**, decode-ahead driven by proactor
    completions; `MediaPlayer` retired. Gate: no music underruns over a full
    run, and the same pacing.

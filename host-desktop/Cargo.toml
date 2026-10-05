@@ -95,7 +95,8 @@ lewton = "0.10"
 loadngo-gfx-gles = { path = "../gfx-gles" }
 ndk = { version = "0.8", default-features = false }
 ndk-context = "0.1"
-ndk-sys = "0.5"
+# `audio`: AAudio, the output the effects mixer runs on.
+ndk-sys = { version = "0.5", features = ["audio"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
 # Audio playback is loadngo's own: a RemoteIO AudioUnit fed by `lewton`,

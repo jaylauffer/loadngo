@@ -88,6 +88,17 @@ fn oldest_evictable_voice(
         .position(|id| priority_for(*id).is_some_and(|priority| priority <= incoming_priority))
 }
 
+/// The effect-mixing core shared by the iOS and Android backends; see
+/// `docs/GAME_AUDIO_RUNTIME.md`. Also compiled for desktop tests so its
+/// mixing rules are checked on every host.
+#[cfg(any(
+    target_os = "ios",
+    target_os = "android",
+    all(test, not(target_os = "netbsd"))
+))]
+#[path = "audio_mobile_mix.rs"]
+mod mobile_mix;
+
 #[cfg(target_os = "android")]
 mod imp {
     use super::{SfxPlayRequest, SfxSettings, SfxVoiceId};
@@ -697,26 +708,287 @@ mod imp {
         }
     }
 
-    struct SfxVoice {
-        player: MediaPlayerHandle,
-        volume: f32,
-        pan: f32,
-        priority: u8,
+    // ------------------------------------------------------------ effects
+    //
+    // Effects mix in an AAudio data callback (see `docs/GAME_AUDIO_RUNTIME.md`).
+    // A `MediaPlayer` per effect cost the main thread 40-53 ms each, measured
+    // on a Xiaomi 22111317I. Now the game thread only admits voices: clips are
+    // read through the host proactor and decoded in the completion, on the
+    // proactor's own thread, and the output stream is opened, started and
+    // stopped there too.
+
+    use super::mobile_mix::{decode_clip_bytes, stereo_volume, ActiveVoice, CachedClip, Voices};
+    use std::collections::HashSet;
+    use std::ffi::c_void;
+    use std::os::fd::AsRawFd;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Mutex, OnceLock};
+
+    /// Voices the callback can hold without growing its list.
+    const MIXER_VOICE_CAPACITY: usize = 64;
+    /// Stop the output after this long with nothing playing, so an idle game
+    /// does not keep an audio callback waking the CPU.
+    const IDLE_STOP: Duration = Duration::from_secs(3);
+
+    static VOICES: OnceLock<Mutex<Voices>> = OnceLock::new();
+    static CLIPS: OnceLock<Mutex<HashMap<String, CachedClip>>> = OnceLock::new();
+    static OUTPUT: OnceLock<Mutex<OutputState>> = OnceLock::new();
+    /// Set by the AAudio error callback (for example when headphones are
+    /// unplugged); the stream is reopened on the proactor thread, never in
+    /// the callback.
+    static OUTPUT_LOST: AtomicBool = AtomicBool::new(false);
+
+    fn voices() -> &'static Mutex<Voices> {
+        VOICES.get_or_init(|| Mutex::new(Voices::with_capacity(MIXER_VOICE_CAPACITY)))
+    }
+
+    fn clips() -> &'static Mutex<HashMap<String, CachedClip>> {
+        CLIPS.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    struct OutputState {
+        stream: *mut ndk_sys::AAudioStream,
+        running: bool,
+        failed: bool,
+    }
+
+    // SAFETY: the stream pointer is only opened, started, stopped and closed
+    // on the proactor thread, under this mutex; the data callback reaches the
+    // voices through `VOICES`, never through this state.
+    unsafe impl Send for OutputState {}
+
+    fn output() -> &'static Mutex<OutputState> {
+        OUTPUT.get_or_init(|| {
+            Mutex::new(OutputState {
+                stream: std::ptr::null_mut(),
+                running: false,
+                failed: false,
+            })
+        })
+    }
+
+    /// Asks the proactor thread to bring the output to `running`.
+    fn request_output(running: bool) {
+        let submitted = android::proactor_handle()
+            .enqueue_work(move |_completion: loadngo_proactor::Completion| apply_output(running));
+        if let Err(err) = submitted {
+            android::android_log_error(&format!("Android SFX output request failed: {err}"));
+        }
+    }
+
+    /// Runs on the proactor thread.
+    fn apply_output(running: bool) {
+        let Ok(mut state) = output().lock() else {
+            return;
+        };
+        if OUTPUT_LOST.swap(false, Ordering::AcqRel) && !state.stream.is_null() {
+            // SAFETY: the stream was opened here and nothing else closes it.
+            unsafe { ndk_sys::AAudioStream_close(state.stream) };
+            state.stream = std::ptr::null_mut();
+            state.running = false;
+        }
+        if running {
+            if state.failed {
+                return;
+            }
+            if state.stream.is_null() {
+                match open_stream() {
+                    Ok(stream) => state.stream = stream,
+                    Err(err) => {
+                        state.failed = true;
+                        android::android_log_error(&format!(
+                            "Android SFX output unavailable: {err}"
+                        ));
+                        return;
+                    }
+                }
+            }
+            if !state.running {
+                // SAFETY: a live stream opened by `open_stream`.
+                let result = unsafe { ndk_sys::AAudioStream_requestStart(state.stream) };
+                state.running = result == ndk_sys::AAUDIO_OK;
+            }
+        } else if state.running && !state.stream.is_null() {
+            // SAFETY: a live stream opened by `open_stream`.
+            unsafe { ndk_sys::AAudioStream_requestStop(state.stream) };
+            state.running = false;
+        }
+    }
+
+    fn open_stream() -> Result<*mut ndk_sys::AAudioStream, String> {
+        let mut builder: *mut ndk_sys::AAudioStreamBuilder = std::ptr::null_mut();
+        // SAFETY: plain AAudio builder calls on pointers this function owns;
+        // the builder is deleted on every path.
+        unsafe {
+            let result = ndk_sys::AAudio_createStreamBuilder(&mut builder);
+            if result != ndk_sys::AAUDIO_OK || builder.is_null() {
+                return Err(format!("AAudio_createStreamBuilder returned {result}"));
+            }
+            ndk_sys::AAudioStreamBuilder_setFormat(builder, ndk_sys::AAUDIO_FORMAT_PCM_FLOAT);
+            ndk_sys::AAudioStreamBuilder_setChannelCount(builder, 2);
+            ndk_sys::AAudioStreamBuilder_setSampleRate(
+                builder,
+                super::mobile_mix::OUTPUT_SAMPLE_RATE as i32,
+            );
+            ndk_sys::AAudioStreamBuilder_setPerformanceMode(
+                builder,
+                ndk_sys::AAUDIO_PERFORMANCE_MODE_LOW_LATENCY as i32,
+            );
+            ndk_sys::AAudioStreamBuilder_setSharingMode(
+                builder,
+                ndk_sys::AAUDIO_SHARING_MODE_SHARED as i32,
+            );
+            ndk_sys::AAudioStreamBuilder_setUsage(builder, ndk_sys::AAUDIO_USAGE_GAME as i32);
+            ndk_sys::AAudioStreamBuilder_setDataCallback(
+                builder,
+                Some(render),
+                std::ptr::null_mut(),
+            );
+            ndk_sys::AAudioStreamBuilder_setErrorCallback(
+                builder,
+                Some(on_error),
+                std::ptr::null_mut(),
+            );
+            let mut stream: *mut ndk_sys::AAudioStream = std::ptr::null_mut();
+            let result = ndk_sys::AAudioStreamBuilder_openStream(builder, &mut stream);
+            ndk_sys::AAudioStreamBuilder_delete(builder);
+            if result != ndk_sys::AAUDIO_OK || stream.is_null() {
+                return Err(format!("AAudioStreamBuilder_openStream returned {result}"));
+            }
+            android::android_log_info(&format!(
+                "Android SFX output open: {} Hz, {} channels, format {}, burst {} frames",
+                ndk_sys::AAudioStream_getSampleRate(stream),
+                ndk_sys::AAudioStream_getChannelCount(stream),
+                ndk_sys::AAudioStream_getFormat(stream),
+                ndk_sys::AAudioStream_getFramesPerBurst(stream),
+            ));
+            Ok(stream)
+        }
+    }
+
+    /// The AAudio data callback: mixes the voices into `audio_data`. Takes
+    /// the voice lock with `try_lock` and writes silence if the game thread
+    /// holds it, because blocking here would glitch far worse than one
+    /// silent burst. Never allocates.
+    unsafe extern "C" fn render(
+        _stream: *mut ndk_sys::AAudioStream,
+        _user_data: *mut c_void,
+        audio_data: *mut c_void,
+        num_frames: i32,
+    ) -> ndk_sys::aaudio_data_callback_result_t {
+        let samples = usize::try_from(num_frames).unwrap_or(0) * 2;
+        if !audio_data.is_null() && samples > 0 {
+            // SAFETY: AAudio hands over `num_frames` frames of the float
+            // stereo format this stream was opened with.
+            let out = unsafe { std::slice::from_raw_parts_mut(audio_data.cast::<f32>(), samples) };
+            out.fill(0.0);
+            let mixed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if let Ok(mut voices) = voices().try_lock() {
+                    voices.mix(out);
+                }
+            }));
+            if mixed.is_err() {
+                out.fill(0.0);
+            }
+            for sample in out.iter_mut() {
+                *sample = sample.clamp(-1.0, 1.0);
+            }
+        }
+        ndk_sys::AAUDIO_CALLBACK_RESULT_CONTINUE as ndk_sys::aaudio_data_callback_result_t
+    }
+
+    unsafe extern "C" fn on_error(
+        _stream: *mut ndk_sys::AAudioStream,
+        _user_data: *mut c_void,
+        _error: ndk_sys::aaudio_result_t,
+    ) {
+        OUTPUT_LOST.store(true, Ordering::Release);
+    }
+
+    /// Reads `path` through the proactor and decodes it in the completion,
+    /// on the proactor thread, into `CLIPS`.
+    fn load_clip_async(path: String) {
+        let handle = android::proactor_handle();
+        let submitted =
+            handle
+                .clone()
+                .enqueue_work(move |_completion: loadngo_proactor::Completion| {
+                    let resolved = match android::ensure_materialized_asset_path(&path) {
+                        Ok(resolved) => resolved,
+                        Err(err) => {
+                            android::android_log_error(&format!("SFX {path} unavailable: {err}"));
+                            return;
+                        }
+                    };
+                    let file = match std::fs::File::open(&resolved) {
+                        Ok(file) => file,
+                        Err(err) => {
+                            android::android_log_error(&format!(
+                                "SFX {resolved} unreadable: {err}"
+                            ));
+                            return;
+                        }
+                    };
+                    let length = file
+                        .metadata()
+                        .map(|metadata| usize::try_from(metadata.len()).unwrap_or(0))
+                        .unwrap_or(0);
+                    let fd = file.as_raw_fd();
+                    let read = handle.read(
+                        fd,
+                        loadngo_proactor::IoBuf::with_capacity(length),
+                        0,
+                        move |result: loadngo_proactor::IoResult| {
+                            // The file stays open until the read completes.
+                            let _file = file;
+                            let decoded =
+                                result.map_err(|err| err.to_string()).and_then(|transfer| {
+                                    let read = transfer.bytes_transferred as usize;
+                                    if read != length {
+                                        return Err(format!("short read {read} of {length} bytes"));
+                                    }
+                                    decode_clip_bytes(&path, transfer.buf.into_vec())
+                                });
+                            match decoded {
+                                Ok(clip) => {
+                                    if let Ok(mut clips) = clips().lock() {
+                                        clips.insert(path, clip);
+                                    }
+                                }
+                                Err(err) => android::android_log_error(&format!(
+                                    "SFX {path} failed to load: {err}"
+                                )),
+                            }
+                        },
+                    );
+                    if let Err(err) = read {
+                        android::android_log_error(&format!("SFX {resolved} read failed: {err}"));
+                    }
+                });
+        if let Err(err) = submitted {
+            android::android_log_error(&format!("SFX preload could not be queued: {err}"));
+        }
     }
 
     pub struct SfxController {
         settings: SfxSettings,
-        voices: HashMap<SfxVoiceId, SfxVoice>,
+        /// Priority, volume and pan of each live voice.
+        voices: HashMap<SfxVoiceId, (u8, f32, f32)>,
         order: VecDeque<SfxVoiceId>,
         next_voice_id: u64,
+        requested: HashSet<String>,
+        idle_since: Option<Instant>,
+        output_running: bool,
         timing: SfxTiming,
     }
 
     /// Opt-in (`LOADNGO_FRAME_METRICS`): wall time the calling thread spends
-    /// inside SFX MediaPlayer calls, reported every 5 s.
+    /// inside SFX calls, reported every 5 s, with effects dropped because
+    /// their clip had not finished loading.
     struct SfxTiming {
         enabled: bool,
         plays: u64,
+        not_ready: u64,
         play_us: u64,
         play_max_us: u64,
         updates: u64,
@@ -732,6 +1004,7 @@ mod imp {
             Self {
                 enabled,
                 plays: 0,
+                not_ready: 0,
                 play_us: 0,
                 play_max_us: 0,
                 updates: 0,
@@ -755,9 +1028,10 @@ mod imp {
             let window = self.since.elapsed();
             if window >= Duration::from_secs(5) {
                 crate::android::android_log_info(&format!(
-                    "[loadngo-sfx] window={:.1}s plays={} play_total={}ms play_mean={:.2}ms play_max={:.1}ms updates={} update_total={}ms update_max={:.1}ms busy={:.1}%",
+                    "[loadngo-sfx] window={:.1}s plays={} not_ready={} play_total={}ms play_mean={:.3}ms play_max={:.2}ms updates={} update_total={}ms update_max={:.2}ms busy={:.2}%",
                     window.as_secs_f64(),
                     self.plays,
+                    self.not_ready,
                     self.play_us / 1000,
                     self.play_us as f64 / 1000.0 / self.plays.max(1) as f64,
                     self.play_max_us as f64 / 1000.0,
@@ -778,20 +1052,35 @@ mod imp {
                 voices: HashMap::new(),
                 order: VecDeque::new(),
                 next_voice_id: 1,
+                requested: HashSet::new(),
+                idle_since: None,
+                output_running: false,
                 timing: SfxTiming::new(),
             }
         }
 
-        /// No-op here: Android already has a real packaging story (assets
-        /// bundled into the APK, materialized on demand by
-        /// `android::ensure_materialized_asset_path`). Exists only so
-        /// desktop callers can call `preload_embedded` unconditionally
-        /// without `cfg`-gating every call site.
+        /// No-op here: Android plays effects by asset path, loaded through
+        /// `preload_path`. Exists so desktop callers can call
+        /// `preload_embedded` unconditionally without `cfg`-gating every call
+        /// site.
         pub fn preload_embedded(
             &mut self,
             _key: &str,
             _ogg_bytes: &'static [u8],
         ) -> Result<(), String> {
+            Ok(())
+        }
+
+        /// Starts loading `path` (read through the proactor, decoded off the
+        /// game thread) so it is ready before its first `play`. Returns at
+        /// once; a repeated path is ignored.
+        pub fn preload_path(&mut self, path: &str) -> Result<(), String> {
+            if path.is_empty() {
+                return Err("SFX path must not be empty".to_string());
+            }
+            if self.requested.insert(path.to_string()) {
+                load_clip_async(path.to_string());
+            }
             Ok(())
         }
 
@@ -820,40 +1109,64 @@ mod imp {
             }
 
             self.update_untimed();
+            let clip = clips()
+                .lock()
+                .ok()
+                .and_then(|clips| clips.get(request.path).cloned());
+            let Some(clip) = clip else {
+                // Never decode inline: start the load and drop this one.
+                self.timing.not_ready += 1;
+                self.preload_path(request.path)?;
+                return Ok(None);
+            };
             if !self.make_voice_capacity(request.priority) {
                 return Ok(None);
             }
-            let path = android::ensure_materialized_asset_path(request.path)?;
-            let mut player = MediaPlayerHandle::create(&path, request.looped)?;
             let (left, right) =
                 stereo_volume(request.volume * self.settings.mix_volume, request.pan);
-            player.set_stereo_volume(left, right)?;
-            player.play()?;
-
             let id = self.allocate_voice_id();
-            self.voices.insert(
-                id,
-                SfxVoice {
-                    player,
-                    volume: request.volume,
-                    pan: request.pan,
-                    priority: request.priority,
-                },
-            );
+            {
+                let Ok(mut voices) = voices().lock() else {
+                    return Ok(None);
+                };
+                if voices.list.len() >= MIXER_VOICE_CAPACITY {
+                    return Ok(None);
+                }
+                voices.list.push((
+                    id.value(),
+                    ActiveVoice {
+                        samples: clip.samples,
+                        cursor: 0,
+                        left,
+                        right,
+                        looped: request.looped,
+                    },
+                ));
+            }
+            self.voices
+                .insert(id, (request.priority, request.volume, request.pan));
             self.order.push_back(id);
+            self.idle_since = None;
+            if !self.output_running || OUTPUT_LOST.load(Ordering::Acquire) {
+                self.output_running = true;
+                request_output(true);
+            }
             Ok(Some(id))
         }
 
         pub fn stop(&mut self, voice: SfxVoiceId) {
-            if let Some(mut state) = self.voices.remove(&voice) {
-                let _ = state.player.stop();
+            if let Ok(mut voices) = voices().lock() {
+                voices.remove(voice.value());
             }
+            self.voices.remove(&voice);
             self.order.retain(|candidate| *candidate != voice);
         }
 
         pub fn stop_all(&mut self) {
-            for state in self.voices.values_mut() {
-                let _ = state.player.stop();
+            if let Ok(mut voices) = voices().lock() {
+                for id in self.voices.keys() {
+                    voices.remove(id.value());
+                }
             }
             self.voices.clear();
             self.order.clear();
@@ -867,24 +1180,31 @@ mod imp {
             }
         }
 
+        /// Forgets voices the mixer has finished, and stops the output once
+        /// nothing has played for `IDLE_STOP`. No allocation.
         fn update_untimed(&mut self) {
-            let finished = self
-                .voices
-                .iter()
-                .filter_map(|(id, state)| (!state.player.is_playing()).then_some(*id))
-                .collect::<Vec<_>>();
-            for id in finished {
-                self.voices.remove(&id);
-                self.order.retain(|candidate| *candidate != id);
+            if let Ok(voices) = voices().lock() {
+                self.voices.retain(|id, _| voices.contains(id.value()));
+                self.order.retain(|id| voices.contains(id.value()));
+            }
+            if !self.voices.is_empty() {
+                self.idle_since = None;
+                return;
+            }
+            let idle_since = *self.idle_since.get_or_insert_with(Instant::now);
+            if self.output_running && idle_since.elapsed() >= IDLE_STOP {
+                self.output_running = false;
+                request_output(false);
             }
         }
 
         pub fn set_mix_volume(&mut self, volume: f32) {
             self.settings.mix_volume = super::finite_clamped(volume, 0.0, 2.0, 1.0);
-            for state in self.voices.values_mut() {
-                let (left, right) =
-                    stereo_volume(state.volume * self.settings.mix_volume, state.pan);
-                let _ = state.player.set_stereo_volume(left, right);
+            if let Ok(mut voices) = voices().lock() {
+                for (id, (_, volume, pan)) in &self.voices {
+                    let (left, right) = stereo_volume(volume * self.settings.mix_volume, *pan);
+                    voices.set_gains(id.value(), left, right);
+                }
             }
         }
 
@@ -904,20 +1224,20 @@ mod imp {
         }
 
         pub fn is_playing(&self, voice: SfxVoiceId) -> bool {
-            self.voices
-                .get(&voice)
-                .is_some_and(|state| state.player.is_playing())
+            voices()
+                .lock()
+                .is_ok_and(|voices| voices.contains(voice.value()))
         }
 
         pub fn frame_demand(&self) -> Option<Duration> {
-            (!self.voices.is_empty()).then_some(Duration::from_millis(100))
+            (!self.voices.is_empty() || self.output_running).then_some(Duration::from_millis(100))
         }
 
         fn make_voice_capacity(&mut self, incoming_priority: u8) -> bool {
             while self.voices.len() >= self.settings.maximum_voices {
                 let Some(index) =
                     super::oldest_evictable_voice(&self.order, incoming_priority, |id| {
-                        self.voices.get(&id).map(|voice| voice.priority)
+                        self.voices.get(&id).map(|voice| voice.0)
                     })
                 else {
                     return false;
@@ -925,8 +1245,9 @@ mod imp {
                 let Some(oldest) = self.order.remove(index) else {
                     return false;
                 };
-                if let Some(mut state) = self.voices.remove(&oldest) {
-                    let _ = state.player.stop();
+                self.voices.remove(&oldest);
+                if let Ok(mut voices) = voices().lock() {
+                    voices.remove(oldest.value());
                 }
             }
             true
@@ -937,11 +1258,6 @@ mod imp {
             self.next_voice_id = self.next_voice_id.wrapping_add(1).max(1);
             id
         }
-    }
-
-    fn stereo_volume(volume: f32, pan: f32) -> (f32, f32) {
-        let pan = pan.clamp(-1.0, 1.0);
-        (volume * (1.0 - pan.max(0.0)), volume * (1.0 + pan.min(0.0)))
     }
 }
 
@@ -1118,6 +1434,15 @@ mod imp {
             _key: &str,
             _ogg_bytes: &'static [u8],
         ) -> Result<(), String> {
+            Ok(())
+        }
+
+        /// Effects here decode on first play or come from `preload_embedded`, so
+        /// there is nothing to start early.
+        pub fn preload_path(&mut self, path: &str) -> Result<(), String> {
+            if path.is_empty() {
+                return Err("SFX path must not be empty".to_string());
+            }
             Ok(())
         }
 
@@ -1975,6 +2300,15 @@ mod imp {
                     samples,
                 },
             );
+            Ok(())
+        }
+
+        /// Effects here decode on first play or come from `preload_embedded`, so
+        /// there is nothing to start early.
+        pub fn preload_path(&mut self, path: &str) -> Result<(), String> {
+            if path.is_empty() {
+                return Err("SFX path must not be empty".to_string());
+            }
             Ok(())
         }
 

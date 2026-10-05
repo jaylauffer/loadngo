@@ -321,6 +321,12 @@ fn proactor() -> &'static HostProactor<EpollPort> {
     PROACTOR.get().expect("android proactor not initialized")
 }
 
+/// The host proactor, for host modules that submit their own work to its
+/// thread (audio clip loading and output control).
+pub(crate) fn proactor_handle() -> loadngo_proactor::ProactorHandle<EpollPort> {
+    proactor().handle.clone()
+}
+
 /// Creates the process-lifetime `EpollPort` proactor and starts a
 /// dedicated thread that does nothing but pump it
 /// (`Proactor::run_until_stopped`, blocking in `epoll_wait` between
