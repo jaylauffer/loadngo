@@ -68,9 +68,11 @@ These three still build with sibling path dependencies, because they form a
 cycle. loadngo's workspace uses `qcoin-types`, and `qcoin-types` uses
 `loadngo-pq-crypto` from loadngo. Fetched by git, each side would get its
 own copy of the other, and the types would no longer match. Breaking the
-cycle comes first, for example by moving what loadngo needs from
-`qcoin-types` into loadngo. Their CI keeps its current sibling setup until
-then.
+cycle comes first. The plan (2026-10-06) is for qcoin to depend on loadngo and
+never the reverse: loadngo's only use of `qcoin-types` is the Task reward code,
+which moves into qcoin as its reward settler
+([TASK_REWARD_FLOW.md](TASK_REWARD_FLOW.md)). Their CI keeps its current
+sibling setup until then.
 
 ## Next: crates.io
 

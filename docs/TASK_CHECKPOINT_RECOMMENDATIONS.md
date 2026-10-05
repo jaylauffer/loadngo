@@ -56,7 +56,7 @@ in its control flow.
 | `open` | requested, no worker holds it (unclaimed) | `assigned` on `TaskAccept`; `expired` |
 | `assigned` | one worker holds it; see the assignment's state | `submitted`; back to `open` if the worker withdraws or is timed out |
 | `submitted` | a `TaskResult` is waiting for verification | `accepted`; back to `open` on `TaskAck(accepted=false)` |
-| `accepted` | verified, acknowledged, reward anchored | final |
+| `accepted` | verified and acknowledged (any reward is settled separately) | final |
 | `expired` / `cancelled` | nobody took it in time, or the submitter withdrew it | final |
 
 A task returns to `open` more than once in its life. What the earlier worker did
@@ -186,10 +186,12 @@ In order of how much trust each needs:
 
 ### 6. What an answer must never decide
 
-`TaskAck(accepted = true)` is the reward gate, and the qcoin receipt follows accepted
-work that is durably anchored. `task_submitter` sets `accepted` from
-`verification_ok && qcoin_tx_hint.is_some()`: deterministic verification of the
-success criteria. A probability does not replace that, at any confidence. It may
+`TaskAck(accepted = true)` is the reward gate: a reward, if one was agreed, is
+settled only for accepted work, and accepting the work does not depend on the
+reward ([TASK_REWARD_FLOW.md](TASK_REWARD_FLOW.md); the runtime still sets
+`accepted` from `verification_ok && qcoin_tx_hint.is_some()` until that plan
+lands). `accepted` comes from deterministic verification of the success
+criteria. A probability does not replace that, at any confidence. It may
 order the verification queue. It may not shorten it.
 
 ## Order of work

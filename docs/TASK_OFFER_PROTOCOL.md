@@ -14,7 +14,8 @@ submitter-driven lifecycle:
 4. the worker maintains direct `TaskStatus` updates
 5. the worker submits `TaskResult`
 6. the submitter closes the record with `TaskAck`
-7. qcoin reward happens only after a positive acknowledgement
+7. a reward, if one was agreed, is settled only for accepted work; accepting the
+   work never depends on the reward ([TASK_REWARD_FLOW.md](TASK_REWARD_FLOW.md))
 
 ## Core Rules
 
@@ -79,7 +80,7 @@ The intended execution flow is:
 5. the selected worker sends periodic `TaskStatus`
 6. the selected worker sends `TaskResult` when the success criteria are met
 7. the submitter validates the result and responds with `TaskAck`
-8. only after positive `TaskAck` should qcoin reward be minted or anchored
+8. a reward, if one was agreed, is settled only after verification accepts the result
 
 ## Message Semantics
 
@@ -191,8 +192,9 @@ Fields should include:
 - `offer_id`
 - `submitter_node_id`
 - `acked_at`
-- `accepted`
-- optional `qcoin_tx_hint`
+- `accepted`: the result met the success criteria; nothing else
+- optional `qcoin_tx_hint` (planned: replaced by a scheme-neutral `reward` settlement;
+  see [TASK_REWARD_FLOW.md](TASK_REWARD_FLOW.md))
 - optional `note`
 
 If `accepted` is false, the task remains unclosed from the worker's perspective
@@ -252,30 +254,25 @@ The network goal is:
 - one direct result
 - one direct acknowledgement
 
-## Relationship To qcoin
+## Relationship To Rewards
 
-`loadngo` coordinates the work.
+`loadngo` coordinates the work. A reward is optional, and QCoin is the
+first-party reward scheme, not a requirement.
 
-`qcoin` rewards acknowledged completion.
+Decided by Jay on 2026-10-06: **accepting the work does not depend on the
+reward.** `TaskAck.accepted` reports verification against the success criteria
+only. A reward is settled only for accepted work, so:
 
-That means:
+- no reward on `TaskRequest`, `TaskOffer`, `TaskAccept` or `TaskStatus`
+- no reward on speculative completion alone
+- a reward only after the submitter confirms that the worker met the success criteria
+- a failed or slow settlement never turns accepted work into rejected work
 
-- no qcoin award on `TaskRequest`
-- no qcoin award on `TaskOffer`
-- no qcoin award on `TaskAccept`
-- no qcoin award on `TaskStatus`
-- no qcoin award on speculative completion alone
-- qcoin award only after the submitter confirms that the worker met the success criteria
-
-`TaskAck(accepted=true)` is the reward gate.
-
-For the current runtime, the submitter may withhold the positive wire-level
-`TaskAck` until the qcoin reward anchor is durably included, so the worker gets
-one closure message that carries the qcoin reference.
-
-The actual qcoin mint or anchor may happen immediately after that acknowledgement
-or through a downstream authority path, but it must remain downstream of the
-positive acknowledgement.
+The current runtime does not follow this yet: `task_submitter` sets `accepted`
+only once the QCoin anchor is included, and fails without sending `TaskAck` when
+QCoin is unreachable. The plan to make rewards pluggable and configured by each
+operator, with QCoin as the first settler, is in
+[TASK_REWARD_FLOW.md](TASK_REWARD_FLOW.md).
 
 ## Recommendations Not Yet Adopted
 
