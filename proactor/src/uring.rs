@@ -365,25 +365,6 @@ impl IoUringPort {
         }
     }
 
-    fn signal_wake(&self, token: u64) -> io::Result<()> {
-        let mut ring = self
-            .ring
-            .lock()
-            .map_err(|e| io::Error::other(format!("lock poisoned: {}", e)))?;
-
-        let noop = opcode::Nop::new().build().user_data(token);
-
-        unsafe {
-            ring.submission()
-                .push(&noop)
-                .map_err(|_| io::Error::other("submission queue full"))?;
-        }
-
-        ring.submit().map_err(|e| io::Error::other(e.to_string()))?;
-
-        Ok(())
-    }
-
     fn signal_eventfd(fd: RawFd) -> io::Result<()> {
         let value: u64 = 1;
         let rc = unsafe {
@@ -432,8 +413,17 @@ impl CompletionPort for IoUringPort {
             .expect("io_uring completion queue poisoned")
             .push_back(envelope);
 
-        // Signal via IORING_OP_NOP with QUEUE_TOKEN
-        self.signal_wake(QUEUE_TOKEN)
+        // Wake a blocked `poll` through the eventfd it already watches
+        // (`WAKE_TOKEN`), which needs no lock. This used to submit an
+        // IORING_OP_NOP tagged `QUEUE_TOKEN`, but that takes the ring mutex,
+        // and `poll` holds the ring mutex for its whole blocking wait: a post
+        // from another thread stalled until that wait ended, which with a
+        // deferred timer pending meant until the timer fired. Found via
+        // loadngo-inference's `work_tools::run` on Linux CI (2026-10-05): its
+        // stdout/stderr readers post their results from their own threads,
+        // and every command was reported as having hit its time limit. The
+        // next `poll` drains the queue before it waits, so nothing is lost.
+        Self::signal_eventfd(self.wake_fd)
     }
 
     fn poll(&self, timeout: Option<Duration>) -> io::Result<PollEvent> {

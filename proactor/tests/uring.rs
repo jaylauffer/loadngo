@@ -81,6 +81,39 @@ fn uring_wake_interrupts_blocking_poll() {
 }
 
 #[test]
+fn uring_work_posted_from_another_thread_wakes_a_blocked_poll() {
+    // A far deferred timer makes `run_once` block in a timed wait. Work
+    // posted from another thread meanwhile must end that wait at once, not
+    // when the timer fires.
+    let proactor = Proactor::new(IoUringPort::new().unwrap());
+    let handle = proactor.handle();
+    handle
+        .defer_for(Duration::from_secs(10), CompletionKind::Timer, 0, |_| {})
+        .unwrap();
+    let (tx, rx) = mpsc::channel();
+
+    let worker = thread::spawn(move || {
+        let started = Instant::now();
+        while rx.try_recv().is_err() && started.elapsed() < Duration::from_secs(15) {
+            proactor.run_once().unwrap();
+        }
+        started.elapsed()
+    });
+
+    thread::sleep(Duration::from_millis(50));
+    let poster = handle.clone();
+    let post = thread::spawn(move || {
+        poster
+            .enqueue_work(move |_completion: Completion| tx.send(()).unwrap())
+            .unwrap();
+    });
+    post.join().unwrap();
+
+    let elapsed = worker.join().unwrap();
+    assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
+}
+
+#[test]
 fn uring_stop_wakes_and_ends_loop() {
     let proactor = Proactor::new(IoUringPort::new().unwrap());
     let handle = proactor.handle();
