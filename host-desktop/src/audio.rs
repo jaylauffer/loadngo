@@ -709,6 +709,66 @@ mod imp {
         voices: HashMap<SfxVoiceId, SfxVoice>,
         order: VecDeque<SfxVoiceId>,
         next_voice_id: u64,
+        timing: SfxTiming,
+    }
+
+    /// Opt-in (`LOADNGO_FRAME_METRICS`): wall time the calling thread spends
+    /// inside SFX MediaPlayer calls, reported every 5 s.
+    struct SfxTiming {
+        enabled: bool,
+        plays: u64,
+        play_us: u64,
+        play_max_us: u64,
+        updates: u64,
+        update_us: u64,
+        update_max_us: u64,
+        since: Instant,
+    }
+
+    impl SfxTiming {
+        fn new() -> Self {
+            let enabled = crate::debug_config_value("LOADNGO_FRAME_METRICS")
+                .is_some_and(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"));
+            Self {
+                enabled,
+                plays: 0,
+                play_us: 0,
+                play_max_us: 0,
+                updates: 0,
+                update_us: 0,
+                update_max_us: 0,
+                since: Instant::now(),
+            }
+        }
+
+        fn record(&mut self, play: bool, started: Instant) {
+            let us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+            if play {
+                self.plays += 1;
+                self.play_us += us;
+                self.play_max_us = self.play_max_us.max(us);
+            } else {
+                self.updates += 1;
+                self.update_us += us;
+                self.update_max_us = self.update_max_us.max(us);
+            }
+            let window = self.since.elapsed();
+            if window >= Duration::from_secs(5) {
+                crate::android::android_log_info(&format!(
+                    "[loadngo-sfx] window={:.1}s plays={} play_total={}ms play_mean={:.2}ms play_max={:.1}ms updates={} update_total={}ms update_max={:.1}ms busy={:.1}%",
+                    window.as_secs_f64(),
+                    self.plays,
+                    self.play_us / 1000,
+                    self.play_us as f64 / 1000.0 / self.plays.max(1) as f64,
+                    self.play_max_us as f64 / 1000.0,
+                    self.updates,
+                    self.update_us / 1000,
+                    self.update_max_us as f64 / 1000.0,
+                    (self.play_us + self.update_us) as f64 / 10_000.0 / window.as_secs_f64(),
+                ));
+                *self = Self::new();
+            }
+        }
     }
 
     impl SfxController {
@@ -718,6 +778,7 @@ mod imp {
                 voices: HashMap::new(),
                 order: VecDeque::new(),
                 next_voice_id: 1,
+                timing: SfxTiming::new(),
             }
         }
 
@@ -735,6 +796,18 @@ mod imp {
         }
 
         pub fn play(&mut self, request: SfxPlayRequest<'_>) -> Result<Option<SfxVoiceId>, String> {
+            let started = Instant::now();
+            let result = self.play_untimed(request);
+            if self.timing.enabled {
+                self.timing.record(true, started);
+            }
+            result
+        }
+
+        fn play_untimed(
+            &mut self,
+            request: SfxPlayRequest<'_>,
+        ) -> Result<Option<SfxVoiceId>, String> {
             let request = request.normalized();
             if request.path.is_empty() {
                 return Err("SFX path must not be empty".to_string());
@@ -746,7 +819,7 @@ mod imp {
                 return Err("Android SFX playback-rate control is not implemented".to_string());
             }
 
-            self.update();
+            self.update_untimed();
             if !self.make_voice_capacity(request.priority) {
                 return Ok(None);
             }
@@ -787,6 +860,14 @@ mod imp {
         }
 
         pub fn update(&mut self) {
+            let started = Instant::now();
+            self.update_untimed();
+            if self.timing.enabled {
+                self.timing.record(false, started);
+            }
+        }
+
+        fn update_untimed(&mut self) {
             let finished = self
                 .voices
                 .iter()

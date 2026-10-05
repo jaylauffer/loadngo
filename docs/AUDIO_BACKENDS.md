@@ -15,7 +15,9 @@ Playback followed capture. iOS is off rodio and cpal entirely (its own
 RemoteIO backend), and desktop has a native path behind the
 `native-desktop-audio` feature, default off until it has been measured
 against rodio on each platform. Android never used cpal at all -- it plays
-through `android.media.MediaPlayer`.
+through `android.media.MediaPlayer`, which costs the game thread 40-53 ms per
+sound effect; [GAME_AUDIO_RUNTIME.md](GAME_AUDIO_RUNTIME.md) has the
+measurement and the plan to replace it.
 
 Linux needs no ALSA crate. The bindings are declared in-tree, so nothing
 depends on `pkg-config` finding a target ALSA install -- which is also what
