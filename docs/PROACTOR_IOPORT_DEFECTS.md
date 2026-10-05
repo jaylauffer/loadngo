@@ -306,11 +306,7 @@ lock-free here: `EpollPort` writes an eventfd, `KqueuePort` triggers an
 | Linux CI run 37316628556 on `43a58e2e` | fmt, clippy and the portable tests pass, including the new test and both `work_tools` tests that had failed |
 | `dolores` (Pi 5, kernel 6.18.50+rpt-rpi-2712), `187fbc0b` | all 12 `tests/uring.rs` tests pass in 0.08 s; `work_tools` tests (with `--all-features`) pass in 0.32 s, where CI had waited 30 s and 60 s |
 | `dolores`, pre-fix `uring.rs` (`43a58e2e^`) with the new test | the posted work runs after 9.99998 s, the full timer: the test fails, so it guards this defect |
-
-`agnes` (Pi 4) is not yet run: its checkout holds an uncommitted
-`host-desktop/src/linux_gamepad.rs` (identical to `dev`'s) that blocks a
-fast-forward, and a worktree elsewhere cannot build because a sibling repo
-refers to `../loadngo/pq-crypto`.
+| `agnes` (Pi 4, kernel 6.18.50+rpt-rpi-v8), `b3bdba83` | all 12 `tests/uring.rs` tests pass in 0.08 s; `work_tools` tests pass in 0.33 s; with the pre-fix `uring.rs` the new test fails at 9.99998 s |
 
 ## Related
 
