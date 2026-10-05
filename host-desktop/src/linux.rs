@@ -546,6 +546,8 @@ pub fn launch(
 }
 
 pub fn capture_frame() -> HostFrame {
+    // Before taking the state lock: a due report does I/O.
+    crate::frame_metrics::maybe_report(|line| eprintln!("{line}"));
     let mut state = lock_state();
     // Polled here, as part of building the frame the caller is about to
     // read, rather than when the frame is published — the same place macOS
@@ -1393,6 +1395,7 @@ fn advance_frame_clock(state: &mut HostSharedState, source: &str) {
     let now = Instant::now();
     let dt = now.saturating_duration_since(state.last_frame_instant);
     state.last_frame_instant = now;
+    crate::frame_metrics::record_interval(dt);
     state.latest_frame = HostFrame {
         timing: FrameTiming {
             delta_seconds: dt.as_secs_f32().max(1.0 / 240.0),
@@ -1405,6 +1408,9 @@ fn advance_frame_clock(state: &mut HostSharedState, source: &str) {
     state.frame_epoch = state.frame_epoch.saturating_add(1);
     state.pending_redraw = true;
     state.idle_frame_pending = false;
+    if !state.next_frame_wakers.is_empty() {
+        crate::frame_metrics::record_wake();
+    }
     for waker in state.next_frame_wakers.drain(..) {
         waker.wake();
     }

@@ -8,6 +8,7 @@ macro_rules! println {
 macro_rules! eprintln {
     ($($argument:tt)*) => { $crate::logging::console_record(true, format_args!($($argument)*)) };
 }
+mod frame_metrics;
 mod logging;
 pub use logging::{flush_logs, log_error, log_info, persistent_log_status};
 mod audio;
