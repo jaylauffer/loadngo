@@ -1,6 +1,7 @@
 # Proactor IoPort Defects
 
-Status: **both fixed 2026-09-08**, the same day they were found while
+Status: defects 1 and 2 **fixed 2026-09-08**; defect 3 (below) fixed 2026-10-05.
+Originally: **both fixed 2026-09-08**, the same day they were found while
 migrating `starlight` onto `Proactor<IoUringPort>`. This document is kept
 as the record of what was wrong and why the fixes took the shape they
 did; the "Suggested fix" sections below became the actual fixes.
@@ -258,6 +259,52 @@ legitimate peer; an `AF_INET` that failed to parse is a genuine fault.
 That way `None` never means "something went wrong".
 
 ---
+
+## 3. `IoUringPort::post` from another thread stalls until a blocked `poll` returns
+
+Found and fixed 2026-10-05 (`43a58e2e`).
+
+### What happens
+
+`poll` holds the ring mutex for its whole blocking wait. `post` (behind
+`enqueue_work`) woke the pump by submitting an `IORING_OP_NOP` tagged
+`QUEUE_TOKEN`, which takes the same mutex. A post from any thread other than
+the pump therefore waited until the pump's wait ended on its own: with a
+deferred timer pending, until that timer fired; with none, until something
+else woke it.
+
+### Reproduction
+
+Linux CI on `05413c28` (run 37314578861): `loadngo-inference`'s
+`work_tools::run` reads a command's stdout and stderr on two threads and
+posts the results. Every command waited out its full limit and reported
+`timed_out`: `sh -c 'exit 3'` under a 30 s limit, `git status` held for 60 s.
+`proactor/tests/uring.rs::uring_work_posted_from_another_thread_wakes_a_blocked_poll`
+reproduces it directly: `run_once` waits on a 10 s timer, a second thread
+posts, and the work must run within 2 s.
+
+### Why it went unnoticed
+
+Every existing uring test posted from the pump's own thread before polling,
+and `wake()` already used the lock-free eventfd. Hosts that pump with
+`run_ready` (the Linux desktop host) never hold the lock through a long wait.
+Earlier CI runs of the code that exposed it had all been cancelled by newer
+pushes.
+
+### Fix
+
+`post` writes the eventfd that `poll` already watches (`WAKE_TOKEN`), as
+`wake()` does; the next `poll` drains the queue before it waits, so nothing
+is lost. `signal_wake` was removed. The other three ports were already
+lock-free here: `EpollPort` writes an eventfd, `KqueuePort` triggers an
+`EVFILT_USER` event, `IocpPort` calls `PostQueuedCompletionStatus`.
+
+### Verification
+
+Linux CI run 37316628556 on `43a58e2e`: fmt, clippy and the portable tests,
+including the new test and both `work_tools` tests that had failed. Not yet
+done: running the new test on `dolores` and `agnes` directly, and showing it
+fails against the pre-fix `post`.
 
 ## Related
 
