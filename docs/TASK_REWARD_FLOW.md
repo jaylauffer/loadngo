@@ -15,10 +15,9 @@ kept separate from accepting the work.
 - QCoin is the first-party reward scheme, not a requirement. A task node must run
   without QCoin.
 
-The runtime does not do this yet. The section below describes the code as it is.
-The plan after it is what changes it.
+## Runtime (2026-10-06)
 
-## Current runtime (as of loadngo `87b6f961`)
+This is built; the sections after it describe the design.
 
 The Task roles:
 
@@ -29,44 +28,58 @@ The Task roles:
   assignment, runs the bounded task command, sends `TaskStatus`, then
   `TaskResult`. It is a bounded helper, not the standing worker runtime.
 - `task_submitter`: multicasts `TaskRequest`, collects `TaskOffer`s, selects one
-  worker with `TaskAccept`, verifies the returned artifact, writes a
-  deterministic completion receipt, submits it to QCoin, waits for inclusion,
-  then sends `TaskAck`.
+  worker with `TaskAccept`, verifies the returned artifact, writes the completion
+  receipt, settles the agreed reward if there is one, then sends `TaskAck`.
 
-How QCoin is wired in today, checked in the code:
+What the code does:
 
-- **Acceptance requires QCoin.** `task_submitter` sets
-  `accepted: verification_ok && qcoin_tx_hint.is_some()`. If QCoin is
-  unreachable, `anchor_reward` fails, the submitter exits with an error, and
-  no `TaskAck` is sent at all; the worker waits until its ack timeout.
-- **The worker has no say in the payee.** The QCoin output's owner is
-  `blake3(worker_node_id)` (`reward_owner_hash` in `network/src/task_runtime.rs`),
-  not an owner script the worker holds keys for.
-- **The task node has no reward configuration.** `task-node` and `task_worker`
-  only log `qcoin_tx_hint`.
-- **Settlement blocks.** `task_submitter` runs `cargo run -p qcoin-node` for
-  `submit-tx`, `tip` and `block`, from a hard-coded manifest path, and polls for
-  inclusion with `thread::sleep(2s)`, against the proactor rules in the
-  workspace `AGENTS.md`.
-- **It ties the repositories together.** `loadngo/network` depends on
-  `qcoin-types` only for this code (`reward_transaction`, `tx_id_hex`,
-  `block_contains_tx_id` and `task_submitter`), while qcoin depends on
-  `loadngo-pq-crypto`, `loadngo-proactor` and `network`. That edge is the
-  loadngo <-> qcoin cycle in [`GAME_DEPENDENCIES.md`](GAME_DEPENDENCIES.md).
+- **Acceptance is verification alone.** `task_submitter` sets
+  `accepted = verification_ok`. A task with no reward, or with a settler that is
+  slow or down, still closes with one `TaskAck`.
+- **Each operator chooses its schemes.** The submitter offers the schemes given
+  with `--reward <scheme>=<command>`; a worker (`task-node`, `task_worker`) offers
+  the payees given with `--reward-payee <scheme>=<payee>`, and may check what it is
+  paid with `--reward-verify <scheme>=<command>`.
+- **Settlement is bounded and offloaded.** The settler runs on a worker thread; the
+  submitter waits on a proactor for its answer or a deadline (30 s by default,
+  `--reward-settle-seconds`, plus 5 s grace), never polling.
+- **loadngo links no scheme.** The shared pieces are in `network::task_reward`
+  (matching, the settler contract, running the commands); no QCoin code or type is
+  in loadngo, and loadngo no longer depends on qcoin. qcoin depends on loadngo,
+  never the reverse.
+
+Checked on a Mac with `task-node` and `task_submitter` on loopback, with test
+settler and verifier commands: a rewarded round (`pending`, then `settled` by the
+worker's verifier), an unrewarded round, and a settler that exits non-zero
+(`accepted = true`, reward `failed`). Unit tests in `network::task_reward` cover
+matching, the flags, settler and verifier outcomes, and the deadline.
+
+### Before (until loadngo `87b6f961`)
+
+For the record: `task_submitter` set `accepted: verification_ok &&
+qcoin_tx_hint.is_some()`, so an unreachable QCoin meant no `TaskAck` at all; it
+paid `blake3(worker_node_id)`, an owner no key controls; it ran
+`cargo run -p qcoin-node` from a hard-coded manifest path and polled for
+inclusion with `thread::sleep(2s)` for up to 120 s, longer than the worker's 90 s
+ack timeout; and `loadngo/network` depended on `qcoin-types` for it, which made
+the loadngo <-> qcoin cycle.
 
 ## The completion receipt
 
 The scheme-neutral object is the deterministic completion receipt,
 `RewardReceipt` in `network/src/task_runtime.rs`: request, offer and assignment
 ids, both node ids, summary, success criteria, artifact hint and hash, result
-note and timestamps. Its commitment is framed by `loadngo-anchor` under the
-domain `loadngo.task.reward-receipt`, version 1.
+note, timestamps and the agreed reward (scheme and payee). Its commitment is
+framed by `loadngo-anchor` under the domain `loadngo.task.reward-receipt`,
+version 2 (`reward_receipt_commitment`). The submitter writes it, with the
+commitment and the settlement, to `--receipt-path` for every accepted task,
+rewarded or not.
 
-A reward scheme settles a receipt. It does not define one. QCoin's current
-settlement is a metadata-only transaction whose `metadata_hash` is that
-commitment; it is a proof of accepted work, not monetary issuance.
+A reward scheme settles a receipt. It does not define one. QCoin's settlement is
+a metadata-only output to the payee's owner script hash whose `metadata_hash` is
+that commitment; it is a proof of accepted work, not monetary issuance.
 
-## Plan: pluggable rewards
+## Design: pluggable rewards
 
 ### Protocol
 
@@ -84,9 +97,9 @@ TaskAck     { …, accepted: bool,                     // verification only
 - The submitter offers the schemes its operator configured. The worker offers
   the payees its operator configured. Selection matches them; a worker with no
   payees can still be selected for work offered without a reward.
-- `TaskAccept.reward` is the binding. It goes into the completion receipt, so
-  the receipt version becomes 2 (`REWARD_RECEIPT_VERSION`), as that constant's
-  comment requires for any field change.
+- `TaskAccept.reward` is the binding. It goes into the completion receipt as
+  `reward`, so the receipt version is 2 (`REWARD_RECEIPT_VERSION`), as that
+  constant's comment requires for any field change.
 - `TaskAck.reward` replaces `qcoin_tx_hint`.
 
 ### Order of closure
@@ -143,25 +156,38 @@ costs nothing that matters.
 The submitter runs the settler through bounded worker offload and receives the
 result as a proactor completion, not by blocking or polling.
 
+The contract, as `network::task_reward` implements it:
+
+- `settle` reads `{ scheme, payee, receipt, commitment_hex, wait_seconds }` and
+  writes `{ scheme, state, reference, note }`. `commitment_hex` is the receipt's
+  anchor commitment (domain `loadngo.task.reward-receipt`, version 2), what a
+  ledger records, so a settler need not know the framing. It should answer within
+  `wait_seconds` with `pending` if the reward is not final; past that plus 5 s
+  the submitter kills it and reports `failed`. A non-zero exit, unreadable output,
+  or an answer for another scheme is also `failed`.
+- `verify` reads a settlement and exits 0 when its reference is real; it may
+  write the settlement as it now stands (for example `settled`). The worker logs
+  it; the assignment is already closed.
+- Commands run through `sh -lc` on Unix and `cmd /C` on Windows.
+
 ### QCoin, the first-party settler
 
-`qcoin-node` gains `task-reward settle` and `task-reward verify`. The QCoin
-pieces now in loadngo move into qcoin with them: building the reward
-transaction, the transaction id, and finding it in a block. The node waits for
-inclusion from its own chain view rather than being polled through
-`cargo run`.
+`qcoin-node task-reward settle` and `task-reward verify` implement the contract
+for QCoin, with the QCoin pieces that used to be in loadngo: building the reward
+transaction, its id, and finding it in a block. Operator use is in qcoin
+`docs/TASK_REWARDS.md`.
 
-With that code gone, `loadngo/network` drops `qcoin-types` and the
-loadngo <-> qcoin cycle ends: qcoin depends on loadngo, never the reverse.
+With that code out of loadngo, `loadngo/network` dropped `qcoin-types` and the
+loadngo <-> qcoin cycle ended: qcoin depends on loadngo, never the reverse.
 
 ### Order of work
 
-| Step | Change | Where |
-|---|---|---|
-| 1 | Reward fields in the Task messages; `accepted` set from verification alone | `data/src/p2pmsg.rs`, `task_submitter`, `task-node`, `task_worker`, `task_ack` |
-| 2 | Settler contract, `--reward` / `--reward-payee` / `--reward-verify`, offloaded settlement; no-reward path tested with no QCoin present | `network` |
-| 3 | `qcoin-node task-reward settle` / `verify`, moved from `task_runtime.rs` and `task_submitter`; `qcoin-node payee` and the standard payee script (stage 1 of qcoin `docs/TASK_REWARDS.md`) | qcoin |
-| 4 | Remove `qcoin-types` from `network` and the loadngo workspace; update the QCoin-specific statements in the other Task docs | loadngo |
+| Step | Change | Where | State |
+|---|---|---|---|
+| 1 | Reward fields in the Task messages; `accepted` set from verification alone | `data/src/p2pmsg.rs`, `task_submitter`, `task-node`, `task_worker`, `task_ack` | done |
+| 2 | Settler contract, `--reward` / `--reward-payee` / `--reward-verify`, offloaded settlement; no-reward path tested with no QCoin present | `network` | done |
+| 3 | `qcoin-node task-reward settle` / `verify`, moved from `task_runtime.rs` and `task_submitter`; `qcoin-node payee` and the standard payee script (stage 1 of qcoin `docs/TASK_REWARDS.md`) | qcoin | see qcoin `docs/TASK_REWARDS.md` |
+| 4 | Remove `qcoin-types` from `network` and the loadngo workspace; update the QCoin-specific statements in the other Task docs | loadngo | done |
 
 ### Decided (Jay, 2026-10-06)
 

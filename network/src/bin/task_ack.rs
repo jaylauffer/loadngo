@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use data::{
     model_utils::now_timestamp,
-    p2pmsg::{Message, TaskAck},
+    p2pmsg::{Message, RewardSettlement, TaskAck},
 };
 use network::{Config, Network};
 use std::env;
@@ -14,7 +14,7 @@ struct Args {
     offer_id: u64,
     assignment_id: u64,
     accepted: bool,
-    qcoin_tx_hint: Option<String>,
+    reward: Option<RewardSettlement>,
     note: Option<String>,
 }
 
@@ -27,7 +27,7 @@ impl Args {
         let mut offer_id = None;
         let mut assignment_id = None;
         let mut accepted = None;
-        let mut qcoin_tx_hint = None;
+        let mut reward = None;
         let mut note = None;
 
         let mut args = env::args().skip(1);
@@ -81,8 +81,12 @@ impl Args {
                             .context("invalid --accepted, expected true or false")?,
                     );
                 }
-                "--qcoin-tx-hint" => {
-                    qcoin_tx_hint = Some(args.next().context("missing value for --qcoin-tx-hint")?);
+                "--reward-json" => {
+                    let value = args.next().context("missing value for --reward-json")?;
+                    reward = Some(
+                        serde_json::from_str(&value)
+                            .context("invalid --reward-json, expected a RewardSettlement")?,
+                    );
                 }
                 "--note" => {
                     note = Some(args.next().context("missing value for --note")?);
@@ -104,7 +108,7 @@ impl Args {
             offer_id: offer_id.ok_or_else(|| anyhow!("--offer-id is required"))?,
             assignment_id: assignment_id.ok_or_else(|| anyhow!("--assignment-id is required"))?,
             accepted: accepted.ok_or_else(|| anyhow!("--accepted is required"))?,
-            qcoin_tx_hint,
+            reward,
             note,
         })
     }
@@ -122,19 +126,21 @@ fn main() -> Result<()> {
         submitter_node_id: args.submitter_node_id,
         acked_at: now_timestamp(),
         accepted: args.accepted,
-        qcoin_tx_hint: args.qcoin_tx_hint,
+        reward: args.reward,
         note: args.note,
     };
 
     network.send_p2p_message(&args.target, Message::TaskAck(ack.clone()), true)?;
     println!(
-        "task_ack_sent assignment_id={} request_id={} offer_id={} target={} accepted={} qcoin_tx_hint={}",
+        "task_ack_sent assignment_id={} request_id={} offer_id={} target={} accepted={} reward={}",
         ack.assignment_id,
         ack.request_id,
         ack.offer_id,
         args.target,
         ack.accepted,
-        ack.qcoin_tx_hint.unwrap_or_default()
+        ack.reward
+            .map(|reward| format!("{}:{:?}", reward.scheme, reward.state))
+            .unwrap_or_else(|| "none".to_string())
     );
     Ok(())
 }
@@ -148,6 +154,7 @@ fn print_usage() {
          --offer-id <id> \
          --assignment-id <id> \
          --accepted <true|false> \
-         [--bind-port <port>] [--qcoin-tx-hint <text>] [--note <text>]"
+         [--bind-port <port>] [--note <text>] \
+         [--reward-json '{{\"scheme\":\"qcoin\",\"state\":\"pending\",\"reference\":\"...\"}}']"
     );
 }

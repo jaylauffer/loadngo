@@ -6,6 +6,7 @@ use data::{
 };
 use loadngo_proactor::{ChannelPort, CompletionKind, Proactor, ProactorHandle};
 use network::{
+    task_reward::{describe_settlement, shell_command, verify, WorkerRewards},
     task_runtime::{parse_multicast_v4, parse_multicast_v6, task_network_config},
     Network,
 };
@@ -13,7 +14,6 @@ use std::{
     collections::{HashMap, HashSet},
     env,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
-    process::Command,
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -32,6 +32,7 @@ struct Args {
     execute_command: String,
     result_note: Option<String>,
     ack_timeout_seconds: u64,
+    rewards: WorkerRewards,
     idle_interval_millis: u64,
     run_seconds: Option<u64>,
     multicast_v6: Vec<(Ipv6Addr, u32)>,
@@ -78,6 +79,7 @@ impl Args {
         let mut note = None;
         let mut execute_command = None;
         let mut result_note = None;
+        let mut rewards = WorkerRewards::default();
         let mut ack_timeout_seconds = 90u64;
         let mut idle_interval_millis = 250u64;
         let mut run_seconds = None;
@@ -134,6 +136,9 @@ impl Args {
                 "--result-note" => {
                     result_note = Some(args.next().context("missing value for --result-note")?);
                 }
+                flag @ ("--reward-payee" | "--reward-verify") => {
+                    rewards.parse_flag(flag, &mut args)?;
+                }
                 "--ack-timeout-seconds" => {
                     ack_timeout_seconds = args
                         .next()
@@ -186,6 +191,7 @@ impl Args {
                 .ok_or_else(|| anyhow!("--execute-command is required"))?,
             result_note,
             ack_timeout_seconds,
+            rewards,
             idle_interval_millis,
             run_seconds,
             multicast_v6,
@@ -326,6 +332,7 @@ impl TaskNode {
                     .artifact_hint
                     .clone()
                     .or_else(|| request.artifact_hint.clone()),
+                reward_payees: self.args.rewards.payees.clone(),
             }
         };
 
@@ -542,15 +549,47 @@ impl TaskNode {
         }
 
         println!(
-            "task-node_ack assignment_id={} source={} accepted={} qcoin_tx_hint={} note={}",
+            "task-node_ack assignment_id={} source={} accepted={} reward={} note={}",
             ack.assignment_id,
             source,
             ack.accepted,
-            ack.qcoin_tx_hint.unwrap_or_default(),
-            ack.note.unwrap_or_default()
+            describe_settlement(ack.reward.as_ref()),
+            ack.note.clone().unwrap_or_default()
         );
         state.active_assignment = None;
+        drop(state);
+        self.spawn_reward_verification(&ack);
         Ok(())
+    }
+
+    /// Checks the settlement in a `TaskAck` with the operator's verifier for its
+    /// scheme, if one is configured, off the proactor thread; the answer comes back as
+    /// a completion. Only logged: the assignment is already closed either way.
+    fn spawn_reward_verification(&self, ack: &TaskAck) {
+        let Some(settlement) = ack.reward.clone() else {
+            return;
+        };
+        let Some(command) = self.args.rewards.verifier(&settlement.scheme) else {
+            return;
+        };
+        let command = command.to_string();
+        let handle = self.handle.clone();
+        let assignment_id = ack.assignment_id;
+        thread::spawn(move || {
+            let verified = verify(&command, &settlement);
+            let posted = handle.enqueue_work(move |_| {
+                println!(
+                    "task-node_reward_verified assignment_id={} real={} now={} note={}",
+                    assignment_id,
+                    verified.real,
+                    describe_settlement(verified.updated.as_ref()),
+                    verified.note.unwrap_or_default()
+                );
+            });
+            if let Err(err) = posted {
+                eprintln!("task-node_enqueue_error assignment_id={assignment_id} error={err:#}");
+            }
+        });
     }
 
     fn handle_ack_timeout(&self, assignment_id: u64, request_id: u64, offer_id: u64) {
@@ -620,21 +659,6 @@ fn run_execute_command(
         .with_context(|| format!("failed to run task node command: {}", args.execute_command))
 }
 
-fn shell_command(script: &str) -> Command {
-    #[cfg(unix)]
-    {
-        let mut command = Command::new("sh");
-        command.arg("-lc").arg(script);
-        command
-    }
-    #[cfg(windows)]
-    {
-        let mut command = Command::new("cmd");
-        command.arg("/C").arg(script);
-        command
-    }
-}
-
 fn main() -> Result<()> {
     let args = Arc::new(Args::parse()?);
     if args.reply_endpoints.is_empty() {
@@ -683,7 +707,8 @@ fn print_usage() {
          [--bind-port <port>] [--capability <tag>] [--artifact-hint <path>] \
          [--estimated-duration-seconds <n>] [--max-status-interval-seconds <n>] \
          [--note <text>] [--result-note <text>] [--ack-timeout-seconds <n>] \
-         [--idle-interval-millis <n>] [--run-seconds <n>]"
+         [--idle-interval-millis <n>] [--run-seconds <n>] \
+         [--reward-payee <scheme>=<payee>]... [--reward-verify <scheme>=<command>]..."
     );
 }
 

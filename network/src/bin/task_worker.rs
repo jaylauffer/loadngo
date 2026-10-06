@@ -5,6 +5,7 @@ use data::{
     p2pmsg::{Message, TaskAccept, TaskOffer, TaskRequest, TaskResult, TaskStatus},
 };
 use network::{
+    task_reward::{describe_settlement, shell_command, verify, WorkerRewards},
     task_runtime::{parse_multicast_v4, parse_multicast_v6, task_network_config},
     Network,
 };
@@ -12,7 +13,6 @@ use std::{
     collections::{HashMap, HashSet},
     env,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
-    process::Command,
     thread,
     time::{Duration, Instant},
 };
@@ -31,6 +31,7 @@ struct Args {
     listen_seconds: u64,
     serve_forever: bool,
     ack_timeout_seconds: u64,
+    rewards: WorkerRewards,
     multicast_v6: Vec<(Ipv6Addr, u32)>,
     multicast_v4: Vec<(Ipv4Addr, Ipv4Addr)>,
 }
@@ -55,6 +56,7 @@ impl Args {
         let mut result_note = None;
         let mut listen_seconds = 300u64;
         let mut serve_forever = false;
+        let mut rewards = WorkerRewards::default();
         let mut ack_timeout_seconds = 90u64;
         let mut multicast_v6 = Vec::new();
         let mut multicast_v4 = Vec::new();
@@ -119,6 +121,9 @@ impl Args {
                 "--serve-forever" => {
                     serve_forever = true;
                 }
+                flag @ ("--reward-payee" | "--reward-verify") => {
+                    rewards.parse_flag(flag, &mut args)?;
+                }
                 "--ack-timeout-seconds" => {
                     ack_timeout_seconds = args
                         .next()
@@ -158,6 +163,7 @@ impl Args {
             listen_seconds,
             serve_forever,
             ack_timeout_seconds,
+            rewards,
             multicast_v6,
             multicast_v4,
         })
@@ -297,6 +303,7 @@ fn handle_request(
             .artifact_hint
             .clone()
             .or_else(|| request.artifact_hint.clone()),
+        reward_payees: args.rewards.payees.clone(),
     };
 
     let mut sent_targets = 0usize;
@@ -395,13 +402,25 @@ fn execute_assignment(
                     && ack.offer_id == accept.offer_id
                 {
                     println!(
-                        "task_worker_ack assignment_id={} source={} accepted={} qcoin_tx_hint={} note={}",
+                        "task_worker_ack assignment_id={} source={} accepted={} reward={} note={}",
                         ack.assignment_id,
                         source,
                         ack.accepted,
-                        ack.qcoin_tx_hint.unwrap_or_default(),
-                        ack.note.unwrap_or_default()
+                        describe_settlement(ack.reward.as_ref()),
+                        ack.note.clone().unwrap_or_default()
                     );
+                    if let Some(settlement) = ack.reward.as_ref() {
+                        if let Some(command) = args.rewards.verifier(&settlement.scheme) {
+                            let verified = verify(command, settlement);
+                            println!(
+                                "task_worker_reward_verified assignment_id={} real={} now={} note={}",
+                                ack.assignment_id,
+                                verified.real,
+                                describe_settlement(verified.updated.as_ref()),
+                                verified.note.unwrap_or_default()
+                            );
+                        }
+                    }
                     return Ok(());
                 }
             }
@@ -450,21 +469,6 @@ fn run_execute_command(
         .with_context(|| format!("failed to run worker command: {}", args.execute_command))
 }
 
-fn shell_command(script: &str) -> Command {
-    #[cfg(unix)]
-    {
-        let mut command = Command::new("sh");
-        command.arg("-lc").arg(script);
-        command
-    }
-    #[cfg(windows)]
-    {
-        let mut command = Command::new("cmd");
-        command.arg("/C").arg(script);
-        command
-    }
-}
-
 fn print_usage() {
     eprintln!(
         "usage: cargo run -p network --bin task_worker -- \
@@ -475,7 +479,8 @@ fn print_usage() {
          [--bind-port <port>] [--capability <tag>] [--artifact-hint <path>] \
          [--estimated-duration-seconds <n>] [--max-status-interval-seconds <n>] \
          [--note <text>] [--result-note <text>] [--listen-seconds <n>] \
-         [--serve-forever] [--ack-timeout-seconds <n>]"
+         [--serve-forever] [--ack-timeout-seconds <n>] \
+         [--reward-payee <scheme>=<payee>]... [--reward-verify <scheme>=<command>]..."
     );
 }
 

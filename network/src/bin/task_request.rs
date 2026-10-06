@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use data::{
     generate_id,
     model_utils::now_timestamp,
-    p2pmsg::{Message, TaskOffer, TaskRequest},
+    p2pmsg::{Message, RewardTerms, TaskOffer, TaskRequest},
 };
 use network::{Config, MulticastConfig, Network};
 use std::{
@@ -23,6 +23,7 @@ struct Args {
     success_criteria: Option<String>,
     artifact_hint: Option<String>,
     note: Option<String>,
+    reward_schemes: Vec<String>,
     timeout_seconds: u64,
     multicast_v6: Vec<(Ipv6Addr, u32)>,
     multicast_v4: Vec<(Ipv4Addr, Ipv4Addr)>,
@@ -39,6 +40,7 @@ impl Args {
         let mut success_criteria = None;
         let mut artifact_hint = None;
         let mut note = None;
+        let mut reward_schemes = Vec::new();
         let mut timeout_seconds = 5u64;
         let mut multicast_v6 = Vec::new();
         let mut multicast_v4 = Vec::new();
@@ -89,6 +91,9 @@ impl Args {
                 "--note" => {
                     note = Some(args.next().context("missing value for --note")?);
                 }
+                "--reward-scheme" => {
+                    reward_schemes.push(args.next().context("missing value for --reward-scheme")?);
+                }
                 "--timeout-seconds" => {
                     timeout_seconds = args
                         .next()
@@ -125,6 +130,7 @@ impl Args {
             success_criteria,
             artifact_hint,
             note,
+            reward_schemes,
             timeout_seconds,
             multicast_v6,
             multicast_v4,
@@ -180,6 +186,14 @@ fn main() -> Result<()> {
         success_criteria: args.success_criteria,
         artifact_hint: args.artifact_hint,
         note: args.note,
+        reward_offers: args
+            .reward_schemes
+            .into_iter()
+            .map(|scheme| RewardTerms {
+                scheme,
+                terms: None,
+            })
+            .collect(),
     };
 
     let sent = network.send_p2p_multicast_message(Message::TaskRequest(request.clone()), false)?;
@@ -281,6 +295,7 @@ fn print_usage() {
          --multicast-v6 <group%iface> [--multicast-v4 <group@interface>] \
          [--bind-port <port>] [--capability <tag>] [--requested-duration-seconds <n>] \
          [--success-criteria <text>] [--artifact-hint <path>] [--note <text>] \
+         [--reward-scheme <scheme>]... \
          [--timeout-seconds <n>]"
     );
 }

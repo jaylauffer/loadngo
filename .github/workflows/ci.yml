@@ -7,12 +7,10 @@ name: CI
 # was often off and left Windows jobs queued for days. Real-device checks on
 # the Pis and phones are done by hand, not here.
 #
-# loadngo's workspace has a path dependency on ../qcoin/qcoin-types, so qcoin
-# is checked out beside loadngo at QCOIN_REV. Cargo.lock records qcoin-types'
-# dependencies, so a pin and a lock that disagree fail under --locked: move
-# QCOIN_REV when the lock is refreshed for a newer qcoin, in the same commit.
-# kimi-k3-in-rust's CI reads QCOIN_REV from this file, so keep the line's
-# shape (`  QCOIN_REV: <40 hex digits>`).
+# loadngo builds on its own: it has no path dependency on another repository.
+# (Until 2026-10-06 it depended on ../qcoin/qcoin-types for Task rewards, and CI
+# checked qcoin out beside it at a pinned QCOIN_REV; see
+# docs/TASK_REWARD_FLOW.md.)
 #
 # Per-platform excludes: Cargo has no way to drop a workspace member by
 # target, and `--workspace` compiles every member on every host. Metal is
@@ -46,7 +44,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  QCOIN_REV: 4320770faf274d5b6e6b08d007add65ec433d5a1
 
 jobs:
   check:
@@ -87,12 +84,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: loadngo
-
-      - uses: actions/checkout@v4
-        with:
-          repository: jaylauffer/qcoin
-          ref: ${{ env.QCOIN_REV }}
-          path: qcoin
 
       - name: Toolchain
         run: |

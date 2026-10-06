@@ -2,9 +2,9 @@ use anyhow::{anyhow, bail, Context, Result};
 use data::{
     generate_id,
     model_utils::now_timestamp,
-    p2pmsg::{Message, TaskOffer, TaskRequest},
+    p2pmsg::{Message, RewardPayee, TaskOffer, TaskRequest},
 };
-use network::{Config, MulticastConfig, Network};
+use network::{task_reward::parse_scheme_value, Config, MulticastConfig, Network};
 use std::{
     collections::HashSet,
     env,
@@ -22,6 +22,7 @@ struct Args {
     max_status_interval_secs: Option<u64>,
     artifact_hint: Option<String>,
     note: Option<String>,
+    reward_payees: Vec<RewardPayee>,
     timeout_seconds: u64,
     multicast_v6: Vec<(Ipv6Addr, u32)>,
     multicast_v4: Vec<(Ipv4Addr, Ipv4Addr)>,
@@ -37,6 +38,7 @@ impl Args {
         let mut max_status_interval_secs = None;
         let mut artifact_hint = None;
         let mut note = None;
+        let mut reward_payees = Vec::new();
         let mut timeout_seconds = 5u64;
         let mut multicast_v6 = Vec::new();
         let mut multicast_v4 = Vec::new();
@@ -84,6 +86,11 @@ impl Args {
                 "--note" => {
                     note = Some(args.next().context("missing value for --note")?);
                 }
+                "--reward-payee" => {
+                    let value = args.next().context("missing value for --reward-payee")?;
+                    let (scheme, payee) = parse_scheme_value("--reward-payee", &value)?;
+                    reward_payees.push(RewardPayee { scheme, payee });
+                }
                 "--timeout-seconds" => {
                     timeout_seconds = args
                         .next()
@@ -119,6 +126,7 @@ impl Args {
             max_status_interval_secs,
             artifact_hint,
             note,
+            reward_payees,
             timeout_seconds,
             multicast_v6,
             multicast_v4,
@@ -231,6 +239,7 @@ fn handle_request(
         max_status_interval_secs: args.max_status_interval_secs,
         note: args.note.clone(),
         artifact_hint: args.artifact_hint.clone(),
+        reward_payees: args.reward_payees.clone(),
     };
 
     let mut sent_targets = 0usize;
@@ -282,6 +291,7 @@ fn print_usage() {
          --multicast-v6 <group%iface> [--multicast-v4 <group@interface>] \
          [--bind-port <port>] [--capability <tag>] [--estimated-duration-seconds <n>] \
          [--max-status-interval-seconds <n>] [--artifact-hint <path>] [--note <text>] \
+         [--reward-payee <scheme>=<payee>]... \
          [--timeout-seconds <n>]"
     );
 }

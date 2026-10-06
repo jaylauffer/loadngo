@@ -2001,9 +2001,7 @@ dependencies = [
  "hex",
  "libc",
  "loadngo-anchor",
- "loadngo-pq-crypto",
  "loadngo-proactor",
- "qcoin-types",
  "serde",
  "serde_json",
  "socket2",
@@ -2851,16 +2849,6 @@ name = "pxfm"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5a041e753da8b807c9255f28de81879c78c876392ff2469cde94799b2896b9d"
-
-[[package]]
-name = "qcoin-types"
-version = "0.1.1"
-dependencies = [
- "blake3",
- "loadngo-pq-crypto",
- "serde",
- "thiserror 1.0.69",
-]
 
 [[package]]
 name = "quick-error"

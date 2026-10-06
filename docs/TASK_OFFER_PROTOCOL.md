@@ -101,6 +101,8 @@ Minimum useful fields:
 - optional `success_criteria`
 - optional `artifact_hint`
 - optional `note`
+- `reward_offers`: the reward schemes the submitter's operator configured, each
+  `{ scheme, terms }`; empty offers no reward (and is what a peer that omits it sends)
 
 This message should stay lightweight. It is for discovery and initial matching,
 not for shipping large artifacts.
@@ -122,6 +124,8 @@ Minimum useful fields:
 - optional `max_status_interval_secs`
 - optional `note`
 - optional `artifact_hint`
+- `reward_payees`: where this worker is paid, `{ scheme, payee }` per scheme its
+  operator configured with `--reward-payee`; empty takes only unrewarded work
 
 This is where concurrent candidate workers respond directly to the submitter.
 
@@ -147,6 +151,9 @@ Minimum useful fields:
 - optional `success_criteria`
 - optional `artifact_hint`
 - optional `note`
+- optional `reward`: the `{ scheme, payee }` agreed for this assignment, the first
+  scheme in the request's order that the worker has a payee for; absent for unrewarded
+  work
 
 This is the authority handoff. It defines the cadence and delivery threshold
 that the submitter will enforce.
@@ -193,8 +200,9 @@ Fields should include:
 - `submitter_node_id`
 - `acked_at`
 - `accepted`: the result met the success criteria; nothing else
-- optional `qcoin_tx_hint` (planned: replaced by a scheme-neutral `reward` settlement;
-  see [TASK_REWARD_FLOW.md](TASK_REWARD_FLOW.md))
+- optional `reward`: how far the agreed reward got, `{ scheme, state, reference, note }`
+  with `state` one of `settled`, `pending`, `failed`; absent when no reward was agreed
+  or the work was rejected (see [TASK_REWARD_FLOW.md](TASK_REWARD_FLOW.md))
 - optional `note`
 
 If `accepted` is false, the task remains unclosed from the worker's perspective
@@ -263,15 +271,14 @@ Decided by Jay on 2026-10-06: **accepting the work does not depend on the
 reward.** `TaskAck.accepted` reports verification against the success criteria
 only. A reward is settled only for accepted work, so:
 
-- no reward on `TaskRequest`, `TaskOffer`, `TaskAccept` or `TaskStatus`
+- nothing is paid at `TaskRequest`, `TaskOffer`, `TaskAccept` or `TaskStatus`; they
+  only carry the offered schemes, the worker's payees and the agreed payee
 - no reward on speculative completion alone
 - a reward only after the submitter confirms that the worker met the success criteria
 - a failed or slow settlement never turns accepted work into rejected work
 
-The current runtime does not follow this yet: `task_submitter` sets `accepted`
-only once the QCoin anchor is included, and fails without sending `TaskAck` when
-QCoin is unreachable. The plan to make rewards pluggable and configured by each
-operator, with QCoin as the first settler, is in
+Rewards are pluggable and configured by each operator; a scheme is an external
+settler command, with QCoin as the first-party one. How it works is in
 [TASK_REWARD_FLOW.md](TASK_REWARD_FLOW.md).
 
 ## Recommendations Not Yet Adopted

@@ -179,6 +179,48 @@ pub enum RequestContent {
     Response { hash: CasHash, data: Vec<u8> },
 }
 
+/// A reward scheme a submitter offers for a Task, such as `qcoin`. A Task with no
+/// reward is complete without one: `TaskAck.accepted` never depends on the reward.
+/// See `docs/TASK_REWARD_FLOW.md`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RewardTerms {
+    pub scheme: String,
+    #[serde(default)]
+    pub terms: Option<String>,
+}
+
+/// Where a worker is paid under one scheme. The payee is opaque to loadngo; only that
+/// scheme's settler reads it (for QCoin, an owner script hash).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RewardPayee {
+    pub scheme: String,
+    pub payee: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RewardState {
+    /// The reward is final under the scheme's rules.
+    Settled,
+    /// Submitted but not final when `TaskAck` was sent; the worker checks the
+    /// reference later with its verify command.
+    Pending,
+    /// The settler failed or did not answer in time.
+    Failed,
+}
+
+/// How far a reward got, reported in `TaskAck`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RewardSettlement {
+    pub scheme: String,
+    pub state: RewardState,
+    /// Scheme-specific reference a verifier can check, such as a transaction id.
+    #[serde(default)]
+    pub reference: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskOffer {
     pub offer_id: u64,
@@ -192,6 +234,9 @@ pub struct TaskOffer {
     pub max_status_interval_secs: Option<u64>,
     pub note: Option<String>,
     pub artifact_hint: Option<String>,
+    /// The payees this worker's operator configured, one per scheme it accepts.
+    #[serde(default)]
+    pub reward_payees: Vec<RewardPayee>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -209,6 +254,9 @@ pub struct TaskAccept {
     pub success_criteria: Option<String>,
     pub artifact_hint: Option<String>,
     pub note: Option<String>,
+    /// The scheme and payee agreed for this assignment; `None` for unrewarded work.
+    #[serde(default)]
+    pub reward: Option<RewardPayee>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -224,6 +272,9 @@ pub struct TaskRequest {
     pub success_criteria: Option<String>,
     pub artifact_hint: Option<String>,
     pub note: Option<String>,
+    /// The reward schemes the submitter's operator configured; empty offers none.
+    #[serde(default)]
+    pub reward_offers: Vec<RewardTerms>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -257,8 +308,13 @@ pub struct TaskAck {
     pub offer_id: u64,
     pub submitter_node_id: String,
     pub acked_at: u64,
+    /// The result met the success criteria. Set from verification alone, never from
+    /// the reward.
     pub accepted: bool,
-    pub qcoin_tx_hint: Option<String>,
+    /// How far the agreed reward got; `None` when none was agreed or the work was
+    /// rejected.
+    #[serde(default)]
+    pub reward: Option<RewardSettlement>,
     pub note: Option<String>,
 }
 
@@ -586,7 +642,17 @@ fn parse_hash(body: &[u8]) -> Option<CasHash> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Message, TaskAccept, TaskAck, TaskOffer, TaskRequest, TaskResult, TaskStatus};
+    use super::{
+        Header, Message, MessageType, RewardPayee, RewardSettlement, RewardState, RewardTerms,
+        TaskAccept, TaskAck, TaskOffer, TaskRequest, TaskResult, TaskStatus,
+    };
+
+    fn qcoin_payee() -> RewardPayee {
+        RewardPayee {
+            scheme: "qcoin".to_string(),
+            payee: "ab".repeat(32),
+        }
+    }
 
     #[test]
     fn task_offer_round_trips() {
@@ -602,6 +668,7 @@ mod tests {
             max_status_interval_secs: Some(60),
             note: Some("can take this on the wired side".to_string()),
             artifact_hint: Some("docs/TASK_OFFER_PROTOCOL.md".to_string()),
+            reward_payees: vec![qcoin_payee()],
         };
 
         let bytes = Message::TaskOffer(offer.clone()).to_bytes(false);
@@ -626,6 +693,7 @@ mod tests {
             success_criteria: Some("commit pushed and tests green".to_string()),
             artifact_hint: Some("docs/TASK_EXECUTION_TEST_PLAN.md".to_string()),
             note: Some("selected for execution".to_string()),
+            reward: Some(qcoin_payee()),
         };
 
         let bytes = Message::TaskAccept(accept.clone()).to_bytes(false);
@@ -648,6 +716,10 @@ mod tests {
             success_criteria: Some("review notes posted with file references".to_string()),
             artifact_hint: Some("docs/TASK_OFFER_PROTOCOL.md".to_string()),
             note: Some("prefer the wired lab path".to_string()),
+            reward_offers: vec![RewardTerms {
+                scheme: "qcoin".to_string(),
+                terms: None,
+            }],
         };
 
         let bytes = Message::TaskRequest(request.clone()).to_bytes(false);
@@ -703,13 +775,71 @@ mod tests {
             submitter_node_id: "submitter-a".to_string(),
             acked_at: 420,
             accepted: true,
-            qcoin_tx_hint: Some("qcoin:tx:abc123".to_string()),
-            note: Some("success criteria met and reward issued".to_string()),
+            reward: Some(RewardSettlement {
+                scheme: "qcoin".to_string(),
+                state: RewardState::Pending,
+                reference: Some("qcoin:tx:abc123".to_string()),
+                note: None,
+            }),
+            note: Some("success criteria met".to_string()),
         };
 
         let bytes = Message::TaskAck(ack.clone()).to_bytes(true);
         let (_, decoded) = Message::from_bytes(&bytes).expect("task ack frame should parse");
 
         assert_eq!(decoded, Message::TaskAck(ack));
+    }
+
+    #[test]
+    fn reward_state_is_lowercase_on_the_wire() {
+        let json = serde_json::to_string(&RewardState::Settled).unwrap();
+        assert_eq!(json, "\"settled\"");
+    }
+
+    /// A peer that sends no reward fields is read as offering or taking no reward.
+    #[test]
+    fn task_messages_without_reward_fields_read_as_unrewarded() {
+        fn decode(msg_type: MessageType, json: &str) -> Message {
+            let mut bytes = Header::new(msg_type, false, json.len() as u32)
+                .to_bytes()
+                .to_vec();
+            bytes.extend_from_slice(json.as_bytes());
+            Message::from_bytes(&bytes).expect("frame should parse").1
+        }
+
+        let request = decode(
+            MessageType::TaskRequest,
+            r#"{"request_id":1,"submitter_node_id":"s","created_at":0,"expires_at":9,
+                "summary":"x","capability_tags":[],"reply_endpoints":[],
+                "requested_duration_secs":null,"success_criteria":null,
+                "artifact_hint":null,"note":null}"#,
+        );
+        let Message::TaskRequest(request) = request else {
+            panic!("expected TaskRequest");
+        };
+        assert!(request.reward_offers.is_empty());
+
+        let offer = decode(
+            MessageType::TaskOffer,
+            r#"{"offer_id":1,"request_id":1,"worker_node_id":"w","created_at":0,
+                "expires_at":9,"capability_tags":[],"reply_endpoints":[],
+                "estimated_duration_secs":null,"max_status_interval_secs":null,
+                "note":null,"artifact_hint":null}"#,
+        );
+        let Message::TaskOffer(offer) = offer else {
+            panic!("expected TaskOffer");
+        };
+        assert!(offer.reward_payees.is_empty());
+
+        let ack = decode(
+            MessageType::TaskAck,
+            r#"{"assignment_id":1,"request_id":1,"offer_id":1,"submitter_node_id":"s",
+                "acked_at":0,"accepted":true,"note":null}"#,
+        );
+        let Message::TaskAck(ack) = ack else {
+            panic!("expected TaskAck");
+        };
+        assert!(ack.accepted);
+        assert_eq!(ack.reward, None);
     }
 }

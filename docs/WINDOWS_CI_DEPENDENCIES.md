@@ -1,19 +1,16 @@
-# CI runners and the QCoin sibling
+# CI runners
 
-loadngo has a path dependency on `../qcoin/qcoin-types`, so every CI job
-builds with a QCoin checkout beside loadngo, at the workflow-level `QCOIN_REV`.
-Cargo.lock records QCoin's dependencies, so with `--locked` a pin and a lock
-that disagree fail dependency resolution. When Cargo.lock is refreshed for a
-newer QCoin, move `QCOIN_REV` to that commit in the same loadngo commit. Do
-not substitute a floating branch or regenerate Cargo.lock in CI.
+loadngo's CI builds loadngo alone. Until 2026-10-06 it also checked out QCoin
+beside it, because loadngo's workspace had a path dependency on
+`../qcoin/qcoin-types` for Task rewards; that dependency is gone (see
+`TASK_REWARD_FLOW.md`), and with it `QCOIN_REV`.
 
 ## Runner
 
 Since 2026-10-06 every platform runs on GitHub-hosted runners
 (`ubuntu-24.04-arm`, `ubuntu-latest`, `macos-latest`, `windows-latest`):
-loadngo is public, so the minutes are free. Each job checks out loadngo and
-QCoin side by side with `actions/checkout` and caches the build with
-`Swatinem/rust-cache`. Windows moved first: it had run on the lab's
+loadngo is public, so the minutes are free. Each job checks out loadngo with
+`actions/checkout` and caches the build with `Swatinem/rust-cache`. Windows moved first: it had run on the lab's
 self-hosted `acerj` (`build-windows-x64`, provisioned by
 `~/pudding/provision-windows-runner.ps1`), which was often switched off, so
 Windows jobs sat queued until it woke. Linux (dolores, agnes) and macOS (the
@@ -21,12 +18,10 @@ Mac mini, building on Jarraya) followed the same day, which also means no pull
 request from a fork runs on lab hardware. The hosted Windows image has what
 acerj was provisioned with: the VS C++ build tools, Git and rustup. Linux
 installs `pkg-config`, `libasound2-dev` and `libwayland-dev`, which alsa-sys
-and wayland-sys look for at build time.
+and wayland-sys look for at build time, and `libegl-dev` and `libgles-dev`,
+which host-desktop's harness binaries link.
 
-kimi-k3-in-rust's CI reads `QCOIN_REV` from loadngo's `ci.yml`, so the two pin
-the same QCoin.
-
-## History
+## History: the QCoin sibling
 
 In [run 35762838840](https://github.com/jaylauffer/loadngo/actions/runs/35762838840)
 acerj fetched loadngo `af005bf6`, passed formatting, then failed dependency

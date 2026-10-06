@@ -62,17 +62,14 @@ For a change that spans loadngo and a game:
 3. In the game, run `cargo update -p ui-core`, then build and test plainly.
 4. Commit the game change together with its `Cargo.lock`.
 
-## Not yet covered: loadngo, qcoin and EAB
+## Not yet covered: qcoin and EAB
 
-These three still build with sibling path dependencies, because they form a
-cycle. loadngo's workspace uses `qcoin-types`, and `qcoin-types` uses
-`loadngo-pq-crypto` from loadngo. Fetched by git, each side would get its
-own copy of the other, and the types would no longer match. Breaking the
-cycle comes first. The plan (2026-10-06) is for qcoin to depend on loadngo and
-never the reverse: loadngo's only use of `qcoin-types` is the Task reward code,
-which moves into qcoin as its reward settler
-([TASK_REWARD_FLOW.md](TASK_REWARD_FLOW.md)). Their CI keeps its current
-sibling setup until then.
+loadngo no longer depends on qcoin (2026-10-06): its only use of `qcoin-types`
+was the Task reward code, which became an external settler command and moved
+into qcoin ([TASK_REWARD_FLOW.md](TASK_REWARD_FLOW.md)). The dependency now runs
+one way, qcoin on loadngo. qcoin and EAB still take loadngo by sibling path at a
+pinned revision; they can move to git dependencies like the games now that the
+cycle is gone.
 
 ## Next: crates.io
 

@@ -2,24 +2,28 @@ use anyhow::{anyhow, bail, Context, Result};
 use data::{
     generate_id,
     model_utils::now_timestamp,
-    p2pmsg::{Message, TaskAccept, TaskAck, TaskOffer, TaskRequest, TaskResult},
+    p2pmsg::{
+        Message, RewardSettlement, RewardState, RewardTerms, TaskAccept, TaskAck, TaskOffer,
+        TaskRequest, TaskResult,
+    },
 };
 use network::{
+    task_reward::{
+        choose_reward, parse_scheme_value, settle, shell_command, SchemeCommand, SettleRequest,
+        DEFAULT_SETTLE_WAIT,
+    },
     task_runtime::{
-        artifact_hash_hex, block_contains_tx_id, endpoint_host, parse_multicast_v4,
-        parse_multicast_v6, reward_receipt_bytes, reward_transaction, task_network_config,
-        tx_id_hex, RewardReceipt,
+        artifact_hash_hex, endpoint_host, parse_multicast_v4, parse_multicast_v6,
+        reward_receipt_commitment, task_network_config, RewardReceipt, REWARD_RECEIPT_VERSION,
     },
     Network,
 };
-use qcoin_types::Block;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::{
     collections::HashMap,
     env, fs,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
-    process::Command,
     thread,
     time::{Duration, Instant},
 };
@@ -44,9 +48,8 @@ struct Args {
     verify_command: String,
     artifact_copy_path: Option<PathBuf>,
     receipt_path: Option<PathBuf>,
-    qcoin_target: String,
-    qcoin_manifest_path: PathBuf,
-    qcoin_inclusion_timeout_seconds: u64,
+    rewards: Vec<SchemeCommand>,
+    settle_wait_seconds: u64,
     multicast_v6: Vec<(Ipv6Addr, u32)>,
     multicast_v4: Vec<(Ipv4Addr, Ipv4Addr)>,
 }
@@ -57,25 +60,13 @@ struct SeenOffer {
     offer: TaskOffer,
 }
 
-#[derive(Debug, Deserialize)]
-struct SubmitTransactionResponse {
-    accepted: bool,
-    tx_id_hex: String,
-    message: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct TipResponse {
-    height: u64,
-}
-
+/// Written for accepted work: the completion receipt, its commitment, and the reward
+/// settlement if one was agreed.
 #[derive(Debug, Serialize)]
-struct RewardClosureRecord {
-    reward_receipt: RewardReceipt,
-    reward_receipt_hash_hex: String,
-    qcoin_target: String,
-    qcoin_tx_id_hex: String,
-    qcoin_included_height: u64,
+struct ClosureRecord {
+    receipt: RewardReceipt,
+    receipt_commitment_hex: String,
+    reward: Option<RewardSettlement>,
 }
 
 impl Args {
@@ -99,9 +90,8 @@ impl Args {
         let mut verify_command = None;
         let mut artifact_copy_path = None;
         let mut receipt_path = None;
-        let mut qcoin_target = None;
-        let mut qcoin_manifest_path = PathBuf::from("/Users/jay/pudding/qcoin/Cargo.toml");
-        let mut qcoin_inclusion_timeout_seconds = 120u64;
+        let mut rewards: Vec<SchemeCommand> = Vec::new();
+        let mut settle_wait_seconds = DEFAULT_SETTLE_WAIT.as_secs();
         let mut multicast_v6 = Vec::new();
         let mut multicast_v4 = Vec::new();
 
@@ -213,21 +203,20 @@ impl Args {
                         args.next().context("missing value for --receipt-path")?,
                     ));
                 }
-                "--qcoin-target" => {
-                    qcoin_target = Some(args.next().context("missing value for --qcoin-target")?);
+                "--reward" => {
+                    let value = args.next().context("missing value for --reward")?;
+                    let (scheme, command) = parse_scheme_value("--reward", &value)?;
+                    if rewards.iter().any(|reward| reward.scheme == scheme) {
+                        bail!("--reward given twice for scheme {scheme}");
+                    }
+                    rewards.push(SchemeCommand { scheme, command });
                 }
-                "--qcoin-manifest-path" => {
-                    qcoin_manifest_path = PathBuf::from(
-                        args.next()
-                            .context("missing value for --qcoin-manifest-path")?,
-                    );
-                }
-                "--qcoin-inclusion-timeout-seconds" => {
-                    qcoin_inclusion_timeout_seconds = args
+                "--reward-settle-seconds" => {
+                    settle_wait_seconds = args
                         .next()
-                        .context("missing value for --qcoin-inclusion-timeout-seconds")?
+                        .context("missing value for --reward-settle-seconds")?
                         .parse()
-                        .context("invalid --qcoin-inclusion-timeout-seconds")?;
+                        .context("invalid --reward-settle-seconds")?;
                 }
                 "--multicast-v6" => {
                     let value = args.next().context("missing value for --multicast-v6")?;
@@ -267,9 +256,8 @@ impl Args {
                 .ok_or_else(|| anyhow!("--verify-command is required"))?,
             artifact_copy_path,
             receipt_path,
-            qcoin_target: qcoin_target.ok_or_else(|| anyhow!("--qcoin-target is required"))?,
-            qcoin_manifest_path,
-            qcoin_inclusion_timeout_seconds,
+            rewards,
+            settle_wait_seconds,
             multicast_v6,
             multicast_v4,
         })
@@ -303,6 +291,14 @@ fn main() -> Result<()> {
         success_criteria: args.success_criteria.clone(),
         artifact_hint: args.artifact_hint.clone(),
         note: args.note.clone(),
+        reward_offers: args
+            .rewards
+            .iter()
+            .map(|reward| RewardTerms {
+                scheme: reward.scheme.clone(),
+                terms: None,
+            })
+            .collect(),
     };
 
     let mut sent =
@@ -317,6 +313,7 @@ fn main() -> Result<()> {
 
     let offers = collect_offers(&network, &request, &args)?;
     let selected = select_offer(&offers, args.select_worker_node_id.as_deref())?;
+    let reward = choose_reward(&request.reward_offers, &selected.offer.reward_payees);
     let accepted_at = now_timestamp();
     let expected_delivery_by = args
         .expected_duration_secs
@@ -341,14 +338,22 @@ fn main() -> Result<()> {
             .clone()
             .or_else(|| selected.offer.artifact_hint.clone()),
         note: Some("selected for feedback task execution".to_string()),
+        reward: reward.clone(),
     };
 
     for target in &selected.offer.reply_endpoints {
         network.send_p2p_message(target, Message::TaskAccept(accept.clone()), false)?;
     }
     println!(
-        "task_submitter_accept_sent assignment_id={} request_id={} offer_id={} worker_node_id={}",
-        accept.assignment_id, accept.request_id, accept.offer_id, accept.worker_node_id
+        "task_submitter_accept_sent assignment_id={} request_id={} offer_id={} worker_node_id={} reward={}",
+        accept.assignment_id,
+        accept.request_id,
+        accept.offer_id,
+        accept.worker_node_id,
+        reward
+            .as_ref()
+            .map(|reward| format!("{}:{}", reward.scheme, reward.payee))
+            .unwrap_or_else(|| "none".to_string())
     );
 
     let result = wait_for_result(&network, &accept, selected, &args)?;
@@ -359,42 +364,54 @@ fn main() -> Result<()> {
         accept.assignment_id, verification_ok
     );
 
-    let mut qcoin_tx_hint = None;
-    let mut ack_note = if verification_ok {
-        Some("artifact verified".to_string())
-    } else {
-        Some(format!("verification failed: {}", verify_output.status))
-    };
-
-    if verification_ok {
-        let (receipt, tx_id_hex_value, included_height) =
-            anchor_reward(&args, &accept, &request, &result)?;
-        qcoin_tx_hint = Some(format!(
-            "qcoin:tx:{}@height:{}",
-            tx_id_hex_value, included_height
-        ));
-        ack_note = Some(format!(
-            "artifact verified and qcoin reward included at height {}",
-            included_height
-        ));
-        write_closure_record(
-            &receipt,
-            &tx_id_hex_value,
-            included_height,
-            &args.qcoin_target,
-            args.receipt_path.as_deref(),
-        )?;
+    // Acceptance is verification alone. The reward, if one was agreed, is settled
+    // only for accepted work, and its outcome never changes `accepted`.
+    let accepted = verification_ok;
+    let mut settlement = None;
+    if accepted {
+        let receipt = completion_receipt(&args, &accept, &request, &result)?;
+        if let Some(reward) = accept.reward.as_ref() {
+            let command = args
+                .rewards
+                .iter()
+                .find(|configured| configured.scheme == reward.scheme)
+                .map(|configured| configured.command.as_str())
+                .expect("the agreed scheme is one this submitter offered");
+            let settle_request = SettleRequest::new(
+                reward,
+                &receipt,
+                Duration::from_secs(args.settle_wait_seconds),
+            )?;
+            let outcome = settle(command, &settle_request);
+            println!(
+                "task_submitter_reward assignment_id={} scheme={} state={:?} reference={} note={}",
+                accept.assignment_id,
+                outcome.scheme,
+                outcome.state,
+                outcome.reference.clone().unwrap_or_default(),
+                outcome.note.clone().unwrap_or_default()
+            );
+            settlement = Some(outcome);
+        }
+        write_closure_record(&receipt, settlement.clone(), args.receipt_path.as_deref())?;
     }
 
+    let ack_note = match (accepted, settlement.as_ref().map(|s| s.state)) {
+        (false, _) => format!("verification failed: {}", verify_output.status),
+        (true, None) => "artifact verified".to_string(),
+        (true, Some(RewardState::Settled)) => "artifact verified; reward settled".to_string(),
+        (true, Some(RewardState::Pending)) => "artifact verified; reward pending".to_string(),
+        (true, Some(RewardState::Failed)) => "artifact verified; reward failed".to_string(),
+    };
     let ack = TaskAck {
         assignment_id: accept.assignment_id,
         request_id: accept.request_id,
         offer_id: accept.offer_id,
         submitter_node_id: args.submitter_node_id.clone(),
         acked_at: now_timestamp(),
-        accepted: verification_ok && qcoin_tx_hint.is_some(),
-        qcoin_tx_hint,
-        note: ack_note,
+        accepted,
+        reward: settlement,
+        note: Some(ack_note),
     };
     let ack_target = selected
         .offer
@@ -404,17 +421,20 @@ fn main() -> Result<()> {
         .unwrap_or_else(|| selected.source.to_string());
     network.send_p2p_message(&ack_target, Message::TaskAck(ack.clone()), true)?;
     println!(
-        "task_submitter_ack_sent assignment_id={} accepted={} target={} qcoin_tx_hint={}",
+        "task_submitter_ack_sent assignment_id={} accepted={} target={} reward={}",
         ack.assignment_id,
         ack.accepted,
         ack_target,
-        ack.qcoin_tx_hint.unwrap_or_default()
+        ack.reward
+            .as_ref()
+            .map(|reward| format!("{}:{:?}", reward.scheme, reward.state))
+            .unwrap_or_else(|| "none".to_string())
     );
 
     if ack.accepted {
         Ok(())
     } else {
-        bail!("task assignment was not accepted for reward closure")
+        bail!("the task result did not pass verification")
     }
 }
 
@@ -429,13 +449,19 @@ fn collect_offers(network: &Network, request: &TaskRequest, args: &Args) -> Resu
             if let Some((source, Message::TaskOffer(offer))) = captured {
                 if offer.request_id == request.request_id {
                     println!(
-                        "task_submitter_offer request_id={} offer_id={} worker_node_id={} source={} estimated_duration_secs={} max_status_interval_secs={} note={}",
+                        "task_submitter_offer request_id={} offer_id={} worker_node_id={} source={} estimated_duration_secs={} max_status_interval_secs={} reward_schemes={} note={}",
                         request.request_id,
                         offer.offer_id,
                         offer.worker_node_id,
                         source,
                         offer.estimated_duration_secs.unwrap_or_default(),
                         offer.max_status_interval_secs.unwrap_or_default(),
+                        offer
+                            .reward_payees
+                            .iter()
+                            .map(|payee| payee.scheme.as_str())
+                            .collect::<Vec<_>>()
+                            .join(","),
                         offer.note.clone().unwrap_or_default()
                     );
                     seen_offers
@@ -583,23 +609,18 @@ fn run_verify_command(
         .with_context(|| format!("failed to run verify command: {}", args.verify_command))
 }
 
-fn anchor_reward(
+fn completion_receipt(
     args: &Args,
     accept: &TaskAccept,
     request: &TaskRequest,
     result: &TaskResult,
-) -> Result<(RewardReceipt, String, u64)> {
-    let receipt_path = default_receipt_path(args.receipt_path.as_deref(), accept.assignment_id);
-    if let Some(parent) = receipt_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create receipt dir: {}", parent.display()))?;
-    }
+) -> Result<RewardReceipt> {
     let artifact_hash = match args.artifact_copy_path.as_deref() {
         Some(path) => artifact_hash_hex(path)?,
         None => None,
     };
-    let receipt = RewardReceipt {
-        receipt_version: 1,
+    Ok(RewardReceipt {
+        receipt_version: u32::from(REWARD_RECEIPT_VERSION),
         request_id: accept.request_id,
         offer_id: accept.offer_id,
         assignment_id: accept.assignment_id,
@@ -622,43 +643,8 @@ fn anchor_reward(
         result_note: result.note.clone(),
         accepted_at: now_timestamp(),
         submitted_at: result.submitted_at,
-    };
-    let receipt_bytes = reward_receipt_bytes(&receipt)?;
-    fs::write(&receipt_path, &receipt_bytes)
-        .with_context(|| format!("failed to write reward receipt: {}", receipt_path.display()))?;
-
-    let tx = reward_transaction(&receipt)?;
-    let tx_json_path = receipt_path.with_extension("qcoin-tx.json");
-    let tx_json = serde_json::to_vec_pretty(&tx).context("failed to encode qcoin tx json")?;
-    fs::write(&tx_json_path, tx_json)
-        .with_context(|| format!("failed to write qcoin tx json: {}", tx_json_path.display()))?;
-
-    let submit_response =
-        submit_reward_transaction(&args.qcoin_manifest_path, &args.qcoin_target, &tx_json_path)?;
-    if !submit_response.accepted {
-        bail!(
-            "qcoin rejected reward transaction {}: {}",
-            submit_response.tx_id_hex,
-            submit_response.message
-        );
-    }
-
-    let expected_tx_id = tx_id_hex(&tx);
-    if submit_response.tx_id_hex != expected_tx_id {
-        bail!(
-            "qcoin reported tx id {} but local tx id is {}",
-            submit_response.tx_id_hex,
-            expected_tx_id
-        );
-    }
-
-    let included_height = wait_for_qcoin_inclusion(
-        &args.qcoin_manifest_path,
-        &args.qcoin_target,
-        &tx,
-        args.qcoin_inclusion_timeout_seconds,
-    )?;
-    Ok((receipt, expected_tx_id, included_height))
+        reward: accept.reward.clone(),
+    })
 }
 
 fn default_receipt_path(configured: Option<&Path>, assignment_id: u64) -> PathBuf {
@@ -667,149 +653,28 @@ fn default_receipt_path(configured: Option<&Path>, assignment_id: u64) -> PathBu
         .unwrap_or_else(|| PathBuf::from(format!("task-receipts/assignment-{assignment_id}.json")))
 }
 
-fn submit_reward_transaction(
-    manifest_path: &Path,
-    target: &str,
-    tx_json_path: &Path,
-) -> Result<SubmitTransactionResponse> {
-    let output = Command::new("cargo")
-        .arg("run")
-        .arg("-q")
-        .arg("-p")
-        .arg("qcoin-node")
-        .arg("--manifest-path")
-        .arg(manifest_path)
-        .arg("--")
-        .arg("submit-tx")
-        .arg("--tx-json")
-        .arg(tx_json_path)
-        .arg("--target")
-        .arg(target)
-        .output()
-        .with_context(|| format!("failed to submit qcoin tx via {}", manifest_path.display()))?;
-    if !output.status.success() {
-        bail!(
-            "qcoin submit-tx failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    serde_json::from_slice(&output.stdout).context("failed to parse qcoin submit response")
-}
-
-fn wait_for_qcoin_inclusion(
-    manifest_path: &Path,
-    target: &str,
-    tx: &qcoin_types::Transaction,
-    timeout_seconds: u64,
-) -> Result<u64> {
-    let deadline = Instant::now() + Duration::from_secs(timeout_seconds);
-    let tx_id = tx.tx_id();
-    while Instant::now() < deadline {
-        let tip = qcoin_tip(manifest_path, target)?;
-        for height in (0..=tip.height).rev() {
-            let block = qcoin_block(manifest_path, target, height)?;
-            if block_contains_tx_id(&block, &tx_id) {
-                return Ok(height);
-            }
-        }
-        thread::sleep(Duration::from_secs(2));
-    }
-    bail!(
-        "timed out waiting for qcoin inclusion for tx {}",
-        tx_id_hex(tx)
-    )
-}
-
-fn qcoin_tip(manifest_path: &Path, target: &str) -> Result<TipResponse> {
-    let output = Command::new("cargo")
-        .arg("run")
-        .arg("-q")
-        .arg("-p")
-        .arg("qcoin-node")
-        .arg("--manifest-path")
-        .arg(manifest_path)
-        .arg("--")
-        .arg("tip")
-        .arg("--target")
-        .arg(target)
-        .output()
-        .with_context(|| format!("failed to query qcoin tip via {}", manifest_path.display()))?;
-    if !output.status.success() {
-        bail!(
-            "qcoin tip failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    serde_json::from_slice(&output.stdout).context("failed to parse qcoin tip response")
-}
-
-fn qcoin_block(manifest_path: &Path, target: &str, height: u64) -> Result<Block> {
-    let output = Command::new("cargo")
-        .arg("run")
-        .arg("-q")
-        .arg("-p")
-        .arg("qcoin-node")
-        .arg("--manifest-path")
-        .arg(manifest_path)
-        .arg("--")
-        .arg("block")
-        .arg("--target")
-        .arg(target)
-        .arg("--height")
-        .arg(height.to_string())
-        .output()
-        .with_context(|| {
-            format!(
-                "failed to query qcoin block via {}",
-                manifest_path.display()
-            )
-        })?;
-    if !output.status.success() {
-        bail!(
-            "qcoin block query failed at height {}: {}",
-            height,
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    serde_json::from_slice(&output.stdout).context("failed to parse qcoin block")
-}
-
 fn write_closure_record(
     receipt: &RewardReceipt,
-    tx_id_hex_value: &str,
-    included_height: u64,
-    qcoin_target: &str,
+    reward: Option<RewardSettlement>,
     configured_path: Option<&Path>,
 ) -> Result<()> {
     let path = default_receipt_path(configured_path, receipt.assignment_id);
-    let closure = RewardClosureRecord {
-        reward_receipt: receipt.clone(),
-        reward_receipt_hash_hex: hex::encode(
-            blake3::hash(&reward_receipt_bytes(receipt)?).as_bytes(),
-        ),
-        qcoin_target: qcoin_target.to_string(),
-        qcoin_tx_id_hex: tx_id_hex_value.to_string(),
-        qcoin_included_height: included_height,
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create receipt dir: {}", parent.display()))?;
+    }
+    let closure = ClosureRecord {
+        receipt: receipt.clone(),
+        receipt_commitment_hex: hex::encode(reward_receipt_commitment(receipt)?),
+        reward,
     };
     let bytes =
-        serde_json::to_vec_pretty(&closure).context("failed to serialize reward closure record")?;
+        serde_json::to_vec_pretty(&closure).context("failed to serialize closure record")?;
     fs::write(&path, bytes)
-        .with_context(|| format!("failed to write reward closure record: {}", path.display()))
-}
-
-fn shell_command(script: &str) -> Command {
-    #[cfg(unix)]
-    {
-        let mut command = Command::new("sh");
-        command.arg("-lc").arg(script);
-        command
-    }
-    #[cfg(windows)]
-    {
-        let mut command = Command::new("cmd");
-        command.arg("/C").arg(script);
-        command
-    }
+        .with_context(|| format!("failed to write closure record: {}", path.display()))
 }
 
 fn print_usage() {
@@ -821,13 +686,18 @@ fn print_usage() {
          [--request-target <addr:port>] \
          --summary <text> \
          --verify-command <shell command> \
-         --qcoin-target <host:port> \
          --multicast-v6 <group%iface> [--multicast-v4 <group@interface>] \
          [--bind-port <port>] [--capability <tag>] [--requested-duration-seconds <n>] \
          [--success-criteria <text>] [--artifact-hint <path>] [--note <text>] \
          [--offer-timeout-seconds <n>] [--status-check-interval-seconds <n>] \
          [--expected-duration-seconds <n>] [--result-timeout-seconds <n>] \
          [--select-worker-node-id <node>] [--artifact-copy-path <path>] \
-         [--receipt-path <path>] [--qcoin-manifest-path <path>] [--qcoin-inclusion-timeout-seconds <n>]"
+         [--receipt-path <path>] \
+         [--reward <scheme>=<settler command>]... [--reward-settle-seconds <n>, default 30]\n\
+         \n\
+         A reward is optional: with no --reward, work is offered unrewarded. Acceptance is\n\
+         verification alone; the agreed reward is settled only for accepted work, and a\n\
+         slow or failing settler gives a pending or failed reward, never rejected work.\n\
+         Example: --reward 'qcoin=qcoin-node task-reward settle --target 10.10.10.6:9700'"
     );
 }

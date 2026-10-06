@@ -188,9 +188,7 @@ In order of how much trust each needs:
 
 `TaskAck(accepted = true)` is the reward gate: a reward, if one was agreed, is
 settled only for accepted work, and accepting the work does not depend on the
-reward ([TASK_REWARD_FLOW.md](TASK_REWARD_FLOW.md); the runtime still sets
-`accepted` from `verification_ok && qcoin_tx_hint.is_some()` until that plan
-lands). `accepted` comes from deterministic verification of the success
+reward ([TASK_REWARD_FLOW.md](TASK_REWARD_FLOW.md)). `accepted` comes from deterministic verification of the success
 criteria. A probability does not replace that, at any confidence. It may
 order the verification queue. It may not shorten it.
 

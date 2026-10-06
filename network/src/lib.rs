@@ -24,6 +24,7 @@ mod core;
 pub mod interfaces;
 pub mod model_service;
 pub mod p2p;
+pub mod task_reward;
 pub mod task_runtime;
 
 use anyhow::Result;

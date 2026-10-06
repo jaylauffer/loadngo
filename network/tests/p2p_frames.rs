@@ -1,8 +1,9 @@
 use data::{
     cas::CasHash,
     p2pmsg::{
-        self, EncodingBitset, Message, MessageType, RequestContent, TaskAccept, TaskAck, TaskOffer,
-        TaskRequest, TaskResult, TaskStatus,
+        self, EncodingBitset, Message, MessageType, RequestContent, RewardPayee, RewardSettlement,
+        RewardState, RewardTerms, TaskAccept, TaskAck, TaskOffer, TaskRequest, TaskResult,
+        TaskStatus,
     },
 };
 use network::p2p;
@@ -151,6 +152,10 @@ fn p2p_task_request_round_trips() {
         success_criteria: Some("findings include file references".to_string()),
         artifact_hint: Some("docs/TASK_OFFER_PROTOCOL.md".to_string()),
         note: Some("prefer the wired path".to_string()),
+        reward_offers: vec![RewardTerms {
+            scheme: "qcoin".to_string(),
+            terms: None,
+        }],
     };
     let frame = p2p::task_request(request.clone());
 
@@ -174,6 +179,10 @@ fn p2p_task_offer_round_trips() {
         max_status_interval_secs: Some(60),
         note: Some("can pick this up over wifi".to_string()),
         artifact_hint: Some("docs/TASK_OFFER_PROTOCOL.md".to_string()),
+        reward_payees: vec![RewardPayee {
+            scheme: "qcoin".to_string(),
+            payee: "ab".repeat(32),
+        }],
     };
     let frame = p2p::task_offer(offer.clone());
 
@@ -199,6 +208,10 @@ fn p2p_task_accept_round_trips() {
         success_criteria: Some("notes posted and branch checked".to_string()),
         artifact_hint: Some("docs/TASK_EXECUTION_TEST_PLAN.md".to_string()),
         note: Some("selected".to_string()),
+        reward: Some(RewardPayee {
+            scheme: "qcoin".to_string(),
+            payee: "ab".repeat(32),
+        }),
     };
     let frame = p2p::task_accept(accept.clone());
 
@@ -257,7 +270,12 @@ fn p2p_task_ack_round_trips() {
         submitter_node_id: "node-submit".to_string(),
         acked_at: 210,
         accepted: true,
-        qcoin_tx_hint: Some("qcoin:tx:def456".to_string()),
+        reward: Some(RewardSettlement {
+            scheme: "qcoin".to_string(),
+            state: RewardState::Settled,
+            reference: Some("qcoin:tx:def456@height:7".to_string()),
+            note: None,
+        }),
         note: Some("closed and rewarded".to_string()),
     };
     let frame = p2p::task_ack(ack.clone());

@@ -1,8 +1,6 @@
 use crate::{Config, MulticastConfig};
 use anyhow::{anyhow, Context, Result};
-use qcoin_types::{
-    Block, Hash256, Output, Transaction, TransactionCore, TransactionKind, TransactionWitness,
-};
+use data::p2pmsg::RewardPayee;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -27,6 +25,10 @@ pub struct RewardReceipt {
     pub result_note: Option<String>,
     pub accepted_at: u64,
     pub submitted_at: u64,
+    /// The scheme and payee agreed in `TaskAccept`; `None` for unrewarded work.
+    /// Added in receipt version 2.
+    #[serde(default)]
+    pub reward: Option<RewardPayee>,
 }
 
 pub fn parse_multicast_v6(value: &str) -> Result<(Ipv6Addr, u32)> {
@@ -105,56 +107,31 @@ pub fn reward_receipt_bytes(receipt: &RewardReceipt) -> Result<Vec<u8>> {
 
 /// The anchor domain and version this receipt's commitment is bound to. Bump the version
 /// with any change to `RewardReceipt`'s fields or their order: the hash a ledger already
-/// carries stays verifiable only against the encoding that produced it.
+/// carries stays verifiable only against the encoding that produced it. Version 2 added
+/// `reward`.
 pub const REWARD_RECEIPT_DOMAIN: &str = "loadngo.task.reward-receipt";
-pub const REWARD_RECEIPT_VERSION: u16 = 1;
+pub const REWARD_RECEIPT_VERSION: u16 = 2;
 
-pub fn reward_metadata_hash(receipt: &RewardReceipt) -> Result<Hash256> {
+/// The receipt's anchor commitment: what a reward scheme records, for example as a
+/// QCoin output's `metadata_hash`.
+pub fn reward_receipt_commitment(receipt: &RewardReceipt) -> Result<[u8; 32]> {
     let bytes = reward_receipt_bytes(receipt)?;
     loadngo_anchor::anchor_hash(REWARD_RECEIPT_DOMAIN, REWARD_RECEIPT_VERSION, &bytes)
         .context("failed to frame the reward receipt for anchoring")
 }
 
-pub fn reward_owner_hash(worker_node_id: &str) -> Hash256 {
-    *blake3::hash(worker_node_id.as_bytes()).as_bytes()
-}
-
-pub fn reward_transaction(receipt: &RewardReceipt) -> Result<Transaction> {
-    Ok(Transaction {
-        core: TransactionCore {
-            kind: TransactionKind::Transfer,
-            inputs: vec![],
-            outputs: vec![Output {
-                owner_script_hash: reward_owner_hash(&receipt.worker_node_id),
-                assets: vec![],
-                metadata_hash: Some(reward_metadata_hash(receipt)?),
-            }],
-        },
-        witness: TransactionWitness::default(),
-    })
-}
-
-pub fn tx_id_hex(tx: &Transaction) -> String {
-    hex::encode(tx.tx_id())
-}
-
-pub fn block_contains_tx_id(block: &Block, tx_id: &Hash256) -> bool {
-    block.transactions.iter().any(|tx| &tx.tx_id() == tx_id)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        artifact_hash_hex, block_contains_tx_id, reward_metadata_hash, reward_owner_hash,
-        reward_transaction, tx_id_hex, RewardReceipt,
+        artifact_hash_hex, reward_receipt_bytes, reward_receipt_commitment, RewardReceipt,
+        REWARD_RECEIPT_DOMAIN, REWARD_RECEIPT_VERSION,
     };
-    use loadngo_pq_crypto::{Dilithium2Scheme, PqSignatureScheme};
-    use qcoin_types::{Output, Transaction, TransactionCore, TransactionKind, TransactionWitness};
+    use data::p2pmsg::RewardPayee;
     use std::fs;
 
     fn sample_receipt() -> RewardReceipt {
         RewardReceipt {
-            receipt_version: 1,
+            receipt_version: REWARD_RECEIPT_VERSION as u32,
             request_id: 10,
             offer_id: 11,
             assignment_id: 12,
@@ -168,34 +145,37 @@ mod tests {
             result_note: Some("done".to_string()),
             accepted_at: 20,
             submitted_at: 18,
+            reward: Some(RewardPayee {
+                scheme: "qcoin".to_string(),
+                payee: "cd".repeat(32),
+            }),
         }
     }
 
     #[test]
-    fn reward_transaction_uses_metadata_only_transfer() {
+    fn commitment_is_the_framed_receipt_hash() {
         let receipt = sample_receipt();
-        let tx = reward_transaction(&receipt).unwrap();
-        assert_eq!(tx.core.kind, TransactionKind::Transfer);
-        assert!(tx.core.inputs.is_empty());
-        assert_eq!(tx.core.outputs.len(), 1);
-        assert!(tx.core.outputs[0].assets.is_empty());
-        assert_eq!(
-            tx.core.outputs[0].owner_script_hash,
-            reward_owner_hash(&receipt.worker_node_id)
-        );
-        assert_eq!(
-            tx.core.outputs[0].metadata_hash,
-            Some(reward_metadata_hash(&receipt).unwrap())
-        );
+        let expected = loadngo_anchor::anchor_hash(
+            REWARD_RECEIPT_DOMAIN,
+            REWARD_RECEIPT_VERSION,
+            &reward_receipt_bytes(&receipt).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(reward_receipt_commitment(&receipt).unwrap(), expected);
     }
 
     #[test]
-    fn tx_id_hex_is_stable_hex() {
+    fn commitment_binds_the_agreed_payee() {
         let receipt = sample_receipt();
-        let tx = reward_transaction(&receipt).unwrap();
-        let hex = tx_id_hex(&tx);
-        assert_eq!(hex.len(), 64);
-        assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
+        let mut other = receipt.clone();
+        other.reward = Some(RewardPayee {
+            scheme: "qcoin".to_string(),
+            payee: "ef".repeat(32),
+        });
+        assert_ne!(
+            reward_receipt_commitment(&receipt).unwrap(),
+            reward_receipt_commitment(&other).unwrap()
+        );
     }
 
     #[test]
@@ -206,41 +186,5 @@ mod tests {
         let actual = artifact_hash_hex(&path).unwrap();
         let expected = Some(hex::encode(blake3::hash(b"meaningful artifact").as_bytes()));
         assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn block_detection_finds_expected_transaction() {
-        let receipt = sample_receipt();
-        let tx = reward_transaction(&receipt).unwrap();
-        let scheme = Dilithium2Scheme;
-        let (public_key, private_key) = scheme.keygen().unwrap();
-        let signature = scheme.sign(&private_key, b"test block").unwrap();
-        let block = qcoin_types::Block {
-            header: qcoin_types::BlockHeader {
-                parent_hash: [0u8; 32],
-                state_root: [1u8; 32],
-                tx_root: [2u8; 32],
-                height: 1,
-                timestamp: 3,
-            },
-            transactions: vec![
-                Transaction {
-                    core: TransactionCore {
-                        kind: TransactionKind::Transfer,
-                        inputs: vec![],
-                        outputs: vec![Output {
-                            owner_script_hash: [9u8; 32],
-                            assets: vec![],
-                            metadata_hash: None,
-                        }],
-                    },
-                    witness: TransactionWitness::default(),
-                },
-                tx.clone(),
-            ],
-            proposer_public_key: public_key,
-            signature,
-        };
-        assert!(block_contains_tx_id(&block, &tx.tx_id()));
     }
 }
