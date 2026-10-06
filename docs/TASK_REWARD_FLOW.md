@@ -94,11 +94,20 @@ TaskAck     { …, accepted: bool,                     // verification only
 1. The submitter verifies the result. That alone sets `accepted`.
 2. If `accepted` is true and a reward was agreed, the submitter runs the
    settler for that scheme. It never runs one for rejected work.
-3. The submitter waits a bounded time for the settlement, then sends one
-   `TaskAck`: `accepted` as verified, and `reward` with whatever state the
-   settlement reached. A slow or unavailable settler gives
-   `state: pending` or `failed` with `accepted = true`; it never turns accepted
-   work into rejected work, and it never stops the `TaskAck` being sent.
+3. The submitter waits up to 30 s for the settlement (Jay, 2026-10-06; an
+   operator can lower it), then sends one `TaskAck`: `accepted` as verified,
+   and `reward` with whatever state the settlement reached. A slow or
+   unavailable settler gives `state: pending` or `failed` with
+   `accepted = true`; it never turns accepted work into rejected work, and it
+   never stops the `TaskAck` being sent.
+4. Nothing more is sent about the reward. A worker given `pending` checks the
+   reference itself, later, with its `--reward-verify` command.
+
+The wait has to end well inside the worker's ack timeout (`task-node`
+`--ack-timeout-seconds`, default 90 s), or the worker gives up on the
+assignment before the `TaskAck` arrives. Today's runtime gets this wrong: the
+submitter waits up to 120 s for QCoin inclusion. QCoin makes a block every
+5 s (`qcoin-node run --interval-seconds`), so 30 s is six blocks.
 
 ### Settlers are external commands chosen by the operator
 
@@ -154,18 +163,23 @@ loadngo <-> qcoin cycle ends: qcoin depends on loadngo, never the reverse.
 | 3 | `qcoin-node task-reward settle` / `verify`, moved from `task_runtime.rs` and `task_submitter`; `qcoin-node payee` and the standard payee script (stage 1 of qcoin `docs/TASK_REWARDS.md`) | qcoin |
 | 4 | Remove `qcoin-types` from `network` and the loadngo workspace; update the QCoin-specific statements in the other Task docs | loadngo |
 
+### Decided (Jay, 2026-10-06)
+
+- **QCoin payee.** Supplied at launch with `--reward-payee`, no wallet on the
+  task node. It is an owner script hash, and QCoin's tooling and docs give each
+  task node its own payee; details in qcoin `docs/TASK_REWARDS.md`. The qcoin
+  ledger fix that lets a key-locked output be spent landed in qcoin `ed87987`.
+- **Wire format.** The messages change in place, with no release that also
+  reads `qcoin_tx_hint`. Only loadngo's Task binaries, one test and these docs
+  use it (checked across `~/pudding`), every peer is in the lab, and dolores's
+  `loadngo-task-node` service is disabled. New fields still default to empty,
+  so a peer that omits them reads as unrewarded.
+- **Settlement wait.** Up to 30 s, then `TaskAck` with whatever state was
+  reached; a `pending` settlement is checked by the worker's `verify`, not
+  reported by a later message (closure order above).
+
 ### Open
 
-- **QCoin payee.** Decided (Jay, 2026-10-06): supplied at launch with
-  `--reward-payee`, no wallet on the task node. The QCoin details and their own open
-  questions are in qcoin `docs/TASK_REWARDS.md`. The qcoin ledger fix that lets a
-  key-locked output be spent landed in qcoin `ed87987`.
-- **Wire compatibility.** Change the messages in place (every peer is in the
-  lab, and dolores's `loadngo-task-node` service is disabled), or keep reading
-  `qcoin_tx_hint` for one release.
-- **Settlement wait.** The bound in step 3 of the closure order, and whether a
-  later message should report a `pending` settlement once it settles, or the
-  worker's `verify` is enough.
 - **Authenticity.** [`TASK_FABRIC_TRUST_MODEL.md`](TASK_FABRIC_TRUST_MODEL.md)
   notes an unauthenticated `TaskAck` is a reward-theft vector. `verify` lets a
   worker check a settlement; it does not authenticate the messages.
