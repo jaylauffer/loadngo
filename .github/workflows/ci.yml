@@ -1,7 +1,8 @@
 name: CI
 
-# Runs on any self-hosted runner advertising `build-linux-arm64` (aarch64
-# Linux). Not actions/checkout: Cargo.toml has a path dependency on a
+# Linux and macOS run on self-hosted runners (`build-linux-arm64`,
+# `build-macos-arm64`); Windows runs on GitHub-hosted `windows-latest` (see
+# that job). On the self-hosted runners, not actions/checkout: Cargo.toml has a path dependency on a
 # sibling repo (../qcoin) that lives next to this repo under ~/ci/pudding/
 # on the runner -- a CI-only clone, separate from the ~/pudding/ checkout
 # a human or agent may be using interactively on the same Pi. actions/checkout
@@ -12,7 +13,7 @@ name: CI
 # faster incremental builds.
 #
 # The qcoin sibling is synced too, to QCOIN_REV, in every job. Until
-# 2026-10-06 only the Windows job did that; on Linux and macOS nothing ever
+# 2026-10-06 only the Windows job pinned it; on Linux and macOS nothing ever
 # moved it (09-17 on the Pis), so those jobs built against whatever qcoin
 # happened to be there. Cargo.lock records qcoin-types' dependencies, so a
 # pin and the lock that disagree fail under --locked: move QCOIN_REV when the
@@ -96,8 +97,8 @@ jobs:
           git clean -fd
 
       - name: Sync the pinned QCoin sibling
-        # Same rule as the Windows job: never reset or clean this clone;
-        # surface unexpected local work instead of losing it.
+        # A dedicated CI clone, but never reset or clean it: surface
+        # unexpected local work instead of losing it.
         run: |
           cd "$QCOIN_DIR"
           git log -1 --oneline
@@ -163,8 +164,8 @@ jobs:
           git clean -fd
 
       - name: Sync the pinned QCoin sibling
-        # Same rule as the Windows job: never reset or clean this clone;
-        # surface unexpected local work instead of losing it.
+        # A dedicated CI clone, but never reset or clean it: surface
+        # unexpected local work instead of losing it.
         run: |
           cd "$QCOIN_DIR"
           git log -1 --oneline
@@ -210,24 +211,16 @@ jobs:
           rmdir /Volumes/Jarraya/ci/.macos-ci-lock 2>/dev/null || true
 
   windows:
-    # Same capability-label rule as `check`. The machine is provisioned by
-    # ~/pudding/provision-windows-runner.ps1 (see
-    # ~/pudding/windows-github-runner-setup.md): machine-wide Rust under
-    # C:\rust, the runner as NETWORK SERVICE, and this checkout -- with its
-    # `qcoin` sibling beside it -- under C:\pudding, which only CI uses.
-    runs-on: [self-hosted, build-windows-x64]
+    # GitHub-hosted, not the lab's self-hosted Windows machine (acerj): loadngo
+    # is public, so these minutes are free, and acerj is often off, which left
+    # every Windows job queued until it woke (moved 2026-10-06). The image has
+    # the VS C++ build tools, Git and rustup, which is all acerj was
+    # provisioned with. A hosted runner starts empty, so both repos are
+    # checked out side by side here and the build is cached by rust-cache.
+    runs-on: windows-latest
     timeout-minutes: 60
-    defaults:
-      run:
-        # cmd, not PowerShell: Windows PowerShell 5.1 turns anything a native
-        # tool writes to stderr into a terminating error under the runner's
-        # `$ErrorActionPreference = 'Stop'`, and git and cargo both report
-        # progress there. Under cmd a step fails on exit codes alone, so each
-        # command in a multi-command step checks its own with `|| exit /b 1`.
-        shell: cmd
     env:
-      REPO_DIR: C:\pudding\loadngo
-      QCOIN_DIR: C:\pudding\qcoin
+      CARGO_TERM_COLOR: always
       # Metal is macOS-only and proactor-harness stays out for build time, as
       # in the other jobs. gui and gui-win32 do not compile against the
       # current `windows` crate at all (imports that crate no longer exports
@@ -240,52 +233,37 @@ jobs:
       # DX12 is *in*: this is the only host that can build it.
       WINDOWS_EXCLUDES: --exclude loadngo-gfx-metal --exclude gui --exclude gui-win32 --exclude task --exclude proactor-harness
     steps:
-      - name: Trust the checkout for the runner's service account
-        # The checkout was cloned by the administrator who provisioned the
-        # machine, and git refuses to work in a repository owned by another
-        # account ("detected dubious ownership"). Adds the entry only when it
-        # is missing, so repeated runs do not pile up duplicates.
-        run: |
-          git config --global --get-all safe.directory | findstr /x /c:"C:/pudding/loadngo" >nul || git config --global --add safe.directory C:/pudding/loadngo || exit /b 1
+      - name: Allow long paths in git
+        run: git config --global core.longpaths true
 
-      - name: Sync checkout to the triggering commit
-        run: |
-          cd /d "%REPO_DIR%" || exit /b 1
-          git fetch github %GITHUB_SHA% || exit /b 1
-          git reset --hard %GITHUB_SHA% || exit /b 1
-          git clean -fd || exit /b 1
+      - uses: actions/checkout@v4
+        with:
+          path: loadngo
 
-      - name: Sync the pinned QCoin sibling
-        # This is the dedicated CI clone, not an interactive checkout. Never
-        # reset/clean it: surface unexpected local work instead of losing it.
-        # Log both revisions so a dependency mismatch is diagnosable remotely.
-        run: |
-          git config --global --get-all safe.directory | findstr /x /c:"C:/pudding/qcoin" >nul || git config --global --add safe.directory C:/pudding/qcoin || exit /b 1
-          cd /d "%QCOIN_DIR%" || exit /b 1
-          git log -1 --oneline || exit /b 1
-          git status --porcelain --untracked-files=all > "%RUNNER_TEMP%\loadngo-qcoin-status.txt" || exit /b 1
-          for %%F in ("%RUNNER_TEMP%\loadngo-qcoin-status.txt") do if %%~zF GTR 0 (
-            type "%RUNNER_TEMP%\loadngo-qcoin-status.txt"
-            echo QCoin has local changes; refusing to overwrite them.
-            exit /b 1
-          )
-          git fetch --no-tags https://github.com/jaylauffer/qcoin.git %QCOIN_REV% || exit /b 1
-          git checkout --detach %QCOIN_REV% || exit /b 1
-          git log -1 --oneline || exit /b 1
+      - uses: actions/checkout@v4
+        with:
+          repository: jaylauffer/qcoin
+          ref: ${{ env.QCOIN_REV }}
+          path: qcoin
 
       - name: Toolchain
         run: |
-          rustc --version || exit /b 1
-          cargo --version || exit /b 1
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: loadngo
 
       - name: cargo fmt --check
-        working-directory: ${{ env.REPO_DIR }}
+        working-directory: loadngo
         run: cargo fmt --check
 
       - name: cargo clippy (Windows, including DX12)
-        working-directory: ${{ env.REPO_DIR }}
+        working-directory: loadngo
         run: cargo clippy --locked --workspace --all-targets --all-features ${{ env.WINDOWS_EXCLUDES }} -- -D warnings
 
       - name: cargo test (Windows, including the IOCP proactor suite)
-        working-directory: ${{ env.REPO_DIR }}
+        working-directory: loadngo
         run: cargo test --locked --workspace ${{ env.WINDOWS_EXCLUDES }}

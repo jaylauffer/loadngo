@@ -21,7 +21,8 @@ machine.
   winit loop blocks on `ControlFlow::WaitUntil(next_deadline)`. `next_frame`
   no longer spawns a thread per call. `wake_host` exists, as on Linux.
 - **CI.** `loadngo`'s `ci.yml` `windows` job runs fmt, clippy with warnings as
-  errors, and the workspace tests on the `build-windows-x64` runner.
+  errors, and the workspace tests on GitHub-hosted `windows-latest` (until
+  2026-10-06 on the self-hosted `build-windows-x64` runner, acerj).
 
 Defects fixed on 2026-09-15, each pinned by a test:
 

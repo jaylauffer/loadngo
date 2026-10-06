@@ -1,36 +1,33 @@
-# Windows CI sibling dependency
+# Windows CI and the QCoin sibling
 
-The Windows job builds `C:\pudding\loadngo`, which has a path dependency on
-`C:\pudding\qcoin\qcoin-types`. Updating Loadngo alone does not update that
-sibling's manifests. The provisioning script creates missing clones but does
-not advance existing QCoin checkouts.
+loadngo has a path dependency on `../qcoin/qcoin-types`, so every CI job
+builds with a QCoin checkout beside loadngo, at the workflow-level `QCOIN_REV`.
+Cargo.lock records QCoin's dependencies, so with `--locked` a pin and a lock
+that disagree fail dependency resolution. When Cargo.lock is refreshed for a
+newer QCoin, move `QCOIN_REV` to that commit in the same loadngo commit. Do
+not substitute a floating branch or regenerate Cargo.lock in CI.
 
-The workflow now pins QCoin with `QCOIN_REV` and synchronizes the dedicated
-CI sibling before Cargo runs. Revision `6579c0a54635ef913806922a88049a6b5e68e840`
-includes the move from `qcoin-crypto` to `loadngo-pq-crypto` expected by the
-current Loadngo lockfile. The step logs the old and new QCoin revisions, fetches
-only from the public GitHub QCoin repository, and checks out the exact revision
-in detached-HEAD mode. It requires the existing clone and refuses tracked or
-untracked local changes; it does not reset or clean the sibling.
+## Runner
 
-Keep `--locked` on Clippy and tests. When changing this path dependency, update
-the pin deliberately and verify the matching manifests/lockfile together.
-Do not substitute a floating branch or silently regenerate Cargo.lock in CI.
-Linux and macOS job behavior is unchanged by this Windows-specific repair.
+Since 2026-10-06 the Windows job runs on GitHub-hosted `windows-latest`
+(loadngo is public, so the minutes are free). It checks out loadngo and QCoin
+side by side with `actions/checkout` and caches the build with
+`Swatinem/rust-cache`. Before that it ran on the lab's self-hosted `acerj`
+(`build-windows-x64`, provisioned by `~/pudding/provision-windows-runner.ps1`),
+which was often switched off, so Windows jobs sat queued until it woke.
+The hosted image has what acerj was provisioned with: the VS C++ build tools,
+Git and rustup.
 
-## Evidence and remaining validation
+Linux and macOS still run on self-hosted runners with persistent clones under
+`ci/pudding`; their QCoin clone is synced to `QCOIN_REV` by a step that
+refuses to overwrite local changes.
 
-In [run 35762838840](https://github.com/jaylauffer/loadngo/actions/runs/35762838840),
-Acerj fetched Loadngo `af005bf6`, passed formatting, then failed dependency
-resolution under `--locked` before linting. Linux and macOS passed. A stale
-Windows sibling was a hypothesis because Acerj has no SSH access; the new
-step makes the dependency revision reproducible and exposes it in job logs.
-Only a fresh Windows run can establish whether it was the entire cause or
-whether Windows-specific resolution/build issues remain.
+## History
 
-If synchronization refuses local changes, inspect the printed status and
-preserve those files before retrying. Do not add `reset --hard` or `clean -fd`
-as a workaround. If the pinned sibling still produces a lockfile error, inspect
-resolution in a disposable copy with the runner's Cargo version and review the
-minimal lockfile delta. A rerun of an old workflow does not pick up this step;
-use a run triggered by the commit containing the repair.
+In [run 35762838840](https://github.com/jaylauffer/loadngo/actions/runs/35762838840)
+acerj fetched loadngo `af005bf6`, passed formatting, then failed dependency
+resolution under `--locked`: its QCoin clone was stale, because nothing
+advanced it. `QCOIN_REV` was added to the Windows job for that (first pin
+`6579c0a5`, which has the move from `qcoin-crypto` to `loadngo-pq-crypto`).
+The Linux and macOS jobs had the same gap (their QCoin clones were from
+09-17) until loadngo `75a48796` pinned them too.
