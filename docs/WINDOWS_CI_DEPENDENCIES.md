@@ -1,4 +1,4 @@
-# Windows CI and the QCoin sibling
+# CI runners and the QCoin sibling
 
 loadngo has a path dependency on `../qcoin/qcoin-types`, so every CI job
 builds with a QCoin checkout beside loadngo, at the workflow-level `QCOIN_REV`.
@@ -9,18 +9,22 @@ not substitute a floating branch or regenerate Cargo.lock in CI.
 
 ## Runner
 
-Since 2026-10-06 the Windows job runs on GitHub-hosted `windows-latest`
-(loadngo is public, so the minutes are free). It checks out loadngo and QCoin
-side by side with `actions/checkout` and caches the build with
-`Swatinem/rust-cache`. Before that it ran on the lab's self-hosted `acerj`
-(`build-windows-x64`, provisioned by `~/pudding/provision-windows-runner.ps1`),
-which was often switched off, so Windows jobs sat queued until it woke.
-The hosted image has what acerj was provisioned with: the VS C++ build tools,
-Git and rustup.
+Since 2026-10-06 every platform runs on GitHub-hosted runners
+(`ubuntu-24.04-arm`, `ubuntu-latest`, `macos-latest`, `windows-latest`):
+loadngo is public, so the minutes are free. Each job checks out loadngo and
+QCoin side by side with `actions/checkout` and caches the build with
+`Swatinem/rust-cache`. Windows moved first: it had run on the lab's
+self-hosted `acerj` (`build-windows-x64`, provisioned by
+`~/pudding/provision-windows-runner.ps1`), which was often switched off, so
+Windows jobs sat queued until it woke. Linux (dolores, agnes) and macOS (the
+Mac mini, building on Jarraya) followed the same day, which also means no pull
+request from a fork runs on lab hardware. The hosted Windows image has what
+acerj was provisioned with: the VS C++ build tools, Git and rustup. Linux
+installs `pkg-config`, `libasound2-dev` and `libwayland-dev`, which alsa-sys
+and wayland-sys look for at build time.
 
-Linux and macOS still run on self-hosted runners with persistent clones under
-`ci/pudding`; their QCoin clone is synced to `QCOIN_REV` by a step that
-refuses to overwrite local changes.
+kimi-k3-in-rust's CI reads `QCOIN_REV` from loadngo's `ci.yml`, so the two pin
+the same QCoin.
 
 ## History
 

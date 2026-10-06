@@ -73,13 +73,14 @@ cargo check --workspace --all-features
 cargo check -p loadngo-gfx-gles --target aarch64-linux-android
 ```
 
-`dolores` is the real Linux box and the self-hosted CI runner, so a green
-build there is a green CI. CI itself runs `cargo fmt --check` and
+CI runs on GitHub-hosted runners: Linux aarch64 and x86-64, macOS (with an
+iOS compile check) and Windows. `dolores` is the lab's real Linux box for
+checking by hand. CI runs `cargo fmt --check` and
 `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
-both stricter than `cargo check` — **with `PLATFORM_EXCLUDES`**
-(`--exclude loadngo-gfx-metal --exclude loadngo-gfx-dx12 --exclude
-gui-win32 --exclude proactor-harness`). Copy that from
-`.github/workflows/ci.yml`; without it the run fails on crates CI never
+both stricter than `cargo check` — **with that platform's excludes**
+(on Linux `--exclude loadngo-gfx-metal --exclude loadngo-gfx-dx12 --exclude
+gui-win32 --exclude proactor-harness`). Copy them from the matrix in
+`.github/workflows/ci.yml`; without them the run fails on crates CI never
 builds, which reads as a real failure and isn't one.
 
 Note that **`cargo clippy --workspace --all-targets` does not pass on

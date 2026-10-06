@@ -1,47 +1,31 @@
 name: CI
 
-# Linux and macOS run on self-hosted runners (`build-linux-arm64`,
-# `build-macos-arm64`); Windows runs on GitHub-hosted `windows-latest` (see
-# that job). On the self-hosted runners, not actions/checkout: Cargo.toml has a path dependency on a
-# sibling repo (../qcoin) that lives next to this repo under ~/ci/pudding/
-# on the runner -- a CI-only clone, separate from the ~/pudding/ checkout
-# a human or agent may be using interactively on the same Pi. actions/checkout
-# only ever checks out this one repo into an isolated ephemeral workspace, so
-# that sibling would never be present there. Instead, sync the persistent
-# clone that's already correctly positioned next to it to the exact commit
-# that triggered this run. This also keeps target/ warm between runs for
-# faster incremental builds.
+# Every platform runs on GitHub-hosted runners (2026-10-06). loadngo is
+# public, so the minutes are free; no lab machine has to be on for CI, and no
+# pull request from a fork runs code on lab hardware. Until then Linux ran on
+# the Pis (dolores, agnes), macOS on the Mac mini and Windows on acerj, which
+# was often off and left Windows jobs queued for days. Real-device checks on
+# the Pis and phones are done by hand, not here.
 #
-# The qcoin sibling is synced too, to QCOIN_REV, in every job. Until
-# 2026-10-06 only the Windows job pinned it; on Linux and macOS nothing ever
-# moved it (09-17 on the Pis), so those jobs built against whatever qcoin
-# happened to be there. Cargo.lock records qcoin-types' dependencies, so a
-# pin and the lock that disagree fail under --locked: move QCOIN_REV when the
-# lock is refreshed for a newer qcoin.
+# loadngo's workspace has a path dependency on ../qcoin/qcoin-types, so qcoin
+# is checked out beside loadngo at QCOIN_REV. Cargo.lock records qcoin-types'
+# dependencies, so a pin and a lock that disagree fail under --locked: move
+# QCOIN_REV when the lock is refreshed for a newer qcoin, in the same commit.
+# kimi-k3-in-rust's CI reads QCOIN_REV from this file, so keep the line's
+# shape (`  QCOIN_REV: <40 hex digits>`).
 #
-# --exclude loadngo-gfx-metal/--exclude loadngo-gfx-dx12/--exclude
-# gui-win32: these are genuinely platform-specific backends (Metal is
-# macOS/iOS-only, DX12 and the win32 GUI layer are Windows-only) that
-# Cargo has no clean way to conditionally drop from `--workspace` itself —
-# `[target.cfg(...).dependencies]` only controls dependency resolution for
-# a *consumer* crate, not workspace membership, so `--workspace` still
-# tries to compile every member on every host regardless of target. This
-# is the pragmatic CI-side fix (explicit excludes); the more thorough fix
-# would be removing these from [workspace] members entirely so they're
-# only ever pulled in as target-conditional path deps by whatever actually
-# uses them — a real change to loadngo's own Cargo.toml, out of scope here.
-#
-# fmt and clippy currently fail on the portable set too (real pre-existing
-# debt, no [workspace.lints] policy yet) — expect this to start red until
-# that's addressed separately. Not something this workflow silently works
-# around.
+# Per-platform excludes: Cargo has no way to drop a workspace member by
+# target, and `--workspace` compiles every member on every host. Metal is
+# macOS/iOS-only; DX12 and the win32 GUI are Windows-only. gui and gui-win32 do
+# not compile against the current `windows` crate (imports that crate no
+# longer exports, and a `gui_win32::` path inside gui-win32's own sources), a
+# repair of their own; `task` depends on `gui`, and `--exclude` only drops a
+# crate from the lint list, not from the build of a crate that depends on it,
+# so it is out on Windows too. proactor-harness is dev-only criterion/loom
+# tooling, out everywhere for build time; run its benches and loom tests by
+# hand (proactor-harness/README.md).
 
-# paths-ignore: skip entirely when every changed file is documentation --
-# a push/PR that touches at least one non-doc file still runs normally.
-# This job runs real build/test/clippy on the shared, single-machine
-# self-hosted aarch64 runner pool (also used by sng-roguelite and
-# sng-zhoenus), so a docs-only commit queuing a full compile is wasted
-# time on a resource other repos' pushes are also waiting on.
+# paths-ignore: a push or PR that changes only documentation runs nothing.
 on:
   push:
     paths-ignore:
@@ -51,190 +35,53 @@ on:
     paths-ignore:
       - "**/*.md"
       - "docs/**"
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
-  # qcoin-types is a path dependency: advance this pin deliberately with
-  # dependency/lockfile changes, in the same commit.
+  CARGO_TERM_COLOR: always
   QCOIN_REV: 4320770faf274d5b6e6b08d007add65ec433d5a1
-  # proactor-harness isn't excluded for a platform-incompatibility reason
-  # like the other three -- it's dev-only criterion/loom tooling that would
-  # otherwise add build time to every push without adding routine
-  # lint/test coverage (its benches aren't run by `cargo test` anyway; its
-  # loom tests are separately gated behind `--cfg loom`, see
-  # proactor/tests/loom_pending_ops_pattern.rs). Run its benches/loom tests
-  # manually instead, see proactor-harness/README.md.
-  PLATFORM_EXCLUDES: --exclude loadngo-gfx-metal --exclude loadngo-gfx-dx12 --exclude gui-win32 --exclude proactor-harness
 
 jobs:
   check:
-    # Matched by *capability*, never by machine name: GitHub matches
-    # runs-on against labels only, and a runner's own name is never
-    # implicitly one — a mismatch this workflow hit once already. Any
-    # runner advertising this label can serve the job. Safe to share the
-    # label across repos: each runner is still repo-scoped by
-    # registration, so a loadngo job can never reach another repo's runner
-    # regardless of label. See ~/pudding/pi-github-runner-setup.md.
-    runs-on: [self-hosted, build-linux-arm64]
-    timeout-minutes: 30
-    env:
-      # Deliberately NOT ~/pudding/loadngo, same reasoning as the macos
-      # job below: `git reset --hard`/`git clean -fd` here must never touch
-      # the interactive checkout a human or agent is using on this Pi for
-      # manual dev/testing. CI gets its own clone under ~/ci/pudding, with
-      # the qcoin sibling beside it that this repo's path dependencies need.
-      REPO_DIR: /home/jay/ci/pudding/loadngo
-      QCOIN_DIR: /home/jay/ci/pudding/qcoin
-    steps:
-      - name: Sync checkout to the triggering commit
-        run: |
-          cd "$REPO_DIR"
-          git fetch github "$GITHUB_SHA"
-          git reset --hard "$GITHUB_SHA"
-          git clean -fd
-
-      - name: Sync the pinned QCoin sibling
-        # A dedicated CI clone, but never reset or clean it: surface
-        # unexpected local work instead of losing it.
-        run: |
-          cd "$QCOIN_DIR"
-          git log -1 --oneline
-          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
-            git status --porcelain --untracked-files=all
-            echo "QCoin has local changes; refusing to overwrite them."
-            exit 1
-          fi
-          git fetch --no-tags https://github.com/jaylauffer/qcoin.git "$QCOIN_REV"
-          git checkout --detach "$QCOIN_REV"
-          git log -1 --oneline
-
-      - name: Add cargo to PATH
-        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-
-      - name: cargo fmt --check
-        working-directory: ${{ env.REPO_DIR }}
-        run: cargo fmt --check
-
-      - name: cargo clippy (portable crates only)
-        working-directory: ${{ env.REPO_DIR }}
-        run: cargo clippy --locked --workspace --all-targets --all-features ${{ env.PLATFORM_EXCLUDES }} -- -D warnings
-
-      - name: cargo test (portable crates only)
-        working-directory: ${{ env.REPO_DIR }}
-        run: cargo test --locked --workspace ${{ env.PLATFORM_EXCLUDES }}
-
-  macos:
-    # Same capability-label rule as `check`. This host also advertises
-    # `build-ios`, but a job asks for the capability it needs, not the
-    # machine that happens to have both.
-    runs-on: [self-hosted, build-macos-arm64]
-    timeout-minutes: 45
-    env:
-      # Deliberately NOT ~/pudding/loadngo. The sync step below runs
-      # `git reset --hard` and `git clean -fd`, which is harmless on the
-      # dedicated Pis but would wipe a live working tree on a workstation.
-      # CI gets its own clone, with the `qcoin` sibling beside it that this
-      # repo's path dependencies need.
-      REPO_DIR: /Volumes/Jarraya/ci/pudding/loadngo
-      QCOIN_DIR: /Volumes/Jarraya/ci/pudding/qcoin
-      # Metal is *included* here: this is the only host that can compile it,
-      # and excluding it everywhere is why the GLES/Metal backends have gone
-      # unlinted. DX12 and the win32 GUI are Windows-only; the `windows` job
-      # below is where DX12 gets linted. proactor-harness stays out for the
-      # same build-time reason as in `check`.
-      MACOS_EXCLUDES: --exclude loadngo-gfx-dx12 --exclude gui-win32 --exclude proactor-harness
-    steps:
-      - name: Acquire the shared Jarraya macOS CI workspace
-        run: |
-          lock_dir=/Volumes/Jarraya/ci/.macos-ci-lock
-          until mkdir "$lock_dir" 2>/dev/null; do
-            echo "Waiting for the shared Jarraya macOS CI workspace"
-            sleep 5
-          done
-          echo "$GITHUB_REPOSITORY $GITHUB_RUN_ID $GITHUB_JOB" > "$lock_dir/owner"
-
-      - name: Sync checkout to the triggering commit
-        run: |
-          cd "$REPO_DIR"
-          git fetch github "$GITHUB_SHA"
-          git reset --hard "$GITHUB_SHA"
-          git clean -fd
-
-      - name: Sync the pinned QCoin sibling
-        # A dedicated CI clone, but never reset or clean it: surface
-        # unexpected local work instead of losing it.
-        run: |
-          cd "$QCOIN_DIR"
-          git log -1 --oneline
-          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
-            git status --porcelain --untracked-files=all
-            echo "QCoin has local changes; refusing to overwrite them."
-            exit 1
-          fi
-          git fetch --no-tags https://github.com/jaylauffer/qcoin.git "$QCOIN_REV"
-          git checkout --detach "$QCOIN_REV"
-          git log -1 --oneline
-
-      - name: Add cargo to PATH
-        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-
-      - name: cargo fmt --check
-        working-directory: ${{ env.REPO_DIR }}
-        run: cargo fmt --check
-
-      - name: cargo clippy (macOS, including Metal)
-        working-directory: ${{ env.REPO_DIR }}
-        run: cargo clippy --locked --workspace --all-targets --all-features ${{ env.MACOS_EXCLUDES }} -- -D warnings
-
-      - name: cargo test (macOS)
-        working-directory: ${{ env.REPO_DIR }}
-        run: cargo test --locked --workspace ${{ env.MACOS_EXCLUDES }}
-
-      # Compile-only, and `check` rather than `clippy -D warnings`: the iOS
-      # target carries pre-existing lint debt (deprecated `msg_send_id`,
-      # dead code in gfx-metal) that would land this red on day one for
-      # reasons unrelated to whatever change is being gated. No signing is
-      # involved, so a lapsed provisioning profile can never break CI --
-      # this exists to catch the regression class that was unguarded when
-      # the iOS audio backend landed.
-      - name: cargo check (iOS target, compile-only)
-        working-directory: ${{ env.REPO_DIR }}
-        run: cargo check --locked -p loadngo-host-desktop --target aarch64-apple-ios --all-targets
-
-      - name: Release the shared Jarraya macOS CI workspace
-        if: always()
-        run: |
-          rm -f /Volumes/Jarraya/ci/.macos-ci-lock/owner
-          rmdir /Volumes/Jarraya/ci/.macos-ci-lock 2>/dev/null || true
-
-  windows:
-    # GitHub-hosted, not the lab's self-hosted Windows machine (acerj): loadngo
-    # is public, so these minutes are free, and acerj is often off, which left
-    # every Windows job queued until it woke (moved 2026-10-06). The image has
-    # the VS C++ build tools, Git and rustup, which is all acerj was
-    # provisioned with. A hosted runner starts empty, so both repos are
-    # checked out side by side here and the build is cached by rust-cache.
-    runs-on: windows-latest
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    env:
-      CARGO_TERM_COLOR: always
-      # Metal is macOS-only and proactor-harness stays out for build time, as
-      # in the other jobs. gui and gui-win32 do not compile against the
-      # current `windows` crate at all (imports that crate no longer exports
-      # there, and a `gui_win32::` path inside gui-win32's own sources) --
-      # a repair of their own, not lint debt, so they stay out until that is
-      # done. `task` goes with them: it depends on `gui`, and `--exclude`
-      # only drops a crate from the lint list, not from the build of a crate
-      # that depends on it, so leaving `task` in rebuilt gui-win32 anyway
-      # (first Windows run, 2026-09-15). Nothing else depends on `task`.
-      # DX12 is *in*: this is the only host that can build it.
-      WINDOWS_EXCLUDES: --exclude loadngo-gfx-metal --exclude gui --exclude gui-win32 --exclude task --exclude proactor-harness
+    strategy:
+      # One platform failing must not hide what the others report.
+      fail-fast: false
+      matrix:
+        include:
+          # aarch64 Linux stands in for the lab Pis; x86-64 Linux was never
+          # covered by the self-hosted runners.
+          - os: ubuntu-24.04-arm
+            excludes: --exclude loadngo-gfx-metal --exclude loadngo-gfx-dx12 --exclude gui-win32 --exclude proactor-harness
+          - os: ubuntu-latest
+            excludes: --exclude loadngo-gfx-metal --exclude loadngo-gfx-dx12 --exclude gui-win32 --exclude proactor-harness
+          # Metal is in: the only host that can compile it.
+          - os: macos-latest
+            excludes: --exclude loadngo-gfx-dx12 --exclude gui-win32 --exclude proactor-harness
+          # DX12 is in: the only host that can build it.
+          - os: windows-latest
+            excludes: --exclude loadngo-gfx-metal --exclude gui --exclude gui-win32 --exclude task --exclude proactor-harness
     steps:
       - name: Allow long paths in git
+        if: runner.os == 'Windows'
         run: git config --global core.longpaths true
+
+      - name: System libraries
+        # alsa-sys and wayland-sys (softbuffer's Wayland client) find their
+        # libraries with pkg-config at build time.
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libwayland-dev
 
       - uses: actions/checkout@v4
         with:
@@ -252,6 +99,10 @@ jobs:
           rustup default stable
           rustc --version
 
+      - name: iOS target
+        if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-ios
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: loadngo
@@ -260,12 +111,21 @@ jobs:
         working-directory: loadngo
         run: cargo fmt --check
 
-      - name: cargo clippy (Windows, including DX12)
+      - name: cargo clippy (warnings are errors)
         working-directory: loadngo
-        run: cargo clippy --locked --workspace --all-targets --all-features ${{ env.WINDOWS_EXCLUDES }} -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features ${{ matrix.excludes }} -- -D warnings
 
-      - name: cargo test (Windows, including the IOCP proactor suite)
+      - name: cargo test
         working-directory: loadngo
-        # --no-fail-fast: the first hosted runs found tests acerj never ran;
-        # report every failing crate at once instead of stopping at the first.
-        run: cargo test --locked --no-fail-fast --workspace ${{ env.WINDOWS_EXCLUDES }}
+        # --no-fail-fast: report every failing crate in one run.
+        run: cargo test --locked --no-fail-fast --workspace ${{ matrix.excludes }}
+
+      # Compile-only, and `check` rather than `clippy -D warnings`: the iOS
+      # target carries pre-existing lint debt (deprecated `msg_send_id`, dead
+      # code in gfx-metal). No signing is involved, so a lapsed provisioning
+      # profile can never break CI; this catches the regression class that was
+      # unguarded when the iOS audio backend landed.
+      - name: cargo check (iOS target, compile-only)
+        if: runner.os == 'macOS'
+        working-directory: loadngo
+        run: cargo check --locked -p loadngo-host-desktop --target aarch64-apple-ios --all-targets
