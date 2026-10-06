@@ -26,6 +26,7 @@ pub mod data_object;
 pub mod file_manager;
 pub mod listener;
 pub mod machine;
+pub mod machine_identity;
 pub mod p2pmsg;
 pub mod pudding;
 pub mod service;
@@ -103,6 +104,7 @@ pub mod model_utils {
     use super::types::{Id, TimeStamp};
     use crate::hash::fnv1a;
     use std::env;
+    use std::process;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -110,22 +112,42 @@ pub mod model_utils {
     pub const UNITS_PER_HOUR: u64 = 36_000_000_000;
     pub const UNITS_PER_MINUTE: u64 = UNITS_PER_HOUR / 60;
 
-    /// Generate an id using hostname, username, process-local counter, and timestamp.
+    /// Generate an id unique across threads, processes and machines, as the C++
+    /// `GenerateID` meant: a fine clock (nanoseconds; the C++ used 100 ns FILETIME
+    /// ticks) and a counter for calls on the same tick, plus what tells processes and
+    /// machines apart: the process id and the OS machine id (`machine_identity`).
+    ///
+    /// Until 2026-10-06 this hashed whole seconds, a per-process counter and the
+    /// `HOSTNAME` environment variable, which macOS and Linux services do not export:
+    /// two processes making their first id in the same second, on any machines run by
+    /// the same user, got the same id.
     pub fn generate_id() -> Id {
         let counter = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        let host = env::var("COMPUTERNAME")
-            .or_else(|_| env::var("HOSTNAME"))
-            .unwrap_or_else(|_| "unknown-host".to_string());
         let user = env::var("USERNAME")
             .or_else(|_| env::var("USER"))
             .unwrap_or_else(|_| "unknown-user".to_string());
-        let now = now_timestamp();
+        id_from(
+            crate::machine_identity::identity(),
+            user.as_bytes(),
+            process::id(),
+            now_nanos(),
+            counter,
+        )
+    }
 
-        let mut acc = fnv1a(host.as_bytes(), 0xcbf29ce484222325);
-        acc = fnv1a(user.as_bytes(), acc);
-        acc = fnv1a(&now.to_le_bytes(), acc);
-        acc = fnv1a(&counter.to_le_bytes(), acc);
-        acc
+    fn id_from(machine: &[u8], user: &[u8], pid: u32, nanos: u128, counter: u64) -> Id {
+        let mut acc = fnv1a(machine, 0xcbf29ce484222325);
+        acc = fnv1a(user, acc);
+        acc = fnv1a(&pid.to_le_bytes(), acc);
+        acc = fnv1a(&nanos.to_le_bytes(), acc);
+        fnv1a(&counter.to_le_bytes(), acc)
+    }
+
+    fn now_nanos() -> u128 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default()
     }
 
     pub fn now_timestamp() -> TimeStamp {
@@ -133,6 +155,76 @@ pub mod model_utils {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{generate_id, id_from};
+        use std::collections::HashSet;
+        use std::process::{Command, Stdio};
+
+        const CHILD: &str = "LOADNGO_GENERATE_ID_CHILD";
+
+        #[test]
+        fn every_input_changes_the_id() {
+            let base = id_from(b"machine", b"user", 7, 1_000, 1);
+            assert_ne!(base, id_from(b"other", b"user", 7, 1_000, 1));
+            assert_ne!(base, id_from(b"machine", b"other", 7, 1_000, 1));
+            assert_ne!(base, id_from(b"machine", b"user", 8, 1_000, 1));
+            assert_ne!(base, id_from(b"machine", b"user", 7, 1_001, 1));
+            assert_ne!(base, id_from(b"machine", b"user", 7, 1_000, 2));
+        }
+
+        #[test]
+        fn ids_in_one_process_are_distinct() {
+            let ids: HashSet<_> = (0..10_000).map(|_| generate_id()).collect();
+            assert_eq!(ids.len(), 10_000);
+        }
+
+        /// Run as a child by `first_ids_of_concurrent_processes_differ`; does nothing
+        /// in an ordinary test run.
+        #[test]
+        fn print_first_id_when_run_as_a_child() {
+            if std::env::var_os(CHILD).is_some() {
+                println!("generated-id={}", generate_id());
+            }
+        }
+
+        /// The case that collided: processes on one machine, as one user, each making
+        /// its first id at the same moment.
+        #[test]
+        fn first_ids_of_concurrent_processes_differ() {
+            let exe = std::env::current_exe().unwrap();
+            let children: Vec<_> = (0..8)
+                .map(|_| {
+                    Command::new(&exe)
+                        .args([
+                            "model_utils::tests::print_first_id_when_run_as_a_child",
+                            "--exact",
+                            "--nocapture",
+                            "--test-threads=1",
+                        ])
+                        .env(CHILD, "1")
+                        .stdout(Stdio::piped())
+                        .spawn()
+                        .unwrap()
+                })
+                .collect();
+            let ids: Vec<String> = children
+                .into_iter()
+                .map(|child| {
+                    let output = child.wait_with_output().unwrap();
+                    assert!(output.status.success());
+                    String::from_utf8_lossy(&output.stdout)
+                        .lines()
+                        .find_map(|line| line.split_once("generated-id=").map(|(_, id)| id))
+                        .expect("child printed its id")
+                        .to_string()
+                })
+                .collect();
+            let distinct: HashSet<_> = ids.iter().collect();
+            assert_eq!(distinct.len(), ids.len(), "{ids:?}");
+        }
     }
 }
 
