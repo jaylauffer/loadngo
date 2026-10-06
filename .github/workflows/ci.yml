@@ -11,6 +11,13 @@ name: CI
 # that triggered this run. This also keeps target/ warm between runs for
 # faster incremental builds.
 #
+# The qcoin sibling is synced too, to QCOIN_REV, in every job. Until
+# 2026-10-06 only the Windows job did that; on Linux and macOS nothing ever
+# moved it (09-17 on the Pis), so those jobs built against whatever qcoin
+# happened to be there. Cargo.lock records qcoin-types' dependencies, so a
+# pin and the lock that disagree fail under --locked: move QCOIN_REV when the
+# lock is refreshed for a newer qcoin.
+#
 # --exclude loadngo-gfx-metal/--exclude loadngo-gfx-dx12/--exclude
 # gui-win32: these are genuinely platform-specific backends (Metal is
 # macOS/iOS-only, DX12 and the win32 GUI layer are Windows-only) that
@@ -49,6 +56,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # qcoin-types is a path dependency: advance this pin deliberately with
+  # dependency/lockfile changes, in the same commit.
+  QCOIN_REV: 4320770faf274d5b6e6b08d007add65ec433d5a1
   # proactor-harness isn't excluded for a platform-incompatibility reason
   # like the other three -- it's dev-only criterion/loom tooling that would
   # otherwise add build time to every push without adding routine
@@ -76,6 +86,7 @@ jobs:
       # manual dev/testing. CI gets its own clone under ~/ci/pudding, with
       # the qcoin sibling beside it that this repo's path dependencies need.
       REPO_DIR: /home/jay/ci/pudding/loadngo
+      QCOIN_DIR: /home/jay/ci/pudding/qcoin
     steps:
       - name: Sync checkout to the triggering commit
         run: |
@@ -83,6 +94,21 @@ jobs:
           git fetch github "$GITHUB_SHA"
           git reset --hard "$GITHUB_SHA"
           git clean -fd
+
+      - name: Sync the pinned QCoin sibling
+        # Same rule as the Windows job: never reset or clean this clone;
+        # surface unexpected local work instead of losing it.
+        run: |
+          cd "$QCOIN_DIR"
+          git log -1 --oneline
+          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+            git status --porcelain --untracked-files=all
+            echo "QCoin has local changes; refusing to overwrite them."
+            exit 1
+          fi
+          git fetch --no-tags https://github.com/jaylauffer/qcoin.git "$QCOIN_REV"
+          git checkout --detach "$QCOIN_REV"
+          git log -1 --oneline
 
       - name: Add cargo to PATH
         run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
@@ -112,6 +138,7 @@ jobs:
       # CI gets its own clone, with the `qcoin` sibling beside it that this
       # repo's path dependencies need.
       REPO_DIR: /Volumes/Jarraya/ci/pudding/loadngo
+      QCOIN_DIR: /Volumes/Jarraya/ci/pudding/qcoin
       # Metal is *included* here: this is the only host that can compile it,
       # and excluding it everywhere is why the GLES/Metal backends have gone
       # unlinted. DX12 and the win32 GUI are Windows-only; the `windows` job
@@ -134,6 +161,21 @@ jobs:
           git fetch github "$GITHUB_SHA"
           git reset --hard "$GITHUB_SHA"
           git clean -fd
+
+      - name: Sync the pinned QCoin sibling
+        # Same rule as the Windows job: never reset or clean this clone;
+        # surface unexpected local work instead of losing it.
+        run: |
+          cd "$QCOIN_DIR"
+          git log -1 --oneline
+          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+            git status --porcelain --untracked-files=all
+            echo "QCoin has local changes; refusing to overwrite them."
+            exit 1
+          fi
+          git fetch --no-tags https://github.com/jaylauffer/qcoin.git "$QCOIN_REV"
+          git checkout --detach "$QCOIN_REV"
+          git log -1 --oneline
 
       - name: Add cargo to PATH
         run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
@@ -186,10 +228,6 @@ jobs:
     env:
       REPO_DIR: C:\pudding\loadngo
       QCOIN_DIR: C:\pudding\qcoin
-      # qcoin-types is a path dependency: syncing only Loadngo leaves an old
-      # sibling manifest free to invalidate Cargo.lock before Clippy starts.
-      # Advance this pin deliberately with dependency/lockfile changes.
-      QCOIN_REV: 6579c0a54635ef913806922a88049a6b5e68e840
       # Metal is macOS-only and proactor-harness stays out for build time, as
       # in the other jobs. gui and gui-win32 do not compile against the
       # current `windows` crate at all (imports that crate no longer exports
