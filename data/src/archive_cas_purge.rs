@@ -690,7 +690,7 @@ mod tests {
             .list_manifests()
             .unwrap()
             .into_iter()
-            .find(|p| p.to_string_lossy().contains("/other-"))
+            .find(|p| f.store.read_manifest(p).unwrap().archive_id == "other")
             .unwrap();
         let (other, other_root) = f.store.read_manifest_and_root(&other_path).unwrap();
         let docs_root = docs.digest().unwrap();

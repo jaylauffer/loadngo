@@ -266,4 +266,6 @@ jobs:
 
       - name: cargo test (Windows, including the IOCP proactor suite)
         working-directory: loadngo
-        run: cargo test --locked --workspace ${{ env.WINDOWS_EXCLUDES }}
+        # --no-fail-fast: the first hosted runs found tests acerj never ran;
+        # report every failing crate at once instead of stopping at the first.
+        run: cargo test --locked --no-fail-fast --workspace ${{ env.WINDOWS_EXCLUDES }}
