@@ -158,8 +158,8 @@ loadngo <-> qcoin cycle ends: qcoin depends on loadngo, never the reverse.
 
 - **QCoin payee.** Decided (Jay, 2026-10-06): supplied at launch with
   `--reward-payee`, no wallet on the task node. The QCoin details and their own open
-  questions are in qcoin `docs/TASK_REWARDS.md`; spending a key-locked output needs
-  a qcoin ledger fix first.
+  questions are in qcoin `docs/TASK_REWARDS.md`. The qcoin ledger fix that lets a
+  key-locked output be spent landed in qcoin `ed87987`.
 - **Wire compatibility.** Change the messages in place (every peer is in the
   lab, and dolores's `loadngo-task-node` service is disabled), or keep reading
   `qcoin_tx_hint` for one release.
