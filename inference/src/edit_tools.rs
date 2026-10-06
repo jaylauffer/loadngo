@@ -995,6 +995,13 @@ mod tests {
     fn other_agents_work_rules_and_unsafe_paths_are_refused() {
         let dir = workspace("refuse");
         let (tools, _) = tools(&dir);
+        // An absolute path outside the workspace; `/etc/hosts` has no drive on
+        // Windows, so it is not absolute there.
+        let outside = if cfg!(windows) {
+            r"C:\Windows\win.ini"
+        } else {
+            "/etc/hosts"
+        };
         for (path, why) in [
             ("game/src/peer.rs", "uncommitted changes"),
             ("game/held/x.rs", "claimed on the agent board by Codex"),
@@ -1002,7 +1009,7 @@ mod tests {
             ("AGENT-BOARD.md", "only Jay changes it"),
             ("game/secret.txt", "ignored"),
             ("../outside.rs", "no `..`"),
-            ("/etc/hosts", "outside the workspace"),
+            (outside, "outside the workspace"),
             ("game/target/x.rs", "build output"),
             ("game/.git/config", ".git"),
             ("game/signing.key", "secret"),

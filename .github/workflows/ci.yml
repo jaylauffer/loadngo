@@ -77,11 +77,12 @@ jobs:
 
       - name: System libraries
         # alsa-sys and wayland-sys (softbuffer's Wayland client) find their
-        # libraries with pkg-config at build time.
+        # libraries with pkg-config at build time; host-desktop's harness
+        # binaries link EGL and GLESv2.
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libwayland-dev
+          sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libwayland-dev libegl-dev libgles-dev
 
       - uses: actions/checkout@v4
         with:
