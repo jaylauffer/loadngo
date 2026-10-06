@@ -3290,6 +3290,40 @@ pub fn app_data_dir(_app_id: &str) -> Result<String, String> {
     })
 }
 
+/// The app's external files directory
+/// (`/sdcard/Android/data/<package>/files`), or `None` while shared storage
+/// is unavailable. Other apps cannot read it on Android 11+, but `adb pull`
+/// can, even from a release build, which `getFilesDir()` does not allow.
+pub(crate) fn external_files_dir() -> Result<Option<String>, String> {
+    android_jni::with_env(|env| {
+        let ctx = ndk_context::android_context();
+        let activity = unsafe { JObject::from_raw(ctx.context().cast()) };
+        let null_type = JObject::null();
+        let Some(files_dir) = android_jni::call_object(
+            env,
+            &activity,
+            "getExternalFilesDir",
+            "(Ljava/lang/String;)Ljava/io/File;",
+            &[JValue::Object(&null_type)],
+        )?
+        else {
+            return Ok(None);
+        };
+        let path_obj = android_jni::call_object(
+            env,
+            &files_dir,
+            "getAbsolutePath",
+            "()Ljava/lang/String;",
+            &[],
+        )?
+        .ok_or_else(|| "File.getAbsolutePath() returned null".to_string())?;
+        let path_string = jni::objects::JString::from(path_obj);
+        env.get_string(&path_string)
+            .map(|value| Some(value.to_string_lossy().into_owned()))
+            .map_err(|err| format!("failed to decode external files dir path: {err}"))
+    })
+}
+
 pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
     if let Ok(bytes) = std::fs::read(path) {
         return Ok(bytes);

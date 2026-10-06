@@ -17,7 +17,7 @@ pub(crate) fn initialize(window: &loadngo_host_core::WindowDescriptor) {
         {
             return Err("invalid logging app identity".to_string());
         }
-        let directory = PathBuf::from(crate::app_data_dir(app_id)?).join("logs");
+        let directory = PathBuf::from(log_root(app_id)?).join("logs");
         let config = PersistentLogConfig::new(directory.clone());
         let mut logger = LOGGER.lock().unwrap();
         if logger.is_none() {
@@ -35,6 +35,19 @@ pub(crate) fn initialize(window: &loadngo_host_core::WindowDescriptor) {
         ),
         Err(error) => std::eprintln!("[loadngo] persistent logging unavailable: {error}"),
     }
+}
+
+/// Where `logs/` lives. Android keeps logs in the external files directory,
+/// which `adb pull` reads from release builds; the private app container is
+/// readable only through `run-as` on debuggable builds, and `adb backup`
+/// leaves it out for apps targeting API 31+. Without shared storage the
+/// private container is the fallback. Elsewhere logs sit in app data.
+fn log_root(app_id: &str) -> Result<String, String> {
+    #[cfg(target_os = "android")]
+    if let Some(external) = crate::android::external_files_dir()? {
+        return Ok(external);
+    }
+    crate::app_data_dir(app_id)
 }
 
 pub(crate) fn persist(error: bool, message: fmt::Arguments<'_>) {

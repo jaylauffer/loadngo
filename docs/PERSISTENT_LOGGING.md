@@ -7,8 +7,14 @@ proactor exists. The normal application command needs no wrapper.
 The host uses `WindowDescriptor::linux_wm_class` as the stable application
 identity on every platform (fallback: `loadngo`). Logs live in that identity's
 platform app-data directory, under `logs/`. The startup console prints the path.
-Android uses its private app container. Profile files and other application
-data have independent lifetimes.
+Android keeps `logs/` in the app's external files directory
+(`/sdcard/Android/data/<package>/files/logs/`), so a release build's logs come
+off a phone with `adb pull`; the private container needs `run-as`, which only
+debuggable builds allow, and `adb backup` skips it for apps targeting API 31+.
+Other apps cannot read that directory on Android 11+. Without shared storage
+the host falls back to the private container. Profile files and other
+application data stay in the private container and have independent
+lifetimes.
 
 ## Storage and overload policy
 
