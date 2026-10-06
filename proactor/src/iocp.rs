@@ -28,6 +28,10 @@ const WAKE_KEY: usize = 2;
 /// (`post`/`wake`), never from a real I/O completion.
 const IO_OP_KEY: usize = 3;
 const WAIT_TIMEOUT_ERROR: u32 = 258;
+/// `ERROR_HANDLE_EOF`: an overlapped `ReadFile` at or past the end of a file
+/// fails with it, synchronously or in its completion, where the Unix
+/// backends' `pread` returns 0 bytes. `read` reports it as a 0-byte transfer.
+const HANDLE_EOF_ERROR: u32 = 38;
 const INFINITE_TIMEOUT_MS: u32 = u32::MAX;
 
 /// The Win32 error code a `windows` crate call failed with, if it was one.
@@ -450,8 +454,13 @@ impl IocpPort {
         let op = unsafe { Box::from_raw(overlapped as *mut OverlappedOp) };
 
         let thunk: Box<dyn FnOnce() + Send> = match op.kind {
-            OverlappedOpKind::Read { buf, handler }
-            | OverlappedOpKind::Recv { buf, handler, .. } => {
+            OverlappedOpKind::Read { buf, handler } => {
+                let io_error =
+                    io_error.filter(|err| err.raw_os_error() != Some(HANDLE_EOF_ERROR as i32));
+                let io_result = Self::finish_transfer(buf, bytes_transferred, io_error, None);
+                Box::new(move || handler.run(io_result))
+            }
+            OverlappedOpKind::Recv { buf, handler, .. } => {
                 let io_result = Self::finish_transfer(buf, bytes_transferred, io_error, None);
                 Box::new(move || handler.run(io_result))
             }
@@ -886,6 +895,19 @@ impl IoPort for IocpPort {
                 Some(overlapped_raw as *mut OVERLAPPED),
             )
         };
+        if let Err(err) = &result {
+            if win32_code(err) == Some(HANDLE_EOF_ERROR) {
+                // Failed synchronously, so no completion packet is coming:
+                // queue the empty read the way `fail_sync` queues a failure.
+                let PollEvent::IoCompletion(thunk) =
+                    self.resolve_io_completion(overlapped_raw as *mut OVERLAPPED, 0, None)
+                else {
+                    unreachable!("resolve_io_completion always yields an I/O completion");
+                };
+                self.queue_io_completion(thunk)?;
+                return Ok(op_id);
+            }
+        }
         self.handle_sync_result(result, overlapped_raw, op_id)?;
         Ok(op_id)
     }

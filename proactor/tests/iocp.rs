@@ -166,7 +166,15 @@ fn iocp_write_then_read_round_trip_an_overlapped_file() {
         .unwrap();
     assert_eq!(written as usize, b"hello iocp".len());
 
-    for (offset, expected) in [(0u64, &b"hello iocp"[..]), (6, &b"iocp"[..])] {
+    // At and past the end of the file `ReadFile` fails with
+    // `ERROR_HANDLE_EOF`; the Unix backends return 0 bytes there, and so
+    // must this one (a reader at end of file otherwise sees an error).
+    for (offset, expected) in [
+        (0u64, &b"hello iocp"[..]),
+        (6, &b"iocp"[..]),
+        (10, &b""[..]),
+        (64, &b""[..]),
+    ] {
         let (read_tx, read_rx) = mpsc::channel();
         handle
             .read(
