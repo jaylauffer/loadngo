@@ -28,7 +28,7 @@
 //! content-block level.
 
 use std::fs::{self, File};
-use std::io::{ErrorKind, Write};
+use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 const MAGIC: [u8; 4] = *b"LGP1";
@@ -85,13 +85,8 @@ impl From<std::io::Error> for PersistenceError {
     }
 }
 
-/// Writes `payload` to `path` atomically: builds the full envelope in
-/// memory, writes it to a `.tmp` file in `path`'s own parent directory
-/// (required for the final rename to stay on the same volume), `fsync`s
-/// that file, renames it over `path` (atomic on the same volume on every
-/// platform this crate targets), then `fsync`s the parent directory —
-/// POSIX durability for the rename itself, a no-op on platforms where
-/// that isn't meaningful.
+/// Writes `payload` to `path` atomically, inside this crate's checked
+/// envelope: builds the envelope in memory, then [`replace_atomically`].
 ///
 /// A write that fails partway through never touches the file at `path`;
 /// at worst it leaves a stray `.tmp` file, which the next successful
@@ -122,15 +117,48 @@ pub fn write_atomic(
     buffer.extend_from_slice(hash.as_bytes());
     buffer.extend_from_slice(&hashed);
 
+    replace_atomically(path, &buffer)?;
+    Ok(())
+}
+
+/// Replaces the file at `path` with `contents`, as they are, so that after a
+/// crash or power loss it holds either its old contents or all of the new.
+///
+/// Writes a `.tmp` file beside `path` (the rename must stay on one volume),
+/// flushes it to disk, renames it over `path`, then makes the rename durable:
+/// on Unix by syncing the parent directory, on Windows by renaming with
+/// `MoveFileExW(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`.
+/// Microsoft documents write-through in terms of moves done as a copy and
+/// delete; for a rename within a volume it is the strongest request the API
+/// offers, and the usual choice for durable replacement on Windows.
+///
+/// For files that need no envelope, such as another program's own format.
+/// The parent directory is created if missing.
+///
+/// # Errors
+///
+/// Any filesystem failure, or a `path` with no file name.
+pub fn replace_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty());
+    if let Some(parent) = parent {
+        fs::create_dir_all(parent)?;
+    }
+    if path.file_name().is_none() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("{} has no file name", path.display()),
+        ));
+    }
+
     let tmp_path = temp_path_for(path);
     {
         let mut tmp_file = File::create(&tmp_path)?;
-        tmp_file.write_all(&buffer)?;
+        tmp_file.write_all(contents)?;
         tmp_file.sync_all()?;
     }
-    fs::rename(&tmp_path, path)?;
-    sync_dir(parent)?;
-    Ok(())
+    rename_durably(&tmp_path, path, parent.unwrap_or(Path::new(".")))
 }
 
 /// Reads and verifies `path`.
@@ -184,21 +212,46 @@ fn temp_path_for(path: &Path) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn sync_dir(dir: &Path) -> Result<(), PersistenceError> {
-    File::open(dir)?.sync_all()?;
-    Ok(())
+fn rename_durably(from: &Path, to: &Path, parent: &Path) -> io::Result<()> {
+    fs::rename(from, to)?;
+    File::open(parent)?.sync_all()
 }
 
-#[cfg(not(unix))]
-fn sync_dir(_dir: &Path) -> Result<(), PersistenceError> {
-    Ok(())
+#[cfg(windows)]
+fn rename_durably(from: &Path, to: &Path, _parent: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let wide =
+        |path: &Path| -> Vec<u16> { path.as_os_str().encode_wide().chain(Some(0)).collect() };
+    let (from, to) = (wide(from), wide(to));
+    // SAFETY: both are NUL-terminated UTF-16 paths that outlive the call.
+    unsafe {
+        MoveFileExW(
+            PCWSTR(from.as_ptr()),
+            PCWSTR(to.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    }
+    // The failure is HRESULT_FROM_WIN32(GetLastError()); its low 16 bits are
+    // the Win32 code, which io::Error maps to an ErrorKind.
+    .map_err(|err| io::Error::from_raw_os_error(err.code().0 & 0xFFFF))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn rename_durably(from: &Path, to: &Path, _parent: &Path) -> io::Result<()> {
+    fs::rename(from, to)
 }
 
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
 
-    use super::{read_checked, write_atomic, PersistenceError};
+    use super::{read_checked, replace_atomically, write_atomic, PersistenceError};
 
     fn temp_dir() -> tempfile::TempDir {
         tempfile::tempdir().expect("must create a temp directory")
@@ -309,6 +362,17 @@ mod tests {
             .expect("read must succeed")
             .expect("file must exist");
         assert_eq!(loaded.payload, b"real content");
+    }
+
+    #[test]
+    fn replace_atomically_writes_raw_bytes_and_replaces_an_existing_file() {
+        let dir = temp_dir();
+        let path = dir.path().join("nested").join("state.json");
+        replace_atomically(&path, b"{\"height\":1}").unwrap();
+        replace_atomically(&path, b"{\"height\":2}").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"{\"height\":2}");
+        assert!(!dir.path().join("nested").join("state.json.tmp").exists());
+        assert!(replace_atomically(Path::new("/"), b"").is_err());
     }
 
     #[test]

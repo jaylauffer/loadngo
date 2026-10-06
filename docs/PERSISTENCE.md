@@ -31,10 +31,20 @@ pull in the qcoin/Task dependency footprint for no reason.
 
 Those crates own platform *integration* — input, windowing, rendering, and
 now `app_data_dir` for path resolution. Atomic-write-then-rename and BLAKE3
-hashing need zero OS-specific branching (`std::fs::rename` is atomic on the
-same volume on every platform this crate targets, including Windows via
-`MoveFileExW`/`MOVEFILE_REPLACE_EXISTING`). Putting this in host-desktop
-would mean six copies of the same platform-independent logic.
+hashing need almost no OS-specific branching: a rename within one volume is
+atomic on every platform this crate targets. The one platform difference is
+making the rename itself durable (`replace_atomically`, 2026-10-06): on Unix
+the parent directory is synced after `rename`; on Windows the rename is
+`MoveFileExW(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`, since a
+directory can't be opened and synced there. Microsoft documents
+write-through in terms of moves done as a copy and delete; for a rename
+within a volume it is the strongest request the API offers. Before
+2026-10-06 the Windows rename was never flushed. Putting this in
+host-desktop would mean six copies of the same logic.
+
+`replace_atomically` is also public for files that keep their own format
+without this crate's envelope; qcoin-node writes its chain state and block
+history with it.
 
 ## Prior art this borrows from
 
