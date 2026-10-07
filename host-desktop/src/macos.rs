@@ -933,6 +933,12 @@ pub fn app_data_dir(app_id: &str) -> Result<String, String> {
         .map_err(|value| format!("app data path is not valid UTF-8: {value:?}"))
 }
 
+/// Runs `job` on the host's bounded worker pool; its result comes back as a
+/// completion on the host proactor. See [`crate::Offloaded`].
+pub fn offload<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> crate::Offloaded<T> {
+    crate::offload::offload_through(with_mac_proactor(|proactor| proactor.handle.clone()), job)
+}
+
 pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|err| format!("failed to read {path}: {err}"))
 }

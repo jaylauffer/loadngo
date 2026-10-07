@@ -3339,6 +3339,12 @@ pub(crate) fn external_files_dir() -> Result<Option<String>, String> {
     })
 }
 
+/// Runs `job` on the host's bounded worker pool; its result comes back as a
+/// completion on the host proactor. See [`crate::Offloaded`].
+pub fn offload<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> crate::Offloaded<T> {
+    crate::offload::offload_through(proactor_handle(), job)
+}
+
 pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
     if let Ok(bytes) = std::fs::read(path) {
         return Ok(bytes);

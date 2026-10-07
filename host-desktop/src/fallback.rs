@@ -303,6 +303,11 @@ pub fn capture_frame() -> HostFrame {
     LoadngoPlaceholderDesktopHost::capture_frame()
 }
 
+/// Runs `job` inline: this host has no proactor or worker pool.
+pub fn offload<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> crate::Offloaded<T> {
+    crate::Offloaded::ready(job())
+}
+
 pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
     LoadngoPlaceholderAssetIo::load_bytes(path).await
 }

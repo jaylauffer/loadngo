@@ -39,6 +39,17 @@ Every supported host must eventually satisfy these rules:
 6. Stop the proactor and drain outstanding I/O before host shutdown releases
    buffers or platform resources.
 
+CPU work an app must not do on its frame thread, such as decoding images, goes
+through `host_desktop::offload(job)` (`host-desktop/src/offload.rs`): a
+two-thread worker pool shared by the process, whose results come back as
+completions on the host proactor and are read with `Offloaded::try_take` on a
+later frame. The pool queues without limit, so the caller bounds its jobs in
+flight. First user: sng-zhoenus's board background. On an iPhone 13 Pro Max
+(2026-10-07) its 100 JPEG frames took 33 ms to read and 223 ms to decode,
+all before the first frame, and iOS's hang detection flagged the launch. With
+the decodes offloaded and 8 frames in flight, the frame thread spends at most
+6.8 ms of any frame on the clip and the clip is ready 259 ms after start.
+
 This does not require a static screen to render at 60 Hz. Frame pacing remains
 an application policy:
 
