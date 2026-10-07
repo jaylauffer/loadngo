@@ -469,6 +469,9 @@ struct AppState {
     next_frame_wakers: Vec<Waker>,
     entry_future: Option<Pin<Box<dyn Future<Output = ()>>>>,
     should_close: bool,
+    /// Whether the app is active and the window key, as of the last event
+    /// pump.
+    focused: bool,
 }
 
 thread_local! {
@@ -763,6 +766,7 @@ fn start(
             next_frame_wakers: Vec::new(),
             entry_future: Some(Box::pin(entry)),
             should_close: false,
+            focused: true,
         });
     });
     APP_STATE.with(|state| {
@@ -853,6 +857,7 @@ pub fn capture_frame() -> HostFrame {
             surface: state.surface,
             input: state.input.snapshot.clone(),
             foreground: true,
+            focused: state.focused,
             insets: loadngo_host_core::SafeAreaInsets::default(),
         };
         state.input.clear_transients();
@@ -1502,6 +1507,12 @@ fn pump_events_until(timeout: Option<Duration>) {
             if !is_key_window {
                 state.input.clear_keyboard_state();
             }
+            // A window can be key within an app that is not active: launched
+            // from a shell, the app may never be brought to the front.
+            let app: *mut AnyObject =
+                unsafe { msg_send![class!(NSApplication), sharedApplication] };
+            let app_active: bool = unsafe { msg_send![app, isActive] };
+            state.focused = is_key_window && app_active;
             let bounds: CGRect = unsafe { msg_send![&*state.view, bounds] };
             state.surface = SurfaceInfo {
                 width: bounds.size.width as f32,

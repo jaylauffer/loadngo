@@ -241,6 +241,10 @@ pub struct TextBlockStyle {
     pub line_spacing: f32,
 }
 
+fn focused_by_default() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HostFrame {
     pub timing: FrameTiming,
@@ -255,6 +259,18 @@ pub struct HostFrame {
     /// while this is `false`, matching platform-expected app-lifecycle
     /// behavior instead of continuing to run (and make noise) off-screen.
     pub foreground: bool,
+    /// Whether the app's window currently has input focus: on desktop, the
+    /// window is the key/focused window (another app or window in front
+    /// makes this `false` while `foreground` stays `true`); on iOS, the app
+    /// is active (Control Center, an incoming call or the app switcher
+    /// make it inactive); on Android, the activity is resumed and its
+    /// window has focus (the notification shade or a system dialog take
+    /// focus without pausing the activity). A focus change wakes a
+    /// `FrameDemand::Idle` caller. A game that keeps a clock, or that the
+    /// player cannot watch while it runs, should pause while this is
+    /// `false`.
+    #[serde(default = "focused_by_default")]
+    pub focused: bool,
     /// Screen space, in `surface`'s units, reserved by the platform's own
     /// system bars (status bar, navigation bar) — see `SafeAreaInsets`'s own doc comment
     /// for why the display cutout is deliberately not included. On Android

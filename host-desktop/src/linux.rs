@@ -273,6 +273,7 @@ impl Default for HostSharedState {
                 },
                 input: PendingInput::default().snapshot(),
                 foreground: true,
+                focused: true,
                 insets: loadngo_host_core::SafeAreaInsets::default(),
             },
             pending_input: PendingInput::default(),
@@ -1284,9 +1285,12 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
                     backend.update_surface_size(size.width as i32, size.height as i32);
                 }
             }
-            WindowEvent::Focused(false) => {
+            WindowEvent::Focused(focused) => {
                 let mut state = lock_state();
-                state.pending_input.clear_keyboard_state();
+                state.latest_frame.focused = focused;
+                if !focused {
+                    state.pending_input.clear_keyboard_state();
+                }
                 state.pending_redraw = true;
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -1403,6 +1407,7 @@ fn advance_frame_clock(state: &mut HostSharedState, source: &str) {
         surface: state.latest_frame.surface,
         input: state.pending_input.snapshot(),
         foreground: true,
+        focused: state.latest_frame.focused,
         insets: loadngo_host_core::SafeAreaInsets::default(),
     };
     state.frame_epoch = state.frame_epoch.saturating_add(1);

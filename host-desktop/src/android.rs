@@ -158,6 +158,10 @@ struct AndroidAppState {
     /// covering the activity, ...) and back to `true` by `onResume`. Starts
     /// `true` since the activity is always foregrounded at process launch.
     foreground: bool,
+    /// The activity window's focus, from `onWindowFocusChanged`: the
+    /// notification shade and system dialogs take it without pausing the
+    /// activity.
+    window_focused: bool,
     /// Real device-reserved screen space, refreshed on `onResume` and
     /// `onWindowFocusChanged(true)` (see `query_safe_area_insets`) and read
     /// cheaply here every frame, the same caching shape as `surface`.
@@ -227,6 +231,7 @@ impl Default for AndroidAppState {
             internal_data_path: None,
             display_scale: 1.0,
             foreground: true,
+            window_focused: true,
             insets: SafeAreaInsets::default(),
             immersive_requested: false,
             surface: SurfaceInfo {
@@ -1700,14 +1705,23 @@ unsafe extern "C" fn on_resume(_activity: *mut ndk_sys::ANativeActivity) {
 /// two fire at different, only-partially-overlapping moments. Real
 /// safe-area insets are refreshed at both points too, since a focus-regain
 /// is exactly when the previous query (taken while immersive flags may have
-/// been transiently cleared) could be stale.
+/// been transiently cleared) could be stale. Both directions are also
+/// recorded as `HostFrame::focused` and wake an idle runtime.
 unsafe extern "C" fn on_window_focus_changed(
     _activity: *mut ndk_sys::ANativeActivity,
     has_focus: std::os::raw::c_int,
 ) {
-    if has_focus != 0 {
+    let has_focus = has_focus != 0;
+    if has_focus {
         refresh_system_ui();
     }
+    {
+        let mut state = app_state().lock().expect("android app state poisoned");
+        state.window_focused = has_focus;
+        state.event_epoch = state.event_epoch.saturating_add(1);
+        wake_next_frame_waiters(&mut state);
+    }
+    request_frame_callback();
 }
 
 /// Consecutive frames re-requested because the GLES surface had not caught up
@@ -3223,6 +3237,7 @@ pub fn capture_frame() -> HostFrame {
         surface: state.surface,
         input: state.input.clone(),
         foreground: state.foreground,
+        focused: state.foreground && state.window_focused,
         insets: logical_insets(state.insets, state.display_scale),
     };
     let state_mut = &mut *state;

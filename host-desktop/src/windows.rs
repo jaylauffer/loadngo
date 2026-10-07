@@ -265,6 +265,7 @@ impl Default for HostSharedState {
                 },
                 input: PendingInput::default().snapshot(),
                 foreground: true,
+                focused: true,
                 insets: loadngo_host_core::SafeAreaInsets::default(),
             },
             pending_input: PendingInput::default(),
@@ -1176,9 +1177,12 @@ impl ApplicationHandler<WindowsUserEvent> for WindowsApp {
                 state.pending_redraw = true;
                 should_publish_frame = true;
             }
-            WindowEvent::Focused(false) => {
+            WindowEvent::Focused(focused) => {
                 let mut state = lock_state();
-                state.pending_input.clear_keyboard_state();
+                state.latest_frame.focused = focused;
+                if !focused {
+                    state.pending_input.clear_keyboard_state();
+                }
                 should_publish_frame = true;
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -1311,6 +1315,7 @@ fn advance_frame_clock(state: &mut HostSharedState) {
         surface: state.latest_frame.surface,
         input: state.pending_input.snapshot(),
         foreground: true,
+        focused: state.latest_frame.focused,
         insets: loadngo_host_core::SafeAreaInsets::default(),
     };
     state.frame_epoch = state.frame_epoch.saturating_add(1);

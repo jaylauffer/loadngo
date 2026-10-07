@@ -145,6 +145,11 @@ struct HostSharedState {
     /// runtime has no timer to advance the frame clock, so touch has to --
     /// but only then. See the `should_publish_frame` note on `Touch`.
     idle_frame_pending: bool,
+    /// Cleared by winit's `suspended` (`applicationWillResignActive`) and
+    /// set again by `resumed` (`applicationDidBecomeActive`).
+    app_active: bool,
+    /// The window's key status, from `WindowEvent::Focused`.
+    window_focused: bool,
 }
 
 #[derive(Clone)]
@@ -308,6 +313,7 @@ impl Default for HostSharedState {
                 },
                 input: PendingInput::default().snapshot(),
                 foreground: true,
+                focused: true,
                 insets: loadngo_host_core::SafeAreaInsets::default(),
             },
             pending_input: PendingInput::default(),
@@ -325,6 +331,8 @@ impl Default for HostSharedState {
             next_texture_id: 0,
             next_frame_wakers: Vec::new(),
             idle_frame_pending: false,
+            app_active: true,
+            window_focused: true,
             last_backend_used: DesktopRenderBackendKind::Unavailable,
             backend_detail: "iOS Metal host waiting for the first frame".to_string(),
             event_proxy: None,
@@ -619,6 +627,7 @@ fn advance_frame_clock(state: &mut HostSharedState) {
         surface: state.latest_frame.surface,
         input: state.pending_input.snapshot(),
         foreground: true,
+        focused: state.app_active && state.window_focused,
         insets: loadngo_host_core::SafeAreaInsets::default(),
     };
     state.frame_epoch = state.frame_epoch.saturating_add(1);
@@ -756,6 +765,7 @@ pub fn capture_frame() -> HostFrame {
         surface: state.latest_frame.surface,
         input: state.pending_input.snapshot(),
         foreground: state.latest_frame.foreground,
+        focused: state.app_active && state.window_focused,
         insets: state.latest_frame.insets,
     };
     state.pending_input.clear_transient();
@@ -1376,6 +1386,8 @@ impl IosApp {
 impl ApplicationHandler<IosUserEvent> for IosApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
+            lock_state().app_active = true;
+            self.publish_frame();
             self.request_redraw_if_needed();
             return;
         }
@@ -1448,6 +1460,16 @@ impl ApplicationHandler<IosUserEvent> for IosApp {
         self.request_redraw_if_needed();
     }
 
+    /// `applicationWillResignActive`: Control Center, an incoming call, the
+    /// app switcher, and the first step of going to the background. One
+    /// frame is published so the app sees `focused: false` before iOS stops
+    /// presenting it.
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        lock_state().app_active = false;
+        self.publish_frame();
+        self.request_redraw_if_needed();
+    }
+
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -1486,9 +1508,12 @@ impl ApplicationHandler<IosUserEvent> for IosApp {
                 );
                 should_publish_frame = true;
             }
-            WindowEvent::Focused(false) => {
+            WindowEvent::Focused(focused) => {
                 let mut state = lock_state();
-                state.pending_input.clear_keyboard_state();
+                state.window_focused = focused;
+                if !focused {
+                    state.pending_input.clear_keyboard_state();
+                }
                 should_publish_frame = true;
             }
             WindowEvent::Touch(touch) => {

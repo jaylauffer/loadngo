@@ -128,6 +128,7 @@ impl DesktopPlatformBackend for LoadngoPlaceholderPlatformHost {
                 gamepads: Vec::new(),
             },
             foreground: true,
+            focused: true,
             insets: loadngo_host_core::SafeAreaInsets::default(),
         }
     }
