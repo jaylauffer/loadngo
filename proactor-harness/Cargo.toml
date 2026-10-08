@@ -12,6 +12,11 @@ loadngo-proactor = { path = "../proactor" }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+# iocp-association-profile calls CreateIoCompletionPort directly to time the
+# association step on its own.
+windows.workspace = true
+
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 

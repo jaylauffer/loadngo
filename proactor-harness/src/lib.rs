@@ -143,3 +143,100 @@ pub fn simulate_frame(
 
     await_completions(&counter, expected, Duration::from_secs(5))
 }
+
+/// The clock `std::time::Instant` reads on this platform, for profile
+/// reports: a single timed operation is only as precise as one tick of it.
+pub struct ClockResolution {
+    /// What `Instant::now` calls here.
+    pub source: &'static str,
+    /// The tick the platform declares: `QueryPerformanceFrequency` on
+    /// Windows, `clock_getres` elsewhere.
+    pub declared: Option<Duration>,
+    /// The counter frequency, where the platform declares one
+    /// (`QueryPerformanceFrequency`).
+    pub frequency_hz: Option<u64>,
+    /// The smallest nonzero difference between two `Instant::now` readings.
+    pub observed_step: Duration,
+}
+
+impl std::fmt::Display for ClockResolution {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "clock: {}", self.source)?;
+        if let Some(hz) = self.frequency_hz {
+            write!(f, " at {hz} Hz")?;
+        }
+        if let Some(tick) = self.declared {
+            write!(f, ", declared tick {} ns", tick.as_nanos())?;
+        }
+        write!(
+            f,
+            ", smallest observed step {} ns",
+            self.observed_step.as_nanos()
+        )
+    }
+}
+
+pub fn clock_resolution() -> ClockResolution {
+    let mut observed_step = Duration::MAX;
+    for _ in 0..1000 {
+        let start = Instant::now();
+        let mut now = Instant::now();
+        while now == start {
+            now = Instant::now();
+        }
+        observed_step = observed_step.min(now - start);
+    }
+    let frequency_hz = frequency_hz();
+    ClockResolution {
+        source: CLOCK_SOURCE,
+        declared: frequency_hz
+            .map(|hz| Duration::from_nanos(1_000_000_000 / hz))
+            .or_else(declared_tick),
+        frequency_hz,
+        observed_step,
+    }
+}
+
+#[cfg(windows)]
+const CLOCK_SOURCE: &str = "QueryPerformanceCounter";
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const CLOCK_SOURCE: &str = "clock_gettime(CLOCK_UPTIME_RAW)";
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+const CLOCK_SOURCE: &str = "clock_gettime(CLOCK_MONOTONIC)";
+
+#[cfg(windows)]
+fn declared_tick() -> Option<Duration> {
+    None
+}
+
+#[cfg(windows)]
+fn frequency_hz() -> Option<u64> {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn QueryPerformanceFrequency(frequency: *mut i64) -> i32;
+    }
+    let mut frequency = 0i64;
+    // SAFETY: writes one i64 through a valid pointer; cannot fail on XP+.
+    let ok = unsafe { QueryPerformanceFrequency(&mut frequency) } != 0;
+    (ok && frequency > 0).then_some(frequency as u64)
+}
+
+#[cfg(unix)]
+fn frequency_hz() -> Option<u64> {
+    None
+}
+
+#[cfg(unix)]
+fn declared_tick() -> Option<Duration> {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    let clock = libc::CLOCK_UPTIME_RAW;
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    let clock = libc::CLOCK_MONOTONIC;
+    let mut resolution = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: writes one timespec through a valid pointer.
+    let ok = unsafe { libc::clock_getres(clock, &mut resolution) } == 0;
+    ok.then(|| Duration::new(resolution.tv_sec as u64, resolution.tv_nsec as u32))
+}

@@ -2802,6 +2802,7 @@ dependencies = [
  "criterion",
  "libc",
  "loadngo-proactor",
+ "windows 0.58.0",
 ]
 
 [[package]]
