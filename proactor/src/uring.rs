@@ -843,6 +843,7 @@ impl IoPort for IoUringPort {
     fn send(&self, fd: RawFd, buf: IoBuf, handler: impl IoCompletionHandler) -> io::Result<IoOpId> {
         let op_id = self.allocate_io_op_id();
         let sqe = opcode::Send::new(types::Fd(fd), buf.as_ptr(), buf.len() as u32)
+            .flags(libc::MSG_NOSIGNAL)
             .build()
             .user_data(op_id.0);
         self.in_flight
@@ -922,6 +923,7 @@ impl IoPort for IoUringPort {
         state.msg.msg_iovlen = 1;
 
         let sqe = opcode::SendMsg::new(types::Fd(fd), std::ptr::addr_of!(state.msg))
+            .flags(libc::MSG_NOSIGNAL as u32)
             .build()
             .user_data(op_id.0);
 

@@ -329,7 +329,8 @@ impl KqueuePort {
                 Box::new(move || handler.run(io_result))
             }
             InFlightOp::Send { fd, buf, handler } => {
-                let rc = unsafe { libc::send(fd, buf.as_ptr().cast(), buf.len(), 0) };
+                let rc =
+                    unsafe { libc::send(fd, buf.as_ptr().cast(), buf.len(), libc::MSG_NOSIGNAL) };
                 let io_result = Self::finish_write_like(rc, buf);
                 Box::new(move || handler.run(io_result))
             }
@@ -376,7 +377,7 @@ impl KqueuePort {
                         fd,
                         buf.as_ptr().cast(),
                         buf.len(),
-                        0,
+                        libc::MSG_NOSIGNAL,
                         addr.as_ptr(),
                         addr.len(),
                     )
@@ -770,7 +771,7 @@ impl IoPort for KqueuePort {
     fn send(&self, fd: RawFd, buf: IoBuf, handler: impl IoCompletionHandler) -> io::Result<IoOpId> {
         Self::set_nonblocking(fd)?;
         let handler: Box<dyn IoCompletionHandler> = Box::new(handler);
-        let rc = unsafe { libc::send(fd, buf.as_ptr().cast(), buf.len(), 0) };
+        let rc = unsafe { libc::send(fd, buf.as_ptr().cast(), buf.len(), libc::MSG_NOSIGNAL) };
         let err = io::Error::last_os_error();
         if rc >= 0 || !Self::would_block(&err) {
             let io_result = Self::finish_write_like(rc, buf);
@@ -848,7 +849,7 @@ impl IoPort for KqueuePort {
                 fd,
                 buf.as_ptr().cast(),
                 buf.len(),
-                0,
+                libc::MSG_NOSIGNAL,
                 addr.as_ptr(),
                 addr.len(),
             )
