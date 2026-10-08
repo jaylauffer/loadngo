@@ -3,6 +3,9 @@
 Status: defects 1 and 2 **fixed 2026-09-08**; defect 3 (below) fixed 2026-10-05;
 defects 4 (IOCP handle reuse) and 5 (IOCP deadlines on the 15.6 ms tick)
 fixed 2026-10-08.
+The profiling commits defects 4 and 5 cite are kept on GitHub branches
+`iocp-handle-reuse` and `iocp-timers`; keep those branches while this
+record cites them.
 Originally: **both fixed 2026-09-08**, the same day they were found while
 migrating `starlight` onto `Proactor<IoUringPort>`. This document is kept
 as the record of what was wrong and why the fixes took the shape they
