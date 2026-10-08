@@ -11,6 +11,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod support;
+
 #[test]
 fn uring_dispatches_enqueued_work() {
     let proactor = Proactor::new(IoUringPort::new().unwrap());
@@ -24,7 +26,7 @@ fn uring_dispatches_enqueued_work() {
         })
         .unwrap();
 
-    let report = proactor.run_once().unwrap();
+    let report = support::run_once(&proactor, "uring_dispatches_enqueued_work");
     assert_eq!(report.dispatched_completions, 1);
     assert_eq!(
         rx.recv_timeout(Duration::from_millis(100)).unwrap(),
@@ -66,7 +68,7 @@ fn uring_wake_interrupts_blocking_poll() {
     let proactor = Proactor::new(IoUringPort::new().unwrap());
     let handle = proactor.handle();
 
-    let worker = thread::spawn(move || {
+    let worker = support::spawn(move || {
         let started = Instant::now();
         let report = proactor.run_once().unwrap();
         (started.elapsed(), report)
@@ -75,7 +77,7 @@ fn uring_wake_interrupts_blocking_poll() {
     thread::sleep(Duration::from_millis(25));
     handle.wake().unwrap();
 
-    let (elapsed, report) = worker.join().unwrap();
+    let (elapsed, report) = worker.join("uring_wake_interrupts_blocking_poll");
     assert!(elapsed < Duration::from_secs(1));
     assert!(report.woke);
 }
@@ -92,7 +94,7 @@ fn uring_work_posted_from_another_thread_wakes_a_blocked_poll() {
         .unwrap();
     let (tx, rx) = mpsc::channel();
 
-    let worker = thread::spawn(move || {
+    let worker = support::spawn(move || {
         let started = Instant::now();
         while rx.try_recv().is_err() && started.elapsed() < Duration::from_secs(15) {
             proactor.run_once().unwrap();
@@ -109,7 +111,7 @@ fn uring_work_posted_from_another_thread_wakes_a_blocked_poll() {
     });
     post.join().unwrap();
 
-    let elapsed = worker.join().unwrap();
+    let elapsed = worker.join("uring_work_posted_from_another_thread_wakes_a_blocked_poll");
     assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
 }
 
@@ -118,7 +120,7 @@ fn uring_stop_wakes_and_ends_loop() {
     let proactor = Proactor::new(IoUringPort::new().unwrap());
     let handle = proactor.handle();
 
-    let worker = thread::spawn(move || {
+    let worker = support::spawn(move || {
         let started = Instant::now();
         proactor.run_until_stopped().unwrap();
         started.elapsed()
@@ -127,7 +129,7 @@ fn uring_stop_wakes_and_ends_loop() {
     thread::sleep(Duration::from_millis(25));
     handle.stop().unwrap();
 
-    let elapsed = worker.join().unwrap();
+    let elapsed = worker.join("uring_stop_wakes_and_ends_loop");
     assert!(elapsed < Duration::from_secs(1));
     assert!(!handle.is_running());
 }
@@ -148,14 +150,14 @@ fn uring_dispatches_registered_readiness() {
         })
         .unwrap();
 
-    let worker = thread::spawn(move || proactor.run_once().unwrap());
+    let worker = support::spawn(move || proactor.run_once().unwrap());
     thread::sleep(Duration::from_millis(25));
 
     let value = [1u8; 1];
     let written = unsafe { libc::write(pipe_fds[1], value.as_ptr() as *const _, value.len()) };
     assert_eq!(written, 1);
 
-    let report = worker.join().unwrap();
+    let report = worker.join("uring_dispatches_registered_readiness");
     assert!(report.woke);
     assert_eq!(rx.recv_timeout(Duration::from_millis(100)).unwrap(), 77);
 
@@ -356,7 +358,7 @@ fn uring_shutdown_drains_a_still_in_flight_op_instead_of_hanging() {
         })
         .unwrap();
 
-    let worker = thread::spawn(move || {
+    let worker = support::spawn(move || {
         let started = Instant::now();
         proactor.run_until_stopped().unwrap();
         started.elapsed()
@@ -365,7 +367,7 @@ fn uring_shutdown_drains_a_still_in_flight_op_instead_of_hanging() {
     thread::sleep(Duration::from_millis(25));
     handle.stop().unwrap();
 
-    let elapsed = worker.join().unwrap();
+    let elapsed = worker.join("uring_shutdown_drains_a_still_in_flight_op_instead_of_hanging");
     assert!(
         elapsed < Duration::from_secs(5),
         "run_until_stopped did not drain the in-flight recv and return"

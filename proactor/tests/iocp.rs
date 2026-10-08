@@ -19,6 +19,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod support;
+
 /// `FILE_FLAG_OVERLAPPED`. IOCP only queues completions for handles opened
 /// with it; a plain `std::fs::File` would complete synchronously and never
 /// post one.
@@ -27,18 +29,6 @@ const FILE_FLAG_OVERLAPPED: u32 = 0x4000_0000;
 /// `ERROR_OPERATION_ABORTED`, what a cancelled overlapped operation completes
 /// with.
 const ERROR_OPERATION_ABORTED: i32 = 995;
-
-fn run_until_dispatched(proactor: &Proactor<IocpPort>, count: usize, what: &str) {
-    let start = Instant::now();
-    let mut dispatched = 0;
-    while dispatched < count {
-        dispatched += proactor.run_ready().unwrap().dispatched_completions;
-        assert!(
-            start.elapsed() < Duration::from_secs(5),
-            "{what} never completed"
-        );
-    }
-}
 
 #[test]
 fn iocp_dispatches_enqueued_work() {
@@ -53,7 +43,7 @@ fn iocp_dispatches_enqueued_work() {
         })
         .unwrap();
 
-    let report = proactor.run_once().unwrap();
+    let report = support::run_once(&proactor, "iocp_dispatches_enqueued_work");
     assert_eq!(report.dispatched_completions, 1);
     assert_eq!(
         rx.recv_timeout(Duration::from_millis(100)).unwrap(),
@@ -77,7 +67,7 @@ fn iocp_dispatches_burst_enqueued_work_in_order() {
     }
     drop(tx);
 
-    run_until_dispatched(&proactor, 3, "burst of enqueued work");
+    support::run_until_dispatched(&proactor, 3, "burst of enqueued work");
     for expected in [1u8, 2, 3] {
         assert_eq!(
             rx.recv_timeout(Duration::from_millis(100)).unwrap(),
@@ -91,7 +81,7 @@ fn iocp_wake_interrupts_blocking_poll() {
     let proactor = Proactor::new(IocpPort::new().unwrap());
     let handle = proactor.handle();
 
-    let worker = thread::spawn(move || {
+    let worker = support::spawn(move || {
         let started = Instant::now();
         let report = proactor.run_once().unwrap();
         (started.elapsed(), report)
@@ -100,7 +90,7 @@ fn iocp_wake_interrupts_blocking_poll() {
     thread::sleep(Duration::from_millis(25));
     handle.wake().unwrap();
 
-    let (elapsed, report) = worker.join().unwrap();
+    let (elapsed, report) = worker.join("iocp_wake_interrupts_blocking_poll");
     assert!(elapsed < Duration::from_secs(1));
     assert!(report.woke);
 }
@@ -110,7 +100,7 @@ fn iocp_stop_wakes_and_ends_loop() {
     let proactor = Proactor::new(IocpPort::new().unwrap());
     let handle = proactor.handle();
 
-    let worker = thread::spawn(move || {
+    let worker = support::spawn(move || {
         let started = Instant::now();
         proactor.run_until_stopped().unwrap();
         started.elapsed()
@@ -119,7 +109,7 @@ fn iocp_stop_wakes_and_ends_loop() {
     thread::sleep(Duration::from_millis(25));
     handle.stop().unwrap();
 
-    let elapsed = worker.join().unwrap();
+    let elapsed = worker.join("iocp_stop_wakes_and_ends_loop");
     assert!(elapsed < Duration::from_secs(1));
     assert!(!handle.is_running());
 }
@@ -159,7 +149,7 @@ fn iocp_write_then_read_round_trip_an_overlapped_file() {
             },
         )
         .unwrap();
-    run_until_dispatched(&proactor, 1, "write");
+    support::run_until_dispatched(&proactor, 1, "write");
     let written = write_rx
         .recv_timeout(Duration::from_millis(100))
         .unwrap()
@@ -189,7 +179,7 @@ fn iocp_write_then_read_round_trip_an_overlapped_file() {
                 },
             )
             .unwrap();
-        run_until_dispatched(&proactor, 1, "read");
+        support::run_until_dispatched(&proactor, 1, "read");
         let (n, buf) = read_rx.recv_timeout(Duration::from_millis(100)).unwrap();
         assert_eq!(n as usize, expected.len(), "read at offset {offset}");
         assert_eq!(&buf[..n as usize], expected, "read at offset {offset}");
@@ -239,7 +229,7 @@ fn iocp_recv_from_reports_the_real_sender_and_send_to_reaches_it() {
         )
         .unwrap();
 
-    run_until_dispatched(&proactor, 2, "send_to/recv_from");
+    support::run_until_dispatched(&proactor, 2, "send_to/recv_from");
     let sent = send_rx
         .recv_timeout(Duration::from_millis(100))
         .unwrap()
@@ -272,7 +262,7 @@ fn accept_round_trip(bind: SocketAddr) {
     let mut client = TcpStream::connect(listener_addr).unwrap();
     let client_addr = client.local_addr().unwrap();
 
-    run_until_dispatched(&proactor, 1, "accept");
+    support::run_until_dispatched(&proactor, 1, "accept");
     let (new_socket, peer) = rx
         .recv_timeout(Duration::from_millis(100))
         .unwrap()
@@ -343,7 +333,7 @@ fn iocp_connect_reaches_a_real_listener_and_leaves_a_usable_socket() {
         })
         .unwrap();
 
-    run_until_dispatched(&proactor, 1, "connect");
+    support::run_until_dispatched(&proactor, 1, "connect");
     rx.recv_timeout(Duration::from_millis(100))
         .unwrap()
         .expect("connect failed");
@@ -373,7 +363,7 @@ fn iocp_cancel_io_completes_the_op_with_operation_aborted() {
         .unwrap();
 
     handle.cancel_io(op).unwrap();
-    run_until_dispatched(&proactor, 1, "cancelled recv");
+    support::run_until_dispatched(&proactor, 1, "cancelled recv");
 
     let err = rx
         .recv_timeout(Duration::from_millis(100))
@@ -404,7 +394,7 @@ fn iocp_shutdown_drains_a_still_in_flight_op_instead_of_hanging() {
         )
         .unwrap();
 
-    let worker = thread::spawn(move || {
+    let worker = support::spawn(move || {
         let started = Instant::now();
         proactor.run_until_stopped().unwrap();
         started.elapsed()
@@ -413,7 +403,7 @@ fn iocp_shutdown_drains_a_still_in_flight_op_instead_of_hanging() {
     thread::sleep(Duration::from_millis(25));
     handle.stop().unwrap();
 
-    let elapsed = worker.join().unwrap();
+    let elapsed = worker.join("iocp_shutdown_drains_a_still_in_flight_op_instead_of_hanging");
     assert!(
         elapsed < Duration::from_secs(5),
         "run_until_stopped did not drain the in-flight recv and return"
