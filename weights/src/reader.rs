@@ -12,6 +12,10 @@
 //! much buffer in a single operation. A short read resumes where it stopped; a read that
 //! returns nothing before the tensor's end means the file shrank after its header was
 //! validated, and is reported as [`io::ErrorKind::UnexpectedEof`].
+//!
+//! Each file is registered with the reader's proactor when it is opened
+//! ([`IoPort::register`]) and released when the reader is dropped, so on IOCP
+//! a read does not associate its handle with the port again.
 
 use std::{fs::File, io, path::PathBuf, sync::mpsc};
 
@@ -42,7 +46,10 @@ pub enum ReadError {
 /// Positioned reads of tensor data from an open checkpoint.
 pub struct TensorReader<P: IoPort> {
     set: ShardSet,
-    files: Vec<File>,
+    /// Keeps open the handles `fds` names; read only through `fds`.
+    _files: Vec<File>,
+    /// The files' registered values, released on drop.
+    fds: Vec<RawFdCompat>,
     proactor: Proactor<P>,
     chunk_limit: usize,
 }
@@ -79,9 +86,12 @@ impl<P: IoPort> TensorReader<P> {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let paths: Vec<_> = set.shards().iter().map(|shard| &shard.path).collect();
+        let fds = register(&proactor, &files, &paths)?;
         Ok(Self {
             set,
-            files,
+            _files: files,
+            fds,
             proactor,
             chunk_limit: MAX_CHUNK_BYTES,
         })
@@ -121,7 +131,7 @@ impl<P: IoPort> TensorReader<P> {
 
         read_plans(
             &self.proactor,
-            &self.files,
+            &self.fds,
             &plans
                 .iter()
                 .map(|&(name, file, offset, len)| Plan {
@@ -145,7 +155,10 @@ impl<P: IoPort> TensorReader<P> {
 /// the same batched completion I/O as [`TensorReader`].
 pub struct FileReader<P: IoPort> {
     path: PathBuf,
-    files: Vec<File>,
+    /// Keeps open the handles `fds` names; read only through `fds`.
+    _files: Vec<File>,
+    /// The files' registered values, released on drop.
+    fds: Vec<RawFdCompat>,
     proactor: Proactor<P>,
     chunk_limit: usize,
 }
@@ -176,9 +189,12 @@ impl<P: IoPort> FileReader<P> {
             path: path.to_owned(),
             source,
         })?;
+        let files = vec![file];
+        let fds = register(&proactor, &files, &[path])?;
         Ok(Self {
             path: path.to_owned(),
-            files: vec![file],
+            _files: files,
+            fds,
             proactor,
             chunk_limit: MAX_CHUNK_BYTES,
         })
@@ -202,11 +218,55 @@ impl<P: IoPort> FileReader<P> {
                 len,
             })
             .collect();
-        read_plans(&self.proactor, &self.files, &plans, self.chunk_limit)
+        read_plans(&self.proactor, &self.fds, &plans, self.chunk_limit)
     }
 }
 
-/// One read: `len` bytes of `files[file]` from `offset`, reported as `name` on error.
+impl<P: IoPort> Drop for TensorReader<P> {
+    fn drop(&mut self) {
+        release(&self.proactor, &self.fds);
+    }
+}
+
+impl<P: IoPort> Drop for FileReader<P> {
+    fn drop(&mut self) {
+        release(&self.proactor, &self.fds);
+    }
+}
+
+/// Registers each of `files` with `proactor`'s port; on a failure the ones
+/// already registered are released.
+fn register<P: IoPort>(
+    proactor: &Proactor<P>,
+    files: &[File],
+    paths: &[impl AsRef<std::path::Path>],
+) -> Result<Vec<RawFdCompat>, ReadError> {
+    let handle = proactor.handle();
+    let mut fds = Vec::with_capacity(files.len());
+    for (file, path) in files.iter().zip(paths) {
+        match handle.register(raw_handle(file)) {
+            Ok(fd) => fds.push(fd),
+            Err(source) => {
+                release(proactor, &fds);
+                return Err(ReadError::Open {
+                    path: path.as_ref().to_owned(),
+                    source,
+                });
+            }
+        }
+    }
+    Ok(fds)
+}
+
+/// Released before the files close: the fields drop after `Drop::drop`.
+fn release<P: IoPort>(proactor: &Proactor<P>, fds: &[RawFdCompat]) {
+    let handle = proactor.handle();
+    for &fd in fds {
+        handle.release(fd);
+    }
+}
+
+/// One read: `len` bytes of `fds[file]` from `offset`, reported as `name` on error.
 struct Plan<'a> {
     name: &'a str,
     file: usize,
@@ -217,7 +277,7 @@ struct Plan<'a> {
 /// Reads every plan's bytes, all chunks submitted before the first completion is awaited.
 fn read_plans<P: IoPort>(
     proactor: &Proactor<P>,
-    files: &[File],
+    fds: &[RawFdCompat],
     plans: &[Plan<'_>],
     chunk_limit: usize,
 ) -> Result<Vec<Vec<u8>>, ReadError> {
@@ -241,7 +301,7 @@ fn read_plans<P: IoPort>(
             let tx = tx.clone();
             handle
                 .read(
-                    raw_handle(&files[shard]),
+                    fds[shard],
                     IoBuf::with_capacity(want),
                     offset,
                     move |result: IoResult| {
