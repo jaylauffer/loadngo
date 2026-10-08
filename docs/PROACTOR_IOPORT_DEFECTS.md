@@ -1,7 +1,8 @@
 # Proactor IoPort Defects
 
 Status: defects 1 and 2 **fixed 2026-09-08**; defect 3 (below) fixed 2026-10-05;
-defect 4 (IOCP handle reuse) fixed 2026-10-08.
+defects 4 (IOCP handle reuse) and 5 (IOCP deadlines on the 15.6 ms tick)
+fixed 2026-10-08.
 Originally: **both fixed 2026-09-08**, the same day they were found while
 migrating `starlight` onto `Proactor<IoUringPort>`. This document is kept
 as the record of what was wrong and why the fixes took the shape they
@@ -389,7 +390,8 @@ Not defects in this sense, but worth knowing; medians:
 
 - IOCP timers are coarse: a 1 ms `defer_for` fires 12.7 ms late and an
   idle 100 ms wait returns 10.6 ms late, the default 15.6 ms Windows timer
-  tick. Frame pacing through `FrameDemand::After` on Windows inherits it.
+  tick. Fixed the same day: defect 5. (This note first said frame pacing
+  through `FrameDemand::After` inherits it; it does not, see defect 5.)
 - kqueue (macOS runner): 1 ms timer 163 µs late (p99 2.1 ms), idle wait
   1.06 ms late, likely kernel timer coalescing.
 - epoll file reads go through worker threads: 21–25 µs per 4 KiB read
@@ -397,6 +399,109 @@ Not defects in this sense, but worth knowing; medians:
   runners, so CI's Linux tests exercise it.
 - Cross-thread wake (post to a pump blocked in `run_once`) is 16–19 µs on
   the Linux runners, 6.8 µs on macOS, 0.7 µs on Windows.
+
+## 5. `IocpPort` ends deadlines on Windows' 15.6 ms timer tick
+
+Found and fixed 2026-10-08, from the general profile above. Jay chose the
+fix after two more profiles of the candidates.
+
+### What happens
+
+A proactor turn waits for completions until its next deferred deadline.
+`IocpPort::poll` waited in `GetQueuedCompletionStatus` with that deadline
+as a millisecond timeout, and Windows ends such a wait on its timer tick,
+15.625 ms unless a process has raised the resolution. A deadline therefore
+fired anywhere up to a tick late. On GitHub's `windows-latest` runner a
+1 ms `defer_for` fired 12.7–12.9 ms late (median; p99 15.1–15.3 ms) and an idle
+100 ms wait returned 1.9–10.6 ms late (p99 14.5 ms) across three runs.
+
+### Who it reached, and who it did not
+
+- Reached: every proactor driven by `run_once`/`run_until_stopped` on an
+  `IocpPort`, such as espeak-ng-rs's engine reads and its playback events
+  delivered from proactor timers, kimi's sampling and tool deadlines.
+- Not reached: the Windows desktop host's frames. `host-desktop`'s
+  `windows.rs` drains its proactor without blocking and hands the next
+  deadline to winit (`ControlFlow::WaitUntil`), and winit 0.30 waits on a
+  high-resolution waitable timer (`CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`)
+  in `MsgWaitForMultipleObjectsEx`. `std::thread::sleep` uses the same
+  kind of timer. So `FrameDemand::After` pacing was never affected.
+
+### Candidates profiled
+
+`IocpPort::with_timer_wait` (on branch `iocp-timers` only, since removed)
+picked one of:
+
+| candidate | how | trade-off |
+| --- | --- | --- |
+| millisecond (the old wait) | `GetQueuedCompletionStatus` timeout | ends on the 15.6 ms tick |
+| `timeBeginPeriod(1)` | the same wait with the process's timer resolution raised to 1 ms for the port's life | no per-wait cost; more timer interrupts the whole time a port exists, even idle, which the thermal rules argue against; Windows 11 may not honor it for a minimized window |
+| wait packet | a high-resolution waitable timer set to the deadline, associated with the port by `NtAssociateWaitCompletionPacket`; the wait has no timeout and the timer's packet ends it | no change to the system tick, no timer while nothing is due; uses ntdll functions Microsoft does not document but the Windows thread pool and Go's runtime rely on |
+
+A waitable timer with an APC and an alertable `GetQueuedCompletionStatusEx`
+was not tried: that call reports failed I/O as NTSTATUS codes in its batch
+entries, so the port's error reporting would have changed with it.
+
+Figures: `proactor-profile` on `windows-latest`, every operation waited for
+before the next, nanoseconds, median (p99). The clock is
+QueryPerformanceCounter at 10 MHz (100 ns tick). Each run is a different
+runner, so compare within a column, not across runs.
+
+First run, 37790218965 (`64d7ad3a`): the wait packet armed the timer and
+withdrew it again on every timed poll.
+
+| | millisecond | `timeBeginPeriod(1)` | wait packet |
+| --- | ---: | ---: | ---: |
+| 1 ms deadline, how late | 12,733,800 (15,348,000) | 636,900 (2,000,400) | 535,500 (552,000) |
+| idle 100 ms wait, how late | 1,927,000 (13,721,300) | 490,700 (2,000,600) | 387,800 (657,600) |
+| 4 KiB file read | 2,900 | 2,800 | 3,500 |
+| 64 KiB file read | 6,000 | 5,800 | 12,100 |
+| UDP send_to + recv_from | 5,500 | 5,400 | 7,100 |
+
+The wait packet's extra I/O cost was four system calls per poll (set and
+associate, cancel and withdraw), paid on every operation because the
+profile waits with a 2 s deadline pending. The fix keeps the timer set
+across polls that other work ends while the deadline holds.
+
+Second run, 37791909803 (`411a0a22`), timer kept armed:
+
+| | millisecond | `timeBeginPeriod(1)` | wait packet |
+| --- | ---: | ---: | ---: |
+| 1 ms deadline, how late | 12,878,000 (15,288,100) | 1,037,800 (2,020,300) | 540,000 (589,000) |
+| idle 100 ms wait, how late | 4,650,700 (14,459,900) | 495,200 (2,044,700) | 232,300 (708,000) |
+| 4 KiB file read | 4,700 | 4,800 | 4,700 |
+| 64 KiB file read | 8,700 | 8,700 | 8,800 |
+| UDP send_to + recv_from | 9,100 | 9,200 | 9,200 |
+| enqueue / cross-thread wake (batches of 1000) | 957 / 889 | 762 / 773 | 756 / 784 |
+
+### Fix
+
+`84b2b6a8`: the wait packet is how every `IocpPort` waits out a deadline;
+the switch and the other candidates are gone.
+
+- A poll with a deadline sets the port's high-resolution timer for it (in
+  100 ns units, relative), associates the timer with the port under its
+  own completion key, and waits with no timeout. The timer's packet ends
+  the wait as a timeout.
+- The timer stays set across polls that I/O or posted work ends while the
+  deadline holds (within 100 us, since each poll recomputes it from a
+  slightly later "now"); it is withdrawn when the deadline moves or no
+  deadline remains, and re-armed after it fires.
+- One poll owns the timer at a time. A poll that does not own it (a second
+  polling thread, or a non-blocking `run_ready`) and dequeues its packet
+  flags the timer as fired for the owner and, if the owner is waiting on
+  it at that moment, wakes it. A packet already being queued when it is
+  withdrawn reaches a later poll as an early, harmless timeout.
+- Where the timer or packet cannot be created (before Windows 10 1803), and
+  for a concurrent poller, polls wait in milliseconds as before.
+
+### Verification
+
+| where | result |
+| --- | --- |
+| `windows-latest`, run 37791909803 (`411a0a22`, same code behind the switch) | 20 of 20 IOCP tests, including: a 1 ms deadline within 4 ms (median of 21); deadlines on time after 10 waits ended by work posted from another thread; and after a non-blocking `run_ready` took the timer's packet with nothing waiting |
+| `windows-latest`, `84b2b6a8` (the fix as landed) | CI run 37793143051 green on all four platforms; profile run 37793143057: 19 of 19 IOCP tests, 1 ms deadline 540,600 ns late (p99 570,300), idle 100 ms wait 248,500 (p99 747,900), 4 KiB read 4,800, 64 KiB read 8,700, UDP pair 9,300, enqueue 767, cross-thread 757 |
+| macOS, Linux | unaffected: `iocp.rs` compiles only for Windows; clippy `-D warnings` cross-checked for both |
 
 ## Related
 

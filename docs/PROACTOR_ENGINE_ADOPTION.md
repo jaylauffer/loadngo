@@ -50,6 +50,20 @@ all before the first frame, and iOS's hang detection flagged the launch. With
 the decodes offloaded and 8 frames in flight, the frame thread spends at most
 6.8 ms of any frame on the clip and the clip is ready 259 ms after start.
 
+File and socket I/O through `IoPort` (`ProactorHandle::read`, `write`,
+`recv`, ...): open files for overlapped I/O on Windows
+(`FILE_FLAG_OVERLAPPED`), and register a handle that is read or written more
+than once with `ProactorHandle::register`, passing the value it returns to
+each operation and calling `release` before the handle closes. IOCP then
+associates the handle with its port once instead of on every operation
+(about 0.8 us each on GitHub's Windows runner); on the Unix ports
+registration returns the descriptor unchanged. Unregistered handles stay
+correct. `weights`, kimi's shard reader, sng-bass-blaster's storage and
+espeak-ng-rs's data reads all register. Deadlines on an `IocpPort` end on a
+high-resolution timer, about 0.5 ms late, not on Windows' 15.6 ms tick.
+Background and measurements: `docs/PROACTOR_IOPORT_DEFECTS.md`, defects 4
+and 5.
+
 This does not require a static screen to render at 60 Hz. Frame pacing remains
 an application policy:
 
