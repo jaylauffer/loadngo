@@ -676,3 +676,37 @@ fn iocp_wait_packet_survives_waits_ended_by_other_work() {
         );
     }
 }
+
+/// The timer fires while nothing waits on it: a non-blocking `run_ready`
+/// takes its packet. Later timed waits must still end on their deadlines.
+#[test]
+fn iocp_wait_packet_survives_a_timer_packet_taken_by_run_ready() {
+    let proactor = Proactor::new(IocpPort::with_timer_wait(TimerWait::WaitPacket).unwrap());
+    let handle = proactor.handle();
+    for round in 0..5 {
+        // Arm the timer for a 10 ms deadline, then let posted work end the wait.
+        handle
+            .defer_for(Duration::from_millis(10), CompletionKind::Timer, 0, |_| {})
+            .unwrap();
+        proactor.run_ready().unwrap();
+        let poster = handle.clone();
+        let posting = support::spawn(move || {
+            thread::sleep(Duration::from_millis(2));
+            poster.enqueue_work(|_| {}).unwrap();
+        });
+        support::run_once(&proactor, "posted work during a timed wait");
+        posting.join("posting thread");
+        // The timer fires with nobody waiting; run_ready dispatches the
+        // deadline and dequeues the packet.
+        thread::sleep(Duration::from_millis(20));
+        for _ in 0..3 {
+            proactor.run_ready().unwrap();
+        }
+
+        let late = median_timer_lateness(&proactor, 5);
+        assert!(
+            late < Duration::from_millis(4),
+            "round {round}: median {late:?} late"
+        );
+    }
+}

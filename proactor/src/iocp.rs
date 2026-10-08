@@ -66,7 +66,15 @@ pub enum TimerWait {
 struct WaitTimer {
     timer: HANDLE,
     packet: HANDLE,
+    /// The deadline the timer is set for, with its packet associated. Left
+    /// armed across polls that something else ends, so a burst of I/O under
+    /// one pending deadline arms the timer once rather than per poll.
+    armed: Option<std::time::Instant>,
 }
+
+/// Deadlines this close count as the same: each poll recomputes its
+/// deadline from a slightly later "now" than the proactor used.
+const SAME_DEADLINE: Duration = Duration::from_micros(100);
 
 #[link(name = "ntdll")]
 extern "system" {
@@ -385,6 +393,9 @@ pub struct IocpPort {
     /// be created (Windows 10 1803 and later); otherwise polls wait in
     /// milliseconds.
     wait_timer: Option<Mutex<WaitTimer>>,
+    /// Set by whichever poll dequeues the timer's packet, so the owner of
+    /// [`WaitTimer`] knows its timer is no longer armed.
+    timer_fired: std::sync::atomic::AtomicBool,
     /// For the one case with no IOCP completion to wait for at all:
     /// `ReadFile`/`WriteFile`/etc. failing *synchronously* with a real
     /// error (not `ERROR_IO_PENDING`) means the operation was never
@@ -427,6 +438,7 @@ impl IocpPort {
             in_flight: Mutex::new(HashMap::new()),
             io_completions: Mutex::new(VecDeque::new()),
             timer_wait,
+            timer_fired: std::sync::atomic::AtomicBool::new(false),
             wait_timer: match timer_wait {
                 TimerWait::WaitPacket => Self::create_wait_timer().map(Mutex::new),
                 TimerWait::Millisecond | TimerWait::TimerResolution => None,
@@ -459,19 +471,49 @@ impl IocpPort {
             }
             return None;
         }
-        Some(WaitTimer { timer, packet })
+        Some(WaitTimer {
+            timer,
+            packet,
+            armed: None,
+        })
     }
 
-    /// Sets the high-resolution timer to end this poll after `timeout` and
-    /// associates it with the port. `None` when the poll should wait in
-    /// milliseconds instead: no timeout, a zero one, another poll holding
-    /// the timer, or a failed call.
+    /// The timer, set to end this poll after `timeout` with its packet
+    /// associated with the port; left as it is when it is already set for
+    /// that deadline. `None` when the poll should wait in milliseconds
+    /// instead: no timeout or a zero one (a timer already set stays set),
+    /// another poll holding the timer, or a failed call.
     fn arm_wait_timer(
         &self,
         timeout: Option<Duration>,
     ) -> Option<std::sync::MutexGuard<'_, WaitTimer>> {
-        let timeout = timeout.filter(|timeout| !timeout.is_zero())?;
-        let wait_timer = self.wait_timer.as_ref()?.try_lock().ok()?;
+        let mut wait_timer = self.wait_timer.as_ref()?.try_lock().ok()?;
+        if self.timer_fired.swap(false, Ordering::AcqRel) {
+            wait_timer.armed = None;
+        }
+        let Some(timeout) = timeout else {
+            // Nothing is due: a timer still set would only wake the port.
+            if wait_timer.armed.take().is_some() {
+                Self::disarm_wait_timer(&wait_timer);
+            }
+            return None;
+        };
+        if timeout.is_zero() {
+            return None;
+        }
+        let deadline = std::time::Instant::now() + timeout;
+        if let Some(armed) = wait_timer.armed {
+            let apart = if armed > deadline {
+                armed - deadline
+            } else {
+                deadline - armed
+            };
+            if apart <= SAME_DEADLINE {
+                return Some(wait_timer);
+            }
+            wait_timer.armed = None;
+            Self::disarm_wait_timer(&wait_timer);
+        }
         // Relative due time, in 100 ns intervals, as a negative number.
         let intervals = (timeout.as_nanos() / 100).clamp(1, i64::MAX as u128) as i64;
         unsafe { SetWaitableTimer(wait_timer.timer, &-intervals, 0, None, None, false) }.ok()?;
@@ -494,16 +536,36 @@ impl IocpPort {
             }
             return None;
         }
+        wait_timer.armed = Some(deadline);
         Some(wait_timer)
     }
 
-    /// After a poll the timer did not end: withdraws its packet, from the
-    /// port's queue too if it fired meanwhile. A packet already being queued
-    /// arrives at a later poll as an early timeout, which is harmless.
+    /// Stops the timer and withdraws its packet, from the port's queue too
+    /// if it fired meanwhile. A packet already being queued arrives at a
+    /// later poll as an early timeout, which is harmless.
     fn disarm_wait_timer(wait_timer: &WaitTimer) {
         unsafe {
             let _ = CancelWaitableTimer(wait_timer.timer);
             NtCancelWaitCompletionPacket(wait_timer.packet, 1);
+        }
+    }
+
+    /// The timer's packet was dequeued. The poll that owns the timer clears
+    /// its own state; any other poll flags it for the owner and, if the
+    /// owner is waiting right now on the timer it took, wakes it.
+    fn timer_packet_dequeued(&self, owner: Option<&mut WaitTimer>) {
+        match owner {
+            Some(wait_timer) => wait_timer.armed = None,
+            None => {
+                self.timer_fired.store(true, Ordering::Release);
+                let owner_waiting = self
+                    .wait_timer
+                    .as_ref()
+                    .is_some_and(|wait_timer| wait_timer.try_lock().is_err());
+                if owner_waiting {
+                    let _ = self.wake();
+                }
+            }
         }
     }
 
@@ -963,12 +1025,13 @@ impl CompletionPort for IocpPort {
                 timeout_ms,
             )
         };
-        if let Some(wait_timer) = wait_timer {
-            let timer_fired = overlapped.is_null() && result.is_ok() && completion_key == TIMER_KEY;
-            if !timer_fired {
-                Self::disarm_wait_timer(&wait_timer);
-            }
+        let mut wait_timer = wait_timer;
+        if overlapped.is_null() && result.is_ok() && completion_key == TIMER_KEY {
+            self.timer_packet_dequeued(wait_timer.as_deref_mut());
         }
+        // Anything else that ended the wait leaves the timer set for its
+        // deadline, which the next poll most likely waits for again.
+        drop(wait_timer);
 
         // A non-null `overlapped` means a specific I/O operation's
         // completion came back -- true whether `result` is `Ok` *or*
@@ -1567,7 +1630,9 @@ impl Drop for IocpPort {
         unsafe {
             if let Some(wait_timer) = self.wait_timer.take() {
                 let wait_timer = wait_timer.into_inner().unwrap_or_else(|p| p.into_inner());
-                Self::disarm_wait_timer(&wait_timer);
+                if wait_timer.armed.is_some() {
+                    Self::disarm_wait_timer(&wait_timer);
+                }
                 let _ = CloseHandle(wait_timer.packet);
                 let _ = CloseHandle(wait_timer.timer);
             }
