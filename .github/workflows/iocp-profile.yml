@@ -1,0 +1,58 @@
+name: IOCP association profile
+
+# How IocpPort associates handles with its completion port, measured on
+# GitHub's Windows runner: the handle-reuse regression tests, then
+# proactor-harness's iocp-association-profile, whose table lands in the job
+# summary. Runs when the IOCP backend or the profile changes, and by hand.
+# Background: docs/PROACTOR_IOPORT_DEFECTS.md, defect 4.
+
+on:
+  push:
+    paths:
+      - "proactor/src/iocp.rs"
+      - "proactor/tests/iocp.rs"
+      - "proactor-harness/src/bin/iocp-association-profile.rs"
+      - ".github/workflows/iocp-profile.yml"
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: Rounds per scenario
+        default: "7"
+
+concurrency:
+  group: iocp-profile-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  profile:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Allow long paths in git
+        run: git config --global core.longpaths true
+
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: IOCP tests
+        timeout-minutes: 10
+        run: cargo test --locked -p loadngo-proactor --test iocp
+
+      - name: Profile
+        timeout-minutes: 10
+        # Still profiles when a strategy's test fails; not after a cancel.
+        if: ${{ !cancelled() }}
+        run: cargo run --locked --release -p proactor-harness --bin iocp-association-profile -- --rounds ${{ inputs.rounds || '7' }} --markdown "$env:GITHUB_STEP_SUMMARY"

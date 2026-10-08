@@ -9,7 +9,8 @@
 //! test's comment.
 
 use loadngo_proactor::{
-    AcceptResult, Completion, CompletionKind, IoBuf, IoResult, IocpPort, PeerAddr, Proactor,
+    AcceptResult, Association, Completion, CompletionKind, IoBuf, IoResult, IocpPort, PeerAddr,
+    Proactor, ProactorHandle,
 };
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
@@ -200,9 +201,8 @@ const REUSE_CYCLES: usize = 64;
 /// new handle, its read's completion went nowhere and `run_once` waited
 /// forever. espeak-ng-rs's engine reads (open, read, close, on one
 /// process-wide port) hung its Windows CI for six hours per job.
-#[test]
-fn iocp_reads_a_file_opened_after_another_was_closed() {
-    let proactor = Proactor::new(IocpPort::new().unwrap());
+fn reads_a_file_opened_after_another_was_closed(association: Association) {
+    let proactor = Proactor::new(IocpPort::with_association(association).unwrap());
     let handle = proactor.handle();
 
     let path = std::env::temp_dir().join(format!(
@@ -221,10 +221,11 @@ fn iocp_reads_a_file_opened_after_another_was_closed() {
             .custom_flags(FILE_FLAG_OVERLAPPED)
             .open(&path)
             .unwrap();
-        let fd = file.as_raw_handle() as usize as u64;
-        if !seen.insert(fd) {
+        let raw = file.as_raw_handle() as usize as u64;
+        if !seen.insert(raw) {
             reused += 1;
         }
+        let fd = operand(&handle, association, raw);
 
         let (tx, rx) = mpsc::channel();
         handle
@@ -244,9 +245,10 @@ fn iocp_reads_a_file_opened_after_another_was_closed() {
         support::run_until_dispatched(
             &proactor,
             1,
-            &format!("read on handle {fd:#x}, cycle {cycle}, {reused} reused values so far"),
+            &format!("read on handle {raw:#x}, cycle {cycle}, {reused} reused values so far"),
         );
         assert_eq!(rx.try_recv().unwrap(), contents, "cycle {cycle}");
+        release(&handle, association, fd);
         drop(file);
     }
     assert!(
@@ -258,9 +260,8 @@ fn iocp_reads_a_file_opened_after_another_was_closed() {
 
 /// The same defect on the socket path: a socket created after another was
 /// closed reuses its value.
-#[test]
-fn iocp_sends_on_a_socket_created_after_another_was_closed() {
-    let proactor = Proactor::new(IocpPort::new().unwrap());
+fn sends_on_a_socket_created_after_another_was_closed(association: Association) {
+    let proactor = Proactor::new(IocpPort::with_association(association).unwrap());
     let handle = proactor.handle();
     let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
     let receiver_addr = receiver.local_addr().unwrap();
@@ -269,10 +270,11 @@ fn iocp_sends_on_a_socket_created_after_another_was_closed() {
     let mut reused = 0;
     for cycle in 0..REUSE_CYCLES {
         let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
-        let fd = sender.as_raw_socket();
-        if !seen.insert(fd) {
+        let raw = sender.as_raw_socket();
+        if !seen.insert(raw) {
             reused += 1;
         }
+        let fd = operand(&handle, association, raw);
         let (tx, rx) = mpsc::channel();
         handle
             .send_to(
@@ -287,15 +289,71 @@ fn iocp_sends_on_a_socket_created_after_another_was_closed() {
         support::run_until_dispatched(
             &proactor,
             1,
-            &format!("send_to on socket {fd:#x}, cycle {cycle}, {reused} reused values so far"),
+            &format!("send_to on socket {raw:#x}, cycle {cycle}, {reused} reused values so far"),
         );
         assert_eq!(rx.try_recv().unwrap().unwrap(), 4, "cycle {cycle}");
+        release(&handle, association, fd);
         drop(sender);
     }
     assert!(
         reused > 0,
         "no socket value was reused in {REUSE_CYCLES} cycles, so reuse went untested"
     );
+}
+
+/// The value operations take for `raw`: itself, or under
+/// `Association::Registered` the tagged value registering it returns.
+fn operand(handle: &ProactorHandle<IocpPort>, association: Association, raw: u64) -> u64 {
+    if association == Association::Registered {
+        handle.port().register(raw).unwrap()
+    } else {
+        raw
+    }
+}
+
+fn release(handle: &ProactorHandle<IocpPort>, association: Association, fd: u64) {
+    if association == Association::Registered {
+        handle.port().release(fd);
+    }
+}
+
+#[test]
+fn iocp_reads_a_reopened_handle_value_associating_every_operation() {
+    reads_a_file_opened_after_another_was_closed(Association::EveryOperation);
+}
+
+#[test]
+fn iocp_reads_a_reopened_handle_value_registered() {
+    reads_a_file_opened_after_another_was_closed(Association::Registered);
+}
+
+#[test]
+fn iocp_sends_on_a_reopened_socket_value_associating_every_operation() {
+    sends_on_a_socket_created_after_another_was_closed(Association::EveryOperation);
+}
+
+#[test]
+fn iocp_sends_on_a_reopened_socket_value_registered() {
+    sends_on_a_socket_created_after_another_was_closed(Association::Registered);
+}
+
+/// A tagged value is refused, not hung on, once released, and when it was
+/// never registered at all.
+#[test]
+fn iocp_refuses_released_and_unregistered_tagged_values() {
+    let proactor = Proactor::new(IocpPort::with_association(Association::Registered).unwrap());
+    let handle = proactor.handle();
+    let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let target = socket.local_addr().unwrap();
+    let tagged = handle.port().register(socket.as_raw_socket()).unwrap();
+    assert_ne!(tagged, socket.as_raw_socket());
+    handle.port().release(tagged);
+    for fd in [tagged, tagged + (1 << 32)] {
+        let error = handle
+            .send_to(fd, IoBuf::from_vec(b"x".to_vec()), target, |_| {})
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound, "{fd:#x}");
+    }
 }
 
 #[test]

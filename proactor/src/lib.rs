@@ -53,7 +53,7 @@ pub use io_port::{
     IoPort, IoResult, IoTransfer, PeerAddr, RawFdCompat, UnitCompletionHandler,
 };
 #[cfg(windows)]
-pub use iocp::IocpPort;
+pub use iocp::{Association, IocpPort};
 #[cfg(any(
     target_os = "macos",
     target_os = "ios",
@@ -508,6 +508,12 @@ impl<P> ProactorHandle<P>
 where
     P: CompletionPort,
 {
+    /// The backend, for its own operations outside the shared traits, such
+    /// as `IocpPort::register` on Windows.
+    pub fn port(&self) -> &P {
+        &self.shared.port
+    }
+
     pub fn enqueue(
         &self,
         kind: CompletionKind,
