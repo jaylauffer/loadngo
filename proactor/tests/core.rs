@@ -5,6 +5,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod support;
+
 #[test]
 fn dispatches_enqueued_work() {
     let proactor = Proactor::new(ChannelPort::new());
@@ -18,7 +20,7 @@ fn dispatches_enqueued_work() {
         })
         .unwrap();
 
-    let report = proactor.run_once().unwrap();
+    let report = support::run_once(&proactor, "enqueued work");
     assert_eq!(report.dispatched_completions, 1);
     assert_eq!(
         rx.recv_timeout(Duration::from_millis(50)).unwrap(),
@@ -46,7 +48,7 @@ fn dispatches_deferred_work_after_deadline() {
 
     let start = Instant::now();
     loop {
-        let report = proactor.run_once().unwrap();
+        let report = support::run_once(&proactor, "deferred work");
         if report.dispatched_deferred > 0 {
             break;
         }
@@ -92,7 +94,7 @@ fn preserves_deferred_insertion_order_for_equal_deadlines() {
     let start = Instant::now();
     let mut dispatched = 0;
     while dispatched < 2 {
-        let report = proactor.run_once().unwrap();
+        let report = support::run_once(&proactor, "two deferred items");
         dispatched += report.dispatched_deferred;
         assert!(start.elapsed() < Duration::from_secs(1));
     }
@@ -105,7 +107,7 @@ fn preserves_deferred_insertion_order_for_equal_deadlines() {
 fn wake_interrupts_blocking_poll_for_earlier_deadline() {
     let proactor = Proactor::new(ChannelPort::new());
     let handle = proactor.handle();
-    let worker = thread::spawn(move || {
+    let worker = support::spawn(move || {
         let started = Instant::now();
         let report = proactor.run_once().unwrap();
         (started.elapsed(), report)
@@ -116,7 +118,7 @@ fn wake_interrupts_blocking_poll_for_earlier_deadline() {
         .defer_for(Duration::from_millis(10), CompletionKind::Timer, 0, |_| {})
         .unwrap();
 
-    let (elapsed, report) = worker.join().unwrap();
+    let (elapsed, report) = worker.join("run_once woken by an earlier deadline");
     assert!(elapsed < Duration::from_secs(1));
     assert!(report.woke || report.dispatched_deferred > 0);
 }
@@ -171,12 +173,12 @@ fn a_passed_deadline_ends_the_turn_on_the_platform_port() {
 fn stop_wakes_and_ends_loop() {
     let proactor = Proactor::new(ChannelPort::new());
     let handle = proactor.handle();
-    let worker = thread::spawn(move || proactor.run_until_stopped().unwrap());
+    let worker = support::spawn(move || proactor.run_until_stopped().unwrap());
 
     thread::sleep(Duration::from_millis(20));
     handle.stop().unwrap();
 
-    worker.join().unwrap();
+    worker.join("run_until_stopped after stop");
     assert!(!handle.is_running());
 }
 

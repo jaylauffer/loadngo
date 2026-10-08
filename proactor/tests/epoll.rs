@@ -15,6 +15,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod support;
+
 #[test]
 fn epoll_dispatches_enqueued_work() {
     let proactor = Proactor::new(EpollPort::new().unwrap());
@@ -28,7 +30,7 @@ fn epoll_dispatches_enqueued_work() {
         })
         .unwrap();
 
-    let report = proactor.run_once().unwrap();
+    let report = support::run_once(&proactor, "epoll_dispatches_enqueued_work");
     assert_eq!(report.dispatched_completions, 1);
     assert_eq!(
         rx.recv_timeout(Duration::from_millis(100)).unwrap(),
@@ -41,7 +43,7 @@ fn epoll_wake_interrupts_blocking_poll() {
     let proactor = Proactor::new(EpollPort::new().unwrap());
     let handle = proactor.handle();
 
-    let worker = thread::spawn(move || {
+    let worker = support::spawn(move || {
         let started = Instant::now();
         let report = proactor.run_once().unwrap();
         (started.elapsed(), report)
@@ -50,7 +52,7 @@ fn epoll_wake_interrupts_blocking_poll() {
     thread::sleep(Duration::from_millis(25));
     handle.wake().unwrap();
 
-    let (elapsed, report) = worker.join().unwrap();
+    let (elapsed, report) = worker.join("epoll_wake_interrupts_blocking_poll");
     assert!(elapsed < Duration::from_secs(1));
     assert!(report.woke);
 }
@@ -71,14 +73,14 @@ fn epoll_dispatches_registered_readiness() {
         })
         .unwrap();
 
-    let worker = thread::spawn(move || proactor.run_once().unwrap());
+    let worker = support::spawn(move || proactor.run_once().unwrap());
     thread::sleep(Duration::from_millis(25));
 
     let value = [1u8; 1];
     let written = unsafe { libc::write(pipe_fds[1], value.as_ptr() as *const _, value.len()) };
     assert_eq!(written, 1);
 
-    let report = worker.join().unwrap();
+    let report = worker.join("epoll_dispatches_registered_readiness");
     assert!(report.woke);
     assert_eq!(rx.recv_timeout(Duration::from_millis(100)).unwrap(), 77);
 
@@ -359,7 +361,7 @@ fn epoll_shutdown_drains_a_still_in_flight_op_instead_of_hanging() {
         })
         .unwrap();
 
-    let worker = thread::spawn(move || {
+    let worker = support::spawn(move || {
         let started = Instant::now();
         proactor.run_until_stopped().unwrap();
         started.elapsed()
@@ -368,7 +370,7 @@ fn epoll_shutdown_drains_a_still_in_flight_op_instead_of_hanging() {
     thread::sleep(Duration::from_millis(25));
     handle.stop().unwrap();
 
-    let elapsed = worker.join().unwrap();
+    let elapsed = worker.join("epoll_shutdown_drains_a_still_in_flight_op_instead_of_hanging");
     assert!(
         elapsed < Duration::from_secs(5),
         "run_until_stopped did not drain the in-flight recv and return"
@@ -608,15 +610,7 @@ fn epoll_a_batch_of_file_reads_completes_byte_exact() {
     }
     drop(tx);
 
-    let mut dispatched = 0;
-    let start = Instant::now();
-    while dispatched < ranges.len() {
-        dispatched += proactor.run_once().unwrap().dispatched_completions;
-        assert!(
-            start.elapsed() < Duration::from_secs(10),
-            "file reads never completed"
-        );
-    }
+    support::run_until_dispatched(&proactor, ranges.len(), "offloaded file reads");
     let received: Vec<_> = rx.iter().collect();
     assert_eq!(received.len(), ranges.len());
     for (index, bytes) in received {
@@ -642,14 +636,14 @@ fn epoll_shutdown_waits_for_offloaded_file_reads_instead_of_hanging() {
             .unwrap();
     }
 
-    let worker = thread::spawn(move || {
+    let worker = support::spawn(move || {
         let started = Instant::now();
         proactor.run_until_stopped().unwrap();
         started.elapsed()
     });
     handle.stop().unwrap();
 
-    let elapsed = worker.join().unwrap();
+    let elapsed = worker.join("epoll_shutdown_waits_for_offloaded_file_reads_instead_of_hanging");
     assert!(
         elapsed < Duration::from_secs(5),
         "run_until_stopped did not drain the offloaded reads and return"

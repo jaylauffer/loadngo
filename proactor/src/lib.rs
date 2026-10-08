@@ -358,6 +358,22 @@ where
     }
 
     pub fn run_once(&self) -> io::Result<RunReport> {
+        self.run_once_capped(None)
+    }
+
+    /// [`run_once`](Self::run_once), but the turn never blocks past
+    /// `deadline`: a turn with nothing to dispatch by then returns an empty
+    /// report, which the caller can tell apart from progress by checking the
+    /// time. For a caller that waits on one completion it cannot afford to
+    /// wait for forever, such as a read whose completion a broken backend
+    /// never delivers (an IOCP handle that was never associated with the port
+    /// blocks `run_once` with no timeout at all). Tests drive the proactor
+    /// through this, so a defect fails the test instead of hanging CI.
+    pub fn run_once_until(&self, deadline: Instant) -> io::Result<RunReport> {
+        self.run_once_capped(Some(deadline))
+    }
+
+    fn run_once_capped(&self, cap: Option<Instant>) -> io::Result<RunReport> {
         let mut report = RunReport::idle(!self.shared.running.load(Ordering::Acquire));
         report.dispatched_deferred += self.dispatch_ready_deferred(Instant::now())?;
 
@@ -379,6 +395,13 @@ where
                 .lock()
                 .expect("deferred queue poisoned");
             deferred.time_until_next_deadline(Instant::now())
+        };
+        let timeout = match cap {
+            Some(cap) => {
+                let left = cap.saturating_duration_since(Instant::now());
+                Some(timeout.map_or(left, |timeout| timeout.min(left)))
+            }
+            None => timeout,
         };
 
         let poll_report = self.poll_and_dispatch_once(timeout)?;
