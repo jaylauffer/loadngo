@@ -650,6 +650,16 @@ impl<P> ProactorHandle<P>
 where
     P: IoPort,
 {
+    /// See [`IoPort::register`].
+    pub fn register(&self, fd: RawFdCompat) -> io::Result<RawFdCompat> {
+        self.shared.port.register(fd)
+    }
+
+    /// See [`IoPort::release`].
+    pub fn release(&self, fd: RawFdCompat) {
+        self.shared.port.release(fd)
+    }
+
     pub fn read(
         &self,
         fd: RawFdCompat,

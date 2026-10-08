@@ -218,6 +218,27 @@ pub struct IoOpId(pub(crate) u64);
 /// never drop an `IoPort` implementation while operations may still be
 /// in flight.
 pub trait IoPort: super::CompletionPort {
+    /// Prepares `fd` for this port's operations, once, and returns the value
+    /// to pass them in its place; [`release`](Self::release) it before
+    /// closing `fd`. Optional: operations also take `fd` itself.
+    ///
+    /// IOCP completes an operation only on a port the handle was associated
+    /// with. `register` associates it now and returns a tagged value
+    /// (registration number << 32 | handle; Windows handle values fit in 32
+    /// bits), which later operations look up instead of associating again.
+    /// An unregistered handle is associated on every operation, a failing
+    /// `CreateIoCompletionPort` once it already is: about 0.8 us each on
+    /// GitHub's Windows runner (docs/PROACTOR_IOPORT_DEFECTS.md, defect 4).
+    /// Other backends have no such step and return `fd` unchanged.
+    fn register(&self, fd: RawFdCompat) -> io::Result<RawFdCompat> {
+        Ok(fd)
+    }
+
+    /// Forgets a value [`register`](Self::register) returned. Operations
+    /// already submitted still complete; on IOCP later ones on the value
+    /// fail with `NotFound`.
+    fn release(&self, _fd: RawFdCompat) {}
+
     fn read(
         &self,
         fd: RawFdCompat,

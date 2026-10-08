@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::net::SocketAddr;
 use std::ptr;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
@@ -28,6 +29,10 @@ const WAKE_KEY: usize = 2;
 /// (`post`/`wake`), never from a real I/O completion.
 const IO_OP_KEY: usize = 3;
 const WAIT_TIMEOUT_ERROR: u32 = 258;
+/// `ERROR_INVALID_PARAMETER`: what `CreateIoCompletionPort` fails with for a
+/// handle that is already associated with a completion port.
+const INVALID_PARAMETER_ERROR: u32 = 87;
+
 /// `ERROR_HANDLE_EOF`: an overlapped `ReadFile` at or past the end of a file
 /// fails with it, synchronously or in its completion, where the Unix
 /// backends' `pread` returns 0 bytes. `read` reports it as a 0-byte transfer.
@@ -41,6 +46,13 @@ const INFINITE_TIMEOUT_MS: u32 = u32::MAX;
 /// `FACILITY_WIN32`), so read it back from there. Calling `GetLastError`
 /// again afterwards reports whatever the most recent Win32 call on this
 /// thread left behind, which need not be the call that failed.
+/// The handle a value from [`IocpPort::register`] tags: its lower 32 bits,
+/// sign-extended as Windows extends 32-bit handle values. An untagged handle
+/// value comes back unchanged.
+fn untagged(fd: RawFdCompat) -> RawFdCompat {
+    fd as u32 as i32 as i64 as u64
+}
+
 fn win32_code(err: &windows::core::Error) -> Option<u32> {
     let hresult = err.code().0 as u32;
     if hresult & 0xFFFF_0000 == 0x8007_0000 {
@@ -281,13 +293,15 @@ fn sockaddr_to_socket_addr(storage: &SOCKADDR_STORAGE) -> Option<SocketAddr> {
 pub struct IocpPort {
     handle: HANDLE,
     queue: Mutex<VecDeque<CompletionEnvelope>>,
-    /// Tracks which raw handles have already been associated with this
-    /// IOCP via `CreateIoCompletionPort` -- MSDN documents associating the
-    /// same handle with the same port a second time as at best redundant
-    /// and at worst an error depending on Windows version, so every
-    /// `IoPort` method checks/inserts here before its first operation on
-    /// a given handle rather than associating unconditionally every call.
-    associated: Mutex<HashSet<usize>>,
+    /// Tagged values [`IoPort::register`] returned and not yet released.
+    /// Never raw handle values: Windows gives a closed handle's value to
+    /// the next handle opened, and a set of raw values then skipped
+    /// associating the new handle, whose operations never completed
+    /// (docs/PROACTOR_IOPORT_DEFECTS.md, defect 4).
+    registered: Mutex<HashSet<u64>>,
+    /// The next registration number; never 0, so a tagged value is never
+    /// mistaken for an untagged one.
+    next_registration: AtomicU32,
     /// `IoOpId -> raw HANDLE/SOCKET value` for operations still in
     /// flight, so `cancel_io` knows what to pass `CancelIoEx` alongside
     /// the `OVERLAPPED` pointer. `IoOpId`'s own value *is* that
@@ -332,7 +346,8 @@ impl IocpPort {
         Ok(Self {
             handle,
             queue: Mutex::new(VecDeque::new()),
-            associated: Mutex::new(HashSet::new()),
+            registered: Mutex::new(HashSet::new()),
+            next_registration: AtomicU32::new(1),
             in_flight: Mutex::new(HashMap::new()),
             io_completions: Mutex::new(VecDeque::new()),
         })
@@ -359,24 +374,43 @@ impl IocpPort {
         }
     }
 
-    /// Associates `raw` with this IOCP if it hasn't been already. Must be
-    /// called before the first `IoPort` operation on any given handle --
-    /// `GetQueuedCompletionStatus` will never report completions for a
-    /// handle that was never associated at all.
-    fn ensure_associated(&self, raw: usize) -> io::Result<()> {
-        let mut associated = self
-            .associated
+    /// The raw handle to operate on for `fd`, associated with this port: a
+    /// registered value is looked up (and fails with `NotFound` once
+    /// released, rather than hang); any other is associated now. Must run
+    /// before every operation: `GetQueuedCompletionStatus` never reports
+    /// completions for a handle that was not associated.
+    fn bind(&self, fd: RawFdCompat) -> io::Result<RawFdCompat> {
+        if fd >> 32 == 0 {
+            self.associate(fd)?;
+            return Ok(fd);
+        }
+        let registered = self
+            .registered
             .lock()
-            .expect("iocp associated-handles set poisoned");
-        if associated.contains(&raw) {
-            return Ok(());
+            .expect("iocp registered-handles set poisoned")
+            .contains(&fd);
+        if registered {
+            Ok(untagged(fd))
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "IOCP handle was not registered with this port, or was released",
+            ))
         }
-        unsafe {
-            CreateIoCompletionPort(HANDLE(raw as *mut _), self.handle, IO_OP_KEY, 0)
-                .map_err(|err| io::Error::other(err.to_string()))?;
+    }
+
+    /// Associates `fd` with this port. A handle that already is fails with
+    /// `ERROR_INVALID_PARAMETER`, taken as success; that cannot tell this
+    /// port from another one the handle was associated with.
+    fn associate(&self, fd: RawFdCompat) -> io::Result<()> {
+        let result = unsafe {
+            CreateIoCompletionPort(HANDLE(fd as usize as *mut _), self.handle, IO_OP_KEY, 0)
+        };
+        match result {
+            Ok(_) => Ok(()),
+            Err(err) if win32_code(&err) == Some(INVALID_PARAMETER_ERROR) => Ok(()),
+            Err(err) => Err(win32_io_error(&err)),
         }
-        associated.insert(raw);
-        Ok(())
     }
 
     /// Loads a WinSock extension function (`AcceptEx`, `ConnectEx`,
@@ -854,6 +888,37 @@ impl CompletionPort for IocpPort {
 }
 
 impl IoPort for IocpPort {
+    /// Associates `fd` now and returns it tagged; see [`IoPort::register`].
+    /// Registering a handle again (released, still open) is allowed.
+    fn register(&self, fd: RawFdCompat) -> io::Result<RawFdCompat> {
+        if untagged(fd) != fd {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "handle value does not fit in 32 bits",
+            ));
+        }
+        self.associate(fd)?;
+        let number = loop {
+            let number = self.next_registration.fetch_add(1, Ordering::Relaxed);
+            if number != 0 {
+                break number;
+            }
+        };
+        let tagged = (u64::from(number) << 32) | (fd & 0xffff_ffff);
+        self.registered
+            .lock()
+            .expect("iocp registered-handles set poisoned")
+            .insert(tagged);
+        Ok(tagged)
+    }
+
+    fn release(&self, tagged: RawFdCompat) {
+        self.registered
+            .lock()
+            .expect("iocp registered-handles set poisoned")
+            .remove(&tagged);
+    }
+
     fn read(
         &self,
         fd: RawFdCompat,
@@ -861,7 +926,7 @@ impl IoPort for IocpPort {
         offset: u64,
         handler: impl IoCompletionHandler,
     ) -> io::Result<IoOpId> {
-        self.ensure_associated(fd as usize)?;
+        let fd = self.bind(fd)?;
         // Take the pointer from the caller's buffer before moving it into
         // the op: moving an `IoBuf` moves its `Vec` header, never the heap
         // bytes it points at. This used to swap the buffer into the op and
@@ -919,7 +984,7 @@ impl IoPort for IocpPort {
         offset: u64,
         handler: impl IoCompletionHandler,
     ) -> io::Result<IoOpId> {
-        self.ensure_associated(fd as usize)?;
+        let fd = self.bind(fd)?;
         let mut op = Box::new(OverlappedOp {
             overlapped: unsafe { std::mem::zeroed() },
             kind: OverlappedOpKind::Write {
@@ -959,7 +1024,7 @@ impl IoPort for IocpPort {
         mut buf: IoBuf,
         handler: impl IoCompletionHandler,
     ) -> io::Result<IoOpId> {
-        self.ensure_associated(fd as usize)?;
+        let fd = self.bind(fd)?;
         let wsabuf = WSABUF {
             len: buf.capacity() as u32,
             buf: windows::core::PSTR(buf.as_mut_ptr()),
@@ -1004,7 +1069,7 @@ impl IoPort for IocpPort {
         buf: IoBuf,
         handler: impl IoCompletionHandler,
     ) -> io::Result<IoOpId> {
-        self.ensure_associated(fd as usize)?;
+        let fd = self.bind(fd)?;
         let mut buf = buf;
         let wsabuf = WSABUF {
             len: buf.len() as u32,
@@ -1049,7 +1114,7 @@ impl IoPort for IocpPort {
         mut buf: IoBuf,
         handler: impl IoCompletionHandler,
     ) -> io::Result<IoOpId> {
-        self.ensure_associated(fd as usize)?;
+        let fd = self.bind(fd)?;
         let wsabuf = WSABUF {
             len: buf.capacity() as u32,
             buf: windows::core::PSTR(buf.as_mut_ptr()),
@@ -1108,7 +1173,7 @@ impl IoPort for IocpPort {
         target: SocketAddr,
         handler: impl IoCompletionHandler,
     ) -> io::Result<IoOpId> {
-        self.ensure_associated(fd as usize)?;
+        let fd = self.bind(fd)?;
         let mut buf = buf;
         let wsabuf = WSABUF {
             len: buf.len() as u32,
@@ -1155,7 +1220,7 @@ impl IoPort for IocpPort {
     }
 
     fn accept(&self, fd: RawFdCompat, handler: impl AcceptCompletionHandler) -> io::Result<IoOpId> {
-        self.ensure_associated(fd as usize)?;
+        let fd = self.bind(fd)?;
         let listen_socket = SOCKET(fd as usize);
         let accept_ex: LpfnAcceptEx =
             unsafe { Self::load_extension_fn(listen_socket, WSAID_ACCEPTEX)? };
@@ -1231,7 +1296,7 @@ impl IoPort for IocpPort {
         target: SocketAddr,
         handler: impl UnitCompletionHandler,
     ) -> io::Result<IoOpId> {
-        self.ensure_associated(fd as usize)?;
+        let fd = self.bind(fd)?;
         let socket = SOCKET(fd as usize);
         let connect_ex: LpfnConnectEx =
             unsafe { Self::load_extension_fn(socket, WSAID_CONNECTEX)? };
