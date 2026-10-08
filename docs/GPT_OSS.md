@@ -271,8 +271,64 @@ The format is the template's (`chat`):
   `<|start|>assistant`.
 
 Within a turn, the model's tokens and each result are fed straight on, so the cache
-never needs re-reading. Across turns, the history keeps each answer but not the tool
-calls that led to it.
+never needs re-reading. Across turns, each answer stays in history and the developer
+message includes a bounded log of actual tool receipts: turn number, tool, arguments,
+and result excerpts. The receipts retain at most 6,000 characters; each argument is
+limited to 500 characters and each result to 1,000, preserving both ends so archive
+identity and coverage warnings survive together. Truncation and eviction are explicit;
+`/reset` clears the receipts too. This is evidence of calls that ran, separate from
+the model's earlier answers; it is not a persistent transcript.
+
+### Field report: archive references (Jay, 2026-10-04)
+
+Asked "Who is James Gooligin?", the model searched workspace Markdown and the web.
+After "Have you checked the CAS?", it tried `cas_find` with an empty archive (error),
+then searched filenames in `pudding-20260917` only. It said there were no file or text
+references. In the following turn it claimed `cas_grep`, variants and notes had also
+been checked, although none of those calls appeared in Jay's trace.
+
+That trace proves neither content absence nor coverage of `loadngo-archive`. The chat
+previously dropped tool calls between turns, retaining only the model's answers, and
+any single local call bypassed the web gate. The repair keeps bounded receipts,
+instructs unfamiliar-name lookups to check workspace contents, archive contents and
+notes, and judges web proposals against the receipts until one is approved.
+
+`cas_find` now labels its output as file-path searches only and points to `cas_grep`.
+It explains that `*` does not cross directories and gives `**/*NAME*` as the pattern
+for a filename at any depth.
+`cas_grep` reports its case-sensitive pattern, glob, searched text files and skipped
+large, binary/non-UTF-8 and unreadable objects. Read/verification failures and search
+limits explicitly report incomplete coverage. Its 32 MiB budget includes failed read
+attempts, and a file that would exceed that budget is not opened. Even a finished
+search covers only eligible text files in the named archive, not skipped files or
+other archives. The instructions require conclusions to match that scope.
+
+Before delivering an answer after an archive search, or an archive follow-up with
+recorded searches, the chat gives one further coverage reminder with the actual
+receipts and asks for a scoped answer. This adds one reply round. The reminder is
+skipped when tools were closed or insufficient context remains; it is guidance to
+the model, not a semantic proof of its final prose.
+
+Regression tests exercise a filename miss with a content hit, corrupted objects,
+the 100-match and 32 MiB limits, and receipts retaining earlier errors and scopes
+without inventing uncalled tools. Model honesty and Jev's decisions remain empirical
+behavior; receipts and scope labels do not guarantee that every answer is truthful.
+
+Live offline validation on 2026-10-04 found four real references in
+`loadngo-archive`, in `The World_s First Trillionaire/Important Notes.txt` (object
+`f7767da3edbabc45e2ead845020b4ead2e8573c0a147339af7e8a423ad8424aa`).
+Independent full-object BLAKE3 verification confirms the literal on lines 95, 99,
+101 and 103. The final follow-ups acknowledged the search limit and unsearched
+archive, but the first answer still contained a contradictory claim about that
+unsearched archive. The earlier replay without the pre-answer reminder continued
+to overclaim absence despite receipts. These are partial behavioral improvements.
+The live runs disabled editing and web access; the changed web judge remains
+unmeasured. See the workspace review
+`reviews/2026-10-04-gpt-oss-archive-codex.md` and its evidence directory.
+
+Validation: 56 affected unit tests, 5 CPU/Metal oracle tests and 4 real-GGUF parity
+tests pass; scoped strict Clippy, formatting, launcher help/syntax and release build
+pass on macOS. Metal tests need GPU access outside the workspace sandbox.
 
 Checked (`gpt-oss/tests/chat_parity.rs`, fixture `scripts/gpt_oss_tools_fixture.py`):
 
@@ -397,10 +453,13 @@ Two uses (`gpt_oss_generate/jev.rs`, `agent.rs`):
     what it has;
   - `needs-input` at 0.6 or more asks it to put the question to Jay; `complete` at 0.7
     or more asks it to check its changes, then answer.
-- **The web gate.** Before a web search or fetch, while no local tool has been tried in
-  the turn, Jev judges whether the request is about Jay's projects, files, archives,
-  notes or this machine. At 0.5 or more the call is not sent, and the model is told to
-  look in the workspace, the archives or its notes first.
+- **The web gate.** Before a web search or fetch, until one is approved in the turn,
+  Jev judges whether useful local lookup is still missing, using actual receipts from
+  this and earlier turns. One local call or an error no longer bypasses the judge.
+  At 0.5 or more the call is not sent; the model is directed to workspace contents,
+  relevant archive contents and notes. Clearly external requests and Jay's explicit
+  requests for the web are grounds to allow it. This is a model judgment, not an
+  exhaustive mechanical search requirement; judge errors are logged and fail open.
 
 Prefer local content: the instructions also say so, and they lay out the method: find,
 `text_read`, `text_edit`, check with `cargo` and `git diff`, then report what changed and

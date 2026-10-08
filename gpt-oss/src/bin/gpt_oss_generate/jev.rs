@@ -7,9 +7,9 @@
 //! - **Checkpoints.** Every few tool calls: is the turn in progress, waiting for Jay,
 //!   complete, or stuck; and are the latest calls repeating earlier ones. The tool loop
 //!   acts on confident answers (see `agent`).
-//! - **The web gate.** Before a web search or fetch, when no local tool has been tried
-//!   this turn: is the request about this machine, Jay's projects, files, archives or
-//!   notes? When it probably is, the model is sent to the local tools first.
+//! - **The web gate.** Before the first approved web call in a turn: is useful local
+//!   lookup still missing, given the actual calls? A denied call is judged again after
+//!   more work; one unrelated local call does not bypass the gate.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -190,20 +190,29 @@ pub fn checkpoint(
 
 /// The probability that `request` can be answered from this machine, asked before the
 /// model goes to the web to `intent` (for example `search the web for "…"`).
-pub fn local_first(judge: &mut Judge<'_>, request: &str, intent: &str) -> Result<f32, String> {
-    let state = newest(
-        &format!(
+pub fn local_first(
+    judge: &mut Judge<'_>,
+    request: &str,
+    intent: &str,
+    evidence: &str,
+) -> Result<f32, String> {
+    let state = format!(
             "Jay's request to an assistant running on his Mac mini, which holds his workspace of \
-             projects, his archives and the assistant's notes:\n{request}\n\nThe assistant now wants to {intent}."
-        ),
-        MAX_STATE_CHARS,
+             projects, his archives and the assistant's notes:\n{request}\n\nThe assistant now wants to {intent}.\n\n\
+             Actual tool receipts (including earlier turns):\n{}",
+        newest(evidence, 4_000),
+        request = newest(request, 1_000),
+        intent = newest(intent, 500),
     );
     let questions = vec![(
         "local".to_owned(),
         Question::Noul {
-            instructions: "The request is about Jay's own projects, files, code, archives, notes or this \
-                           machine, or about something already stated above, so the answer is more likely \
-                           on this machine than on the web."
+            instructions: "Useful local lookup is still missing before this web call. For an unfamiliar \
+                           person or name, check workspace contents, archive contents and notes first. \
+                           One local call, an error, or a cas_find filename search does not cover those \
+                           sources. cas_grep searches archive contents. If relevant local sources were \
+                           already checked, the request is clearly external, or Jay explicitly asked \
+                           for the web, answer no. Otherwise answer yes."
                 .into(),
         },
     )];

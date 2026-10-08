@@ -43,7 +43,8 @@ In chat the model works in the workspace (--base) with loadngo's tools:
 System One (Jev) answers typed questions with the same model in a side session: every
 6 tool calls it judges whether the turn is in progress, waiting for Jay, complete or
 stuck (nudging, then closing the tools when it stays stuck), and before a web call
-with no local tool tried yet it judges whether the answer is likely on this machine.
+until one is approved this turn it judges whether useful local lookup is still missing,
+using the recorded tool evidence. Search receipts are kept across turns in a bounded log.
 
 Usage:
   cargo run --release -p loadngo-gpt-oss --bin gpt_oss_generate -- [OPTIONS] [TEXT]

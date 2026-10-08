@@ -455,17 +455,21 @@ impl Tool for CasFind {
         "cas_find"
     }
     fn description(&self) -> &'static str {
-        "Find files in an archive whose path matches a glob (* within a directory, ** across). Shows the first 100 and counts every match: files, bytes and distinct objects."
+        "Search file paths ONLY, not file contents, in one named archive with a glob (* within a directory, ** across). For references inside files use cas_grep. Shows the first 100 and counts every path match."
     }
     fn parameters(&self) -> Value {
         json!({"type": "object", "properties": {
             "archive": archive_param(),
-            "pattern": {"type": "string", "description": "e.g. loadngo/**/*.rs or **/*.conf"}},
+            "pattern": {"type": "string", "description": "e.g. **/*NAME* for a filename at any depth, loadngo/**/*.rs or **/*.conf; * alone does not cross directories"}},
             "required": ["archive", "pattern"]})
     }
     fn call(&self, args: &Value) -> Result<String, String> {
         let (view, mut out) = self.0.with_view(args)?;
         let pattern = str_arg(args, "pattern")?;
+        let _ = writeln!(
+            out,
+            "Scope: file paths only, glob {pattern:?}; * does not cross directories, ** does; contents NOT searched (use cas_grep)."
+        );
         let (mut matches, mut bytes) = (0, 0);
         let mut objects = HashSet::new();
         for (path, object) in view.files() {
@@ -544,7 +548,7 @@ impl Tool for CasGrep {
         "cas_grep"
     }
     fn description(&self) -> &'static str {
-        "Search text files in an archive for a literal string; returns path:line: text. Bounded to 32 MiB scanned and 100 matches."
+        "Search file CONTENTS in one named archive for a case-sensitive literal string; returns path:line: text. Only readable UTF-8 files up to 2 MiB; bounded to 32 MiB scanned and 100 matches. Reports skipped files and incomplete coverage."
     }
     fn parameters(&self) -> Value {
         json!({"type": "object", "properties": {
@@ -560,37 +564,70 @@ impl Tool for CasGrep {
             return Err("empty pattern".into());
         }
         let filter = args.get("glob").and_then(Value::as_str);
-        let (mut matches, mut scanned) = (0, 0_u64);
+        let _ = writeln!(out, "Scope: file contents, case-sensitive literal {pattern:?}, glob {:?}; readable UTF-8 files up to {MAX_GREP_FILE_BYTES} bytes only.", filter.unwrap_or("**/*"));
+        let (mut matches, mut scanned, mut attempted) = (0, 0_u64, 0_u64);
+        let (mut text_files, mut binary, mut large, mut unreadable) = (0, 0, 0, 0);
+        let mut first_error = None;
+        let mut limited = false;
         'files: for (path, object) in view.files() {
-            if object.size > MAX_GREP_FILE_BYTES || filter.is_some_and(|g| !glob_match(g, path)) {
+            if filter.is_some_and(|g| !glob_match(g, path)) {
                 continue;
             }
-            let Ok(bytes) = view.read_object(object) else {
+            if object.size > MAX_GREP_FILE_BYTES {
+                large += 1;
                 continue;
+            }
+            if attempted + object.size > MAX_SCAN_BYTES {
+                limited = true;
+                break;
+            }
+            attempted += object.size;
+            let bytes = match view.read_object(object) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    unreadable += 1;
+                    if first_error.is_none() {
+                        first_error = Some(format!("{path}: {error:#}"));
+                    }
+                    continue;
+                }
             };
             scanned += object.size;
             if let Some(text) = as_text(&bytes) {
+                text_files += 1;
                 for (i, line) in text.lines().enumerate() {
                     if line.contains(pattern) {
                         let shown: String = line.chars().take(240).collect();
                         let _ = writeln!(out, "{path}:{}: {shown}", i + 1);
                         matches += 1;
                         if matches >= MAX_MATCHES {
+                            limited = true;
                             break 'files;
                         }
                     }
                 }
-            }
-            if scanned >= MAX_SCAN_BYTES {
-                break;
+            } else {
+                binary += 1;
             }
         }
         let _ = writeln!(
             out,
-            "{matches} matches ({scanned} bytes scanned, every file verified)"
+            "{matches} matches in {text_files} text files ({scanned} bytes read, successfully read objects BLAKE3-verified)"
         );
-        if matches >= MAX_MATCHES || scanned >= MAX_SCAN_BYTES {
-            out.push_str("[stopped at the search limit; add a glob]\n");
+        let _ = writeln!(out, "Skipped among visited files: {large} too large, {binary} binary/non-UTF-8, {unreadable} unreadable or failed verification.");
+        if let Some(error) = first_error {
+            let _ = writeln!(
+                out,
+                "First read error: {}",
+                error.chars().take(300).collect::<String>()
+            );
+        }
+        if limited {
+            out.push_str("[incomplete: stopped at the search limit; unvisited files may contain matches; narrow the glob]\n");
+        } else if unreadable > 0 {
+            out.push_str("[incomplete: some eligible files could not be searched]\n");
+        } else {
+            out.push_str("[finished the eligible text-file scope; skipped files and other archives were NOT searched]\n");
         }
         Ok(out)
     }
@@ -620,6 +657,145 @@ mod tests {
 
     fn no_discovery() -> Vec<PathBuf> {
         Vec::new()
+    }
+
+    #[test]
+    fn a_filename_miss_cannot_rule_out_a_content_reference() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("cas");
+        let store = ArchiveCasStorage::new(&root).unwrap();
+        store
+            .write_manifest(
+                &ArchiveManifest::new(
+                    "docs",
+                    "Documents",
+                    1,
+                    vec![
+                        file(
+                            &store,
+                            "notes/contact.txt",
+                            b"James Gooligin works on the lab.\n",
+                        ),
+                        file(&store, "binary.dat", &[0, 255]),
+                        file(
+                            &store,
+                            "large.txt",
+                            &vec![b'x'; MAX_GREP_FILE_BYTES as usize + 1],
+                        ),
+                    ],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut archives = Archives::new(vec![root], None);
+        archives.discover = no_discovery;
+        let tools = toolbox(archives);
+        let found = tools
+            .call(
+                "cas_find",
+                r#"{"archive":"docs","pattern":"**/*Gooligin*"}"#,
+            )
+            .unwrap();
+        assert!(found.contains("0 matches"), "{found}");
+        assert!(found.contains("contents NOT searched"), "{found}");
+        let grep = tools
+            .call("cas_grep", r#"{"archive":"docs","pattern":"Gooligin"}"#)
+            .unwrap();
+        assert!(
+            grep.contains("notes/contact.txt:1: James Gooligin"),
+            "{grep}"
+        );
+        assert!(grep.contains("1 matches in 1 text files"), "{grep}");
+        assert!(
+            grep.contains("1 too large, 1 binary/non-UTF-8, 0 unreadable"),
+            "{grep}"
+        );
+        assert!(grep.contains("other archives were NOT searched"), "{grep}");
+    }
+
+    #[test]
+    fn grep_reports_failed_verification_instead_of_complete_absence() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("cas");
+        let store = ArchiveCasStorage::new(&root).unwrap();
+        let entry = file(&store, "contact.txt", b"James Gooligin\n");
+        let ArchiveEntry::File { object, .. } = &entry else {
+            unreachable!()
+        };
+        // Corrupt the content after recording its manifest hash.
+        let object_path = store.object_path(object.hash);
+        store
+            .write_manifest(&ArchiveManifest::new("docs", "Docs", 1, vec![entry]).unwrap())
+            .unwrap();
+        std::fs::write(object_path, b"wrong").unwrap();
+        let mut archives = Archives::new(vec![root], None);
+        archives.discover = no_discovery;
+        let grep = toolbox(archives)
+            .call("cas_grep", r#"{"archive":"docs","pattern":"Gooligin"}"#)
+            .unwrap();
+        assert!(grep.contains("0 matches"), "{grep}");
+        assert!(
+            grep.contains("1 unreadable or failed verification"),
+            "{grep}"
+        );
+        assert!(grep.contains("First read error: contact.txt"), "{grep}");
+        assert!(grep.contains("incomplete: some eligible files"), "{grep}");
+    }
+
+    #[test]
+    fn grep_match_limit_reports_unvisited_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("cas");
+        let store = ArchiveCasStorage::new(&root).unwrap();
+        let entries = (0..101)
+            .map(|i| file(&store, &format!("{i:03}.txt"), b"Gooligin\n"))
+            .collect();
+        store
+            .write_manifest(&ArchiveManifest::new("docs", "Docs", 1, entries).unwrap())
+            .unwrap();
+        let mut archives = Archives::new(vec![root], None);
+        archives.discover = no_discovery;
+        let grep = toolbox(archives)
+            .call("cas_grep", r#"{"archive":"docs","pattern":"Gooligin"}"#)
+            .unwrap();
+        assert!(grep.contains("100 matches"), "{grep}");
+        assert!(
+            grep.contains("incomplete: stopped at the search limit"),
+            "{grep}"
+        );
+        assert!(
+            grep.contains("unvisited files may contain matches"),
+            "{grep}"
+        );
+    }
+
+    #[test]
+    fn grep_byte_limit_does_not_read_the_next_file_or_claim_absence() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("cas");
+        let store = ArchiveCasStorage::new(&root).unwrap();
+        let bytes = vec![b'x'; MAX_GREP_FILE_BYTES as usize];
+        let mut entries: Vec<_> = (0..16)
+            .map(|i| file(&store, &format!("{i:03}.txt"), &bytes))
+            .collect();
+        entries.push(file(&store, "999.txt", b"James Gooligin\n"));
+        store
+            .write_manifest(&ArchiveManifest::new("docs", "Docs", 1, entries).unwrap())
+            .unwrap();
+        let mut archives = Archives::new(vec![root], None);
+        archives.discover = no_discovery;
+        let grep = toolbox(archives)
+            .call("cas_grep", r#"{"archive":"docs","pattern":"Gooligin"}"#)
+            .unwrap();
+        assert!(grep.contains("0 matches in 16 text files"), "{grep}");
+        assert!(
+            grep.contains(&format!("{MAX_SCAN_BYTES} bytes read")),
+            "{grep}"
+        );
+        assert!(
+            grep.contains("incomplete: stopped at the search limit"),
+            "{grep}"
+        );
     }
 
     #[test]
