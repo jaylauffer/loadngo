@@ -36,6 +36,8 @@ pub enum Key {
     Down,
     /// Ctrl-W
     DeleteWordBack,
+    /// Alt-D
+    DeleteWordForward,
     /// Ctrl-U
     DeleteToStart,
     /// Ctrl-K
@@ -156,6 +158,7 @@ fn escape(b: &[u8]) -> Option<(Key, usize)> {
         }
         b'b' => Some((Key::WordLeft, 2)),
         b'f' => Some((Key::WordRight, 2)),
+        b'd' => Some((Key::DeleteWordForward, 2)),
         0x7f => Some((Key::DeleteWordBack, 2)),
         _ => Some((Key::Ignored, 2)),
     }
@@ -265,6 +268,10 @@ impl Line {
                 let from = self.word_start();
                 self.text.drain(from..self.cursor);
                 self.cursor = from;
+            }
+            Key::DeleteWordForward => {
+                let to = self.word_end();
+                self.text.drain(self.cursor..to);
             }
             Key::DeleteToStart => {
                 self.text.drain(..self.cursor);
@@ -645,6 +652,9 @@ mod tests {
         assert_eq!(line.text(), "ello one ");
         typed(&mut line, b"\x1bb\x15");
         assert_eq!((line.text().as_str(), line.cursor()), ("one ", 0));
+        // Alt-D deletes word after cursor
+        typed(&mut line, b"\x1bd");
+        assert_eq!(line.text(), " ");
         // Multi-byte characters move as one.
         let mut line = Line::default();
         typed(&mut line, "中文ok".as_bytes());
