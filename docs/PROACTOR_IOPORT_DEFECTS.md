@@ -1,6 +1,7 @@
 # Proactor IoPort Defects
 
-Status: defects 1 and 2 **fixed 2026-09-08**; defect 3 (below) fixed 2026-10-05.
+Status: defects 1 and 2 **fixed 2026-09-08**; defect 3 (below) fixed 2026-10-05;
+defect 4 (IOCP handle reuse) fixed 2026-10-08.
 Originally: **both fixed 2026-09-08**, the same day they were found while
 migrating `starlight` onto `Proactor<IoUringPort>`. This document is kept
 as the record of what was wrong and why the fixes took the shape they
@@ -307,6 +308,95 @@ lock-free here: `EpollPort` writes an eventfd, `KqueuePort` triggers an
 | `dolores` (Pi 5, kernel 6.18.50+rpt-rpi-2712), `187fbc0b` | all 12 `tests/uring.rs` tests pass in 0.08 s; `work_tools` tests (with `--all-features`) pass in 0.32 s, where CI had waited 30 s and 60 s |
 | `dolores`, pre-fix `uring.rs` (`43a58e2e^`) with the new test | the posted work runs after 9.99998 s, the full timer: the test fails, so it guards this defect |
 | `agnes` (Pi 4, kernel 6.18.50+rpt-rpi-v8), `b3bdba83` | all 12 `tests/uring.rs` tests pass in 0.08 s; `work_tools` tests pass in 0.33 s; with the pre-fix `uring.rs` the new test fails at 9.99998 s |
+
+## 4. `IocpPort` loses operations on a reused handle value
+
+Found and fixed 2026-10-08. Jay chose registration with an unregistered
+fallback after the profile below.
+
+### What happens
+
+An overlapped operation completes on an I/O completion port only if its
+handle was associated with that port (`CreateIoCompletionPort`). `IocpPort`
+associated each handle on its first operation and remembered the raw value
+in a set, to skip the call afterwards. Windows gives a closed handle's value
+to the next handle opened, usually on the very next open. The new handle's
+value was already in the set, so it was never associated: its read's
+completion went to no port, and `run_once` waited in
+`GetQueuedCompletionStatus` with no timeout, forever.
+
+espeak-ng-rs's `engine_io` (from its commit `84803914`) reads every engine
+file by open, read, close on one process-wide proactor. Every Windows job of
+its `Rust port` workflow from then on hung in three tests until GitHub's
+six-hour limit: 17 jobs on 2026-10-08. Linux and macOS have no association
+step and were unaffected. Any long-lived `Proactor<IocpPort>` that opens and
+closes handles is exposed, including the Windows desktop host's.
+
+### Reproduction
+
+`tests/iocp.rs`: `reads_a_file_opened_after_another_was_closed` and
+`sends_on_a_socket_created_after_another_was_closed` open, operate on and
+close 64 files and UDP sockets on one port, and require a reused value.
+With the raw-value cache, hosted Windows (CI run 37781126633, `4da86fae`)
+failed both at cycle 1, on the first reused value (file `0x18c`, socket
+`0x1d4`), in 10 s.
+
+The proactor tests' waits now all go through `Proactor::run_once_until`
+(`tests/support`), so a lost completion fails its test within 10 s instead
+of hanging the job.
+
+### Fix
+
+`IoPort::register(fd)` (and `ProactorHandle::register`) associates a handle
+with the port once and returns a tagged value, registration number << 32 |
+handle; Windows guarantees handle values fit in 32 bits. Operations on a
+tagged value look it up in the port's set and fail with `NotFound` once
+`release` has removed it, rather than hang. An untagged handle, from a
+caller that never registers, is associated before every operation, with
+`ERROR_INVALID_PARAMETER` (already associated) taken as success. The port
+never keys anything on a raw handle value. On the Unix backends `register`
+returns `fd` unchanged and `release` does nothing, so callers need no
+`cfg`. Registering is optional, worth about 0.8 us per operation on Windows.
+
+### Strategies profiled
+
+Before the choice, `IocpPort::with_association` picked one of three (since
+removed):
+
+| strategy | how | trade-off |
+| --- | --- | --- |
+| `RawValueCache` | the old cache | loses operations on reused values |
+| `EveryOperation` | `CreateIoCompletionPort` before every operation; `ERROR_INVALID_PARAMETER` (87) means already associated | no API change; a failing system call per operation; cannot tell this port from another the handle is bound to |
+| `Registered` | `IocpPort::register` associates once and returns registration number << 32 \| handle (Windows guarantees handle values fit in 32 bits); operations look the tag up; `release` forgets it | a set lookup per operation; every caller must register on open and release on close; a released or unknown tag fails with `NotFound`, never hangs; untagged values fall back to `EveryOperation` |
+
+Proactor profile run 37782289447, `f7747dda`, `windows-latest`, 7 rounds,
+median ns per operation, each operation waited for before the next:
+
+| scenario | RawValueCache | EveryOperation | Registered |
+| --- | ---: | ---: | ---: |
+| association step alone | 16 | 825 (87 on all 200,000 calls) | 16 |
+| 4 KiB file read, one open file | 3,388 | 4,189 (+24%) | 3,382 |
+| UDP send_to + recv_from | 8,505 | 10,060 (+18%) | 8,394 |
+| open, read 4 KiB, close | stalled at cycle 1 | 26,962 | 27,112 |
+| bind, send_to, close | stalled at cycle 1 | 125,386 | 120,700 |
+
+`Registered` costs what the broken cache did and works under churn;
+`EveryOperation` adds about 0.8 µs, a system call, to every operation.
+
+### Other findings from the general profile (same run)
+
+Not defects in this sense, but worth knowing; medians:
+
+- IOCP timers are coarse: a 1 ms `defer_for` fires 12.7 ms late and an
+  idle 100 ms wait returns 10.6 ms late, the default 15.6 ms Windows timer
+  tick. Frame pacing through `FrameDemand::After` on Windows inherits it.
+- kqueue (macOS runner): 1 ms timer 163 µs late (p99 2.1 ms), idle wait
+  1.06 ms late, likely kernel timer coalescing.
+- epoll file reads go through worker threads: 21–25 µs per 4 KiB read
+  against 1.7–2.3 µs on io_uring. io_uring is available on GitHub's Linux
+  runners, so CI's Linux tests exercise it.
+- Cross-thread wake (post to a pump blocked in `run_once`) is 16–19 µs on
+  the Linux runners, 6.8 µs on macOS, 0.7 µs on Windows.
 
 ## Related
 
