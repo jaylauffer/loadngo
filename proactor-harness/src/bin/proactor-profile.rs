@@ -226,13 +226,31 @@ mod scenarios {
             &mut rows,
         );
         #[cfg(windows)]
-        backend(
-            "iocp",
-            || loadngo_proactor::IocpPort::new().map(Proactor::new),
-            &path,
-            options,
-            &mut rows,
-        );
+        {
+            use loadngo_proactor::{IocpPort, TimerWait};
+            backend(
+                "iocp",
+                || IocpPort::new().map(Proactor::new),
+                &path,
+                options,
+                &mut rows,
+            );
+            // The timer-wait candidates (loadngo_proactor::TimerWait).
+            backend(
+                "iocp timeBeginPeriod",
+                || IocpPort::with_timer_wait(TimerWait::TimerResolution).map(Proactor::new),
+                &path,
+                options,
+                &mut rows,
+            );
+            backend(
+                "iocp wait packet",
+                || IocpPort::with_timer_wait(TimerWait::WaitPacket).map(Proactor::new),
+                &path,
+                options,
+                &mut rows,
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&directory);
         rows

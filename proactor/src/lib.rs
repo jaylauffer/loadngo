@@ -53,7 +53,7 @@ pub use io_port::{
     IoPort, IoResult, IoTransfer, PeerAddr, RawFdCompat, UnitCompletionHandler,
 };
 #[cfg(windows)]
-pub use iocp::IocpPort;
+pub use iocp::{IocpPort, TimerWait};
 #[cfg(any(
     target_os = "macos",
     target_os = "ios",

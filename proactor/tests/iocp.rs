@@ -10,7 +10,7 @@
 
 use loadngo_proactor::{
     AcceptResult, Completion, CompletionKind, IoBuf, IoResult, IocpPort, PeerAddr, Proactor,
-    ProactorHandle,
+    ProactorHandle, TimerWait,
 };
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
@@ -578,4 +578,101 @@ fn iocp_shutdown_drains_a_still_in_flight_op_instead_of_hanging() {
         elapsed < Duration::from_secs(5),
         "run_until_stopped did not drain the in-flight recv and return"
     );
+}
+
+/// Median lateness of `count` successive 1 ms deferred deadlines.
+fn median_timer_lateness(proactor: &Proactor<IocpPort>, count: usize) -> Duration {
+    let handle = proactor.handle();
+    let mut lateness = Vec::with_capacity(count);
+    for _ in 0..count {
+        let (tx, rx) = mpsc::channel();
+        let due = Instant::now() + Duration::from_millis(1);
+        handle
+            .defer_until(due, CompletionKind::Timer, 0, move |_| {
+                tx.send(Instant::now()).unwrap();
+            })
+            .unwrap();
+        let deadline = Instant::now() + support::LIMIT;
+        let fired = loop {
+            if let Ok(fired) = rx.try_recv() {
+                break fired;
+            }
+            assert!(Instant::now() < deadline, "1 ms timer never fired");
+            proactor.run_once_until(deadline).unwrap();
+        };
+        lateness.push(fired.saturating_duration_since(due));
+    }
+    lateness.sort();
+    lateness[count / 2]
+}
+
+/// The default millisecond wait ends on Windows' 15.6 ms tick; both
+/// candidates must fire a 1 ms deadline within a few milliseconds. Generous
+/// for a shared runner: the profile records the real figures.
+#[test]
+fn iocp_timer_resolution_fires_a_1ms_deadline_within_4ms() {
+    let proactor = Proactor::new(IocpPort::with_timer_wait(TimerWait::TimerResolution).unwrap());
+    let late = median_timer_lateness(&proactor, 21);
+    assert!(late < Duration::from_millis(4), "median {late:?} late");
+}
+
+#[test]
+fn iocp_wait_packet_fires_a_1ms_deadline_within_4ms() {
+    let proactor = Proactor::new(IocpPort::with_timer_wait(TimerWait::WaitPacket).unwrap());
+    let late = median_timer_lateness(&proactor, 21);
+    assert!(late < Duration::from_millis(4), "median {late:?} late");
+}
+
+/// Work posted from another thread ends a wait the timer was armed for;
+/// the timer's packet is withdrawn, and the next timed waits still end on
+/// their own deadlines, not early on a stale packet nor late.
+#[test]
+fn iocp_wait_packet_survives_waits_ended_by_other_work() {
+    let proactor = Proactor::new(IocpPort::with_timer_wait(TimerWait::WaitPacket).unwrap());
+    let handle = proactor.handle();
+    for round in 0..10 {
+        let (timer_tx, timer_rx) = mpsc::channel();
+        let due = Instant::now() + Duration::from_millis(30);
+        handle
+            .defer_until(due, CompletionKind::Timer, 0, move |_| {
+                timer_tx.send(Instant::now()).unwrap();
+            })
+            .unwrap();
+        // Takes the wake that scheduling posted.
+        proactor.run_ready().unwrap();
+        let poster = handle.clone();
+        let (work_tx, work_rx) = mpsc::channel();
+        let posting = support::spawn(move || {
+            thread::sleep(Duration::from_millis(5));
+            poster
+                .enqueue_work(move |_| work_tx.send(()).unwrap())
+                .unwrap();
+        });
+        let report = support::run_once(&proactor, "posted work during a timed wait");
+        posting.join("posting thread");
+        assert_eq!(report.dispatched_completions, 1, "round {round}");
+        work_rx.try_recv().unwrap();
+        assert!(
+            timer_rx.try_recv().is_err(),
+            "round {round}: timer fired early"
+        );
+
+        let deadline = Instant::now() + support::LIMIT;
+        let fired = loop {
+            if let Ok(fired) = timer_rx.try_recv() {
+                break fired;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "round {round}: timer never fired"
+            );
+            proactor.run_once_until(deadline).unwrap();
+        };
+        assert!(fired >= due, "round {round}: fired before its deadline");
+        let late = fired - due;
+        assert!(
+            late < Duration::from_millis(8),
+            "round {round}: {late:?} late"
+        );
+    }
 }

@@ -16,6 +16,10 @@ use windows::Win32::Networking::WinSock::{
     SOCKET, SOCKET_ERROR, WSABUF, WSA_IO_PENDING,
 };
 use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile};
+use windows::Win32::System::Threading::{
+    CancelWaitableTimer, CreateWaitableTimerExW, SetWaitableTimer,
+    CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS,
+};
 use windows::Win32::System::IO::{
     CancelIoEx, CreateIoCompletionPort, GetQueuedCompletionStatus, PostQueuedCompletionStatus,
     OVERLAPPED,
@@ -29,6 +33,69 @@ const WAKE_KEY: usize = 2;
 /// (`post`/`wake`), never from a real I/O completion.
 const IO_OP_KEY: usize = 3;
 const WAIT_TIMEOUT_ERROR: u32 = 258;
+/// Completion key of the packet [`TimerWait::WaitPacket`]'s timer queues.
+const TIMER_KEY: usize = 4;
+
+/// How [`IocpPort`] waits out a poll's timeout: the deadline of the
+/// proactor's next deferred work.
+///
+/// Chosen per port while the strategies are profiled on hosted Windows
+/// (`proactor-harness` `proactor-profile`); only one will remain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimerWait {
+    /// `GetQueuedCompletionStatus`'s millisecond timeout. Windows ends such a
+    /// wait on its timer tick, 15.6 ms by default: a 1 ms deadline fired
+    /// 12.7 ms late (median) on GitHub's runner. The behavior before
+    /// 2026-10-08, kept for comparison.
+    Millisecond,
+    /// The same wait, with the process's timer resolution raised to 1 ms
+    /// (`timeBeginPeriod`) for the port's life: more timer interrupts, and
+    /// so more wakeups, while the port exists, even when nothing is due.
+    TimerResolution,
+    /// A high-resolution waitable timer set to the deadline and associated
+    /// with the port (`NtAssociateWaitCompletionPacket`, as Go's runtime
+    /// does): the wait itself has no timeout, and the timer's packet ends
+    /// it. The system tick is unchanged; two more system calls per timed
+    /// wait, and one more when something else ends it first.
+    WaitPacket,
+}
+
+/// [`TimerWait::WaitPacket`]'s timer and the wait completion packet that
+/// queues to the port when it fires. One poll uses them at a time; a
+/// concurrent poll falls back to the millisecond wait.
+struct WaitTimer {
+    timer: HANDLE,
+    packet: HANDLE,
+}
+
+#[link(name = "ntdll")]
+extern "system" {
+    fn NtCreateWaitCompletionPacket(
+        packet: *mut HANDLE,
+        access: u32,
+        attributes: *const std::ffi::c_void,
+    ) -> i32;
+    fn NtAssociateWaitCompletionPacket(
+        packet: HANDLE,
+        port: HANDLE,
+        target: HANDLE,
+        key: *mut std::ffi::c_void,
+        apc_context: *mut std::ffi::c_void,
+        status: i32,
+        information: usize,
+        already_signaled: *mut u8,
+    ) -> i32;
+    fn NtCancelWaitCompletionPacket(packet: HANDLE, remove_signaled_packet: u8) -> i32;
+}
+
+#[link(name = "winmm")]
+extern "system" {
+    fn timeBeginPeriod(period: u32) -> u32;
+    fn timeEndPeriod(period: u32) -> u32;
+}
+
+/// `GENERIC_ALL`, the access a wait completion packet is created with.
+const GENERIC_ALL: u32 = 0x1000_0000;
 /// `ERROR_INVALID_PARAMETER`: what `CreateIoCompletionPort` fails with for a
 /// handle that is already associated with a completion port.
 const INVALID_PARAMETER_ERROR: u32 = 87;
@@ -313,6 +380,11 @@ pub struct IocpPort {
     /// pointer at completion time, not here -- this table exists only to
     /// support cancellation and shutdown draining.
     in_flight: Mutex<HashMap<IoOpId, usize>>,
+    timer_wait: TimerWait,
+    /// `Some` for [`TimerWait::WaitPacket`] when the timer and packet could
+    /// be created (Windows 10 1803 and later); otherwise polls wait in
+    /// milliseconds.
+    wait_timer: Option<Mutex<WaitTimer>>,
     /// For the one case with no IOCP completion to wait for at all:
     /// `ReadFile`/`WriteFile`/etc. failing *synchronously* with a real
     /// error (not `ERROR_IO_PENDING`) means the operation was never
@@ -339,6 +411,10 @@ unsafe impl Sync for IocpPort {}
 
 impl IocpPort {
     pub fn new() -> io::Result<Self> {
+        Self::with_timer_wait(TimerWait::Millisecond)
+    }
+
+    pub fn with_timer_wait(timer_wait: TimerWait) -> io::Result<Self> {
         let handle = unsafe {
             CreateIoCompletionPort(INVALID_HANDLE_VALUE, HANDLE::default(), 0, 0)
                 .map_err(|err| io::Error::other(err.to_string()))?
@@ -350,7 +426,85 @@ impl IocpPort {
             next_registration: AtomicU32::new(1),
             in_flight: Mutex::new(HashMap::new()),
             io_completions: Mutex::new(VecDeque::new()),
+            timer_wait,
+            wait_timer: match timer_wait {
+                TimerWait::WaitPacket => Self::create_wait_timer().map(Mutex::new),
+                TimerWait::Millisecond | TimerWait::TimerResolution => None,
+            },
         })
+        .inspect(|port| {
+            if port.timer_wait == TimerWait::TimerResolution {
+                unsafe {
+                    timeBeginPeriod(1);
+                }
+            }
+        })
+    }
+
+    fn create_wait_timer() -> Option<WaitTimer> {
+        let timer = unsafe {
+            CreateWaitableTimerExW(
+                None,
+                windows::core::PCWSTR::null(),
+                CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                TIMER_ALL_ACCESS.0,
+            )
+        }
+        .ok()?;
+        let mut packet = HANDLE::default();
+        let status = unsafe { NtCreateWaitCompletionPacket(&mut packet, GENERIC_ALL, ptr::null()) };
+        if status < 0 {
+            unsafe {
+                let _ = CloseHandle(timer);
+            }
+            return None;
+        }
+        Some(WaitTimer { timer, packet })
+    }
+
+    /// Sets the high-resolution timer to end this poll after `timeout` and
+    /// associates it with the port. `None` when the poll should wait in
+    /// milliseconds instead: no timeout, a zero one, another poll holding
+    /// the timer, or a failed call.
+    fn arm_wait_timer(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Option<std::sync::MutexGuard<'_, WaitTimer>> {
+        let timeout = timeout.filter(|timeout| !timeout.is_zero())?;
+        let wait_timer = self.wait_timer.as_ref()?.try_lock().ok()?;
+        // Relative due time, in 100 ns intervals, as a negative number.
+        let intervals = (timeout.as_nanos() / 100).clamp(1, i64::MAX as u128) as i64;
+        unsafe { SetWaitableTimer(wait_timer.timer, &-intervals, 0, None, None, false) }.ok()?;
+        let mut already_signaled = 0u8;
+        let status = unsafe {
+            NtAssociateWaitCompletionPacket(
+                wait_timer.packet,
+                self.handle,
+                wait_timer.timer,
+                TIMER_KEY as *mut std::ffi::c_void,
+                ptr::null_mut(),
+                0,
+                0,
+                &mut already_signaled,
+            )
+        };
+        if status < 0 {
+            unsafe {
+                let _ = CancelWaitableTimer(wait_timer.timer);
+            }
+            return None;
+        }
+        Some(wait_timer)
+    }
+
+    /// After a poll the timer did not end: withdraws its packet, from the
+    /// port's queue too if it fired meanwhile. A packet already being queued
+    /// arrives at a later poll as an early timeout, which is harmless.
+    fn disarm_wait_timer(wait_timer: &WaitTimer) {
+        unsafe {
+            let _ = CancelWaitableTimer(wait_timer.timer);
+            NtCancelWaitCompletionPacket(wait_timer.packet, 1);
+        }
     }
 
     fn drain_io_completion(&self) -> Option<Box<dyn FnOnce() + Send>> {
@@ -794,7 +948,11 @@ impl CompletionPort for IocpPort {
         let mut bytes_transferred = 0u32;
         let mut completion_key = 0usize;
         let mut overlapped: *mut OVERLAPPED = ptr::null_mut();
-        let timeout_ms = Self::duration_to_timeout_ms(timeout);
+        let wait_timer = self.arm_wait_timer(timeout);
+        let timeout_ms = match wait_timer {
+            Some(_) => INFINITE_TIMEOUT_MS,
+            None => Self::duration_to_timeout_ms(timeout),
+        };
 
         let result = unsafe {
             GetQueuedCompletionStatus(
@@ -805,6 +963,12 @@ impl CompletionPort for IocpPort {
                 timeout_ms,
             )
         };
+        if let Some(wait_timer) = wait_timer {
+            let timer_fired = overlapped.is_null() && result.is_ok() && completion_key == TIMER_KEY;
+            if !timer_fired {
+                Self::disarm_wait_timer(&wait_timer);
+            }
+        }
 
         // A non-null `overlapped` means a specific I/O operation's
         // completion came back -- true whether `result` is `Ok` *or*
@@ -839,6 +1003,8 @@ impl CompletionPort for IocpPort {
                 }
             }
             WAKE_KEY => Ok(PollEvent::Wake),
+            // This poll's timer, or a late packet from an earlier one's.
+            TIMER_KEY => Ok(PollEvent::Timeout),
             _ => Ok(PollEvent::Wake),
         }
     }
@@ -1399,6 +1565,15 @@ impl IoPort for IocpPort {
 impl Drop for IocpPort {
     fn drop(&mut self) {
         unsafe {
+            if let Some(wait_timer) = self.wait_timer.take() {
+                let wait_timer = wait_timer.into_inner().unwrap_or_else(|p| p.into_inner());
+                Self::disarm_wait_timer(&wait_timer);
+                let _ = CloseHandle(wait_timer.packet);
+                let _ = CloseHandle(wait_timer.timer);
+            }
+            if self.timer_wait == TimerWait::TimerResolution {
+                timeEndPeriod(1);
+            }
             let _ = CloseHandle(self.handle);
         }
     }
