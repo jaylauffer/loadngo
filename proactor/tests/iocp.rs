@@ -189,6 +189,115 @@ fn iocp_write_then_read_round_trip_an_overlapped_file() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// How many open/operate/close cycles the handle-reuse tests run. Windows
+/// hands a closed handle's value to the next handle opened, usually on the
+/// very next open; the tests fail if no value came back at all.
+const REUSE_CYCLES: usize = 64;
+
+/// Regression (2026-10-08): the port remembered which handles it had
+/// associated by their raw value. A file opened after another was closed
+/// usually gets the closed one's value, so the port skipped associating the
+/// new handle, its read's completion went nowhere and `run_once` waited
+/// forever. espeak-ng-rs's engine reads (open, read, close, on one
+/// process-wide port) hung its Windows CI for six hours per job.
+#[test]
+fn iocp_reads_a_file_opened_after_another_was_closed() {
+    let proactor = Proactor::new(IocpPort::new().unwrap());
+    let handle = proactor.handle();
+
+    let path = std::env::temp_dir().join(format!(
+        "loadngo-proactor-iocp-reuse-{}-{:?}",
+        std::process::id(),
+        thread::current().id()
+    ));
+    let contents: Vec<u8> = (0..4096u32).map(|i| (i * 7) as u8).collect();
+    std::fs::write(&path, &contents).unwrap();
+
+    let mut seen = std::collections::HashSet::new();
+    let mut reused = 0;
+    for cycle in 0..REUSE_CYCLES {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_OVERLAPPED)
+            .open(&path)
+            .unwrap();
+        let fd = file.as_raw_handle() as usize as u64;
+        if !seen.insert(fd) {
+            reused += 1;
+        }
+
+        let (tx, rx) = mpsc::channel();
+        handle
+            .read(
+                fd,
+                IoBuf::with_capacity(contents.len()),
+                0,
+                move |result: IoResult| {
+                    let transfer = result.unwrap();
+                    tx.send(
+                        transfer.buf.into_vec()[..transfer.bytes_transferred as usize].to_vec(),
+                    )
+                    .unwrap();
+                },
+            )
+            .unwrap();
+        support::run_until_dispatched(
+            &proactor,
+            1,
+            &format!("read on handle {fd:#x}, cycle {cycle}, {reused} reused values so far"),
+        );
+        assert_eq!(rx.try_recv().unwrap(), contents, "cycle {cycle}");
+        drop(file);
+    }
+    assert!(
+        reused > 0,
+        "no handle value was reused in {REUSE_CYCLES} cycles, so reuse went untested"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The same defect on the socket path: a socket created after another was
+/// closed reuses its value.
+#[test]
+fn iocp_sends_on_a_socket_created_after_another_was_closed() {
+    let proactor = Proactor::new(IocpPort::new().unwrap());
+    let handle = proactor.handle();
+    let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let receiver_addr = receiver.local_addr().unwrap();
+
+    let mut seen = std::collections::HashSet::new();
+    let mut reused = 0;
+    for cycle in 0..REUSE_CYCLES {
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let fd = sender.as_raw_socket();
+        if !seen.insert(fd) {
+            reused += 1;
+        }
+        let (tx, rx) = mpsc::channel();
+        handle
+            .send_to(
+                fd,
+                IoBuf::from_vec(b"ping".to_vec()),
+                receiver_addr,
+                move |result: IoResult| {
+                    tx.send(result.map(|t| t.bytes_transferred)).unwrap();
+                },
+            )
+            .unwrap();
+        support::run_until_dispatched(
+            &proactor,
+            1,
+            &format!("send_to on socket {fd:#x}, cycle {cycle}, {reused} reused values so far"),
+        );
+        assert_eq!(rx.try_recv().unwrap().unwrap(), 4, "cycle {cycle}");
+        drop(sender);
+    }
+    assert!(
+        reused > 0,
+        "no socket value was reused in {REUSE_CYCLES} cycles, so reuse went untested"
+    );
+}
+
 #[test]
 fn iocp_recv_from_reports_the_real_sender_and_send_to_reaches_it() {
     let proactor = Proactor::new(IocpPort::new().unwrap());
