@@ -1,0 +1,93 @@
+name: Proactor profile
+
+# loadngo-proactor measured on GitHub-hosted runners, with each table in the
+# job summary:
+#
+# - general: proactor-harness's proactor-profile on Linux (x86-64, arm64),
+#   macOS and Windows, every backend each platform has (io_uring and epoll,
+#   kqueue, IOCP), so a backend change shows up on every platform.
+# - iocp-association: the IOCP tests, then iocp-association-profile, which
+#   compares how IocpPort associates handles with its port (handle values
+#   are reused once closed; docs/PROACTOR_IOPORT_DEFECTS.md, defect 4).
+#
+# Hosted runners are shared machines: compare runs, not single numbers.
+# Runs when the proactor or the harness changes, and by hand.
+
+on:
+  push:
+    paths:
+      - "proactor/**"
+      - "proactor-harness/**"
+      - ".github/workflows/proactor-profile.yml"
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: Rounds per scenario
+        default: "5"
+
+concurrency:
+  group: proactor-profile-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  general:
+    name: general (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    steps:
+      - name: Allow long paths in git
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
+
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Profile
+        timeout-minutes: 10
+        shell: bash
+        run: cargo run --locked --release -p proactor-harness --bin proactor-profile -- --rounds ${{ inputs.rounds || '5' }} --markdown "$GITHUB_STEP_SUMMARY"
+
+  iocp-association:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Allow long paths in git
+        run: git config --global core.longpaths true
+
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: IOCP tests
+        timeout-minutes: 10
+        run: cargo test --locked -p loadngo-proactor --test iocp
+
+      - name: Profile
+        timeout-minutes: 10
+        # Still profiles when a strategy's test fails; not after a cancel.
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: cargo run --locked --release -p proactor-harness --bin iocp-association-profile -- --rounds ${{ inputs.rounds || '7' }} --markdown "$GITHUB_STEP_SUMMARY"

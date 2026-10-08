@@ -16,8 +16,9 @@
 //! - `Registered`: associate once at registration; operations look up a
 //!   tagged value (registration number << 32 | handle).
 //!
-//! Run by the `iocp-profile` workflow on GitHub's `windows-latest`, which
-//! writes the table to the job summary. Windows only; `--help` works anywhere.
+//! Run by the `proactor-profile` workflow's `iocp-association` job on
+//! GitHub's `windows-latest`, which writes the table to the job summary.
+//! Windows only; `--help` works anywhere.
 
 use std::io::Write;
 use std::path::PathBuf;
