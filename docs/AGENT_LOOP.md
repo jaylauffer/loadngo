@@ -132,7 +132,7 @@ is rebuilt from it (`flow`), written from Kimi's behaviour since 2026-10-02:
 | 1 | The loop, its guards and tests; gpt-oss moved onto it | done 2026-10-09 |
 | 2 | Kimi Linear and Gemma templates and backend (kimi-k3-in-rust); Kimi on loadngo's editing and `cargo`/`git` tools; her own `text_tools`, terminal tools (Jay: dropped) and `board_add_row` removed; saved transcripts for every model | done 2026-10-09 |
 | 3 | The rest of the lifecycle: pauses and `/continue`, turn budgets, saved chats resumed, compaction through a handoff (with a cycle guard); K3 on the loop too, and Kimi's old chat (`--legacy-chat`, ~2,600 lines) removed | done 2026-10-09 |
-| 4 | The evaluation set (`kimi docs/ORCHESTRATION.md`): finished board tasks, every model through the same loop | next |
+| 4 | The evaluation set (`kimi docs/ORCHESTRATION.md`) and its scorer (`agent::eval`, `--eval FILE` in `gpt_oss_generate` and `k3`): rules, a model's typed answers, and both | first measurement 2026-10-09; unseen tasks next |
 
 ### Evidence, step 1 (2026-10-09, M4 Pro Mac mini)
 
@@ -219,4 +219,31 @@ is rebuilt from it (`flow`), written from Kimi's behaviour since 2026-10-02:
   - **gpt-oss**, the same pause and resume: `/continue` in the new process ran
     `fs_find` and `fs_read` and answered.
   - Not run on a model: Ctrl-C (the tests cover it), K3 (about a minute per token).
+
+### Step 4: the first measurement (2026-10-09)
+
+`agent::eval` scores finished tasks for an orchestrator's digest: each worker report gets
+a class (verified, not verified, failed, needs Jay) from phrase rules, from a model's two
+typed System One questions (asked with the options in two orders and averaged, so a
+model's preference for a letter cancels), and from the more severe of the two. The error
+that matters is false comfort: a task that needed Jay, not flagged. The 44 cases (35
+board handoffs from 09-30 to 10-09 and 9 real model answers) quote the private board, so
+they live in `~/pudding/eval`, not here; the full write-up is
+`~/pudding/reviews/2026-10-09-orchestration-eval-claude.md`.
+
+| Scorer | Class correct | False comfort (of 29 that needed Jay) | False alarms (of 15) | Per case |
+|---|---:|---:|---:|---:|
+| Rules | 36/44 | 1 | 9 | 0 |
+| gpt-oss-20b | 14/44 | 0 | 14 | 3.9 s |
+| Kimi Linear 48B-A3B | 21/44 | 4 | 6 | 2.9 s |
+| Gemma 4 31B-it | 33/44 | 1 | 11 | 19.2 s |
+| Rules + Gemma 4 | 34/44 | 0 | 11 | |
+
+- gpt-oss answered "not verified" to 43 of 44 (its answers are read with no reasoning
+  first, which may be unfair to it);
+- Kimi Linear called 25 verified, including her own inflated review and reports that say
+  "no push";
+- Gemma was steady across option orders (34 -> 33);
+- the rules were written after the cases, by the case writer, so they are flattered.
+  Unseen tasks, appended as they finish, are the next measurement.
 

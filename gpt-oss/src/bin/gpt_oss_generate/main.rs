@@ -83,6 +83,9 @@ Options:
   --no-jev         (optional)  without Jev's checkpoints and web gate
   --turn-minutes N (optional)  pause a turn after N minutes (default: no limit)
   --turn-tokens N  (optional)  pause a turn after N generated tokens (default: no limit)
+  --eval FILE      (optional)  score the orchestration cases in FILE (loadngo
+                               inference::agent::eval): the rules and the model's typed
+                               answers; the report to stderr, the answers as JSON to stdout
   --resume WHICH   (optional)  with --chat: carry on a saved chat, `latest` or the path of
                                its .jsonl or .state.json
   -h, --help                   this text
@@ -121,6 +124,7 @@ pub struct Options {
     jev: bool,
     budget: loadngo_inference::agent::Budget,
     resume: Option<String>,
+    eval: Option<PathBuf>,
 }
 
 fn options() -> Options {
@@ -151,6 +155,7 @@ fn options() -> Options {
         jev: true,
         budget: loadngo_inference::agent::Budget::default(),
         resume: None,
+        eval: None,
     };
     let mut path = None;
     let mut args = args.into_iter();
@@ -195,6 +200,7 @@ fn options() -> Options {
                 o.budget.tokens = (tokens > 0).then_some(tokens);
             }
             "--resume" => o.resume = Some(value("latest or a path")),
+            "--eval" => o.eval = Some(PathBuf::from(value("a path"))),
             other if other.starts_with("--") => fail(&format!("unknown option {other}")),
             other => o.text = Some(other.to_owned()),
         }
@@ -202,7 +208,7 @@ fn options() -> Options {
     if o.resume.is_some() && (!o.chat || o.text.is_some()) {
         fail("--resume carries on an interactive chat: --chat without TEXT");
     }
-    if o.text.is_none() && !o.chat {
+    if o.text.is_none() && !o.chat && o.eval.is_none() {
         fail("no text to continue (or pass --chat for a conversation)");
     }
     o.path = path.unwrap_or_else(|| fail("--gguf is required"));
@@ -265,6 +271,11 @@ fn main() {
         }
     );
     let limit = o.tokens.unwrap_or(if o.chat { 2048 } else { 8 });
+    if let Some(path) = &o.eval {
+        let mut backend = agent::GptOss::new(engine, &tokenizer, o.profile);
+        agent::evaluate(&mut backend, path);
+        return;
+    }
 
     if !o.chat {
         let text = o.text.as_deref().expect("checked in options()");

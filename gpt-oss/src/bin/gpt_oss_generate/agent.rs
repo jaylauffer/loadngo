@@ -368,3 +368,37 @@ pub fn finish(chat: &mut Agent<'_, Harmony<'_>>) {
         }
     }
 }
+
+/// `--eval FILE`: the orchestration cases scored by the rules and by gpt-oss's typed
+/// answers (`loadngo_inference::agent::eval`); the report to stderr, the answers as JSON to
+/// stdout.
+pub fn evaluate(backend: &mut GptOss<'_>, path: &std::path::Path) {
+    use loadngo_inference::agent::eval;
+    let text =
+        std::fs::read_to_string(path).unwrap_or_else(|e| fail(&format!("{}: {e}", path.display())));
+    let cases = eval::load(&text).unwrap_or_else(|e| fail(&e));
+    let date = agent::clock::now().date;
+    let mut run = eval::Run::default();
+    for (i, case) in cases.iter().enumerate() {
+        let started = Instant::now();
+        let judged = {
+            let mut judge = backend.judge(&date).unwrap_or_else(|| fail("no judge"));
+            eval::judge(judge.as_mut(), case)
+        };
+        let j = judged.unwrap_or_else(|e| fail(&e));
+        eprintln!(
+            "[{}/{}] {}: key {}, model {} (attention {:.2}), rules {}; {:.1}s",
+            i + 1,
+            cases.len(),
+            case.id,
+            case.class.name(),
+            j.best().name(),
+            j.attention,
+            eval::mechanical(&case.report).name(),
+            started.elapsed().as_secs_f64()
+        );
+        run.add(case, Some(&j));
+    }
+    eprint!("{}", run.report("gpt-oss-20b"));
+    println!("{}", run.to_json("gpt-oss-20b"));
+}

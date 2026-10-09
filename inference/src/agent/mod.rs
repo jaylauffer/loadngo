@@ -21,6 +21,7 @@
 //! chat's own checks wait in a loadngo proactor (`work_tools::run`).
 
 pub mod clock;
+pub mod eval;
 pub mod evidence;
 pub mod flow;
 pub mod guards;
