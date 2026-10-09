@@ -84,14 +84,55 @@ instructions gained one line against inflated reviews (her 10-08 espeak review c
 55%-ported engine "production-ready"): state what the documents and code say, with their
 numbers, and do not rate work above the evidence.
 
+## Pauses, budgets and saved chats
+
+A turn pauses instead of ending when Ctrl-C stops a reply or comes between tool calls,
+when a reply reaches its token limit, or when its budget is spent (`Budget`: minutes and
+generated tokens, checked after each reply before its calls run; Kimi's defaults are 30
+minutes and 16,384 tokens, gpt-oss has none unless given). What was left is held
+(`Pending`): calls not yet run, after the results of those that ran, or the reply so far.
+
+- `/continue` (`agent::resume`) goes on with a fresh budget: it runs the waiting calls, or
+  goes on writing the reply, which is then read as one.
+- A new message ends the paused turn first: waiting calls are answered as not run, so the
+  history stays a well-formed conversation.
+- `/undo` drops a paused turn; `/reset` drops it with everything else.
+
+After every round the agent's state (`Agent::state`: the backend's exact tokens, where
+the opening ends, the history and where each exchange began, the tool receipts, a paused
+turn with its rounds) goes to the transcript as `<time>.state.json`, written through a
+temporary file. `--resume latest` (or a path) reads it back (`Agent::restore`): the
+backend reads the saved opening, then the rest, so `/reset` returns to the opening that
+chat had. Snapshots from Kimi's old chat (version 1) are refused.
+
+## Context flow
+
+Past three quarters of the context, the model writes a handoff to itself and the context
+is rebuilt from it (`flow`), written from Kimi's behaviour since 2026-10-02:
+
+- the request is a message from the chat in fixed sections (TASK, STANDING, DONE, FACTS,
+  FAILED, FILES CHANGED, NEXT); the reply is begun with `TASK:` and limited to 1/32 of
+  the context;
+- the rebuilt context is the opening, a note (the handoff, Jay's newest 2 KiB of earlier
+  messages, and this turn's calls one line each), Jay's message, and the newest tool
+  rounds that fit an eighth of the context;
+- it happens before results that would cross the line, when a reply runs into the end of
+  the context (dropped and written again), and before a new message that would cross
+  it; another waits until the context has grown by an eighth;
+- reads made before it may be made again (their results are gone);
+- **a cycle is closed**: when the calls since a rebuild add nothing to the interval
+  before it, the next rebuild closes the tools and begins the answer. Found on Kimi
+  Linear with an 8k context, where no round fit the rebuild: she re-read from line 1 after
+  every handoff, six times, until Jev's checkpoint closed her tools without an answer.
+
 ## Status
 
 | Step | | State |
 |---|---|---|
 | 1 | The loop, its guards and tests; gpt-oss moved onto it | done 2026-10-09 |
 | 2 | Kimi Linear and Gemma templates and backend (kimi-k3-in-rust); Kimi on loadngo's editing and `cargo`/`git` tools; her own `text_tools`, terminal tools (Jay: dropped) and `board_add_row` removed; saved transcripts for every model | done 2026-10-09 |
-| 3 | The rest of the lifecycle: resume, turn budgets with pause and `/continue`, Ctrl-C pausing a turn rather than ending it, context compaction through a handoff (an appending format's rewrite is a `Rendered::Full`). Until then Kimi's old chat stays behind `--legacy-chat`, and a full context ends a turn | next |
-| 4 | The evaluation set (`kimi docs/ORCHESTRATION.md`): finished board tasks, every model through the same loop | after 3 |
+| 3 | The rest of the lifecycle: pauses and `/continue`, turn budgets, saved chats resumed, compaction through a handoff (with a cycle guard); K3 on the loop too, and Kimi's old chat (`--legacy-chat`, ~2,600 lines) removed | done 2026-10-09 |
+| 4 | The evaluation set (`kimi docs/ORCHESTRATION.md`): finished board tasks, every model through the same loop | next |
 
 ### Evidence, step 1 (2026-10-09, M4 Pro Mac mini)
 
@@ -148,4 +189,34 @@ numbers, and do not rate work above the evidence.
     `fs_read`, the result inside its turn, "The crate name is `demo` and the edition is
     `2021`." Opening 2,971 tokens in 66 s; 4.5 tokens/s.
   - **gpt-oss**: a one-call question answered, and its chat saved as a transcript.
+
+### Evidence, step 3 (2026-10-09, M4 Pro Mac mini)
+
+- `inference::agent` tests: 32, adding a reply cut at its limit paused and continued
+  (read as one reply), a spent budget holding the calls and `/continue` running them,
+  Ctrl-C between reply and tools followed by a new message (calls answered as not run),
+  `/undo` of a paused turn, the three compaction triggers (results crossing, a reply cut
+  at the end of the context, a crowded new message), reads made again after a
+  compaction, a cycle closed, a saved chat restored in a new agent and backend and its
+  paused turn finished, version-1 snapshots refused. Seven deliberate bugs each fail them
+  (reads not forgotten at a compaction, no in-turn compaction, a cut reply ending the turn,
+  no compaction before a message, no budget, waiting calls not answered, no cycle check).
+- kimi `agent_chat` tests: K3's turns (its opening in the first message, the last reply
+  closed); the next-token backend (whole context, ending token not fed, cancel); a context
+  rebuilt from a handoff reading only what follows the opening's snapshot.
+- Real models (GPU):
+  - **Kimi Linear, 8,192-token context**, asked to read a 754-line file 150 lines at a
+    time: compacted 5,637 -> 3,378 positions and went on. No round fit the rebuild
+    (each ~2,400 tokens > 1,024), so she re-read the same lines; the cycle check closed the
+    tools at the second compaction (100 s) and she answered with the `Key` enum's keys,
+    then copied part of the rebuild note into her answer. Before the cycle check and the
+    re-read fix the same request went round six compactions (193 s) and ended without an
+    answer.
+  - **Kimi Linear, pause and resume across processes**: `--turn-tokens 1` paused the turn
+    before its `fs_read`, the chat was saved and the process quit; `--resume latest` read
+    the 2,850-token context back in 7.6 s, `/stats` showed the paused turn, `/continue`
+    ran the call and she answered "The crate name is \"demo\"."
+  - **gpt-oss**, the same pause and resume: `/continue` in the new process ran
+    `fs_find` and `fs_read` and answered.
+  - Not run on a model: Ctrl-C (the tests cover it), K3 (about a minute per token).
 

@@ -154,6 +154,9 @@ impl Backend for Scripted {
         let script = self.replies.pop_front().expect("a scripted reply");
         let mut out = Vec::new();
         for t in script {
+            if self.held.len() + 1 >= self.capacity {
+                return Ok((out, Ended::Context));
+            }
             out.push(t);
             if stops.contains(&t) {
                 return Ok((out, Ended::Stop));
@@ -174,6 +177,9 @@ impl Backend for Scripted {
         }
         self.held.truncate(len);
         Ok(())
+    }
+    fn held(&self) -> &[u32] {
+        &self.held
     }
     fn position(&self) -> usize {
         self.held.len()
@@ -596,6 +602,7 @@ impl Template for Appending {
         if !p.history.is_empty() {
             out.push(DONE);
         }
+        out.extend(text(p.about));
         out.push(USER);
         out.extend(text(p.user));
         out.push(REPLY);
@@ -686,4 +693,273 @@ fn a_message_that_cannot_fit_is_refused_and_a_failed_backend_ends_the_turn() {
     // The turn is in the history, so an undo removes it.
     assert_eq!(a.history().len(), 1);
     assert_eq!(a.undo(), Some(6));
+}
+
+fn budgeted(budget: Budget) -> (Agent<'static, Appending>, Rc<RefCell<usize>>) {
+    let (read, reads) = fake("fs_read", |_, n| Ok(format!("contents {n}")));
+    let mut tools = Toolbox::default();
+    tools.push(read);
+    let workspace = Workspace {
+        tools,
+        edits: None,
+        instructions: "rules".into(),
+        base: PathBuf::from("."),
+        described: Vec::new(),
+    };
+    let mut a = Agent::new(Appending, Some(workspace), false, Box::new(Quiet));
+    a.set_budget(budget);
+    (a, reads)
+}
+
+#[test]
+fn a_reply_cut_by_its_limit_pauses_and_continue_finishes_it() {
+    let mut a = appending();
+    let mut b = Scripted::new(vec![text("a long ans"), answer("wer")]);
+    a.prepare(&mut b).unwrap();
+    let end = turn(&mut a, &mut b, "q", 10, &NO).unwrap();
+    assert_eq!(
+        end.paused.as_deref(),
+        Some("the reply reached its token limit")
+    );
+    assert!(a.pending().is_some());
+    assert!(
+        a.history().is_empty(),
+        "a paused turn is not an exchange yet"
+    );
+    let end = resume(&mut a, &mut b, 10, &NO).unwrap().unwrap();
+    assert_eq!(end.read.answer, "a long answer", "read as one reply");
+    assert_eq!(a.history().len(), 1);
+    assert!(resume(&mut a, &mut b, 10, &NO).unwrap().is_none());
+}
+
+#[test]
+fn a_spent_budget_holds_the_calls_and_continue_runs_them() {
+    let (mut a, reads) = budgeted(Budget {
+        time: None,
+        tokens: Some(1),
+    });
+    let mut b = Scripted::new(vec![call(r#"fs_read {"path":"a"}"#), answer("done")]);
+    a.prepare(&mut b).unwrap();
+    let end = turn(&mut a, &mut b, "read a", 100, &NO).unwrap();
+    assert_eq!(end.paused.as_deref(), Some("the turn's 1 tokens are spent"));
+    assert_eq!(*reads.borrow(), 0, "nothing ran");
+    let end = resume(&mut a, &mut b, 100, &NO).unwrap().unwrap();
+    assert_eq!(*reads.borrow(), 1);
+    assert_eq!(end.read.answer, "done");
+}
+
+#[test]
+fn ctrl_c_holds_the_calls_and_a_new_message_answers_them_as_not_run() {
+    let (mut a, reads) = budgeted(Budget::default());
+    let mut b = Scripted::new(vec![call(r#"fs_read {"path":"a"}"#), answer("ok")]);
+    a.prepare(&mut b).unwrap();
+    let stop = AtomicBool::new(false);
+    // Ctrl-C arrives while the reply is written; the tools have not run.
+    let end = {
+        let start = b.position();
+        let prompt = a.begin("read a", start).unwrap();
+        let Rendered::Append(tokens) = prompt else {
+            panic!()
+        };
+        b.feed(&tokens).unwrap();
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        drive(&mut a, &mut b, 100, &stop, Step::Generate).unwrap()
+    };
+    assert_eq!(end.paused.as_deref(), Some("stopped by Ctrl-C"));
+    assert_eq!(*reads.borrow(), 0);
+    let end = turn(&mut a, &mut b, "never mind", 100, &NO).unwrap();
+    assert_eq!(end.read.answer, "ok");
+    assert!(b.held_text().contains("Not run: Jay paused this turn"));
+    assert_eq!(a.history().len(), 2);
+    assert_eq!(a.history()[0].user, "read a");
+}
+
+#[test]
+fn undo_drops_a_paused_turn() {
+    let mut a = appending();
+    let mut b = Scripted::new(vec![text("cut")]);
+    a.prepare(&mut b).unwrap();
+    turn(&mut a, &mut b, "q", 3, &NO).unwrap();
+    assert_eq!(a.undo(), Some(6));
+    assert!(a.pending().is_none());
+    assert!(a.history().is_empty());
+}
+
+/// Text that never repeats a block, so the loop guard leaves it alone.
+fn varied(n: usize) -> String {
+    let mut x: u32 = 12_345;
+    (0..n)
+        .map(|_| {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            char::from(b'a' + u8::try_from((x >> 16) % 26).unwrap())
+        })
+        .collect()
+}
+
+#[test]
+fn results_that_would_cross_three_quarters_are_handed_off_and_the_context_rebuilt() {
+    let (read, _) = fake("fs_read", |_, n| Ok(format!("{n}:{}", "r".repeat(200))));
+    let mut tools = Toolbox::default();
+    tools.push(read);
+    let workspace = Workspace {
+        tools,
+        edits: None,
+        instructions: "rules".into(),
+        base: PathBuf::from("."),
+        described: Vec::new(),
+    };
+    let notes = Notes::default();
+    let mut a = Agent::new(Appending, Some(workspace), false, Box::new(notes.clone()));
+    // Reads of 225 positions each: the 14th's results would cross 3,000 of 4,000 (the
+    // request alone is ~650 positions in this one-token-per-character format).
+    let mut script: Vec<Vec<u32>> = (1..=14)
+        .map(|i| call(&format!(r#"fs_read {{"path":"{i}"}}"#)))
+        .collect();
+    script.push(answer(" read 1 to 14; NEXT answer"));
+    // A read made before the compaction is made again: its result is gone.
+    script.push(call(r#"fs_read {"path":"1"}"#));
+    script.push(answer("all read"));
+    let mut b = Scripted::new(script);
+    b.capacity = 4_000;
+    a.prepare(&mut b).unwrap();
+    let end = turn(&mut a, &mut b, "read them", 100, &NO).unwrap();
+    assert_eq!(end.read.answer, "all read");
+    let held = b.held_text();
+    // The rebuilt context: the opening, the handoff, Jay's message, the newest round.
+    assert!(held.starts_with("rules"), "{held}");
+    assert!(held.contains("TASK: read 1 to 14; NEXT answer"));
+    assert!(held.contains("read them"));
+    assert!(
+        held.contains("14:rrr") && held.contains("13:rrr"),
+        "the newest rounds are kept"
+    );
+    assert!(!held.contains("12:rrr"), "older rounds are gone");
+    assert!(b.held.len() < 2_000);
+    assert!(notes
+        .0
+        .borrow()
+        .iter()
+        .any(|n| n.starts_with("[context] rebuilt")));
+    assert!(held.contains("15:rrr"), "the earlier read ran again");
+    assert!(!held.contains("Not run: you already made"));
+    // An undo now goes back to the opening.
+    assert_eq!(a.undo(), Some(6));
+}
+
+#[test]
+fn a_reply_cut_by_the_end_of_the_context_is_written_again_after_a_handoff() {
+    let mut a = appending();
+    let mut long = text(&varied(2_000));
+    long.push(DONE);
+    let mut b = Scripted::new(vec![
+        answer("x"),
+        long,
+        answer(" carry on"),
+        answer("short answer"),
+    ]);
+    b.capacity = 1_200;
+    a.prepare(&mut b).unwrap();
+    // Fill the context past an eighth so a compaction may happen.
+    turn(&mut a, &mut b, &"m".repeat(300), 100, &NO).unwrap();
+    let end = turn(&mut a, &mut b, "write a lot", 3_000, &NO).unwrap();
+    assert_eq!(end.read.answer, "short answer");
+    let held = b.held_text();
+    assert!(held.len() < 1_000, "the cut reply was dropped");
+    assert!(held.contains("TASK: carry on"));
+}
+
+#[test]
+fn a_new_message_into_a_crowded_context_starts_from_a_handoff() {
+    let mut a = appending();
+    let mut b = Scripted::new(vec![
+        answer("first"),
+        answer("second"),
+        answer(" earlier talk"),
+        answer("third"),
+    ]);
+    b.capacity = 4_000;
+    a.prepare(&mut b).unwrap();
+    turn(&mut a, &mut b, "hello", 100, &NO).unwrap();
+    turn(&mut a, &mut b, &"p".repeat(2_980), 100, &NO).unwrap();
+    let end = turn(&mut a, &mut b, "next one", 100, &NO).unwrap();
+    assert_eq!(end.read.answer, "third");
+    let held = b.held_text();
+    assert!(
+        !held.contains("first") && !held.contains("second"),
+        "the old context is gone"
+    );
+    assert!(held.contains("TASK: earlier talk") && held.contains("next one"));
+    // Jay's newest 2 KiB of earlier messages are kept word for word.
+    assert!(held.contains("word for word"));
+    assert!(held.matches('p').count() >= 2_000);
+}
+
+#[test]
+fn a_saved_chat_resumes_with_its_context_and_its_paused_turn() {
+    let (mut a, _) = budgeted(Budget {
+        time: None,
+        tokens: Some(1),
+    });
+    let mut b = Scripted::new(vec![answer("one"), call(r#"fs_read {"path":"a"}"#)]);
+    a.prepare(&mut b).unwrap();
+    turn(&mut a, &mut b, "first", 100, &NO).unwrap();
+    let end = turn(&mut a, &mut b, "read a", 100, &NO).unwrap();
+    assert!(end.paused.is_some());
+    let saved = a.state(&b);
+    // A new process: a new agent and backend, picking the chat up.
+    let (mut a2, reads) = budgeted(Budget::default());
+    let mut b2 = Scripted::new(vec![answer("read it")]);
+    a2.restore(&saved, &mut b2).unwrap();
+    assert_eq!(b2.held, b.held);
+    assert_eq!(a2.history().len(), 1);
+    let end = resume(&mut a2, &mut b2, 100, &NO).unwrap().unwrap();
+    assert_eq!(*reads.borrow(), 1);
+    assert_eq!(end.read.answer, "read it");
+    assert_eq!(a2.history()[1].user, "read a");
+    // /reset goes back to the saved opening.
+    assert_eq!(a2.reset(), 6);
+    // Snapshots from the chat before the loop are refused.
+    let mut old = saved.clone();
+    old["version"] = serde_json::json!(1);
+    assert!(appending()
+        .restore(&old, &mut Scripted::new(vec![]))
+        .is_err());
+}
+
+#[test]
+fn a_turn_that_does_the_same_work_after_each_handoff_has_its_tools_closed() {
+    let (read, reads) = fake("fs_read", |_, n| Ok(format!("{n}:{}", "r".repeat(800))));
+    let mut tools = Toolbox::default();
+    tools.push(read);
+    let workspace = Workspace {
+        tools,
+        edits: None,
+        instructions: "rules".into(),
+        base: PathBuf::from("."),
+        described: Vec::new(),
+    };
+    let notes = Notes::default();
+    let mut a = Agent::new(Appending, Some(workspace), false, Box::new(notes.clone()));
+    // Each interval reads the same four files (the fourth's results cross three
+    // quarters), then the context is handed off; the second adds nothing new.
+    let mut script = Vec::new();
+    for _ in 0..2 {
+        for i in 1..=4 {
+            script.push(call(&format!(r#"fs_read {{"path":"{i}"}}"#)));
+        }
+        script.push(answer(" reading"));
+    }
+    script.push(answer("what I have"));
+    let mut b = Scripted::new(script);
+    b.capacity = 4_000;
+    a.prepare(&mut b).unwrap();
+    let end = turn(&mut a, &mut b, "read them", 100, &NO).unwrap();
+    assert_eq!(end.read.answer, "what I have");
+    assert!(notes
+        .0
+        .borrow()
+        .iter()
+        .any(|n| n.contains("the same work again after a handoff")));
+    // Two intervals of four reads, the second adding nothing; then the answer.
+    assert_eq!(*reads.borrow(), 8);
 }

@@ -56,6 +56,30 @@ impl Evidence {
         self.calls.iter().any(|c| c.contains(needle))
     }
 
+    /// For a saved chat.
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({"turn": self.turn, "dropped": self.dropped, "calls": self.calls})
+    }
+
+    /// From [`Self::to_json`]; anything missing is empty.
+    #[must_use]
+    pub fn from_json(value: &serde_json::Value) -> Self {
+        Self {
+            turn: value["turn"]
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .unwrap_or(0),
+            dropped: value["dropped"].as_bool().unwrap_or(false),
+            calls: value["calls"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|c| c.as_str().map(str::to_owned))
+                .collect(),
+        }
+    }
+
     /// The receipts as the model reads them.
     #[must_use]
     pub fn summary(&self) -> String {

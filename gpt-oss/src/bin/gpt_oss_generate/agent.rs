@@ -33,6 +33,8 @@ pub struct GptOss<'t> {
     profile: bool,
     /// The last reply's speed, in tokens per second.
     pub rate: Option<f64>,
+    /// The context, as tokens (for a saved chat).
+    held: Vec<u32>,
 }
 
 impl<'t> GptOss<'t> {
@@ -43,6 +45,7 @@ impl<'t> GptOss<'t> {
             logits: Vec::new(),
             profile,
             rate: None,
+            held: Vec::new(),
         }
     }
 }
@@ -50,7 +53,9 @@ impl<'t> GptOss<'t> {
 impl Backend for GptOss<'_> {
     fn load(&mut self, tokens: &[u32]) -> Result<(), String> {
         self.engine.reset(Which::Main)?;
+        self.held.clear();
         self.logits = self.engine.feed(Which::Main, tokens)?;
+        self.held.extend_from_slice(tokens);
         if self.profile {
             eprintln!("[prompt] {}", self.engine.profile());
         }
@@ -60,6 +65,7 @@ impl Backend for GptOss<'_> {
     fn feed(&mut self, tokens: &[u32]) -> Result<(), String> {
         if !tokens.is_empty() {
             self.logits = self.engine.feed(Which::Main, tokens)?;
+            self.held.extend_from_slice(tokens);
         }
         Ok(())
     }
@@ -95,6 +101,7 @@ impl Backend for GptOss<'_> {
                 break Ended::Stop;
             }
             self.logits = self.engine.feed(Which::Main, &[next])?;
+            self.held.push(next);
             if !emit(next) {
                 break Ended::Halted;
             }
@@ -113,9 +120,14 @@ impl Backend for GptOss<'_> {
         // Harmony renders the whole conversation each turn; the next turn reloads.
         if len < self.engine.position(Which::Main) {
             self.engine.truncate(Which::Main, len)?;
+            self.held.truncate(len);
             self.logits.clear();
         }
         Ok(())
+    }
+
+    fn held(&self) -> &[u32] {
+        &self.held
     }
 
     fn position(&self) -> usize {
@@ -169,14 +181,18 @@ impl Observer for Terminal {
                     eprintln!("        {}", first.replace('\n', " "));
                 }
             }
-            Event::User(_) | Event::Token(_) | Event::TurnEnd { .. } => {}
+            Event::User(_) | Event::Token(_) | Event::State(_) | Event::TurnEnd { .. } => {}
             Event::Note(note) => eprintln!("{note}"),
         }
     }
 }
 
-/// The chat for these options: tools from the shared workspace setup, or none.
-pub fn chat<'t>(tokenizer: &'t Tokenizer, o: &Options) -> Agent<'t, Harmony<'t>> {
+/// The chat for these options: tools from the shared workspace setup, or none; with
+/// `--resume`, the saved state to pick up ([`Agent::restore`]) once the backend exists.
+pub fn chat<'t>(
+    tokenizer: &'t Tokenizer,
+    o: &Options,
+) -> (Agent<'t, Harmony<'t>>, Option<serde_json::Value>) {
     let template = Harmony::new(tokenizer, o.reasoning).unwrap_or_else(|e| fail(&e.to_string()));
     let workspace = if o.tools {
         let base = o
@@ -219,17 +235,28 @@ pub fn chat<'t>(tokenizer: &'t Tokenizer, o: &Options) -> Agent<'t, Harmony<'t>>
         }
     );
     let mut observers: Vec<Box<dyn Observer>> = vec![Box::new(Terminal::default())];
+    let mut saved = None;
     if let Some(home) = std::env::var_os("HOME") {
         let dir = PathBuf::from(home).join(".loadngo/gpt-oss/transcripts");
-        match Transcript::create(&dir, "harmony", "gpt-oss-20b") {
+        let opened = match &o.resume {
+            Some(which) => Transcript::resume(&dir, which, "harmony").map(|(t, state)| {
+                saved = Some(state);
+                t
+            }),
+            None => Transcript::create(&dir, "harmony", "gpt-oss-20b"),
+        };
+        match opened {
             Ok(t) => {
                 eprintln!("transcript: {}", t.path().display());
                 observers.push(Box::new(t));
             }
+            Err(e) if o.resume.is_some() => fail(&e),
             Err(e) => eprintln!("transcript: {e}; the chat is not saved"),
         }
     }
-    Agent::new(template, workspace, o.jev, Box::new(Tee(observers)))
+    let mut chat = Agent::new(template, workspace, o.jev, Box::new(Tee(observers)));
+    chat.set_budget(o.budget);
+    (chat, saved)
 }
 
 /// What the model is told about the chat it runs in.
@@ -259,8 +286,23 @@ pub fn turn(
 ) {
     chat.set_about(about(backend));
     let cancel = AtomicBool::new(false);
-    let TurnEnd { read, stopped } =
-        agent::turn(chat, backend, text, limit, &cancel).unwrap_or_else(|e| fail(&e));
+    let end = agent::turn(chat, backend, text, limit, &cancel).unwrap_or_else(|e| fail(&e));
+    show(&end, show_reasoning);
+}
+
+/// The answer to stdout; reasoning and a pause to stderr.
+fn show(end: &TurnEnd, show_reasoning: bool) {
+    let TurnEnd {
+        read,
+        stopped,
+        paused,
+    } = end;
+    if let Some(why) = paused {
+        eprintln!(
+            "[paused: {why}. /continue goes on; a new message answers waiting calls as not run]"
+        );
+        return;
+    }
     if show_reasoning && !read.reasoning.trim().is_empty() {
         eprintln!("[reasoning] {}", read.reasoning.trim());
     }
@@ -278,8 +320,8 @@ pub fn interactive(
     o: &Options,
 ) {
     eprintln!(
-        "chat: one message per line (arrow keys edit, Up/Down recall); /undo drops the last \
-         exchange, /reset starts over, /quit or Ctrl-D stops"
+        "chat: one message per line (arrow keys edit, Up/Down recall); /continue goes on with a \
+         paused turn, /undo drops the last exchange, /reset starts over, /quit or Ctrl-D stops"
     );
     let mut editor = loadngo_line_editor::LineEditor::new();
     loop {
@@ -295,6 +337,14 @@ pub fn interactive(
                 let keep = chat.reset();
                 backend.truncate(keep).unwrap_or_else(|e| fail(&e));
                 eprintln!("[conversation cleared]");
+            }
+            "/continue" => {
+                let cancel = AtomicBool::new(false);
+                match agent::resume(chat, backend, limit, &cancel) {
+                    Ok(Some(end)) => show(&end, o.show_reasoning),
+                    Ok(None) => eprintln!("[nothing to continue]"),
+                    Err(e) => fail(&e),
+                }
             }
             "/undo" => match chat.undo() {
                 Some(at) => {

@@ -47,7 +47,11 @@ using the recorded tool evidence. Search receipts are kept across turns in a bou
 The turn loop is loadngo's shared one (inference::agent, docs/AGENT_LOOP.md): repeated
 calls are not run again, and a second round of them closes the tools; a write failing
 the same way twice ends the turn; an answer after unchecked changes waits for a check.
-In an interactive chat /undo drops the last exchange (file changes stay).
+In an interactive chat /undo drops the last exchange (file changes stay), and /continue
+goes on with a paused turn: one paused by its budget (--turn-minutes, --turn-tokens) or a
+reply that reached --tokens. Past three quarters of --context the model writes a handoff
+and the context is rebuilt from it. Chats are saved in ~/.loadngo/gpt-oss/transcripts,
+with a snapshot to resume from (--resume).
 
 Usage:
   cargo run --release -p loadngo-gpt-oss --bin gpt_oss_generate -- [OPTIONS] [TEXT]
@@ -77,6 +81,10 @@ Options:
   --no-web         (optional)  without web_search and web_fetch
   --no-memory      (optional)  without the memory tools
   --no-jev         (optional)  without Jev's checkpoints and web gate
+  --turn-minutes N (optional)  pause a turn after N minutes (default: no limit)
+  --turn-tokens N  (optional)  pause a turn after N generated tokens (default: no limit)
+  --resume WHICH   (optional)  with --chat: carry on a saved chat, `latest` or the path of
+                               its .jsonl or .state.json
   -h, --help                   this text
 
 Example:
@@ -111,6 +119,8 @@ pub struct Options {
     web: bool,
     notes: bool,
     jev: bool,
+    budget: loadngo_inference::agent::Budget,
+    resume: Option<String>,
 }
 
 fn options() -> Options {
@@ -139,6 +149,8 @@ fn options() -> Options {
         web: true,
         notes: true,
         jev: true,
+        budget: loadngo_inference::agent::Budget::default(),
+        resume: None,
     };
     let mut path = None;
     let mut args = args.into_iter();
@@ -173,9 +185,22 @@ fn options() -> Options {
             "--no-web" => o.web = false,
             "--no-memory" => o.notes = false,
             "--no-jev" => o.jev = false,
+            "--turn-minutes" => {
+                let minutes = number(value("a number"), "--turn-minutes");
+                o.budget.time =
+                    (minutes > 0).then(|| std::time::Duration::from_secs(60 * minutes as u64));
+            }
+            "--turn-tokens" => {
+                let tokens = number(value("a number"), "--turn-tokens");
+                o.budget.tokens = (tokens > 0).then_some(tokens);
+            }
+            "--resume" => o.resume = Some(value("latest or a path")),
             other if other.starts_with("--") => fail(&format!("unknown option {other}")),
             other => o.text = Some(other.to_owned()),
         }
+    }
+    if o.resume.is_some() && (!o.chat || o.text.is_some()) {
+        fail("--resume carries on an interactive chat: --chat without TEXT");
     }
     if o.text.is_none() && !o.chat {
         fail("no text to continue (or pass --chat for a conversation)");
@@ -249,8 +274,22 @@ fn main() {
         println!("{text}{}", tokenizer.decode(&out));
         return;
     }
-    let mut chat = agent::chat(&tokenizer, &o);
+    let (mut chat, saved) = agent::chat(&tokenizer, &o);
     let mut backend = agent::GptOss::new(engine, &tokenizer, o.profile);
+    if let Some(saved) = saved {
+        chat.restore(&saved, &mut backend)
+            .unwrap_or_else(|e| fail(&e));
+        eprintln!(
+            "resumed: {} exchanges, {} context tokens{}",
+            chat.history().len(),
+            loadngo_inference::agent::Backend::position(&backend),
+            if chat.pending().is_some() {
+                "; a paused turn waits for /continue"
+            } else {
+                ""
+            }
+        );
+    }
     match &o.text {
         Some(text) => agent::turn(&mut chat, &mut backend, text, limit, true),
         None => agent::interactive(&mut chat, &mut backend, limit, &o),

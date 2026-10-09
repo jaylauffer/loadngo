@@ -594,7 +594,12 @@ taken from Kimi's chat and written fresh:
   ends the turn;
 - a reply looping on one block is halted;
 - `/undo` in an interactive chat;
-- every chat saved, one JSON event per line, in `~/.loadngo/gpt-oss/transcripts/`;
+- every chat saved, one JSON event per line, in `~/.loadngo/gpt-oss/transcripts/`, with a
+  snapshot beside it: `--resume latest` carries a chat on, a paused turn included;
+- `--turn-minutes`, `--turn-tokens` and a reply reaching `--tokens` pause a turn, and
+  `/continue` goes on;
+- past three quarters of `--context` the model writes a handoff and the context is
+  rebuilt from it (`docs/AGENT_LOOP.md`, "Context flow");
 - each turn's notes say which model and engine it is and its last reply's speed, and
   the instructions ask that reviews state what the evidence says and not rate work
   above it;

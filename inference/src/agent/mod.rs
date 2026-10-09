@@ -22,8 +22,10 @@
 
 pub mod clock;
 pub mod evidence;
+pub mod flow;
 pub mod guards;
 pub mod jev;
+pub mod state;
 pub mod transcript;
 pub mod workspace;
 
@@ -31,15 +33,16 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::edit_tools::EditSession;
 use crate::system_one::LabelModel;
 use crate::tools::Toolbox;
 use clock::Now;
 use evidence::{excerpt, Evidence};
+use flow::Round;
 use workspace::Workspace;
 
 /// Longest tool result passed back, in characters; the tools bound their own output
@@ -199,6 +202,8 @@ pub trait Backend {
     /// # Errors
     /// Whatever stopped the model.
     fn truncate(&mut self, len: usize) -> Result<(), String>;
+    /// The context, as tokens (for a saved chat).
+    fn held(&self) -> &[u32];
     /// Positions held.
     fn position(&self) -> usize;
     /// Positions the context can hold.
@@ -238,7 +243,9 @@ pub enum Event<'a> {
     },
     /// A check, a Jev answer or a guard's note, already worded (`[check] …`).
     Note(&'a str),
-    /// The turn is over: why, when it ended without an answer.
+    /// The chat's state, to save for resuming ([`Agent::state`]).
+    State(&'a Value),
+    /// The turn is over (or paused): why, when it ended without an answer.
     TurnEnd {
         stopped: Option<&'a str>,
         replies: usize,
@@ -264,11 +271,53 @@ pub enum Next {
     Tools(Vec<Call>),
     /// Feed these tokens and generate again.
     Feed(Vec<u32>),
+    /// Replace the context with these tokens (rebuilt from a handoff) and generate again.
+    Load(Vec<u32>),
+    /// Go back to this position (dropping a reply cut by the end of the context), feed
+    /// these tokens and generate again.
+    Retry { to: usize, feed: Vec<u32> },
+    /// The turn waits for `/continue` or a new message.
+    Pause(String),
     /// The turn is over with this answer.
     Answer(Read),
     /// The turn is over without a proper answer.
     Stop { why: String, read: Read },
 }
+
+/// Limits on the work one message leads to, checked after each reply before its calls
+/// run; a spent budget pauses the turn (`/continue` gives a fresh one).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Budget {
+    pub time: Option<Duration>,
+    /// Tokens generated across the turn's replies.
+    pub tokens: Option<usize>,
+}
+
+/// A turn paused (Ctrl-C, a spent budget, a reply's token limit), waiting for
+/// `/continue` or a new message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Pending {
+    /// Calls not run yet, after the results of those that ran.
+    Calls {
+        done: Vec<(Call, String)>,
+        remaining: Vec<Call>,
+    },
+    /// A reply cut short, already fed; `/continue` goes on writing it.
+    Reply(Vec<u32>),
+}
+
+/// Where the backend is, for the agent's decisions about room.
+#[derive(Clone, Copy, Debug)]
+pub struct At {
+    /// The position the last generation began at.
+    pub start: usize,
+    pub position: usize,
+    pub capacity: usize,
+}
+
+/// Not run: answered for calls left waiting when Jay sends a new message.
+const NOT_RUN: &str = "Not run: Jay paused this turn before this call ran and has sent a new \
+message; nothing was done for it.";
 
 /// One user turn's state.
 #[derive(Default)]
@@ -309,6 +358,21 @@ struct Turn {
     started: Option<Instant>,
     replies: usize,
     tokens: usize,
+    /// The budget's start and the tokens generated since.
+    budget_from: Option<Instant>,
+    budget_tokens: usize,
+    /// A reply cut short and continued: its tokens so far.
+    partial: Vec<u32>,
+    /// The last reply as fed, without the token that ended it.
+    reply: Vec<u32>,
+    /// This turn's tool rounds, for a context rebuilt from a handoff.
+    rounds: Vec<Round>,
+    /// The next reply is a handoff.
+    handoff: bool,
+    /// Calls made since the last rebuild, and in the interval before it: a rebuild
+    /// after an interval that found nothing new is a cycle.
+    interval: Vec<(String, Value)>,
+    previous_interval: Option<Vec<(String, Value)>>,
 }
 
 /// The chat: the tools, the instructions, the conversation, and the turn in progress.
@@ -331,6 +395,12 @@ pub struct Agent<'o, T> {
     last_answer: String,
     turn: Turn,
     handed_off: bool,
+    budget: Budget,
+    pending: Option<Pending>,
+    /// Context flow (compaction through a handoff) is on.
+    flow: bool,
+    /// The context's length right after the last compaction.
+    compacted: usize,
     observer: Box<dyn Observer + 'o>,
 }
 
@@ -367,6 +437,10 @@ impl<'o, T: Template> Agent<'o, T> {
             last_answer: String::new(),
             turn: Turn::default(),
             handed_off: false,
+            budget: Budget::default(),
+            pending: None,
+            flow: true,
+            compacted: 0,
             observer,
         }
     }
@@ -380,6 +454,20 @@ impl<'o, T: Template> Agent<'o, T> {
 
     pub fn history(&self) -> &[Exchange] {
         &self.history
+    }
+
+    pub fn set_budget(&mut self, budget: Budget) {
+        self.budget = budget;
+    }
+
+    /// Context flow (compaction through a handoff); on by default.
+    pub fn set_flow(&mut self, on: bool) {
+        self.flow = on;
+    }
+
+    /// The paused turn, if one waits for `/continue`.
+    pub fn pending(&self) -> Option<&Pending> {
+        self.pending.as_ref()
     }
 
     /// Reads the format's opening into `backend` once, so the first message and every
@@ -401,6 +489,11 @@ impl<'o, T: Template> Agent<'o, T> {
     /// Removes the last exchange; returns where it began in the backend's context, for
     /// [`Backend::truncate`]. File changes stay.
     pub fn undo(&mut self) -> Option<usize> {
+        // A paused turn is the newest; it has no exchange yet.
+        if self.pending.take().is_some() {
+            self.turn.request.clear();
+            return Some(self.turn.start);
+        }
         self.history.pop()?;
         self.starts.pop()
     }
@@ -410,6 +503,8 @@ impl<'o, T: Template> Agent<'o, T> {
     pub fn reset(&mut self) -> usize {
         self.history.clear();
         self.starts.clear();
+        self.pending = None;
+        self.compacted = 0;
         self.evidence = Evidence::default();
         self.opening
     }
@@ -430,6 +525,7 @@ impl<'o, T: Template> Agent<'o, T> {
             date: now.date.clone(),
             start,
             started: Some(Instant::now()),
+            budget_from: Some(Instant::now()),
             ..Turn::default()
         };
         self.observer.event(Event::User(text));
@@ -458,32 +554,85 @@ impl<'o, T: Template> Agent<'o, T> {
         self.template.stops()
     }
 
-    /// Reads a reply and decides what follows. `room` is how many positions the
-    /// backend has left after it;
-    /// `seconds` is how long it took, for the observer.
-    pub fn reply(&mut self, reply: &[u32], ended: Ended, room: usize, seconds: f64) -> Next {
+    /// Reads a reply and decides what follows. `reply` holds the tokens this generation
+    /// wrote; a continued reply's earlier part is kept by the agent. `seconds` is how long
+    /// it took, for the observer.
+    #[allow(clippy::too_many_lines)]
+    pub fn reply(&mut self, reply: &[u32], ended: Ended, at: At, seconds: f64) -> Next {
+        let earlier = std::mem::take(&mut self.turn.partial);
+        let mut full = earlier.clone();
+        full.extend_from_slice(reply);
         self.turn.ended_by = match ended {
-            Ended::Stop => reply.last().copied(),
+            Ended::Stop => full.last().copied(),
             _ => None,
         };
-        let read = self.template.read(reply);
+        self.turn.reply = match ended {
+            Ended::Stop => full[..full.len().saturating_sub(1)].to_vec(),
+            _ => full.clone(),
+        };
+        let read = self.template.read(&full);
         self.turn.replies += 1;
         self.turn.tokens += reply.len();
+        self.turn.budget_tokens += reply.len();
         self.observer.event(Event::Reply {
             read: &read,
             tokens: reply.len(),
             seconds,
             ended,
         });
-        let unfinished = match ended {
-            Ended::Stop => None,
-            Ended::Limit => Some("the reply reached its token limit"),
-            Ended::Context => Some("the context is full"),
-            Ended::Cancelled => Some("cancelled"),
-            Ended::Halted => Some("the reply was repeating one block"),
-        };
-        if let Some(why) = unfinished {
-            return self.stop(why, read);
+        if std::mem::take(&mut self.turn.handoff) {
+            return match ended {
+                Ended::Stop | Ended::Limit => {
+                    let space = if read.answer.starts_with(char::is_whitespace) {
+                        ""
+                    } else {
+                        " "
+                    };
+                    let handoff = format!("{}{space}{}", flow::HANDOFF_OPENING, read.answer);
+                    match self.rebuild(&handoff, at.capacity) {
+                        Ok(tokens) => {
+                            self.note(&format!(
+                                "[context] rebuilt from a handoff ({} tokens): {} -> {} positions",
+                                reply.len(),
+                                at.position,
+                                tokens.len()
+                            ));
+                            self.observer
+                                .event(Event::Note(&format!("[handoff] {}", handoff.trim())));
+                            Next::Load(tokens)
+                        }
+                        Err(e) => self.stop(&e, read),
+                    }
+                }
+                _ => self.stop("the context is full and the handoff did not finish", read),
+            };
+        }
+        match ended {
+            Ended::Stop => {}
+            Ended::Limit | Ended::Cancelled => {
+                let why = if ended == Ended::Limit {
+                    "the reply reached its token limit"
+                } else {
+                    "stopped by Ctrl-C"
+                };
+                self.pending = Some(Pending::Reply(full));
+                return self.pause(why);
+            }
+            Ended::Halted => return self.stop("the reply was repeating one block", read),
+            Ended::Context => {
+                // Drop the cut reply and write it again in a context rebuilt from a handoff.
+                let to = at.start.saturating_sub(earlier.len());
+                if self.flow && to >= self.compacted + at.capacity / 8 {
+                    if let Ok(feed) = self.handoff_request(None) {
+                        if to + feed.len() + flow::handoff_limit(at.capacity) <= at.capacity {
+                            self.turn.handoff = true;
+                            self.note("[context] full: asking for a handoff");
+                            return Next::Retry { to, feed };
+                        }
+                    }
+                }
+                return self.stop("the context is full; /undo or /reset make room", read);
+            }
         }
         if !read.calls.is_empty() {
             if self.turn.closed {
@@ -495,6 +644,7 @@ impl<'o, T: Template> Agent<'o, T> {
             return Next::Tools(read.calls);
         }
         if let Some(note) = self.before_answer() {
+            let room = at.capacity.saturating_sub(at.position);
             match self.template.note(self.turn.ended_by, &note) {
                 Ok(tokens) if tokens.len() + REPLY_RESERVE <= room => return Next::Feed(tokens),
                 Ok(_) => self.note("[check] no room left for the check; the answer goes through"),
@@ -503,6 +653,163 @@ impl<'o, T: Template> Agent<'o, T> {
         }
         self.finish_turn(&read.answer, None);
         Next::Answer(read)
+    }
+
+    /// Pauses the turn (its pending work is already set).
+    fn pause(&mut self, why: &str) -> Next {
+        let seconds = self.turn.started.map_or(0.0, |t| t.elapsed().as_secs_f64());
+        self.observer.event(Event::TurnEnd {
+            stopped: Some(&format!("paused: {why}")),
+            replies: self.turn.replies,
+            tokens: self.turn.tokens,
+            seconds,
+        });
+        Next::Pause(why.to_owned())
+    }
+
+    /// What the budget says, if it is spent.
+    fn budget_spent(&self) -> Option<String> {
+        let since = self
+            .turn
+            .budget_from
+            .map_or(Duration::ZERO, |t| t.elapsed());
+        if let Some(limit) = self.budget.time {
+            if since >= limit {
+                return Some(format!(
+                    "the turn's {} minutes are spent",
+                    limit.as_secs().div_ceil(60)
+                ));
+            }
+        }
+        if let Some(limit) = self.budget.tokens {
+            if self.turn.budget_tokens >= limit {
+                return Some(format!("the turn's {limit} tokens are spent"));
+            }
+        }
+        None
+    }
+
+    /// Takes the paused turn's work, with a fresh budget, for `/continue`.
+    pub fn take_pending(&mut self) -> Option<Pending> {
+        let pending = self.pending.take()?;
+        self.turn.budget_from = Some(Instant::now());
+        self.turn.budget_tokens = 0;
+        if self.turn.started.is_none() {
+            self.turn.started = Some(Instant::now());
+        }
+        Some(pending)
+    }
+
+    /// Ends a paused turn because Jay sent a new message: waiting calls are answered as
+    /// not run, so the history stays a well-formed conversation. Returns tokens to feed
+    /// before the new message.
+    ///
+    /// # Errors
+    /// When the template cannot write the results.
+    pub fn settle(&mut self) -> Result<Option<Vec<u32>>, String> {
+        match self.pending.take() {
+            None => Ok(None),
+            Some(Pending::Calls {
+                mut done,
+                remaining,
+            }) => {
+                done.extend(remaining.into_iter().map(|c| (c, NOT_RUN.to_owned())));
+                let tokens = self.template.results(self.turn.ended_by, &done)?;
+                self.finish_turn("", Some("paused; Jay sent a new message"));
+                Ok(Some(tokens))
+            }
+            Some(Pending::Reply(tokens)) => {
+                let read = self.template.read(&tokens);
+                self.finish_turn(&read.answer, Some("paused; Jay sent a new message"));
+                Ok(None)
+            }
+        }
+    }
+
+    /// The request for a handoff, the reply begun for the model.
+    fn handoff_request(&self, ended_by: Option<u32>) -> Result<Vec<u32>, String> {
+        let mut tokens = self.template.note(ended_by, flow::REQUEST)?;
+        tokens.extend(self.template.answer_opening(flow::HANDOFF_OPENING)?);
+        Ok(tokens)
+    }
+
+    /// The context rebuilt from `handoff`: the opening and this turn's message with a
+    /// note holding the handoff and Jay's earlier messages, then this turn's newest tool
+    /// rounds that fit an eighth of `capacity`.
+    fn rebuild(&mut self, handoff: &str, capacity: usize) -> Result<Vec<u32>, String> {
+        let now = clock::now();
+        // Work since the last rebuild that adds nothing to the interval before it means
+        // the model is going round: answer from what there is.
+        let interval = std::mem::take(&mut self.turn.interval);
+        let cycling = self
+            .turn
+            .previous_interval
+            .as_ref()
+            .is_some_and(|before| interval.iter().all(|k| before.contains(k)));
+        self.turn.previous_interval = Some(interval);
+        let evidence = if self.tools.is_some() {
+            self.evidence.summary()
+        } else {
+            String::new()
+        };
+        // The note (handoff, Jay's messages, this turn's calls) stays within an eighth of
+        // the context: fewer call lines until it does.
+        let earlier = flow::earlier_messages(&self.history);
+        let mut lines = flow::WORK_LINES.min(self.turn.work.len());
+        let mut tokens = loop {
+            let work = &self.turn.work[self.turn.work.len() - lines..];
+            let mut about = flow::note(handoff, &earlier, work);
+            if !self.about.is_empty() {
+                about = format!("{}\n\n{about}", self.about);
+            }
+            let (Rendered::Full(tokens) | Rendered::Append(tokens)) =
+                self.template.render(&Prompt {
+                    now: &now,
+                    instructions: &self.instructions,
+                    about: &about,
+                    evidence: &evidence,
+                    tools: self.declaration.as_deref(),
+                    history: &[],
+                    user: &self.turn.request,
+                    first: true,
+                })?;
+            if lines == 0 || tokens.len() <= self.opening + capacity / 8 {
+                break tokens;
+            }
+            lines /= 2;
+        };
+        let mut kept = Vec::new();
+        let mut used = 0;
+        for round in self.turn.rounds.iter().rev() {
+            let mut t = round.reply.clone();
+            t.extend(self.template.results(round.ended_by, &round.results)?);
+            if used + t.len() > capacity / 8 {
+                break;
+            }
+            used += t.len();
+            kept.push(t);
+        }
+        for t in kept.into_iter().rev() {
+            tokens.extend(t);
+        }
+        if cycling {
+            self.turn.closed = true;
+            self.note("[context] the same work again after a handoff: tools closed");
+            tokens.extend(self.template.answer_opening(ANSWER_OPENING)?);
+        }
+        if tokens.len() + REPLY_RESERVE > capacity {
+            return Err("the context is full even after a handoff; /reset starts over".into());
+        }
+        // Earlier results are gone from the context: reads may be made again (an edit is
+        // still never replayed).
+        self.turn.earlier.retain(|(name, _)| guards::writes(name));
+        self.turn.repeated_rounds = 0;
+        // Earlier positions are gone: an undo now goes back to the opening.
+        for start in &mut self.starts {
+            *start = (*start).min(self.opening);
+        }
+        self.turn.start = self.opening;
+        Ok(tokens)
     }
 
     /// A note the answer must wait for: archive coverage, or changes no check has
@@ -567,6 +874,8 @@ impl<'o, T: Template> Agent<'o, T> {
     /// Ends the turn: the exchange joins the history, and when files were written the
     /// chat checks the crates itself.
     fn finish_turn(&mut self, answer: &str, stopped: Option<&str>) {
+        self.pending = None;
+        self.turn.partial.clear();
         self.last_answer = answer.trim().to_owned();
         self.history.push(Exchange {
             user: std::mem::take(&mut self.turn.request),
@@ -605,12 +914,37 @@ impl<'o, T: Template> Agent<'o, T> {
 
     /// Runs a reply's calls with the guards, and returns the results to feed (fitted
     /// into `room` positions), or the end of the turn.
+    /// `done` holds results of calls that ran before a pause; `cancel` (Ctrl-C) pauses
+    /// before the next call.
     #[allow(clippy::too_many_lines)]
-    pub fn run(&mut self, calls: &[Call], backend: &mut dyn Backend, room: usize) -> Next {
-        let mut results: Vec<(Call, String)> = Vec::with_capacity(calls.len());
+    pub fn run(
+        &mut self,
+        done: Vec<(Call, String)>,
+        calls: &[Call],
+        backend: &mut dyn Backend,
+        at: At,
+        cancel: &AtomicBool,
+    ) -> Next {
+        if !self.turn.closed {
+            if let Some(why) = self.budget_spent() {
+                self.pending = Some(Pending::Calls {
+                    done,
+                    remaining: calls.to_vec(),
+                });
+                return self.pause(&why);
+            }
+        }
+        let mut results: Vec<(Call, String)> = done;
         let mut repeats = 0;
         let mut write_limit = None;
-        for call in calls {
+        for (i, call) in calls.iter().enumerate() {
+            if write_limit.is_none() && cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                self.pending = Some(Pending::Calls {
+                    done: results,
+                    remaining: calls[i..].to_vec(),
+                });
+                return self.pause("stopped by Ctrl-C");
+            }
             self.observer.event(Event::Call {
                 name: &call.name,
                 arguments: &call.arguments,
@@ -648,6 +982,9 @@ impl<'o, T: Template> Agent<'o, T> {
                 }
                 if !self.turn.earlier.contains(&key) {
                     self.turn.earlier.push(key.clone());
+                }
+                if !self.turn.interval.contains(&key) {
+                    self.turn.interval.push(key.clone());
                 }
                 if guards::writes(&call.name) {
                     self.turn.unchecked = true;
@@ -734,10 +1071,25 @@ impl<'o, T: Template> Agent<'o, T> {
                 }
             }
         }
+        let room = at.capacity.saturating_sub(at.position);
         let mut tokens = match self.fit(&mut results, room) {
             Ok(tokens) => tokens,
             Err(why) => return self.stop(&why, Read::default()),
         };
+        self.turn.rounds.push(Round {
+            reply: self.turn.reply.clone(),
+            ended_by: self.turn.ended_by,
+            results: results.clone(),
+        });
+        if self.flow && flow::due(at.position, tokens.len(), at.capacity, self.compacted) {
+            if let Ok(request) = self.handoff_request(self.turn.ended_by) {
+                if at.position + request.len() + flow::handoff_limit(at.capacity) <= at.capacity {
+                    self.turn.handoff = true;
+                    self.note("[context] nearly full: asking for a handoff");
+                    return Next::Feed(request);
+                }
+            }
+        }
         if self.turn.closed {
             match self.template.answer_opening(ANSWER_OPENING) {
                 Ok(opening) => tokens.extend(opening),
@@ -871,6 +1223,112 @@ impl<'o, T: Template> Agent<'o, T> {
         }
     }
 
+    /// The chat's state, to resume from: the backend's context and the agent's.
+    pub fn state(&self, backend: &dyn Backend) -> Value {
+        let turn = if self.pending.is_some() {
+            json!({
+                "request": self.turn.request,
+                "date": self.turn.date,
+                "start": self.turn.start,
+                "ended_by": self.turn.ended_by,
+                "reply": self.turn.reply,
+                "rounds": self.turn.rounds.iter().map(state::round_to_json).collect::<Vec<_>>(),
+                "unchecked": self.turn.unchecked,
+                "wrote": self.turn.wrote,
+            })
+        } else {
+            Value::Null
+        };
+        json!({
+            "version": state::VERSION,
+            "opening": self.opening,
+            "compacted": self.compacted,
+            "tokens": backend.held(),
+            "history": state::history_to_json(&self.history),
+            "starts": self.starts,
+            "evidence": self.evidence.to_json(),
+            "last_answer": self.last_answer,
+            "pending": self.pending.as_ref().map(state::pending_to_json),
+            "turn": turn,
+        })
+    }
+
+    /// Tells the observer the state, for a saved chat.
+    pub fn save(&mut self, backend: &dyn Backend) {
+        let state = self.state(backend);
+        self.observer.event(Event::State(&state));
+    }
+
+    /// Picks up a saved chat ([`Self::state`]): the backend reads its exact context (the
+    /// opening first, so `/reset` returns to it) and the agent takes its history, receipts
+    /// and paused turn. Use instead of [`Self::prepare`].
+    ///
+    /// # Errors
+    /// When the snapshot is not one, is from another chat format version, or does not
+    /// fit the backend's context.
+    pub fn restore(&mut self, saved: &Value, backend: &mut dyn Backend) -> Result<(), String> {
+        if saved["version"].as_u64() != Some(state::VERSION) {
+            return Err(
+                "this saved chat was written by the chat before the shared loop (or a newer \
+                 one); it cannot be resumed here"
+                    .into(),
+            );
+        }
+        let tokens = state::tokens_from_json(&saved["tokens"])?;
+        if tokens.len() + REPLY_RESERVE > backend.capacity() {
+            return Err(format!(
+                "the saved chat holds {} tokens; give a context of at least {}",
+                tokens.len(),
+                tokens.len() + REPLY_RESERVE
+            ));
+        }
+        let number = |v: &Value| {
+            v.as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .unwrap_or(0)
+        };
+        let opening = number(&saved["opening"]).min(tokens.len());
+        if opening > 0 {
+            backend.load(&tokens[..opening])?;
+            if tokens.len() > opening {
+                backend.feed(&tokens[opening..])?;
+            }
+        } else if !tokens.is_empty() {
+            backend.load(&tokens)?;
+        }
+        self.opening = opening;
+        self.compacted = number(&saved["compacted"]);
+        self.history = state::history_from_json(&saved["history"]);
+        self.starts = state::usize_list(&saved["starts"]);
+        self.starts.resize(self.history.len(), opening);
+        self.evidence = Evidence::from_json(&saved["evidence"]);
+        self.last_answer = saved["last_answer"].as_str().unwrap_or_default().to_owned();
+        self.pending = state::pending_from_json(&saved["pending"])?;
+        let t = &saved["turn"];
+        if self.pending.is_some() {
+            self.turn = Turn {
+                request: t["request"].as_str().unwrap_or_default().to_owned(),
+                date: t["date"].as_str().unwrap_or_default().to_owned(),
+                start: number(&t["start"]),
+                ended_by: t["ended_by"].as_u64().and_then(|n| u32::try_from(n).ok()),
+                reply: state::tokens_from_json(&t["reply"])?,
+                rounds: t["rounds"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(state::round_from_json)
+                    .collect::<Result<_, _>>()?,
+                unchecked: t["unchecked"].as_bool().unwrap_or(false),
+                wrote: t["wrote"].as_bool().unwrap_or(false),
+                ..Turn::default()
+            };
+            if let Some(edits) = &self.edits {
+                edits.set_task(&self.turn.request);
+            }
+        }
+        Ok(())
+    }
+
     /// When the chat ends: claims become handoffs on the board. Returns the files left
     /// uncommitted.
     pub fn finish(&mut self) -> Vec<(String, String)> {
@@ -890,13 +1348,15 @@ pub struct TurnEnd {
     pub read: Read,
     /// Why it ended without an answer.
     pub stopped: Option<String>,
+    /// Why it paused (`/continue` goes on).
+    pub paused: Option<String>,
 }
 
 /// One user message, blocking: the prompt, then replies and tool rounds until the turn
-/// ends. Each generation is bounded by `limit` tokens; a reply looping on one block is
-/// halted. A prompt that would leave no room for a reply is refused: `/undo` or
-/// `/reset` make room (compaction through a handoff is step 3 of
-/// `docs/AGENT_LOOP.md`).
+/// ends or pauses. Each generation is bounded by `limit` tokens; a reply looping on one
+/// block is halted. A paused turn is ended first, its waiting calls answered as not run.
+/// Past three quarters of the context, the model writes a handoff and the context is
+/// rebuilt from it ([`flow`]).
 ///
 /// # Errors
 /// When the backend or the template fails; the turn is then ended in the history.
@@ -907,43 +1367,92 @@ pub fn turn<T: Template>(
     limit: usize,
     cancel: &AtomicBool,
 ) -> Result<TurnEnd, String> {
-    let start = backend.position();
-    let prompt = agent.begin(text, start);
-    let result = prompt.and_then(|prompt| run_turn(agent, backend, &prompt, limit, cancel));
+    let result = begin_turn(agent, backend, text, limit, cancel);
     if let Err(e) = &result {
         agent.abandon(e);
+        agent.save(backend);
     }
     result
 }
 
-fn run_turn<T: Template>(
+/// `/continue`: goes on with a paused turn, with a fresh budget. `None` when no turn is
+/// paused.
+///
+/// # Errors
+/// As [`turn`].
+pub fn resume<T: Template>(
     agent: &mut Agent<'_, T>,
     backend: &mut dyn Backend,
-    prompt: &Rendered,
+    limit: usize,
+    cancel: &AtomicBool,
+) -> Result<Option<TurnEnd>, String> {
+    let step = match agent.take_pending() {
+        None => return Ok(None),
+        Some(Pending::Calls { done, remaining }) => Step::Calls {
+            done,
+            calls: remaining,
+        },
+        Some(Pending::Reply(tokens)) => {
+            agent.turn.partial = tokens;
+            Step::Generate
+        }
+    };
+    let result = drive(agent, backend, limit, cancel, step);
+    if let Err(e) = &result {
+        agent.abandon(e);
+        agent.save(backend);
+    }
+    result.map(Some)
+}
+
+fn begin_turn<T: Template>(
+    agent: &mut Agent<'_, T>,
+    backend: &mut dyn Backend,
+    text: &str,
     limit: usize,
     cancel: &AtomicBool,
 ) -> Result<TurnEnd, String> {
+    if let Some(tokens) = agent.settle()? {
+        backend.feed(&tokens)?;
+    }
     let started = Instant::now();
-    let (tokens, held) = match prompt {
+    let start = backend.position();
+    let prompt = agent.begin(text, start)?;
+    let capacity = backend.capacity();
+    let (tokens, held) = match &prompt {
         Rendered::Full(tokens) => (tokens, 0),
-        Rendered::Append(tokens) => (tokens, backend.position()),
+        Rendered::Append(tokens) => (tokens, start),
     };
-    if held + tokens.len() + REPLY_RESERVE > backend.capacity() {
+    if matches!(prompt, Rendered::Append(_))
+        && agent.flow
+        && !agent.history.is_empty()
+        && flow::due(held, tokens.len(), capacity, agent.compacted)
+    {
+        // The handoff is written in the old context; the rebuilt one holds this message.
+        let request = agent.handoff_request(None)?;
+        if held + request.len() + flow::handoff_limit(capacity) <= capacity {
+            agent.note("[context] a new message into a crowded context: asking for a handoff");
+            backend.feed(&request)?;
+            agent.turn.handoff = true;
+            return drive(agent, backend, limit, cancel, Step::Generate);
+        }
+    }
+    if held + tokens.len() + REPLY_RESERVE > capacity {
         let why = format!(
-            "the context is full ({} of {} positions, and this message needs {}); /undo or \
-             /reset make room",
-            held,
-            backend.capacity(),
+            "the context is full ({held} of {capacity} positions, and this message needs {}); \
+             /undo or /reset make room",
             tokens.len()
         );
         agent.note(&format!("[stopped: {why}]"));
         agent.finish_turn("", Some(&why));
+        agent.save(backend);
         return Ok(TurnEnd {
             read: Read::default(),
             stopped: Some(why),
+            paused: None,
         });
     }
-    match prompt {
+    match &prompt {
         Rendered::Full(tokens) => backend.load(tokens)?,
         Rendered::Append(tokens) => backend.feed(tokens)?,
     }
@@ -951,23 +1460,67 @@ fn run_turn<T: Template>(
         tokens: tokens.len(),
         seconds: started.elapsed().as_secs_f64(),
     });
+    drive(agent, backend, limit, cancel, Step::Generate)
+}
+
+/// What the driver does next.
+enum Step {
+    Generate,
+    Calls {
+        done: Vec<(Call, String)>,
+        calls: Vec<Call>,
+    },
+}
+
+fn drive<T: Template>(
+    agent: &mut Agent<'_, T>,
+    backend: &mut dyn Backend,
+    limit: usize,
+    cancel: &AtomicBool,
+    mut step: Step,
+) -> Result<TurnEnd, String> {
     let mut seen = Vec::with_capacity(limit.min(4096));
     loop {
-        let started = Instant::now();
-        seen.clear();
-        let stops = agent.stops().to_vec();
-        let observer = &mut agent.observer;
-        let (reply, ended) = backend.generate(limit, &stops, cancel, &mut |token| {
-            observer.event(Event::Token(token));
-            seen.push(token);
-            guards::looping(&seen).is_none()
-        })?;
-        let room = backend.capacity().saturating_sub(backend.position());
-        let mut next = agent.reply(&reply, ended, room, started.elapsed().as_secs_f64());
-        if let Next::Tools(calls) = next {
-            next = agent.run(&calls, backend, room);
-        }
-        match next {
+        let capacity = backend.capacity();
+        let next = match step {
+            Step::Generate => {
+                let started = Instant::now();
+                let start = backend.position();
+                let limit = if agent.turn.handoff {
+                    flow::handoff_limit(capacity)
+                } else {
+                    limit
+                };
+                seen.clear();
+                seen.extend_from_slice(&agent.turn.partial);
+                let stops = agent.stops().to_vec();
+                let observer = &mut agent.observer;
+                let (reply, ended) = backend.generate(limit, &stops, cancel, &mut |token| {
+                    observer.event(Event::Token(token));
+                    seen.push(token);
+                    guards::looping(&seen).is_none()
+                })?;
+                let at = At {
+                    start,
+                    position: backend.position(),
+                    capacity,
+                };
+                agent.reply(&reply, ended, at, started.elapsed().as_secs_f64())
+            }
+            Step::Calls { done, calls } => {
+                let at = At {
+                    start: backend.position(),
+                    position: backend.position(),
+                    capacity,
+                };
+                agent.run(done, &calls, backend, at, cancel)
+            }
+        };
+        step = match next {
+            Next::Tools(calls) => Step::Calls {
+                done: Vec::new(),
+                calls,
+            },
             Next::Feed(tokens) => {
                 let started = Instant::now();
                 backend.feed(&tokens)?;
@@ -975,21 +1528,50 @@ fn run_turn<T: Template>(
                     tokens: tokens.len(),
                     seconds: started.elapsed().as_secs_f64(),
                 });
+                agent.save(backend);
+                Step::Generate
+            }
+            Next::Load(tokens) => {
+                let started = Instant::now();
+                backend.load(&tokens)?;
+                agent.compacted = backend.position();
+                agent.observer.event(Event::Prompt {
+                    tokens: tokens.len(),
+                    seconds: started.elapsed().as_secs_f64(),
+                });
+                agent.save(backend);
+                Step::Generate
+            }
+            Next::Retry { to, feed } => {
+                backend.truncate(to)?;
+                backend.feed(&feed)?;
+                Step::Generate
+            }
+            Next::Pause(why) => {
+                agent.save(backend);
+                return Ok(TurnEnd {
+                    read: Read::default(),
+                    stopped: None,
+                    paused: Some(why),
+                });
             }
             Next::Answer(read) => {
+                agent.save(backend);
                 return Ok(TurnEnd {
                     read,
                     stopped: None,
-                })
+                    paused: None,
+                });
             }
             Next::Stop { why, read } => {
+                agent.save(backend);
                 return Ok(TurnEnd {
                     read,
                     stopped: Some(why),
-                })
+                    paused: None,
+                });
             }
-            Next::Tools(_) => unreachable!("run returns feed or stop"),
-        }
+        };
     }
 }
 
