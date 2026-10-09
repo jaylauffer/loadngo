@@ -7,6 +7,8 @@
 //! its host proactor/offload path, never run inference in paint/input callbacks.
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "agent")]
+pub mod agent;
 pub mod board;
 #[cfg(feature = "cas")]
 pub mod cas_tools;

@@ -39,11 +39,14 @@ bytes). It is in the signed pudding CAS, and its verified local copy is
   - `config`: the model's shape from `gpt-oss.*` metadata, and the YaRN frequencies.
   - `model`: the CPU reference forward pass with a key/value cache. Matrices stay in
     their file formats, and large products are split across the cores.
-  - `chat`: the harmony chat format without tools: system, developer, user and earlier
-    assistant messages, with `read_reply` splitting a reply into its analysis and final
-    channels. Text that spells a control token stays text.
-  - `gpt_oss_generate`: greedy continuation, or one chat answer with `--chat`, from the
-    command line.
+  - `chat`: the harmony chat format: system, developer, user and earlier assistant
+    messages, with `read_reply` splitting a reply into its analysis and final channels,
+    and tools (below). Text that spells a control token stays text. `Harmony` is the
+    format as the shared chat loop's template (`docs/AGENT_LOOP.md`).
+  - `gpt_oss_generate`: greedy continuation, or a chat (one answer, or interactive)
+    with `--chat`. Since 2026-10-09 the chat is loadngo's shared loop
+    (`inference::agent`); the program only connects the engine, the format and the
+    terminal.
 
 ## Evidence (2026-10-04, M4 Pro Mac mini)
 
@@ -216,8 +219,8 @@ answer was accurate, generated at 48.7 tokens/s. Decoding is unchanged at 57 tok
 
 `~/pudding/run-gpt-oss.sh` (outside any repository, at the workspace root):
 
-- With no text it starts an interactive chat: one message per line, `/reset` to start
-  over, `/quit` or Ctrl-D to stop.
+- With no text it starts an interactive chat: one message per line, `/undo` to drop the
+  last exchange (file changes stay), `/reset` to start over, `/quit` or Ctrl-D to stop.
 - With text it answers once; `--file PATH` puts a file's text before the question;
   `--raw` continues the text instead of answering it.
 - `--reasoning`, `--tokens`, `--show-reasoning` and `--profile` pass through; `--cpu`
@@ -439,7 +442,8 @@ option. gpt-oss is its `LabelModel`:
   the state's end (`GpuSession::truncate`, tested against transformers).
 - The next token's scores over `A`, `B`, … are the answer.
 
-Two uses (`gpt_oss_generate/jev.rs`, `agent.rs`):
+Two uses (the questions and what the chat does with them are the shared loop's,
+`inference::agent::jev` and `agent`; `gpt_oss_generate/jev.rs` reads gpt-oss's scores):
 
 - **Checkpoints.** Every 6 tool calls, over Jay's request and a one-line summary of each
   call:
@@ -576,6 +580,29 @@ row removed; the diffs are kept with the session's evidence.
   - The chat's own check did not run: it ran only when the model's last `cargo` run had
     not passed. It now runs whenever a turn wrote files.
   - The change is left uncommitted for Jay, as the handoff says.
+
+## The shared chat loop (2026-10-09)
+
+The chat above (tools, Jev, the checks, the receipts) moved out of `gpt_oss_generate`
+into `loadngo-inference`'s `agent` module, so Kimi Linear and Gemma can run on the same
+loop (`docs/AGENT_LOOP.md`). For gpt-oss it behaves as before, with these additions,
+taken from Kimi's chat and written fresh:
+
+- a call made again with the same arguments is not run (except `cargo`, `git`); a
+  second round of only such calls closes the tools and begins the answer for it;
+- a write failing twice with the same error, or five failing writes without a success,
+  ends the turn;
+- a reply looping on one block is halted;
+- `/undo` in an interactive chat;
+- each turn's notes say which model and engine it is and its last reply's speed, and
+  the instructions ask that reviews state what the evidence says and not rate work
+  above it;
+- the local date comes from `chrono`, so Windows gets local time too (it was UTC
+  there).
+
+Checked on the GPU on 2026-10-09: the date and self-description question answered
+without tools, and the seeded task above finished in 6 calls with the chat's own check
+passing; see `docs/AGENT_LOOP.md`, "Evidence, step 1".
 
 ## Line editing
 

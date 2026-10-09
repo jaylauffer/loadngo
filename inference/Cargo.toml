@@ -16,11 +16,14 @@ url = { version = "2.5", optional = true }
 # `work` feature: editing, building and reviewing tools (`edit_tools`, `work_tools`).
 blake3 = { workspace = true, optional = true }
 loadngo-proactor = { path = "../proactor", optional = true }
+# `agent` feature: the shared chat loop (`agent`), with every tool above.
+chrono = { workspace = true, optional = true }
 
 [features]
 cas = ["dep:data"]
 web = ["dep:ureq", "dep:url"]
 work = ["dep:blake3", "dep:loadngo-proactor"]
+agent = ["cas", "web", "work", "dep:chrono"]
 
 [dev-dependencies]
 tempfile = "3"

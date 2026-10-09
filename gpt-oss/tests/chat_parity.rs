@@ -171,3 +171,83 @@ fn tools_are_declared_called_and_answered_as_the_template_does() {
         ("cas_archives", "{}")
     );
 }
+
+#[test]
+#[ignore = "needs gpt-oss-20b's GGUF (~/.loadngo/models or GPT_OSS_GGUF)"]
+fn the_shared_loop_writes_harmony_as_the_template_checked_above() {
+    use loadngo_gpt_oss::chat::{follow_up, tool_namespace, tool_result, Harmony};
+    use loadngo_inference::agent::{clock, Call, Exchange, Prompt, Rendered, Template};
+    let tokenizer = tokenizer();
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/tools-parity.json")).unwrap();
+    let declaration = fixture["declaration"].as_str().unwrap();
+    let harmony = Harmony::new(&tokenizer, Reasoning::Low).unwrap();
+    let now = clock::now();
+    let history = [Exchange {
+        user: "Hello".into(),
+        answer: "Hi.".into(),
+    }];
+    let Rendered::Full(prompt) = harmony
+        .render(&Prompt {
+            now: &now,
+            instructions: "Work carefully.",
+            notes: "Receipts.",
+            tools: Some(declaration),
+            history: &history,
+            user: "Read README.md",
+            first: false,
+        })
+        .unwrap()
+    else {
+        panic!("harmony renders the whole conversation");
+    };
+    // The same conversation through the parity-checked renderer.
+    let mut conversation = Conversation::new(now.date.clone());
+    conversation.reasoning = Reasoning::Low;
+    conversation.tools = Some(tool_namespace(declaration).unwrap());
+    conversation.instructions = Some(format!("{}\n\nWork carefully.\n\nReceipts.", now.said));
+    conversation.messages = vec![
+        Message::User("Hello".into()),
+        Message::Assistant("Hi.".into()),
+        Message::User("Read README.md".into()),
+    ];
+    assert_eq!(prompt, conversation.prompt(&tokenizer).unwrap());
+
+    // A call reads back; its result is the parity-checked message after `<|call|>`.
+    let call_token = tokenizer.control("<|call|>").unwrap();
+    let mut reply = vec![tokenizer.control("<|channel|>").unwrap()];
+    reply.extend(tokenizer.encode("commentary to=functions.fs_read "));
+    reply.push(tokenizer.control("<|message|>").unwrap());
+    reply.extend(tokenizer.encode(r#"{"path":"README.md"}"#));
+    reply.push(call_token);
+    let read = harmony.read(&reply);
+    assert_eq!(
+        read.calls,
+        [Call {
+            id: None,
+            name: "fs_read".into(),
+            arguments: r#"{"path":"README.md"}"#.into()
+        }]
+    );
+    let results = harmony
+        .results(Some(call_token), &[(read.calls[0].clone(), "text".into())])
+        .unwrap();
+    let mut want = vec![call_token];
+    want.extend(tool_result(&tokenizer, "fs_read", "text").unwrap());
+    assert_eq!(results, want);
+
+    // A note follows a finished answer as a user message; an answer opening is the
+    // final channel.
+    let ret = tokenizer.control("<|return|>").unwrap();
+    assert_eq!(
+        harmony.note(Some(ret), "Check first.").unwrap(),
+        follow_up(&tokenizer, "Check first.").unwrap()
+    );
+    let opening = harmony.answer_opening("So:").unwrap();
+    let mut answer = opening.clone();
+    answer.extend(tokenizer.encode(" done"));
+    answer.push(ret);
+    let read = harmony.read(&answer);
+    assert!(read.calls.is_empty());
+    assert_eq!(read.answer, "So: done");
+    assert!(read.complete);
+}

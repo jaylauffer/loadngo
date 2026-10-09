@@ -1631,7 +1631,6 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "data",
- "libc",
  "loadngo-inference",
  "loadngo-line-editor",
  "loadngo-metal-compute",
@@ -1702,6 +1701,7 @@ name = "loadngo-inference"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "chrono",
  "data",
  "loadngo-proactor",
  "serde_json",

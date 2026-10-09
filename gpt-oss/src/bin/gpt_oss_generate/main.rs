@@ -5,7 +5,6 @@
 //! System One (Jev) checks the work as it goes.
 
 mod agent;
-mod clock;
 mod engine;
 mod jev;
 
@@ -45,6 +44,10 @@ System One (Jev) answers typed questions with the same model in a side session: 
 stuck (nudging, then closing the tools when it stays stuck), and before a web call
 until one is approved this turn it judges whether useful local lookup is still missing,
 using the recorded tool evidence. Search receipts are kept across turns in a bounded log.
+The turn loop is loadngo's shared one (inference::agent, docs/AGENT_LOOP.md): repeated
+calls are not run again, and a second round of them closes the tools; a write failing
+the same way twice ends the turn; an answer after unchecked changes waits for a check.
+In an interactive chat /undo drops the last exchange (file changes stay).
 
 Usage:
   cargo run --release -p loadngo-gpt-oss --bin gpt_oss_generate -- [OPTIONS] [TEXT]
@@ -246,16 +249,13 @@ fn main() {
         println!("{text}{}", tokenizer.decode(&out));
         return;
     }
-    let mut chat = agent::Chat::new(&tokenizer, &o);
+    let mut chat = agent::chat(&tokenizer, &o);
+    let mut backend = agent::GptOss::new(engine, &tokenizer, o.profile);
     match &o.text {
-        Some(text) => {
-            let reply = chat.turn(&mut engine, text, limit, &o);
-            eprintln!("[reasoning] {}", reply.analysis.trim());
-            println!("{}", reply.answer.trim());
-        }
-        None => chat.interactive(&mut engine, limit, &o),
+        Some(text) => agent::turn(&mut chat, &mut backend, text, limit, true),
+        None => agent::interactive(&mut chat, &mut backend, limit, &o),
     }
-    chat.finish();
+    agent::finish(&mut chat);
 }
 
 /// Feeds `tokens` to the conversation and reports the time; returns the logits after

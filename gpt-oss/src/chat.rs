@@ -36,6 +36,7 @@
 //! taken. Text goes through [`Tokenizer::encode`], so a message that spells a control
 //! token cannot forge one.
 
+use loadngo_inference::agent::{Call, Prompt, Read, Rendered, Template};
 use serde_json::Value;
 
 use crate::tokenizer::Tokenizer;
@@ -362,6 +363,14 @@ pub fn tool_result(
     result: &str,
 ) -> Result<Vec<u32>, MissingControl> {
     let c = Controls::of(tokenizer)?;
+    let mut out = tool_message(tokenizer, &c, name, result);
+    out.push(c.start);
+    out.extend(tokenizer.encode("assistant"));
+    Ok(out)
+}
+
+/// A tool's result message, without the reply's opening after it.
+fn tool_message(tokenizer: &Tokenizer, c: &Controls, name: &str, result: &str) -> Vec<u32> {
     let mut out = vec![c.start];
     out.extend(tokenizer.encode(&format!("functions.{name} to=assistant")));
     out.push(c.channel);
@@ -369,9 +378,7 @@ pub fn tool_result(
     out.push(c.message);
     out.extend(tokenizer.encode(&Value::String(result.to_owned()).to_string()));
     out.push(c.end);
-    out.push(c.start);
-    out.extend(tokenizer.encode("assistant"));
-    Ok(out)
+    out
 }
 
 /// The start of a typed question for System One (Jev): a system message, then `state`
@@ -439,4 +446,122 @@ pub fn follow_up(tokenizer: &Tokenizer, text: &str) -> Result<Vec<u32>, MissingC
     out.push(c.start);
     out.extend(tokenizer.encode("assistant"));
     Ok(out)
+}
+
+/// Harmony as the shared chat loop's format (`loadngo_inference::agent`).
+///
+/// Each user message renders the whole conversation again: earlier replies keep only
+/// their final channel, as the chat template writes them, and the developer message
+/// opens with this turn's date and time, then the standing instructions, then the
+/// turn's notes (facts about the chat, tool receipts).
+pub struct Harmony<'t> {
+    tokenizer: &'t Tokenizer,
+    pub identity: String,
+    pub reasoning: Reasoning,
+    /// `<|return|>`, `<|call|>`.
+    stops: [u32; 2],
+}
+
+impl<'t> Harmony<'t> {
+    /// # Errors
+    /// When the tokenizer lacks a control token the format needs.
+    pub fn new(tokenizer: &'t Tokenizer, reasoning: Reasoning) -> Result<Self, MissingControl> {
+        Controls::of(tokenizer)?;
+        let get = |name: &'static str| tokenizer.control(name).ok_or(MissingControl(name));
+        Ok(Self {
+            tokenizer,
+            identity: DEFAULT_IDENTITY.to_owned(),
+            reasoning,
+            stops: [get("<|return|>")?, get("<|call|>")?],
+        })
+    }
+
+    /// The reasoning and answer of a reply.
+    pub fn reply(&self, tokens: &[u32]) -> Reply {
+        read_reply(self.tokenizer, tokens)
+    }
+}
+
+impl Template for Harmony<'_> {
+    fn render(&self, p: &Prompt<'_>) -> Result<Rendered, String> {
+        let mut conversation = Conversation::new(p.now.date.clone());
+        conversation.identity.clone_from(&self.identity);
+        conversation.reasoning = self.reasoning;
+        let mut developer = p.now.said.clone();
+        for part in [p.instructions, p.notes] {
+            if !part.is_empty() {
+                developer.push_str("\n\n");
+                developer.push_str(part);
+            }
+        }
+        conversation.instructions = Some(developer);
+        conversation.tools = p.tools.map(tool_namespace).transpose()?;
+        for e in p.history {
+            conversation.messages.push(Message::User(e.user.clone()));
+            conversation
+                .messages
+                .push(Message::Assistant(e.answer.clone()));
+        }
+        conversation.messages.push(Message::User(p.user.to_owned()));
+        Ok(Rendered::Full(
+            conversation
+                .prompt(self.tokenizer)
+                .map_err(|e| e.to_string())?,
+        ))
+    }
+
+    fn stops(&self) -> &[u32] {
+        &self.stops
+    }
+
+    fn read(&self, reply: &[u32]) -> Read {
+        let r = read_reply(self.tokenizer, reply);
+        let calls = if reply.last() == Some(&self.stops[1]) {
+            read_call(self.tokenizer, reply)
+                .map(|c| Call {
+                    id: None,
+                    name: c.name,
+                    arguments: c.arguments,
+                })
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Read {
+            calls,
+            answer: r.answer,
+            reasoning: r.analysis,
+            complete: r.complete,
+        }
+    }
+
+    fn results(
+        &self,
+        ended_by: Option<u32>,
+        results: &[(Call, String)],
+    ) -> Result<Vec<u32>, String> {
+        let c = Controls::of(self.tokenizer).map_err(|e| e.to_string())?;
+        let mut out: Vec<u32> = ended_by.into_iter().collect();
+        for (call, text) in results {
+            out.extend(tool_message(self.tokenizer, &c, &call.name, text));
+        }
+        out.push(c.start);
+        out.extend(self.tokenizer.encode("assistant"));
+        Ok(out)
+    }
+
+    /// The answer's `<|return|>` becomes `<|end|>`, as history writes a finished answer.
+    fn note(&self, _ended_by: Option<u32>, text: &str) -> Result<Vec<u32>, String> {
+        follow_up(self.tokenizer, text).map_err(|e| e.to_string())
+    }
+
+    fn answer_opening(&self, text: &str) -> Result<Vec<u32>, String> {
+        let c = Controls::of(self.tokenizer).map_err(|e| e.to_string())?;
+        let mut out = vec![c.channel];
+        out.extend(self.tokenizer.encode("final"));
+        out.push(c.message);
+        out.extend(self.tokenizer.encode(text));
+        Ok(out)
+    }
 }

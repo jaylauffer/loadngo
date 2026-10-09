@@ -1,0 +1,571 @@
+//! The turn loop on a toy chat format and scripted replies: no model, no files.
+
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::atomic::AtomicBool;
+
+use serde_json::{json, Value};
+
+use super::*;
+use crate::tools::Tool;
+
+// The toy format: text is one token per character (code + 1000); these are controls.
+const USER: u32 = 1;
+const REPLY: u32 = 2;
+const DONE: u32 = 3;
+const CALL: u32 = 4;
+const RESULT: u32 = 5;
+const NOTE: u32 = 6;
+const ANSWER: u32 = 7;
+
+fn text(s: &str) -> Vec<u32> {
+    s.chars().map(|c| c as u32 + 1000).collect()
+}
+
+fn untext(tokens: &[u32]) -> String {
+    tokens
+        .iter()
+        .filter(|&&t| t >= 1000)
+        .map(|&t| char::from_u32(t - 1000).unwrap())
+        .collect()
+}
+
+struct Toy;
+
+impl Template for Toy {
+    fn render(&self, p: &Prompt<'_>) -> Result<Rendered, String> {
+        let mut out = Vec::new();
+        for e in p.history {
+            out.push(USER);
+            out.extend(text(&e.user));
+            out.push(REPLY);
+            out.extend(text(&e.answer));
+            out.push(DONE);
+        }
+        out.push(USER);
+        out.extend(text(p.user));
+        out.push(REPLY);
+        Ok(Rendered::Full(out))
+    }
+    fn stops(&self) -> &[u32] {
+        &[DONE, CALL]
+    }
+    /// A call is `name args` before CALL; anything else is the answer.
+    fn read(&self, reply: &[u32]) -> Read {
+        let body = untext(reply);
+        if reply.last() == Some(&CALL) {
+            let (name, arguments) = body.split_once(' ').unwrap_or((&body, "{}"));
+            return Read {
+                calls: vec![Call {
+                    id: None,
+                    name: name.into(),
+                    arguments: arguments.into(),
+                }],
+                ..Read::default()
+            };
+        }
+        Read {
+            answer: body,
+            complete: reply.last() == Some(&DONE),
+            ..Read::default()
+        }
+    }
+    fn results(
+        &self,
+        ended_by: Option<u32>,
+        results: &[(Call, String)],
+    ) -> Result<Vec<u32>, String> {
+        let mut out: Vec<u32> = ended_by.into_iter().collect();
+        for (_, r) in results {
+            out.push(RESULT);
+            out.extend(text(r));
+        }
+        out.push(REPLY);
+        Ok(out)
+    }
+    fn note(&self, ended_by: Option<u32>, note: &str) -> Result<Vec<u32>, String> {
+        let mut out: Vec<u32> = ended_by.into_iter().collect();
+        out.push(NOTE);
+        out.extend(text(note));
+        out.push(REPLY);
+        Ok(out)
+    }
+    fn answer_opening(&self, opening: &str) -> Result<Vec<u32>, String> {
+        let mut out = vec![ANSWER];
+        out.extend(text(opening));
+        Ok(out)
+    }
+}
+
+/// Replies given in order; records everything fed.
+struct Scripted {
+    replies: VecDeque<Vec<u32>>,
+    held: Vec<u32>,
+    capacity: usize,
+    judge: Option<Vec<Vec<f32>>>,
+}
+
+impl Scripted {
+    fn new(replies: Vec<Vec<u32>>) -> Self {
+        Self {
+            replies: replies.into(),
+            held: Vec::new(),
+            capacity: 100_000,
+            judge: None,
+        }
+    }
+    fn held_text(&self) -> String {
+        untext(&self.held)
+    }
+}
+
+struct Labels<'a>(&'a mut Vec<Vec<f32>>);
+impl LabelModel for Labels<'_> {
+    fn label_logits(&mut self, _: &str, _: &str, labels: &[String]) -> Result<Vec<f32>, String> {
+        let next = self.0.remove(0);
+        assert_eq!(next.len(), labels.len());
+        Ok(next)
+    }
+}
+
+impl Backend for Scripted {
+    fn load(&mut self, tokens: &[u32]) -> Result<(), String> {
+        self.held = tokens.to_vec();
+        Ok(())
+    }
+    fn feed(&mut self, tokens: &[u32]) -> Result<(), String> {
+        self.held.extend_from_slice(tokens);
+        Ok(())
+    }
+    fn generate(
+        &mut self,
+        limit: usize,
+        stops: &[u32],
+        _cancel: &AtomicBool,
+        emit: &mut dyn FnMut(u32) -> bool,
+    ) -> Result<(Vec<u32>, Ended), String> {
+        let script = self.replies.pop_front().expect("a scripted reply");
+        let mut out = Vec::new();
+        for t in script {
+            out.push(t);
+            if stops.contains(&t) {
+                return Ok((out, Ended::Stop));
+            }
+            self.held.push(t);
+            if !emit(t) {
+                return Ok((out, Ended::Halted));
+            }
+            if out.len() == limit {
+                return Ok((out, Ended::Limit));
+            }
+        }
+        Ok((out, Ended::Limit))
+    }
+    fn position(&self) -> usize {
+        self.held.len()
+    }
+    fn capacity(&self) -> usize {
+        self.capacity
+    }
+    fn judge(&mut self, _date: &str) -> Option<Box<dyn LabelModel + '_>> {
+        self.judge
+            .as_mut()
+            .map(|j| Box::new(Labels(j)) as Box<dyn LabelModel>)
+    }
+}
+
+/// A tool answering from a closure, counting its calls.
+struct Fake {
+    name: &'static str,
+    calls: Rc<RefCell<usize>>,
+    answer: fn(&Value, usize) -> Result<String, String>,
+}
+
+impl Tool for Fake {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+    fn description(&self) -> &'static str {
+        "test tool"
+    }
+    fn parameters(&self) -> Value {
+        json!({"type": "object"})
+    }
+    fn call(&self, args: &Value) -> Result<String, String> {
+        *self.calls.borrow_mut() += 1;
+        (self.answer)(args, *self.calls.borrow())
+    }
+}
+
+fn fake(
+    name: &'static str,
+    answer: fn(&Value, usize) -> Result<String, String>,
+) -> (Box<dyn Tool>, Rc<RefCell<usize>>) {
+    let calls = Rc::new(RefCell::new(0));
+    (
+        Box::new(Fake {
+            name,
+            calls: Rc::clone(&calls),
+            answer,
+        }),
+        calls,
+    )
+}
+
+#[derive(Clone, Default)]
+struct Notes(Rc<RefCell<Vec<String>>>);
+impl Observer for Notes {
+    fn event(&mut self, event: Event<'_>) {
+        if let Event::Note(n) = event {
+            self.0.borrow_mut().push(n.to_owned());
+        }
+    }
+}
+
+fn agent(tools: Vec<Box<dyn Tool>>, jev: bool) -> (Agent<Toy>, Notes) {
+    let mut toolbox = Toolbox::default();
+    for t in tools {
+        toolbox.push(t);
+    }
+    let notes = Notes::default();
+    let workspace = Workspace {
+        tools: toolbox,
+        edits: None,
+        instructions: "test".into(),
+        base: PathBuf::from("."),
+        described: Vec::new(),
+    };
+    (
+        Agent::new(Toy, Some(workspace), jev, Box::new(notes.clone())),
+        notes,
+    )
+}
+
+fn call(s: &str) -> Vec<u32> {
+    let mut t = text(s);
+    t.push(CALL);
+    t
+}
+
+fn answer(s: &str) -> Vec<u32> {
+    let mut t = text(s);
+    t.push(DONE);
+    t
+}
+
+static NO: AtomicBool = AtomicBool::new(false);
+
+#[test]
+fn a_tool_round_then_an_answer_and_the_next_turn_sees_the_exchange() {
+    let (read, reads) = fake("fs_read", |_, _| Ok("fn main() {}".into()));
+    let (mut a, _) = agent(vec![read], false);
+    let mut b = Scripted::new(vec![
+        call(r#"fs_read {"path":"a.rs"}"#),
+        answer("a.rs has main"),
+        answer("yes"),
+    ]);
+    let end = turn(&mut a, &mut b, "what is in a.rs?", 100, &NO).unwrap();
+    assert_eq!(end.read.answer, "a.rs has main");
+    assert_eq!(end.stopped, None);
+    assert_eq!(*reads.borrow(), 1);
+    // The call's ending token was fed with its result.
+    let held = b.held.clone();
+    let at = held.iter().position(|&t| t == CALL).unwrap();
+    assert_eq!(held[at + 1], RESULT);
+    assert!(b.held_text().contains("fn main() {}"));
+    turn(&mut a, &mut b, "sure?", 100, &NO).unwrap();
+    assert_eq!(
+        a.history(),
+        [
+            Exchange {
+                user: "what is in a.rs?".into(),
+                answer: "a.rs has main".into()
+            },
+            Exchange {
+                user: "sure?".into(),
+                answer: "yes".into()
+            }
+        ]
+    );
+    // The second prompt is the whole conversation again (a Full template).
+    assert!(b
+        .held_text()
+        .starts_with("what is in a.rs?a.rs has mainsure?"));
+    assert!(a.undo());
+    assert_eq!(a.history().len(), 1);
+}
+
+#[test]
+fn a_repeated_call_is_not_run_and_a_second_repeated_round_closes_the_tools() {
+    let (read, reads) = fake("fs_read", |_, _| Ok("contents".into()));
+    let (mut a, notes) = agent(vec![read], false);
+    let same = r#"fs_read {"path":"a.rs"}"#;
+    let mut b = Scripted::new(vec![
+        call(same),
+        call(r#"fs_read { "path": "a.rs" }"#),
+        call(same),
+        answer("a.rs holds contents"),
+    ]);
+    let end = turn(&mut a, &mut b, "read a.rs", 100, &NO).unwrap();
+    assert_eq!(*reads.borrow(), 1, "the call runs once");
+    assert_eq!(end.read.answer, "a.rs holds contents");
+    let held = b.held_text();
+    assert!(held.contains("Not run: you already made this exact call"));
+    assert!(held.contains("Your tools are closed for this turn"));
+    // The answer was begun for the model.
+    assert!(b.held.contains(&ANSWER));
+    assert!(held.contains(ANSWER_OPENING.trim()));
+    assert!(notes
+        .0
+        .borrow()
+        .iter()
+        .any(|n| n.starts_with("[tools closed")));
+
+    // A call after the tools closed ends the turn.
+    let (read, _) = fake("fs_read", |_, _| Ok("contents".into()));
+    let (mut a, _) = agent(vec![read], false);
+    let mut b = Scripted::new(vec![call(same), call(same), call(same), call(same)]);
+    let end = turn(&mut a, &mut b, "read a.rs", 100, &NO).unwrap();
+    assert_eq!(
+        end.stopped.as_deref(),
+        Some("tools were called after they were closed")
+    );
+}
+
+#[test]
+fn a_read_may_be_made_again_after_a_successful_edit() {
+    let (read, reads) = fake("fs_read", |_, _| Ok("contents".into()));
+    let (edit, _) = fake("text_edit", |_, n| {
+        Ok(format!("edited a.rs: revision {n:016}; lines 1-2"))
+    });
+    let (mut a, _) = agent(vec![read, edit], false);
+    let r = r#"fs_read {"path":"a.rs"}"#;
+    let e = r#"text_edit {"path":"a.rs","old_text":"a","new_text":"b"}"#;
+    let mut b = Scripted::new(vec![
+        call(r),
+        call(e),
+        call(r),
+        call(e),
+        answer("it is done"),
+        answer("done"),
+    ]);
+    let end = turn(&mut a, &mut b, "edit a.rs", 100, &NO).unwrap();
+    assert_eq!(*reads.borrow(), 2);
+    // The same edit is never replayed.
+    assert_eq!(
+        b.held_text().matches("Not run: you already made").count(),
+        1
+    );
+    // Files changed and no cargo run passed: the answer waited for a check, once.
+    assert!(b.held_text().contains("Automatic check before your answer"));
+    assert!(b.held.contains(&NOTE));
+    assert_eq!(end.read.answer, "done");
+}
+
+#[test]
+fn the_verification_note_is_sent_once_and_a_passing_cargo_run_clears_it() {
+    let (edit, _) = fake("text_edit", |_, _| {
+        Ok("edited a.rs: revision 1111111111111111; x".into())
+    });
+    let (cargo, _) = fake("cargo", |_, _| Ok("cargo test succeeded (exit 0)".into()));
+    let (mut a, _) = agent(vec![edit, cargo], false);
+    let mut b = Scripted::new(vec![
+        call(r#"text_edit {"path":"a.rs"}"#),
+        answer("it compiles"),
+        call(r#"cargo {"command":"test"}"#),
+        answer("tests pass"),
+    ]);
+    let end = turn(&mut a, &mut b, "fix a.rs", 100, &NO).unwrap();
+    assert_eq!(end.read.answer, "tests pass");
+    assert_eq!(b.held_text().matches("Automatic check").count(), 1);
+
+    let (edit, _) = fake("text_edit", |_, _| Ok("edited".into()));
+    let (cargo, _) = fake("cargo", |_, _| Ok("cargo test succeeded (exit 0)".into()));
+    let (mut a, _) = agent(vec![edit, cargo], false);
+    let mut b = Scripted::new(vec![
+        call(r#"text_edit {"path":"a.rs"}"#),
+        call(r#"cargo {"command":"test"}"#),
+        answer("tests pass"),
+    ]);
+    turn(&mut a, &mut b, "fix a.rs", 100, &NO).unwrap();
+    assert!(!b.held_text().contains("Automatic check"));
+}
+
+#[test]
+fn a_write_failing_twice_the_same_way_ends_the_turn_and_three_failures_get_a_note() {
+    let (write, _) = fake("text_edit", |_, _| Err("old_text not found".into()));
+    let (mut a, _) = agent(vec![write], false);
+    let mut b = Scripted::new(vec![
+        call(r#"text_edit {"path":"a.rs","old_text":"x"}"#),
+        call(r#"text_edit {"path":"a.rs","old_text":"x"}"#),
+    ]);
+    let end = turn(&mut a, &mut b, "edit", 100, &NO).unwrap();
+    assert!(end
+        .stopped
+        .unwrap()
+        .starts_with("the same write failed twice with the same error"));
+
+    let (write, _) = fake("text_edit", |args, _| {
+        Err(format!("{} not found", args["old_text"]))
+    });
+    let (mut a, _) = agent(vec![write], false);
+    let mut script: Vec<Vec<u32>> = (0..5)
+        .map(|i| call(&format!(r#"text_edit {{"path":"a.rs","old_text":"{i}"}}"#)))
+        .collect();
+    script.push(answer("unused"));
+    let mut b = Scripted::new(script);
+    let end = turn(&mut a, &mut b, "edit", 100, &NO).unwrap();
+    assert!(b
+        .held_text()
+        .contains("text_edit has failed 3 times in a row"));
+    assert!(end
+        .stopped
+        .unwrap()
+        .starts_with("five writes failed without one succeeding"));
+}
+
+#[test]
+fn results_are_cut_to_fit_and_a_full_context_ends_the_turn() {
+    let (read, _) = fake("fs_read", |_, _| Ok("x".repeat(5_000)));
+    let (mut a, _) = agent(vec![read], false);
+    let mut b = Scripted::new(vec![call(r#"fs_read {"path":"big"}"#), answer("big")]);
+    b.capacity = 3_000;
+    let end = turn(&mut a, &mut b, "read big", 100, &NO).unwrap();
+    assert_eq!(end.read.answer, "big");
+    assert!(b.held_text().contains("[truncated to fit the context]"));
+    assert!(b.held.len() <= 3_000);
+
+    let (read, _) = fake("fs_read", |_, _| Ok("x".repeat(5_000)));
+    let (mut a, _) = agent(vec![read], false);
+    let mut b = Scripted::new(vec![call(r#"fs_read {"path":"big"}"#)]);
+    b.capacity = 560;
+    let end = turn(&mut a, &mut b, "read big", 100, &NO).unwrap();
+    assert_eq!(end.stopped.as_deref(), Some("the context is full"));
+}
+
+#[test]
+fn a_looping_reply_is_halted() {
+    let (mut a, _) = agent(Vec::new(), false);
+    let looping: Vec<u32> = std::iter::repeat_n(text("the same line. "), 10)
+        .flatten()
+        .collect();
+    let mut b = Scripted::new(vec![looping]);
+    let end = turn(&mut a, &mut b, "hi", 1_000, &NO).unwrap();
+    assert_eq!(
+        end.stopped.as_deref(),
+        Some("the reply was repeating one block")
+    );
+}
+
+#[test]
+fn jev_nudges_then_closes_a_stuck_turn() {
+    let (read, _) = fake("fs_read", |_, n| Ok(format!("read {n}")));
+    let (mut a, notes) = agent(vec![read], true);
+    // Twelve different reads; two checkpoints, both "stuck".
+    let mut script: Vec<Vec<u32>> = (0..12)
+        .map(|i| call(&format!(r#"fs_read {{"path":"{i}.rs"}}"#)))
+        .collect();
+    script.push(answer("I could not find it"));
+    let mut b = Scripted::new(script);
+    // state: in-progress, needs-input, complete, stuck; repeating: true, false.
+    let stuck = vec![0.0, 0.0, 0.0, 5.0];
+    let not_repeating = vec![0.0, 5.0];
+    b.judge = Some(vec![
+        stuck.clone(),
+        not_repeating.clone(),
+        stuck,
+        not_repeating,
+    ]);
+    let end = turn(&mut a, &mut b, "find it", 100, &NO).unwrap();
+    assert_eq!(end.read.answer, "I could not find it");
+    let held = b.held_text();
+    assert!(held.contains("Jev checkpoint: this looks stuck or repeating"));
+    assert!(held.contains("Jev checkpoint: still stuck. Tools are closed"));
+    assert!(b.held.contains(&ANSWER));
+    assert_eq!(
+        notes
+            .0
+            .borrow()
+            .iter()
+            .filter(|n| n.starts_with("[jev] state stuck"))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn the_archive_note_asks_for_scope_once_before_an_answer() {
+    let (find, _) = fake("cas_find", |_, _| {
+        Ok("Scope: file paths only\n0 matches".into())
+    });
+    let (mut a, _) = agent(vec![find], false);
+    let mut b = Scripted::new(vec![
+        call(r#"cas_find {"archive":"a","pattern":"*x*"}"#),
+        answer("there is no x anywhere"),
+        answer("x is not in a's file names; contents not searched"),
+    ]);
+    let end = turn(&mut a, &mut b, "is x in the archives?", 100, &NO).unwrap();
+    assert_eq!(
+        end.read.answer,
+        "x is not in a's file names; contents not searched"
+    );
+    assert_eq!(b.held_text().matches("Archive coverage check").count(), 1);
+}
+
+#[test]
+fn notes_each_turn_carry_the_receipts_and_facts_about_the_chat() {
+    struct Seen(Rc<RefCell<String>>);
+    impl Template for Seen {
+        fn render(&self, p: &Prompt<'_>) -> Result<Rendered, String> {
+            *self.0.borrow_mut() = format!("{}\n{}", p.now.said, p.notes);
+            Toy.render(p)
+        }
+        fn stops(&self) -> &[u32] {
+            Toy.stops()
+        }
+        fn read(&self, reply: &[u32]) -> Read {
+            Toy.read(reply)
+        }
+        fn results(&self, e: Option<u32>, r: &[(Call, String)]) -> Result<Vec<u32>, String> {
+            Toy.results(e, r)
+        }
+        fn note(&self, e: Option<u32>, t: &str) -> Result<Vec<u32>, String> {
+            Toy.note(e, t)
+        }
+        fn answer_opening(&self, t: &str) -> Result<Vec<u32>, String> {
+            Toy.answer_opening(t)
+        }
+    }
+    let seen = Rc::new(RefCell::new(String::new()));
+    let (read, _) = fake("fs_grep", |_, _| Ok("0 matches".into()));
+    let mut tools = Toolbox::default();
+    tools.push(read);
+    let workspace = Workspace {
+        tools,
+        edits: None,
+        instructions: String::new(),
+        base: PathBuf::from("."),
+        described: Vec::new(),
+    };
+    let mut a = Agent::new(
+        Seen(Rc::clone(&seen)),
+        Some(workspace),
+        false,
+        Box::new(Quiet),
+    );
+    a.set_about("This chat runs gpt-oss-20b; its last reply ran at 57 tokens/s.");
+    let mut b = Scripted::new(vec![
+        call(r#"fs_grep {"pattern":"x"}"#),
+        answer("none"),
+        answer("ok"),
+    ]);
+    turn(&mut a, &mut b, "find x", 100, &NO).unwrap();
+    assert!(seen.borrow().contains("No tool calls recorded"));
+    turn(&mut a, &mut b, "again", 100, &NO).unwrap();
+    let notes = seen.borrow();
+    assert!(notes.starts_with("It is now "));
+    assert!(notes.contains("57 tokens/s"));
+    assert!(notes.contains("Turn 1, fs_grep"));
+}
