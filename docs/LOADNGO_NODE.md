@@ -83,15 +83,24 @@ host on the LAN can drive a `task-node`. With the shipped exec script that is a 
 exposure. A node that runs models over private text, such as the agent board, for
 whoever asks is not acceptable on those terms. So:
 
-- **Every call carries a `SignedAuthToken`.**
+- **Every call from another machine carries a `SignedAuthToken`.**
   - Its audience is the node's id and its scopes name the capability.
   - The challenge is bound to `call_id`, so a token cannot be replayed onto another call.
   - The node verifies it with a `VerifyPolicy` against the callers it trusts.
 - **Task messages get the same treatment.** That is the fix the trust document sketches,
   and the node is the place to do it once.
-- **Calls from the same machine** go over a local channel the OS already protects (a Unix
-  socket, a named pipe), not the multicast segment. Whether they also carry tokens is
-  open below.
+- **Calls from the same machine carry no token** (Jay, 2026-10-10): the OS channel is
+  enough.
+  - The channel is a Unix domain socket, which never leaves the machine. The socket lives
+    in a directory only the user can open (`~/.loadngo/node/`, mode 0700).
+  - The node also checks the peer's user id when it accepts a connection (`getpeereid`
+    on macOS and the BSDs, `SO_PEERCRED` on Linux and Android). That is one system call
+    per connection, and it still holds if the directory's mode is ever loosened.
+  - The proactor already handles Unix-domain peers on kqueue, epoll and io_uring
+    (`proactor/src/io_port.rs`, `PeerAddr::Unix`, with room left there for the peer
+    credentials). The Windows port (`iocp.rs`) has no `AF_UNIX` path yet. Windows 10 and
+    later support `AF_UNIX`, so that path is added when the node runs on Windows, rather
+    than switching to named pipes.
 
 ## Order of work
 
@@ -124,11 +133,28 @@ Each step is measured before the next: a hosted decision against the in-process 
 - **Routing across machines by load or price.** Discovery finds the nodes that hold a
   capability; choosing among them stays the caller's job.
 
+## Rewards
+
+Jay, 2026-10-10: rewards should generally be made available when work actually benefits
+human beings in a real, meaningful and positive way.
+
+What follows for the node:
+
+- **A call earns nothing by being made.** Serving a decision or a generation is
+  machinery. Whether it helped anyone shows only in the work it served.
+- **Rewards stay with Task,** where a submitter states the success criteria, verifies the
+  result and acknowledges it (`TASK_REWARD_FLOW.md`). Even there, an acknowledgement says
+  the criteria were met, not that the work helped someone. A submitter offers a reward
+  for work whose benefit to people it can name, and the reward follows its
+  verification.
+- **Nothing pays for traffic,** so nothing is gained by making calls or Tasks for their
+  own sake. That matches the huddle note's exclusion of synthetic command-running.
+
 ## Open
 
-- Whether calls from the same machine also carry tokens, or the OS channel is enough.
 - How trusted keys reach each node (manual placement works for the lab; the trust
   document asks the same question).
-- Whether a call is ever rewarded, or rewards stay with Task alone.
+- How a Task names the people its work benefits, so that a submitter's reward decision
+  can be checked against it.
 - The node's name on the wire and as a binary (`loadngo-node`), and when `task-node`
   becomes an alias for it.
