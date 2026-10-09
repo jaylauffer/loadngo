@@ -129,6 +129,7 @@ function rather than in per-backend arms — see
 - [`docs/CLI_CONVENTIONS.md`](docs/CLI_CONVENTIONS.md): the `--help`/no-args/error-message convention every loadngo tool and harness follows.
 - [`docs/PDF_RENDERING.md`](docs/PDF_RENDERING.md): intent for a native Rust PDF renderer as a core capability, and the pdfium-via-FFI stop-gap until it exists.
 - [`docs/FIELD_NETWORK_BACKLOG.md`](docs/FIELD_NETWORK_BACKLOG.md): network and replication considerations.
+- [`docs/TASK_BENEFIT.md`](docs/TASK_BENEFIT.md): when a Task reward should be offered: benefit to people judged against Maslow's needs, harm first, rewards after confirmed evidence; with a decision-model probe.
 - [`docs/LOADNGO_NODE.md`](docs/LOADNGO_NODE.md): plan for one resident node per machine that holds its models and capabilities, takes Task work and answers authenticated calls.
 - [`docs/TASK_OFFER_PROTOCOL.md`](docs/TASK_OFFER_PROTOCOL.md): submitter/worker task coordination protocol over multicast discovery and direct unicast follow-up.
 - [`docs/TASK_CHECKPOINT_RECOMMENDATIONS.md`](docs/TASK_CHECKPOINT_RECOMMENDATIONS.md): recommendations for typed `TaskStatus.state`, counted facts beside the worker's note, and submitter-side System One checkpoints in shadow mode; not built.

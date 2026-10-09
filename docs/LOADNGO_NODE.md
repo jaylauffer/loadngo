@@ -147,6 +147,8 @@ What follows for the node:
   the criteria were met, not that the work helped someone. A submitter offers a reward
   for work whose benefit to people it can name, and the reward follows its
   verification.
+- **How benefit is judged** is in [`TASK_BENEFIT.md`](TASK_BENEFIT.md): against
+  Maslow's needs, harm first, and a reward only after a person confirms evidence.
 - **Nothing pays for traffic,** so nothing is gained by making calls or Tasks for their
   own sake. That matches the huddle note's exclusion of synthetic command-running.
 

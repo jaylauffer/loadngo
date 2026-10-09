@@ -1,7 +1,9 @@
 # Task Reward Flow
 
 Purpose: how accepted `loadngo` task work earns a reward, and how the reward is
-kept separate from accepting the work.
+kept separate from accepting the work. When a reward should be offered at all (work
+that actually benefits people, checked against human needs) is in
+[`TASK_BENEFIT.md`](TASK_BENEFIT.md).
 
 ## Decision (Jay, 2026-10-06)
 
