@@ -452,8 +452,8 @@ pub fn follow_up(tokenizer: &Tokenizer, text: &str) -> Result<Vec<u32>, MissingC
 ///
 /// Each user message renders the whole conversation again: earlier replies keep only
 /// their final channel, as the chat template writes them, and the developer message
-/// opens with this turn's date and time, then the standing instructions, then the
-/// turn's notes (facts about the chat, tool receipts).
+/// opens with this turn's date and time, then the standing instructions, then facts
+/// about the chat and the tool receipts (earlier calls are not in its history).
 pub struct Harmony<'t> {
     tokenizer: &'t Tokenizer,
     pub identity: String,
@@ -488,7 +488,7 @@ impl Template for Harmony<'_> {
         conversation.identity.clone_from(&self.identity);
         conversation.reasoning = self.reasoning;
         let mut developer = p.now.said.clone();
-        for part in [p.instructions, p.notes] {
+        for part in [p.instructions, p.about, p.evidence] {
             if !part.is_empty() {
                 developer.push_str("\n\n");
                 developer.push_str(part);

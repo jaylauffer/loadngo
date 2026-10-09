@@ -190,7 +190,8 @@ fn the_shared_loop_writes_harmony_as_the_template_checked_above() {
         .render(&Prompt {
             now: &now,
             instructions: "Work carefully.",
-            notes: "Receipts.",
+            about: "About.",
+            evidence: "Receipts.",
             tools: Some(declaration),
             history: &history,
             user: "Read README.md",
@@ -204,7 +205,10 @@ fn the_shared_loop_writes_harmony_as_the_template_checked_above() {
     let mut conversation = Conversation::new(now.date.clone());
     conversation.reasoning = Reasoning::Low;
     conversation.tools = Some(tool_namespace(declaration).unwrap());
-    conversation.instructions = Some(format!("{}\n\nWork carefully.\n\nReceipts.", now.said));
+    conversation.instructions = Some(format!(
+        "{}\n\nWork carefully.\n\nAbout.\n\nReceipts.",
+        now.said
+    ));
     conversation.messages = vec![
         Message::User("Hello".into()),
         Message::Assistant("Hi.".into()),

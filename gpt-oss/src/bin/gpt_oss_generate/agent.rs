@@ -10,6 +10,7 @@ use std::time::Instant;
 use loadngo_gpt_oss::{chat::Harmony, tokenizer::Tokenizer};
 use loadngo_inference::agent::{
     self,
+    transcript::{Tee, Transcript},
     workspace::{Workspace, WorkspaceOptions},
     Agent, Backend, Ended, Event, Observer, TurnEnd,
 };
@@ -108,6 +109,15 @@ impl Backend for GptOss<'_> {
         Ok((out, ended))
     }
 
+    fn truncate(&mut self, len: usize) -> Result<(), String> {
+        // Harmony renders the whole conversation each turn; the next turn reloads.
+        if len < self.engine.position(Which::Main) {
+            self.engine.truncate(Which::Main, len)?;
+            self.logits.clear();
+        }
+        Ok(())
+    }
+
     fn position(&self) -> usize {
         self.engine.position(Which::Main)
     }
@@ -144,25 +154,29 @@ impl Observer for Terminal {
             Event::Call { name, arguments } => {
                 self.call = Some((name.to_owned(), arguments.trim().to_owned()));
             }
-            Event::Result { name, chars, error } => {
+            Event::Result { name, text, ok } => {
                 let arguments = self
                     .call
                     .take()
                     .filter(|(n, _)| n == name)
                     .map_or_else(String::new, |(_, a)| a);
-                eprintln!("[tool] {name} {arguments} -> {chars} characters");
-                if let Some(error) = error {
-                    let first: String = error.chars().take(220).collect();
+                eprintln!(
+                    "[tool] {name} {arguments} -> {} characters",
+                    text.chars().count()
+                );
+                if !ok {
+                    let first: String = text.chars().take(220).collect();
                     eprintln!("        {}", first.replace('\n', " "));
                 }
             }
+            Event::User(_) | Event::Token(_) | Event::TurnEnd { .. } => {}
             Event::Note(note) => eprintln!("{note}"),
         }
     }
 }
 
 /// The chat for these options: tools from the shared workspace setup, or none.
-pub fn chat<'t>(tokenizer: &'t Tokenizer, o: &Options) -> Agent<Harmony<'t>> {
+pub fn chat<'t>(tokenizer: &'t Tokenizer, o: &Options) -> Agent<'t, Harmony<'t>> {
     let template = Harmony::new(tokenizer, o.reasoning).unwrap_or_else(|e| fail(&e.to_string()));
     let workspace = if o.tools {
         let base = o
@@ -204,7 +218,18 @@ pub fn chat<'t>(tokenizer: &'t Tokenizer, o: &Options) -> Agent<Harmony<'t>> {
             "off (--no-jev)"
         }
     );
-    Agent::new(template, workspace, o.jev, Box::new(Terminal::default()))
+    let mut observers: Vec<Box<dyn Observer>> = vec![Box::new(Terminal::default())];
+    if let Some(home) = std::env::var_os("HOME") {
+        let dir = PathBuf::from(home).join(".loadngo/gpt-oss/transcripts");
+        match Transcript::create(&dir, "harmony", "gpt-oss-20b") {
+            Ok(t) => {
+                eprintln!("transcript: {}", t.path().display());
+                observers.push(Box::new(t));
+            }
+            Err(e) => eprintln!("transcript: {e}; the chat is not saved"),
+        }
+    }
+    Agent::new(template, workspace, o.jev, Box::new(Tee(observers)))
 }
 
 /// What the model is told about the chat it runs in.
@@ -226,7 +251,7 @@ fn about(backend: &GptOss<'_>) -> String {
 
 /// One message: the answer to stdout, the rest to stderr.
 pub fn turn(
-    chat: &mut Agent<Harmony<'_>>,
+    chat: &mut Agent<'_, Harmony<'_>>,
     backend: &mut GptOss<'_>,
     text: &str,
     limit: usize,
@@ -247,7 +272,7 @@ pub fn turn(
 }
 
 pub fn interactive(
-    chat: &mut Agent<Harmony<'_>>,
+    chat: &mut Agent<'_, Harmony<'_>>,
     backend: &mut GptOss<'_>,
     limit: usize,
     o: &Options,
@@ -267,24 +292,24 @@ pub fn interactive(
             "" => {}
             "/quit" => break,
             "/reset" => {
-                chat.reset();
+                let keep = chat.reset();
+                backend.truncate(keep).unwrap_or_else(|e| fail(&e));
                 eprintln!("[conversation cleared]");
             }
-            "/undo" => eprintln!(
-                "{}",
-                if chat.undo() {
-                    "[last exchange removed; file changes stay]"
-                } else {
-                    "[nothing to undo]"
+            "/undo" => match chat.undo() {
+                Some(at) => {
+                    backend.truncate(at).unwrap_or_else(|e| fail(&e));
+                    eprintln!("[last exchange removed; file changes stay]");
                 }
-            ),
+                None => eprintln!("[nothing to undo]"),
+            },
             text => turn(chat, backend, text, limit, o.show_reasoning),
         }
     }
 }
 
 /// Hands the session's edits off on the board and lists them.
-pub fn finish(chat: &mut Agent<Harmony<'_>>) {
+pub fn finish(chat: &mut Agent<'_, Harmony<'_>>) {
     let left = chat.finish();
     if !left.is_empty() {
         eprintln!("[board] handed off on AGENT-BOARD.md; uncommitted changes:");

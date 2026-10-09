@@ -594,6 +594,7 @@ taken from Kimi's chat and written fresh:
   ends the turn;
 - a reply looping on one block is halted;
 - `/undo` in an interactive chat;
+- every chat saved, one JSON event per line, in `~/.loadngo/gpt-oss/transcripts/`;
 - each turn's notes say which model and engine it is and its last reply's speed, and
   the instructions ask that reviews state what the evidence says and not rate work
   above it;

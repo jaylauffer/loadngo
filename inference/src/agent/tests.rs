@@ -105,6 +105,7 @@ struct Scripted {
     held: Vec<u32>,
     capacity: usize,
     judge: Option<Vec<Vec<f32>>>,
+    fail_next: bool,
 }
 
 impl Scripted {
@@ -114,6 +115,7 @@ impl Scripted {
             held: Vec::new(),
             capacity: 100_000,
             judge: None,
+            fail_next: false,
         }
     }
     fn held_text(&self) -> String {
@@ -136,6 +138,9 @@ impl Backend for Scripted {
         Ok(())
     }
     fn feed(&mut self, tokens: &[u32]) -> Result<(), String> {
+        if std::mem::take(&mut self.fail_next) {
+            return Err("the GPU went away".into());
+        }
         self.held.extend_from_slice(tokens);
         Ok(())
     }
@@ -162,6 +167,13 @@ impl Backend for Scripted {
             }
         }
         Ok((out, Ended::Limit))
+    }
+    fn truncate(&mut self, len: usize) -> Result<(), String> {
+        if self.fail_next {
+            return Err("disk".into());
+        }
+        self.held.truncate(len);
+        Ok(())
     }
     fn position(&self) -> usize {
         self.held.len()
@@ -224,7 +236,7 @@ impl Observer for Notes {
     }
 }
 
-fn agent(tools: Vec<Box<dyn Tool>>, jev: bool) -> (Agent<Toy>, Notes) {
+fn agent(tools: Vec<Box<dyn Tool>>, jev: bool) -> (Agent<'static, Toy>, Notes) {
     let mut toolbox = Toolbox::default();
     for t in tools {
         toolbox.push(t);
@@ -293,7 +305,8 @@ fn a_tool_round_then_an_answer_and_the_next_turn_sees_the_exchange() {
     assert!(b
         .held_text()
         .starts_with("what is in a.rs?a.rs has mainsure?"));
-    assert!(a.undo());
+    // A format that renders everything reloads next turn, whatever is truncated.
+    assert!(a.undo().is_some());
     assert_eq!(a.history().len(), 1);
 }
 
@@ -519,7 +532,7 @@ fn notes_each_turn_carry_the_receipts_and_facts_about_the_chat() {
     struct Seen(Rc<RefCell<String>>);
     impl Template for Seen {
         fn render(&self, p: &Prompt<'_>) -> Result<Rendered, String> {
-            *self.0.borrow_mut() = format!("{}\n{}", p.now.said, p.notes);
+            *self.0.borrow_mut() = format!("{}\n{}\n{}", p.now.said, p.about, p.evidence);
             Toy.render(p)
         }
         fn stops(&self) -> &[u32] {
@@ -568,4 +581,109 @@ fn notes_each_turn_carry_the_receipts_and_facts_about_the_chat() {
     assert!(notes.starts_with("It is now "));
     assert!(notes.contains("57 tokens/s"));
     assert!(notes.contains("Turn 1, fs_grep"));
+}
+
+/// The toy format, appending: an opening read once, each turn closing the last reply.
+struct Appending;
+const OPEN: u32 = 8;
+
+impl Template for Appending {
+    fn render(&self, p: &Prompt<'_>) -> Result<Rendered, String> {
+        let mut out = Vec::new();
+        if p.first {
+            out = self.opening(p.instructions, p.tools)?;
+        }
+        if !p.history.is_empty() {
+            out.push(DONE);
+        }
+        out.push(USER);
+        out.extend(text(p.user));
+        out.push(REPLY);
+        Ok(Rendered::Append(out))
+    }
+    fn opening(&self, instructions: &str, _tools: Option<&str>) -> Result<Vec<u32>, String> {
+        let mut out = vec![OPEN];
+        out.extend(text(instructions));
+        Ok(out)
+    }
+    fn stops(&self) -> &[u32] {
+        Toy.stops()
+    }
+    fn read(&self, reply: &[u32]) -> Read {
+        Toy.read(reply)
+    }
+    fn results(&self, e: Option<u32>, r: &[(Call, String)]) -> Result<Vec<u32>, String> {
+        Toy.results(e, r)
+    }
+    fn note(&self, e: Option<u32>, t: &str) -> Result<Vec<u32>, String> {
+        Toy.note(e, t)
+    }
+    fn answer_opening(&self, t: &str) -> Result<Vec<u32>, String> {
+        Toy.answer_opening(t)
+    }
+}
+
+fn appending() -> Agent<'static, Appending> {
+    let workspace = Workspace {
+        tools: Toolbox::default(),
+        edits: None,
+        instructions: "rules".into(),
+        base: PathBuf::from("."),
+        described: Vec::new(),
+    };
+    Agent::new(Appending, Some(workspace), false, Box::new(Quiet))
+}
+
+#[test]
+fn an_appending_format_reads_its_opening_once_and_undo_and_reset_truncate_to_it() {
+    let mut a = appending();
+    let mut b = Scripted::new(vec![answer("one"), answer("two"), answer("again")]);
+    assert_eq!(a.prepare(&mut b).unwrap(), 6);
+    assert_eq!(b.held_text(), "rules");
+    turn(&mut a, &mut b, "a", 100, &NO).unwrap();
+    let after_first = b.held.len();
+    turn(&mut a, &mut b, "b", 100, &NO).unwrap();
+    // The opening is not repeated; the first reply was closed before the second message.
+    assert_eq!(b.held.iter().filter(|&&t| t == OPEN).count(), 1);
+    assert_eq!(b.held[after_first], DONE);
+    assert_eq!(b.held_text(), "rulesaonebtwo");
+    // Undo goes back to where the second exchange began, closing token included.
+    let at = a.undo().unwrap();
+    assert_eq!(at, after_first);
+    b.truncate(at).unwrap();
+    turn(&mut a, &mut b, "c", 100, &NO).unwrap();
+    assert_eq!(b.held_text(), "rulesaonecagain");
+    assert_eq!(b.held[after_first], DONE);
+    // Reset keeps the opening, and the next message does not close a reply.
+    let keep = a.reset();
+    assert_eq!(keep, 6);
+    b.truncate(keep).unwrap();
+    b.replies.push_back(answer("fresh"));
+    turn(&mut a, &mut b, "d", 100, &NO).unwrap();
+    assert_eq!(b.held[6], USER);
+    assert_eq!(b.held_text(), "rulesdfresh");
+}
+
+#[test]
+fn a_message_that_cannot_fit_is_refused_and_a_failed_backend_ends_the_turn() {
+    let mut a = appending();
+    let mut b = Scripted::new(vec![]);
+    a.prepare(&mut b).unwrap();
+    b.capacity = 520;
+    let end = turn(&mut a, &mut b, "hello", 100, &NO).unwrap();
+    assert!(end.stopped.unwrap().starts_with("the context is full"));
+    assert_eq!(b.held_text(), "rules", "nothing was fed");
+    assert_eq!(a.history().len(), 1);
+
+    let mut a = appending();
+    let mut b = Scripted::new(vec![]);
+    a.prepare(&mut b).unwrap();
+    b.fail_next = true;
+    assert_eq!(
+        turn(&mut a, &mut b, "hello", 100, &NO).err().as_deref(),
+        Some("the GPU went away")
+    );
+    // The turn is in the history, so an undo removes it.
+    assert_eq!(a.history().len(), 1);
+    assert_eq!(a.undo(), Some(6));
 }

@@ -24,6 +24,7 @@ pub mod clock;
 pub mod evidence;
 pub mod guards;
 pub mod jev;
+pub mod transcript;
 pub mod workspace;
 
 use std::collections::HashMap;
@@ -88,14 +89,19 @@ pub struct Prompt<'a> {
     pub now: &'a Now,
     /// The standing instructions ([`Workspace::instructions`]).
     pub instructions: &'a str,
-    /// This turn's notes: facts about the chat itself and the tool receipts.
-    pub notes: &'a str,
+    /// Facts about the chat itself ([`Agent::set_about`]).
+    pub about: &'a str,
+    /// Receipts of the tool calls made so far, across turns. A format that rewrites the
+    /// conversation each turn needs them (earlier calls are gone from its history); an
+    /// appending format already holds every call and result, and leaves them out.
+    pub evidence: &'a str,
     /// The tool declarations ([`Toolbox::declaration`]), when there are tools.
     pub tools: Option<&'a str>,
     /// Earlier exchanges, oldest first.
     pub history: &'a [Exchange],
     pub user: &'a str,
-    /// Whether the backend holds nothing yet (an appending format writes its opening).
+    /// Whether the backend holds nothing yet: an appending format writes its opening
+    /// first. (After [`Agent::prepare`] the opening is already held.)
     pub first: bool,
 }
 
@@ -113,6 +119,15 @@ pub trait Template {
     /// # Errors
     /// When the tokenizer lacks a token the format needs, or the tools cannot be declared.
     fn render(&self, prompt: &Prompt<'_>) -> Result<Rendered, String>;
+    /// What every conversation opens with, the same each time (an appending format's
+    /// instructions and tool declarations), so a backend can read it once and start each
+    /// conversation from it. Empty for a format that renders everything each turn.
+    ///
+    /// # Errors
+    /// As [`Self::render`].
+    fn opening(&self, _instructions: &str, _tools: Option<&str>) -> Result<Vec<u32>, String> {
+        Ok(Vec::new())
+    }
     /// The tokens that end a reply: a finished answer or a tool call.
     fn stops(&self) -> &[u32];
     /// The calls, answer and reasoning in a reply (its tokens, the ending one included).
@@ -179,6 +194,11 @@ pub trait Backend {
         cancel: &AtomicBool,
         emit: &mut dyn FnMut(u32) -> bool,
     ) -> Result<(Vec<u32>, Ended), String>;
+    /// Drops every position from `len` on (after `/undo` or `/reset`).
+    ///
+    /// # Errors
+    /// Whatever stopped the model.
+    fn truncate(&mut self, len: usize) -> Result<(), String>;
     /// Positions held.
     fn position(&self) -> usize;
     /// Positions the context can hold.
@@ -190,11 +210,18 @@ pub trait Backend {
 
 /// What the chat reports as it goes (to a terminal, a transcript).
 pub enum Event<'a> {
+    /// Jay's message, as a turn begins.
+    User(&'a str),
+    /// Tokens fed: the prompt, results or a note.
     Prompt {
         tokens: usize,
         seconds: f64,
     },
+    /// A token as it is generated, for showing the reply as it is written.
+    Token(u32),
+    /// A reply, read.
     Reply {
+        read: &'a Read,
         tokens: usize,
         seconds: f64,
         ended: Ended,
@@ -203,14 +230,21 @@ pub enum Event<'a> {
         name: &'a str,
         arguments: &'a str,
     },
-    /// A call's result: its length, and its start when it failed.
+    /// A call's result, as the model reads it.
     Result {
         name: &'a str,
-        chars: usize,
-        error: Option<&'a str>,
+        text: &'a str,
+        ok: bool,
     },
     /// A check, a Jev answer or a guard's note, already worded (`[check] …`).
     Note(&'a str),
+    /// The turn is over: why, when it ended without an answer.
+    TurnEnd {
+        stopped: Option<&'a str>,
+        replies: usize,
+        tokens: usize,
+        seconds: f64,
+    },
 }
 
 pub trait Observer {
@@ -270,10 +304,15 @@ struct Turn {
     failed_writes: Vec<((String, Value), String)>,
     /// The token that ended the last reply, not yet fed.
     ended_by: Option<u32>,
+    /// Where the turn began in the backend's context.
+    start: usize,
+    started: Option<Instant>,
+    replies: usize,
+    tokens: usize,
 }
 
 /// The chat: the tools, the instructions, the conversation, and the turn in progress.
-pub struct Agent<T> {
+pub struct Agent<'o, T> {
     pub template: T,
     tools: Option<Toolbox>,
     declaration: Option<String>,
@@ -283,21 +322,25 @@ pub struct Agent<T> {
     base: PathBuf,
     jev: bool,
     history: Vec<Exchange>,
+    /// Where each exchange began in the backend's context.
+    starts: Vec<usize>,
+    /// Positions the opening takes ([`Self::prepare`]).
+    opening: usize,
     evidence: Evidence,
     verified: Option<(Vec<String>, bool)>,
     last_answer: String,
     turn: Turn,
     handed_off: bool,
-    observer: Box<dyn Observer>,
+    observer: Box<dyn Observer + 'o>,
 }
 
-impl<T: Template> Agent<T> {
+impl<'o, T: Template> Agent<'o, T> {
     /// An agent with `workspace`'s tools, or none.
     pub fn new(
         template: T,
         workspace: Option<Workspace>,
         jev: bool,
-        observer: Box<dyn Observer>,
+        observer: Box<dyn Observer + 'o>,
     ) -> Self {
         let (tools, edits, instructions, base) = match workspace {
             Some(w) => (Some(w.tools), w.edits, w.instructions, w.base),
@@ -317,6 +360,8 @@ impl<T: Template> Agent<T> {
             base,
             jev,
             history: Vec::new(),
+            starts: Vec::new(),
+            opening: 0,
             evidence: Evidence::default(),
             verified: None,
             last_answer: String::new(),
@@ -337,15 +382,36 @@ impl<T: Template> Agent<T> {
         &self.history
     }
 
-    /// Removes the last exchange.
-    pub fn undo(&mut self) -> bool {
-        self.history.pop().is_some()
+    /// Reads the format's opening into `backend` once, so the first message and every
+    /// [`Self::reset`] start from it.
+    ///
+    /// # Errors
+    /// When the template or the backend fails.
+    pub fn prepare(&mut self, backend: &mut dyn Backend) -> Result<usize, String> {
+        let opening = self
+            .template
+            .opening(&self.instructions, self.declaration.as_deref())?;
+        if !opening.is_empty() {
+            backend.load(&opening)?;
+        }
+        self.opening = opening.len();
+        Ok(self.opening)
     }
 
-    /// Starts the conversation over (receipts included).
-    pub fn reset(&mut self) {
+    /// Removes the last exchange; returns where it began in the backend's context, for
+    /// [`Backend::truncate`]. File changes stay.
+    pub fn undo(&mut self) -> Option<usize> {
+        self.history.pop()?;
+        self.starts.pop()
+    }
+
+    /// Starts the conversation over (receipts included); returns the context to keep,
+    /// for [`Backend::truncate`]: the opening.
+    pub fn reset(&mut self) -> usize {
         self.history.clear();
+        self.starts.clear();
         self.evidence = Evidence::default();
+        self.opening
     }
 
     fn note(&mut self, text: &str) {
@@ -353,35 +419,38 @@ impl<T: Template> Agent<T> {
     }
 
     /// Begins a turn with Jay's message: the prompt to give the backend.
+    /// `start` is the backend's position now.
     ///
     /// # Errors
     /// When the template cannot render it.
-    pub fn begin(&mut self, text: &str, first: bool) -> Result<Rendered, String> {
+    pub fn begin(&mut self, text: &str, start: usize) -> Result<Rendered, String> {
         let now = clock::now();
         self.turn = Turn {
             request: text.to_owned(),
             date: now.date.clone(),
+            start,
+            started: Some(Instant::now()),
             ..Turn::default()
         };
+        self.observer.event(Event::User(text));
         self.evidence.turn += 1;
         if let Some(edits) = &self.edits {
             edits.set_task(text);
         }
-        let mut notes = self.about.clone();
-        if self.tools.is_some() {
-            if !notes.is_empty() {
-                notes.push_str("\n\n");
-            }
-            notes.push_str(&self.evidence.summary());
-        }
+        let evidence = if self.tools.is_some() {
+            self.evidence.summary()
+        } else {
+            String::new()
+        };
         self.template.render(&Prompt {
             now: &now,
             instructions: &self.instructions,
-            notes: &notes,
+            about: &self.about,
+            evidence: &evidence,
             tools: self.declaration.as_deref(),
             history: &self.history,
             user: text,
-            first,
+            first: start == 0,
         })
     }
 
@@ -390,13 +459,22 @@ impl<T: Template> Agent<T> {
     }
 
     /// Reads a reply and decides what follows. `room` is how many positions the
-    /// backend has left after it.
-    pub fn reply(&mut self, reply: &[u32], ended: Ended, room: usize) -> Next {
+    /// backend has left after it;
+    /// `seconds` is how long it took, for the observer.
+    pub fn reply(&mut self, reply: &[u32], ended: Ended, room: usize, seconds: f64) -> Next {
         self.turn.ended_by = match ended {
             Ended::Stop => reply.last().copied(),
             _ => None,
         };
         let read = self.template.read(reply);
+        self.turn.replies += 1;
+        self.turn.tokens += reply.len();
+        self.observer.event(Event::Reply {
+            read: &read,
+            tokens: reply.len(),
+            seconds,
+            ended,
+        });
         let unfinished = match ended {
             Ended::Stop => None,
             Ended::Limit => Some("the reply reached its token limit"),
@@ -423,7 +501,7 @@ impl<T: Template> Agent<T> {
                 Err(e) => self.note(&format!("[check] cannot write the note: {e}")),
             }
         }
-        self.finish_turn(&read.answer);
+        self.finish_turn(&read.answer, None);
         Next::Answer(read)
     }
 
@@ -479,7 +557,7 @@ impl<T: Template> Agent<T> {
 
     fn stop(&mut self, why: &str, read: Read) -> Next {
         self.note(&format!("[stopped: {why}]"));
-        self.finish_turn(&read.answer);
+        self.finish_turn(&read.answer, Some(why));
         Next::Stop {
             why: why.to_owned(),
             read,
@@ -488,12 +566,13 @@ impl<T: Template> Agent<T> {
 
     /// Ends the turn: the exchange joins the history, and when files were written the
     /// chat checks the crates itself.
-    fn finish_turn(&mut self, answer: &str) {
+    fn finish_turn(&mut self, answer: &str, stopped: Option<&str>) {
         self.last_answer = answer.trim().to_owned();
         self.history.push(Exchange {
             user: std::mem::take(&mut self.turn.request),
             answer: self.last_answer.clone(),
         });
+        self.starts.push(self.turn.start);
         if self.turn.wrote {
             if let Some(edits) = self.edits.clone() {
                 if let Some(result) = workspace::verify(&self.base, &edits) {
@@ -504,6 +583,24 @@ impl<T: Template> Agent<T> {
                 }
             }
         }
+        let seconds = self
+            .turn
+            .started
+            .take()
+            .map_or(0.0, |t| t.elapsed().as_secs_f64());
+        self.observer.event(Event::TurnEnd {
+            stopped,
+            replies: self.turn.replies,
+            tokens: self.turn.tokens,
+            seconds,
+        });
+    }
+
+    /// Ends a turn the backend or template failed in, so the history still matches what
+    /// the backend holds.
+    pub fn abandon(&mut self, why: &str) {
+        self.note(&format!("[stopped: {why}]"));
+        self.finish_turn("", Some(why));
     }
 
     /// Runs a reply's calls with the guards, and returns the results to feed (fitted
@@ -540,8 +637,8 @@ impl<T: Template> Agent<T> {
             let ok = !result.starts_with("error:") && !repeated;
             self.observer.event(Event::Result {
                 name: &call.name,
-                chars: result.chars().count(),
-                error: result.starts_with("error:").then_some(result.as_str()),
+                text: &result,
+                ok: !result.starts_with("error:"),
             });
             if ok {
                 if guards::mutates(&call.name) {
@@ -797,32 +894,61 @@ pub struct TurnEnd {
 
 /// One user message, blocking: the prompt, then replies and tool rounds until the turn
 /// ends. Each generation is bounded by `limit` tokens; a reply looping on one block is
-/// halted.
+/// halted. A prompt that would leave no room for a reply is refused: `/undo` or
+/// `/reset` make room (compaction through a handoff is step 3 of
+/// `docs/AGENT_LOOP.md`).
 ///
 /// # Errors
-/// When the backend or the template fails.
+/// When the backend or the template fails; the turn is then ended in the history.
 pub fn turn<T: Template>(
-    agent: &mut Agent<T>,
+    agent: &mut Agent<'_, T>,
     backend: &mut dyn Backend,
     text: &str,
     limit: usize,
     cancel: &AtomicBool,
 ) -> Result<TurnEnd, String> {
+    let start = backend.position();
+    let prompt = agent.begin(text, start);
+    let result = prompt.and_then(|prompt| run_turn(agent, backend, &prompt, limit, cancel));
+    if let Err(e) = &result {
+        agent.abandon(e);
+    }
+    result
+}
+
+fn run_turn<T: Template>(
+    agent: &mut Agent<'_, T>,
+    backend: &mut dyn Backend,
+    prompt: &Rendered,
+    limit: usize,
+    cancel: &AtomicBool,
+) -> Result<TurnEnd, String> {
     let started = Instant::now();
-    let first = backend.position() == 0;
-    let prompt = agent.begin(text, first)?;
-    let fed = match &prompt {
-        Rendered::Full(tokens) => {
-            backend.load(tokens)?;
-            tokens.len()
-        }
-        Rendered::Append(tokens) => {
-            backend.feed(tokens)?;
-            tokens.len()
-        }
+    let (tokens, held) = match prompt {
+        Rendered::Full(tokens) => (tokens, 0),
+        Rendered::Append(tokens) => (tokens, backend.position()),
     };
+    if held + tokens.len() + REPLY_RESERVE > backend.capacity() {
+        let why = format!(
+            "the context is full ({} of {} positions, and this message needs {}); /undo or \
+             /reset make room",
+            held,
+            backend.capacity(),
+            tokens.len()
+        );
+        agent.note(&format!("[stopped: {why}]"));
+        agent.finish_turn("", Some(&why));
+        return Ok(TurnEnd {
+            read: Read::default(),
+            stopped: Some(why),
+        });
+    }
+    match prompt {
+        Rendered::Full(tokens) => backend.load(tokens)?,
+        Rendered::Append(tokens) => backend.feed(tokens)?,
+    }
     agent.observer.event(Event::Prompt {
-        tokens: fed,
+        tokens: tokens.len(),
         seconds: started.elapsed().as_secs_f64(),
     });
     let mut seen = Vec::with_capacity(limit.min(4096));
@@ -830,17 +956,14 @@ pub fn turn<T: Template>(
         let started = Instant::now();
         seen.clear();
         let stops = agent.stops().to_vec();
+        let observer = &mut agent.observer;
         let (reply, ended) = backend.generate(limit, &stops, cancel, &mut |token| {
+            observer.event(Event::Token(token));
             seen.push(token);
             guards::looping(&seen).is_none()
         })?;
-        agent.observer.event(Event::Reply {
-            tokens: reply.len(),
-            seconds: started.elapsed().as_secs_f64(),
-            ended,
-        });
         let room = backend.capacity().saturating_sub(backend.position());
-        let mut next = agent.reply(&reply, ended, room);
+        let mut next = agent.reply(&reply, ended, room, started.elapsed().as_secs_f64());
         if let Next::Tools(calls) = next {
             next = agent.run(&calls, backend, room);
         }
