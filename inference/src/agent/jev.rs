@@ -1,6 +1,7 @@
 //! System One (Jev) in the tool loop: typed questions about the work, answered with a
-//! probability per option by a [`LabelModel`] (usually the chat's own model, in a side
-//! session so judging never disturbs the conversation).
+//! probability per option by a [`Decide`]: the chat's own model read through its option
+//! letters in a side session ([`crate::system_one::LetterReadout`]), so judging never
+//! disturbs the conversation, or a decision model.
 //!
 //! - **Checkpoints.** Every few tool calls: is the turn in progress, waiting for Jay,
 //!   complete, or stuck; and are the latest calls repeating earlier ones. The agent acts
@@ -11,7 +12,7 @@
 
 use std::time::Instant;
 
-use crate::system_one::{answer, Answer, Calibration, LabelModel, Question, Request};
+use crate::system_one::{Answer, Decide, Question, Request};
 
 /// The longest state Jev reads, in characters (about 1,500 tokens).
 const MAX_STATE_CHARS: usize = 6_000;
@@ -63,7 +64,7 @@ impl Checkpoint {
 /// # Errors
 /// When the label model fails.
 pub fn checkpoint(
-    judge: &mut dyn LabelModel,
+    judge: &mut dyn Decide,
     request: &str,
     work: &[String],
 ) -> Result<Checkpoint, String> {
@@ -113,7 +114,7 @@ pub fn checkpoint(
             },
         ),
     ];
-    let answers = answer(judge, &Request { state, questions }, Calibration::default())?;
+    let answers = judge.decide(&Request { state, questions })?;
     let state = answers[0].1.clone();
     let repeating = answers[1].1.probabilities.first().map_or(0.0, |(_, p)| *p);
     Ok(Checkpoint {
@@ -129,7 +130,7 @@ pub fn checkpoint(
 /// # Errors
 /// When the label model fails.
 pub fn local_first(
-    judge: &mut dyn LabelModel,
+    judge: &mut dyn Decide,
     request: &str,
     intent: &str,
     evidence: &str,
@@ -155,6 +156,6 @@ pub fn local_first(
                 .into(),
         },
     )];
-    let answers = answer(judge, &Request { state, questions }, Calibration::default())?;
+    let answers = judge.decide(&Request { state, questions })?;
     Ok(answers[0].1.probabilities.first().map_or(0.0, |(_, p)| *p))
 }

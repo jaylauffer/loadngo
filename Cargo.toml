@@ -22,6 +22,7 @@ members = [
     "camera",
     "weights",
     "gpt-oss",
+    "decider",
     "line-editor",
     "text-shaping",
     "inference",

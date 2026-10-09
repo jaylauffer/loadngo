@@ -1,0 +1,28 @@
+[package]
+name = "loadngo-decider"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "A decision model in the loadngo stack: Strands Decider (a Qwen3.5 torso and a pointer head) answering typed System One questions, written from the published architecture."
+
+[dependencies]
+loadngo-weights = { path = "../weights" }
+loadngo-proactor = { path = "../proactor" }
+loadngo-inference = { path = "../inference" }
+# NFC, the checkpoint tokenizer's normalizer (already in the tree through `url`).
+icu_normalizer = "2"
+serde_json.workspace = true
+thiserror.workspace = true
+
+[features]
+# The `decide` command, whose `--eval` scores the orchestration cases (the agent loop's
+# `eval`, which brings the agent's tools with it).
+cli = ["loadngo-inference/agent"]
+
+[[bin]]
+name = "decide"
+required-features = ["cli"]
+
+[dev-dependencies]
+serde_json.workspace = true

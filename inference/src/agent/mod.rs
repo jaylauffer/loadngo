@@ -39,7 +39,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::edit_tools::EditSession;
-use crate::system_one::LabelModel;
+use crate::system_one::{Calibration, LabelModel, LetterReadout};
 use crate::tools::Toolbox;
 use clock::Now;
 use evidence::{excerpt, Evidence};
@@ -1112,7 +1112,11 @@ impl<'o, T: Template> Agent<'o, T> {
             };
             let summary = self.evidence.summary();
             let judged = backend.judge(&self.turn.date).map(|mut judge| {
-                jev::local_first(judge.as_mut(), &self.turn.request, &intent, &summary)
+                let mut readout = LetterReadout {
+                    model: judge.as_mut(),
+                    calibration: Calibration::default(),
+                };
+                jev::local_first(&mut readout, &self.turn.request, &intent, &summary)
             });
             match judged {
                 Some(Ok(p)) if p >= 0.5 => {
@@ -1146,9 +1150,13 @@ impl<'o, T: Template> Agent<'o, T> {
             return None;
         }
         self.turn.since_checkpoint = 0;
-        let judged = backend
-            .judge(&self.turn.date)
-            .map(|mut judge| jev::checkpoint(judge.as_mut(), &self.turn.request, &self.turn.work));
+        let judged = backend.judge(&self.turn.date).map(|mut judge| {
+            let mut readout = LetterReadout {
+                model: judge.as_mut(),
+                calibration: Calibration::default(),
+            };
+            jev::checkpoint(&mut readout, &self.turn.request, &self.turn.work)
+        });
         let check = match judged? {
             Ok(check) => check,
             Err(e) => {

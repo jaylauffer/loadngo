@@ -10,6 +10,7 @@
 #[cfg(feature = "agent")]
 pub mod agent;
 pub mod board;
+pub mod bpe;
 #[cfg(feature = "cas")]
 pub mod cas_tools;
 pub mod compute;

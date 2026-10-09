@@ -96,6 +96,18 @@ them), with the field names above. Not built: anything in the Task runtime. The
 recommendations for it, with the first run's results, are in
 [TASK_CHECKPOINT_RECOMMENDATIONS.md](TASK_CHECKPOINT_RECOMMENDATIONS.md).
 
+## Decision models
+
+Since 2026-10-10 a question can also go to a model built for it. `system_one::Decide` is
+anything that answers a request with a probability per option:
+
+- `LetterReadout`: a chat model read through its option letters, as above.
+- `loadngo_decider::Decider`: Strands Decider, a Qwen3.5-2B torso with a pointer head. It
+  scores each option from that option's own hidden state, so it has no letter bias and no
+  26-option limit. See [DECISION_MODEL.md](DECISION_MODEL.md).
+
+The agent loop's Jev checks and the orchestration evaluation take a `Decide`.
+
 ## Still open
 
 - **Calibration on real tasks.** Labelled examples from our own decisions (the

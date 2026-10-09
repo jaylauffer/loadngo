@@ -27,6 +27,7 @@
 
 use std::collections::HashMap;
 
+use loadngo_inference::bpe::{byte_char, Class, Merges};
 use loadngo_weights::gguf::{Gguf, Value};
 
 /// `tokenizer.ggml.token_type` of a control token.
@@ -36,40 +37,6 @@ const CONTROL: u64 = 3;
 pub enum TokenizerError {
     #[error("GGUF tokenizer: {0}")]
     Invalid(String),
-}
-
-/// A sorted list of inclusive code point ranges.
-struct Class(Vec<(char, char)>);
-
-impl Class {
-    fn parse(pattern: &str) -> Self {
-        use regex_syntax::hir::{Class as HirClass, HirKind};
-        let hir = regex_syntax::parse(pattern).expect("a valid class");
-        match hir.kind() {
-            HirKind::Class(HirClass::Unicode(class)) => Self(
-                class
-                    .ranges()
-                    .iter()
-                    .map(|r| (r.start(), r.end()))
-                    .collect(),
-            ),
-            other => panic!("{pattern} is not a Unicode class: {other:?}"),
-        }
-    }
-
-    fn contains(&self, c: char) -> bool {
-        self.0
-            .binary_search_by(|&(start, end)| {
-                if end < c {
-                    std::cmp::Ordering::Less
-                } else if start > c {
-                    std::cmp::Ordering::Greater
-                } else {
-                    std::cmp::Ordering::Equal
-                }
-            })
-            .is_ok()
-    }
 }
 
 /// The character classes the pattern uses.
@@ -240,25 +207,10 @@ fn pre_split<'t>(classes: &Classes, text: &'t str) -> Vec<&'t str> {
     pieces
 }
 
-/// The GPT-2 byte alphabet: the printable Latin-1 bytes stand for themselves and the
-/// rest, in order, for U+0100 onwards.
-fn byte_char(byte: u8) -> char {
-    let printable = |b: u8| matches!(b, b'!'..=b'~' | 0xa1..=0xac | 0xae..=0xff);
-    if printable(byte) {
-        char::from(byte)
-    } else {
-        let index = (0..byte).filter(|&b| !printable(b)).count();
-        char::from_u32(256 + index as u32).expect("in range")
-    }
-}
-
 pub struct Tokenizer {
     /// A token's bytes, by id (control tokens: their text).
     bytes: Vec<Vec<u8>>,
-    /// The id of each single byte.
-    byte_ids: [u32; 256],
-    /// `(left, right)` -> `(rank, merged)`.
-    merges: HashMap<(u32, u32), (u32, u32)>,
+    merges: Merges,
     control: HashMap<String, u32>,
     is_control: Vec<bool>,
     classes: Classes,
@@ -321,8 +273,8 @@ impl Tokenizer {
                 .ok_or_else(|| invalid(&format!("no token for byte {b:#04x}")))?;
         }
         let merge_list = array("tokenizer.ggml.merges")?;
-        let mut merges = HashMap::with_capacity(merge_list.len());
-        for (rank, merge) in merge_list.iter().enumerate() {
+        let mut ranked = Vec::with_capacity(merge_list.len());
+        for merge in merge_list {
             let merge = merge
                 .as_str()
                 .ok_or_else(|| invalid("a merge is not a string"))?;
@@ -334,15 +286,11 @@ impl Tokenizer {
                     .copied()
                     .ok_or_else(|| invalid(&format!("merge {merge:?} names an unknown token")))
             };
-            let merged = id(&format!("{left}{right}"))?;
-            merges
-                .entry((id(left)?, id(right)?))
-                .or_insert((rank as u32, merged));
+            ranked.push((id(left)?, id(right)?, id(&format!("{left}{right}"))?));
         }
         Ok(Self {
             bytes,
-            byte_ids,
-            merges,
+            merges: Merges::new(byte_ids, ranked),
             control,
             is_control,
             classes: Classes::new(),
@@ -366,31 +314,9 @@ impl Tokenizer {
     pub fn encode(&self, text: &str) -> Vec<u32> {
         let mut out = Vec::new();
         for piece in pre_split(&self.classes, text) {
-            self.merge_into(piece.as_bytes(), &mut out);
+            self.merges.apply(piece.as_bytes(), &mut out);
         }
         out
-    }
-
-    fn merge_into(&self, piece: &[u8], out: &mut Vec<u32>) {
-        let mut symbols: Vec<u32> = piece
-            .iter()
-            .map(|&b| self.byte_ids[usize::from(b)])
-            .collect();
-        loop {
-            let best = symbols
-                .windows(2)
-                .enumerate()
-                .filter_map(|(at, pair)| {
-                    self.merges
-                        .get(&(pair[0], pair[1]))
-                        .map(|&(rank, merged)| (rank, at, merged))
-                })
-                .min();
-            let Some((_, at, merged)) = best else { break };
-            symbols[at] = merged;
-            symbols.remove(at + 1);
-        }
-        out.extend(symbols);
     }
 
     /// The bytes a token stands for (a control token: its text).

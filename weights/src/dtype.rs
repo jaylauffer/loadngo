@@ -96,6 +96,25 @@ pub fn bf16_to_f32(bits: u16) -> f32 {
     f32::from_bits(u32::from(bits) << 16)
 }
 
+/// `f32` to bfloat16, rounding to nearest with ties to even (as PyTorch casts); a NaN
+/// stays a quiet NaN.
+#[inline]
+pub fn f32_to_bf16(value: f32) -> u16 {
+    let bits = value.to_bits();
+    if value.is_nan() {
+        return ((bits >> 16) | 0x40) as u16;
+    }
+    let bias = 0x7fff + ((bits >> 16) & 1);
+    (bits.wrapping_add(bias) >> 16) as u16
+}
+
+/// `value` rounded to the nearest bfloat16, as an `f32`: what a model loaded in bfloat16
+/// holds for a weight its file stores in `f32`.
+#[inline]
+pub fn round_to_bf16(value: f32) -> f32 {
+    bf16_to_f32(f32_to_bf16(value))
+}
+
 /// IEEE 754 binary16 to `f32`, exact for every one of the 65,536 codes.
 ///
 /// binary16 has a 5-bit exponent with bias 15 and a 10-bit mantissa. Normal values move
@@ -159,6 +178,28 @@ pub fn widen_to_f32(dtype: Dtype, bytes: &[u8]) -> Result<Vec<f32>, WidenError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn f32_rounds_to_the_nearest_bf16_with_ties_to_even() {
+        assert_eq!(round_to_bf16(0.956_787_1), 0.957_031_25);
+        assert_eq!(round_to_bf16(0.892_578_1), 0.890_625);
+        assert_eq!(round_to_bf16(1.0), 1.0);
+        // 1 + 2^-8 is halfway between 1 and 1 + 2^-7: even (1) wins; 1 + 3*2^-8 rounds up.
+        assert_eq!(round_to_bf16(1.0 + 1.0 / 256.0), 1.0);
+        assert_eq!(round_to_bf16(1.0 + 3.0 / 256.0), 1.0 + 4.0 / 256.0);
+        assert_eq!(
+            round_to_bf16(-2.5e38).to_bits(),
+            round_to_bf16(-2.5e38).to_bits()
+        );
+        assert!(round_to_bf16(f32::NAN).is_nan());
+        assert_eq!(round_to_bf16(f32::INFINITY), f32::INFINITY);
+        for bits in (0..=u16::MAX).step_by(7) {
+            let v = bf16_to_f32(bits);
+            if !v.is_nan() {
+                assert_eq!(f32_to_bf16(v), bits, "{bits:#06x}");
+            }
+        }
+    }
 
     #[test]
     fn every_dtype_name_round_trips_and_unknown_names_are_refused() {

@@ -23,8 +23,8 @@ use std::fmt::Write as _;
 use serde_json::{json, Value};
 
 use crate::system_one::{
-    answer, calibration_report, fit_temperature, softmax, Answer, Calibration, CalibrationReport,
-    Example, LabelModel, Question, Request,
+    calibration_report, fit_temperature, softmax, Answer, CalibrationReport, Decide, Example,
+    Question, Request,
 };
 
 /// A digest class, least to most severe.
@@ -288,18 +288,14 @@ fn p(answer: &Answer, label: &str) -> f32 {
 ///
 /// # Errors
 /// When the model fails.
-pub fn judge(model: &mut dyn LabelModel, case: &Case) -> Result<Judgement, String> {
+pub fn judge(model: &mut dyn Decide, case: &Case) -> Result<Judgement, String> {
     let state = state(case);
     let mut asked = Vec::new();
     for reversed in [false, true] {
-        asked.push(answer(
-            model,
-            &Request {
-                state: state.clone(),
-                questions: questions(reversed),
-            },
-            Calibration::default(),
-        )?);
+        asked.push(model.decide(&Request {
+            state: state.clone(),
+            questions: questions(reversed),
+        })?);
     }
     let class = Answer {
         probabilities: STATES
@@ -680,6 +676,7 @@ impl Run {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::system_one::{Calibration, LabelModel, LetterReadout};
 
     fn case(report: &str, class: Class, attention: bool) -> Case {
         Case {
@@ -751,6 +748,10 @@ mod tests {
         // preference cancels out, so verified and failed tie and attention is 0.5. The
         // model is asked for a state only: needs-jay is never an option.
         let mut model = Always(0);
+        let mut model = LetterReadout {
+            model: &mut model,
+            calibration: Calibration::default(),
+        };
         for c in &cases {
             let j = judge(&mut model, c).unwrap();
             assert!((p(&j.class, "verified") - p(&j.class, "failed")).abs() < 1e-6);

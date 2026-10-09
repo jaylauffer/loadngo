@@ -7,7 +7,10 @@ license.workspace = true
 description = "Bounded local inference conversations, cooperative generation, and UTF-8 streaming"
 
 [dependencies]
+serde.workspace = true
 serde_json.workspace = true
+# Unicode character classes for byte-level BPE pre-split patterns (`bpe`).
+regex-syntax = "0.8"
 # `cas` feature: tools over a signed Archive CAS snapshot (pulls in data + PQ crypto).
 data = { path = "../data", optional = true }
 # `web` feature: web_search / web_fetch tools (the only tools that leave the machine).

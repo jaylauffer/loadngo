@@ -182,6 +182,96 @@ impl Request {
     }
 }
 
+impl Request {
+    /// Parses a request from JSON text, keeping questions and options in the order the
+    /// text gives them. A decision model's answer depends a little on option order, and
+    /// [`Request::from_json`] sees serde_json's sorted keys.
+    ///
+    /// # Errors
+    /// As [`Request::from_json`], or when the text is not JSON.
+    pub fn from_text(text: &str) -> Result<Self, String> {
+        let value: Value = serde_json::from_str(text).map_err(|e| format!("request: {e}"))?;
+        let keys: Keys = serde_json::from_str(text).map_err(|e| format!("request: {e}"))?;
+        let mut request = Self::from_json(&value)?;
+        let questions = keys.get("questions");
+        let rank = |order: Option<&Keys>, key: &str| {
+            order
+                .and_then(|o| o.0.iter().position(|(k, _)| k == key))
+                .unwrap_or(usize::MAX)
+        };
+        request.questions.sort_by_key(|(id, _)| rank(questions, id));
+        for (id, question) in &mut request.questions {
+            let criteria = questions
+                .and_then(|q| q.get(id))
+                .and_then(|q| q.get("criteria"));
+            match question {
+                Question::Choice { criteria: c, .. } => {
+                    c.sort_by_key(|(label, _)| rank(criteria, label))
+                }
+                Question::Score { criteria: c, .. }
+                    if !c.iter().all(|(l, _)| l.parse::<f64>().is_ok()) =>
+                {
+                    c.sort_by_key(|(label, _)| rank(criteria, label));
+                }
+                _ => {}
+            }
+        }
+        Ok(request)
+    }
+}
+
+/// The keys of every JSON object in a document, in document order (and nothing else).
+#[derive(Default)]
+struct Keys(Vec<(String, Keys)>);
+
+impl Keys {
+    fn get(&self, key: &str) -> Option<&Keys> {
+        self.0.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Keys {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = Keys;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("any JSON value")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Keys, A::Error> {
+                let mut keys = Vec::new();
+                while let Some((k, v)) = map.next_entry::<String, Keys>()? {
+                    keys.push((k, v));
+                }
+                Ok(Keys(keys))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Keys, A::Error> {
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(Keys::default())
+            }
+            fn visit_bool<E>(self, _: bool) -> Result<Keys, E> {
+                Ok(Keys::default())
+            }
+            fn visit_i64<E>(self, _: i64) -> Result<Keys, E> {
+                Ok(Keys::default())
+            }
+            fn visit_u64<E>(self, _: u64) -> Result<Keys, E> {
+                Ok(Keys::default())
+            }
+            fn visit_f64<E>(self, _: f64) -> Result<Keys, E> {
+                Ok(Keys::default())
+            }
+            fn visit_str<E>(self, _: &str) -> Result<Keys, E> {
+                Ok(Keys::default())
+            }
+            fn visit_unit<E>(self) -> Result<Keys, E> {
+                Ok(Keys::default())
+            }
+        }
+        d.deserialize_any(Visitor)
+    }
+}
+
 /// A probability for every option of one question.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Answer {
@@ -300,6 +390,28 @@ pub fn answer(
     Ok(answers)
 }
 
+/// Anything that answers a request's typed questions with a probability for every option:
+/// a chat model read through its option letters ([`LetterReadout`]), or a decision model
+/// built for it (`loadngo-decider`). Answers are in the request's question order, each
+/// with its options in [`Question::options`] order.
+pub trait Decide {
+    /// # Errors
+    /// Whatever stopped the model.
+    fn decide(&mut self, request: &Request) -> Result<Vec<(String, Answer)>, String>;
+}
+
+/// A chat model as a [`Decide`]: each question asked through [`answer`].
+pub struct LetterReadout<'m> {
+    pub model: &'m mut dyn LabelModel,
+    pub calibration: Calibration,
+}
+
+impl Decide for LetterReadout<'_> {
+    fn decide(&mut self, request: &Request) -> Result<Vec<(String, Answer)>, String> {
+        answer(self.model, request, self.calibration)
+    }
+}
+
 /// The response JSON: `{"answers": {id: {label: probability}}}`.
 pub fn response_json(answers: &[(String, Answer)]) -> Value {
     let mut map = Map::new();
@@ -412,6 +524,23 @@ pub fn calibration_report(examples: &[Example], temperature: f32) -> Calibration
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn requests_from_text_keep_the_document_order() {
+        let r = Request::from_text(
+            r#"{"state": "s", "questions": {
+                "zeta": {"type": "choice", "criteria": {"sales": "", "billing": "", "retail": ""}},
+                "alpha": {"type": "noul", "instructions": "x"},
+                "mid": {"type": "score", "criteria": {"low": "a", "high": "b"}}}}"#,
+        )
+        .unwrap();
+        let ids: Vec<&str> = r.questions.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, ["zeta", "alpha", "mid"]);
+        let labels = |q: &Question| q.options().into_iter().map(|(l, _)| l).collect::<Vec<_>>();
+        assert_eq!(labels(&r.questions[0].1), ["sales", "billing", "retail"]);
+        assert_eq!(labels(&r.questions[2].1), ["low", "high"]);
+        assert!(Request::from_text("{").is_err());
+    }
 
     #[test]
     fn requests_parse_in_typesafe_shape_and_scores_order_numerically() {

@@ -105,8 +105,10 @@ whoever asks is not acceptable on those terms. So:
 ## Order of work
 
 1. **Decision model in process first.** Strands Decider measured on the orchestration
-   cases (`~/pudding/eval`). If it earns a place, it is ported into loadngo and connected
-   to the agent loop through one decision interface, in-process. No node is needed for
+   cases (`~/pudding/eval`); it earned a place (rules + decider route like rules + Gemma,
+   in a fortieth of the time). Ported 2026-10-10 as `loadngo-decider` (CPU, matching the
+   reference to 4.6e-5) behind one decision interface, `system_one::Decide`
+   ([DECISION_MODEL.md](DECISION_MODEL.md)). Next: its GPU path. No node is needed for
    this step.
 2. **The node with one hosted capability:**
    - the existing `task-node` becomes its worker role, behaviour unchanged;

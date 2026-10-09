@@ -1274,6 +1274,9 @@ dependencies = [
  "icu_properties",
  "icu_provider",
  "smallvec",
+ "utf16_iter",
+ "utf8_iter",
+ "write16",
  "zerovec",
 ]
 
@@ -1595,6 +1598,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "loadngo-decider"
+version = "0.1.0"
+dependencies = [
+ "icu_normalizer",
+ "loadngo-inference",
+ "loadngo-proactor",
+ "loadngo-weights",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "loadngo-gfx-dx12"
 version = "0.1.0"
 dependencies = [
@@ -1704,6 +1719,8 @@ dependencies = [
  "chrono",
  "data",
  "loadngo-proactor",
+ "regex-syntax",
+ "serde",
  "serde_json",
  "tempfile",
  "ureq",
@@ -3814,6 +3831,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "utf16_iter"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8232dd3cdaed5356e0f716d285e4b40b932ac434100fe9b7e0e8e935b9e6246"
+
+[[package]]
 name = "utf16string"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4612,6 +4635,12 @@ dependencies = [
  "wayland-protocols",
  "wayland-protocols-wlr",
 ]
+
+[[package]]
+name = "write16"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1890f4022759daae28ed4fe62859b1236caebfc61ede2f63ed4e695f3f6d936"
 
 [[package]]
 name = "writeable"

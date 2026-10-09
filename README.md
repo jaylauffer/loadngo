@@ -129,6 +129,7 @@ function rather than in per-backend arms — see
 - [`docs/CLI_CONVENTIONS.md`](docs/CLI_CONVENTIONS.md): the `--help`/no-args/error-message convention every loadngo tool and harness follows.
 - [`docs/PDF_RENDERING.md`](docs/PDF_RENDERING.md): intent for a native Rust PDF renderer as a core capability, and the pdfium-via-FFI stop-gap until it exists.
 - [`docs/FIELD_NETWORK_BACKLOG.md`](docs/FIELD_NETWORK_BACKLOG.md): network and replication considerations.
+- [`docs/DECISION_MODEL.md`](docs/DECISION_MODEL.md): Strands Decider in loadngo (`loadngo-decider`): a Qwen3.5 torso and pointer head answering System One questions, how it was checked against the reference, and what the port found.
 - [`docs/TASK_BENEFIT.md`](docs/TASK_BENEFIT.md): when a Task reward should be offered: benefit to people judged against Maslow's needs, harm first, rewards after confirmed evidence; with a decision-model probe.
 - [`docs/LOADNGO_NODE.md`](docs/LOADNGO_NODE.md): plan for one resident node per machine that holds its models and capabilities, takes Task work and answers authenticated calls.
 - [`docs/TASK_OFFER_PROTOCOL.md`](docs/TASK_OFFER_PROTOCOL.md): submitter/worker task coordination protocol over multicast discovery and direct unicast follow-up.

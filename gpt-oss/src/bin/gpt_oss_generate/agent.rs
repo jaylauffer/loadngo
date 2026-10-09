@@ -383,7 +383,11 @@ pub fn evaluate(backend: &mut GptOss<'_>, path: &std::path::Path) {
         let started = Instant::now();
         let judged = {
             let mut judge = backend.judge(&date).unwrap_or_else(|| fail("no judge"));
-            eval::judge(judge.as_mut(), case)
+            let mut readout = loadngo_inference::system_one::LetterReadout {
+                model: judge.as_mut(),
+                calibration: loadngo_inference::system_one::Calibration::default(),
+            };
+            eval::judge(&mut readout, case)
         };
         let j = judged.unwrap_or_else(|e| fail(&e));
         eprintln!(
