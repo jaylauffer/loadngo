@@ -43,6 +43,11 @@ pub const CLASSES: [Class; 4] = [
     Class::NeedsJay,
 ];
 
+/// The states of the work, which a model is asked to choose between. Whether Jay must act
+/// is a question of its own: Jay calls work verified when its checks passed even if he
+/// still has to push or decide (his labels, 2026-10-10), so `needs-jay` is not a state.
+pub const STATES: [Class; 3] = [Class::Verified, Class::Unverified, Class::Failed];
+
 impl Class {
     #[must_use]
     pub const fn name(self) -> &'static str {
@@ -61,10 +66,7 @@ impl Class {
 
     const fn description(self) -> &'static str {
         match self {
-            Self::Verified => {
-                "verified: done, and the report names checks that ran and passed; nothing is \
-                 left for Jay"
-            }
+            Self::Verified => "verified: done, and the report names checks that ran and passed",
             Self::Unverified => {
                 "not verified: done or mostly done, but a check did not run or its result is not \
                  known yet (CI pending, not run on a device, not played, not reviewed, claims \
@@ -207,10 +209,10 @@ impl Judgement {
         Class::parse(label).unwrap_or(Class::Unverified)
     }
 
-    /// Whether the model flags it for Jay: any class but verified, or attention at 0.5.
+    /// Whether the model flags it for Jay: failed work, or attention at 0.5.
     #[must_use]
     pub fn flags(&self) -> bool {
-        self.best() != Class::Verified || self.attention >= 0.5
+        self.best() == Class::Failed || self.attention >= 0.5
     }
 }
 
@@ -230,9 +232,9 @@ pub fn state(case: &Case) -> String {
     )
 }
 
-/// The two typed questions, with the options in `CLASSES` order or reversed.
+/// The two typed questions, with the options in `STATES` order or reversed.
 fn questions(reversed: bool) -> Vec<(String, Question)> {
-    let mut classes: Vec<Class> = CLASSES.to_vec();
+    let mut classes: Vec<Class> = STATES.to_vec();
     let mut attention = vec![
         ("yes".to_owned(), "yes".to_owned()),
         ("no".to_owned(), "no".to_owned()),
@@ -246,8 +248,9 @@ fn questions(reversed: bool) -> Vec<(String, Question)> {
             "class".to_owned(),
             Question::Choice {
                 instructions: Some(
-                    "What should the digest for Jay say about this task? Judge the report \
-                     itself: a claim is verified only if the report shows the check that ran."
+                    "What state is the work in? Judge the report itself: a claim is verified \
+                     only if the report shows the check that ran. Whether Jay must act is a \
+                     separate question."
                         .into(),
                 ),
                 criteria: classes
@@ -299,7 +302,7 @@ pub fn judge(model: &mut dyn LabelModel, case: &Case) -> Result<Judgement, Strin
         )?);
     }
     let class = Answer {
-        probabilities: CLASSES
+        probabilities: STATES
             .iter()
             .map(|c| {
                 let label = c.name();
@@ -323,6 +326,8 @@ pub fn judge(model: &mut dyn LabelModel, case: &Case) -> Result<Judgement, Strin
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Tally {
     pub cases: usize,
+    /// Cases whose key is a state of the work (not `needs-jay`), and those of them right.
+    pub stated: usize,
     pub correct: usize,
     /// `[key][predicted]`, in [`CLASSES`] order.
     pub confusion: [[usize; 4]; 4],
@@ -339,7 +344,10 @@ impl Tally {
     pub fn add(&mut self, case: &Case, predicted: Class, flagged: bool) {
         let index = |c: Class| CLASSES.iter().position(|x| *x == c).unwrap_or(0);
         self.cases += 1;
-        self.correct += usize::from(predicted == case.class);
+        if STATES.contains(&case.class) {
+            self.stated += 1;
+            self.correct += usize::from(predicted == case.class);
+        }
         self.confusion[index(case.class)][index(predicted)] += 1;
         match (case.attention, flagged) {
             (true, true) => self.caught += 1,
@@ -353,6 +361,7 @@ impl Tally {
     pub fn to_json(&self) -> Value {
         json!({
             "cases": self.cases,
+            "stated": self.stated,
             "correct": self.correct,
             "confusion": self.confusion,
             "caught": self.caught,
@@ -366,9 +375,9 @@ impl Tally {
     #[must_use]
     pub fn line(&self) -> String {
         format!(
-            "class {}/{}, needed Jay {}/{} flagged, false comfort {}, false alarms {}/{}",
+            "state {}/{}, needed Jay {}/{} flagged, false comfort {}, false alarms {}/{}",
             self.correct,
-            self.cases,
+            self.stated,
             self.caught,
             self.caught + self.missed.len(),
             self.missed.len(),
@@ -384,10 +393,10 @@ impl Tally {
         let needed = self.caught + self.missed.len();
         let _ = writeln!(
             out,
-            "{name}: class {}/{} correct; needed Jay {} of {} flagged, false comfort {} {:?}; \
+            "{name}: state {}/{} correct; needed Jay {} of {} flagged, false comfort {} {:?}; \
              false alarms {} of {}",
             self.correct,
-            self.cases,
+            self.stated,
             self.caught,
             needed,
             self.missed.len(),
@@ -513,15 +522,22 @@ impl Run {
         });
         if let Some(j) = judgement {
             let model = j.best();
-            let both = model.max(rules);
+            // The rules' `needs-jay` says nothing about the state of the work.
+            let both = if rules == Class::NeedsJay {
+                model
+            } else {
+                model.max(rules)
+            };
             self.model.add(case, model, j.flags());
             self.combined.add(case, both, j.flags() || ruled);
             set[1].add(case, model, j.flags());
             set[2].add(case, both, j.flags() || ruled);
-            self.class_answers.push(Example {
-                logits: log_probabilities(j.class.probabilities.iter().map(|(_, p)| *p)),
-                correct: CLASSES.iter().position(|c| *c == case.class).unwrap_or(0),
-            });
+            if let Some(correct) = STATES.iter().position(|c| *c == case.class) {
+                self.class_answers.push(Example {
+                    logits: log_probabilities(j.class.probabilities.iter().map(|(_, p)| *p)),
+                    correct,
+                });
+            }
             self.attention_answers.push(Example {
                 logits: log_probabilities([j.attention, 1.0 - j.attention]),
                 correct: usize::from(!case.attention),
@@ -732,16 +748,19 @@ mod tests {
         ];
         let mut run = Run::default();
         // A model that always answers the first letter: asked in both orders, its
-        // preference cancels out, so verified and needs-jay tie and attention is 0.5.
+        // preference cancels out, so verified and failed tie and attention is 0.5. The
+        // model is asked for a state only: needs-jay is never an option.
         let mut model = Always(0);
         for c in &cases {
             let j = judge(&mut model, c).unwrap();
-            assert!((p(&j.class, "verified") - p(&j.class, "needs-jay")).abs() < 1e-6);
-            assert!(p(&j.class, "failed") < 0.01);
+            assert!((p(&j.class, "verified") - p(&j.class, "failed")).abs() < 1e-6);
+            assert!(p(&j.class, "unverified") < 0.01);
+            assert!(j.class.probabilities.iter().all(|(l, _)| l != "needs-jay"));
             assert!((j.attention - 0.5).abs() < 1e-6);
             run.add(c, Some(&j));
         }
-        assert_eq!(run.mechanical.correct, 2);
+        // Only the first case's key is a state of the work; the rules get it right.
+        assert_eq!((run.mechanical.stated, run.mechanical.correct), (1, 1));
         assert_eq!(
             run.mechanical.missed.len(),
             1,
@@ -752,7 +771,8 @@ mod tests {
         assert!(run.model.missed.is_empty());
         let text = run.report("toy");
         assert!(text.contains("false comfort 1"));
-        assert!(run.to_json("toy")["cases"][2]["combined"] == "needs-jay");
+        // The rules' needs-jay leaves the state to the model.
+        assert!(run.to_json("toy")["cases"][2]["combined"] != "needs-jay");
         assert!(state(&cases[0]).contains("not recorded"));
     }
 
