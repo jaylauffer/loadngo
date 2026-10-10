@@ -33,6 +33,7 @@ members = [
     "system-stats",
     "pq-crypto",
     "anchor",
+    "code-editor",
 ]
 default-members = [
     "task",
@@ -62,6 +63,7 @@ default-members = [
     "system-stats",
     "pq-crypto",
     "anchor",
+    "code-editor",
 ]
 resolver = "2"
 

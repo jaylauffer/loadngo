@@ -64,12 +64,19 @@ What is missing for code:
 
 These are the workspace's demand-driven rules applied to the editor:
 
-- The frame demand is `Idle` whenever nothing changes. The caret blinks on a
-  host deadline and stops blinking (solid caret) after a few seconds without
-  input, so an editor left open costs nothing.
+- The frame demand is `Idle` whenever nothing changes, and
+  `IdleUntil(deadline)` while the caret blinks or a backup or session write
+  is due. `IdleUntil` is new in host-core for this: like `Idle`, input brings
+  the frame at once, but no later than the deadline. `After` would not do:
+  it is paced on every host, so input waits for its timer, and a blinking
+  caret would delay typing by up to half a blink. The caret stops blinking
+  (solid caret) 10 s after the last input, so an editor left open draws
+  nothing.
 - Reading files, listing folders, saving and checking for changes on disk
-  all run through `offload`, and their results are picked up
-  on the next frame. Nothing blocks a frame.
+  all run through `offload`. On macOS a finished job now posts an
+  application-defined event, so the result is dispatched and an idle frame
+  runs at once. Before, it waited for the next window event. On the other
+  hosts it still waits for the next frame. Nothing blocks a frame.
 - Changes on disk are checked when the window regains focus
   (`HostFrame.focused`) and before a save, never by polling. A clean buffer
   reloads silently. A dirty buffer shows the conflict and keeps the edits.
@@ -77,8 +84,15 @@ These are the workspace's demand-driven rules applied to the editor:
   files are edited as `\n` and written back as CRLF.
 - The buffer is dirty when its document revision differs from the revision
   that was saved, not when the whole text compares unequal.
-- Files that are not UTF-8 open read-only with a note. Binary files are not
-  opened.
+- Files that are not UTF-8, and binary files (a NUL in the first 8 KiB),
+  are not opened; the status line says why.
+- Unsaved edits are backed up 2 s after typing stops
+  (`backups/<hash of path>.json` in the app data folder) and the open folder,
+  tabs, carets and expanded folders 2 s after they change (`session.json`).
+  A loadngo host cannot veto closing the window, so these backups are what
+  make closing, a crash or a power cut lose at most 2 s of typing. At launch
+  the tabs come back, and a backup is applied as one undoable edit over the
+  file's text, so Cmd-Z returns to what is on disk.
 - The tree hides `target/` and `.git/` and skips any directory carrying a
   `CACHEDIR.TAG`.
 
@@ -86,10 +100,29 @@ These are the workspace's demand-driven rules applied to the editor:
 
 **M1, usable for plain editing.** Open a folder (by argument or the file
 dialog), browse it in a tree, open files in tabs, edit, undo, Cmd-S and
-Cmd-Shift-S, dirty markers, confirm before closing a dirty tab or quitting,
-check for changes on disk at focus, find in the current file, go to line, and
-reopen the last folder and tabs at launch. Proportional font, current text
-path (one `Text` op per visible line).
+Cmd-Shift-S, dirty markers, confirm before closing a dirty tab, check for
+changes on disk at focus, find in the current file, go to line, and reopen
+the last folder and tabs at launch. Proportional font, current text path
+(one `Text` op per visible line).
+
+Done 2026-10-10 except opening a folder from inside the editor: the folder
+comes from the command line or the last session (`code_editor --help`).
+Along the way, every `TextAreaModel` gained:
+
+- undo by word: typing groups until whitespace is followed by a new word,
+  deletions group with deletions, and any caret move ends a group. Undo
+  and redo put the caret at the change.
+- the platform's word and line moves: Option (Ctrl elsewhere) with the arrows
+  and Backspace/Delete works by word, Cmd with Left/Right/Backspace by
+  line, and Cmd with Up/Down jumps to the document's start or end.
+- `auto_indent` (Enter keeps the indentation, plus one level after an
+  opening bracket) and `tab_text`.
+- a gap between the line-number gutter and the text.
+- only lines on screen are measured. Measuring a line takes one text
+  measurement per character, and the first layout used to measure every
+  line: opening a 4,328-line file blocked one frame for 1,043 ms. Other
+  lines carry an estimated width until they scroll into view, and the
+  cache of measured lines is bounded.
 
 **M2, highlighting.** A glyph cache with colored runs in `ui-core` and on the
 macOS renderer first (other renderers fall back to one `Text` op per run
@@ -113,3 +146,27 @@ tree, and running on Linux and Windows.
 
 Each milestone records here what was run and checked: tests, macOS sessions,
 idle CPU and wakeups, and the CI run for the other platforms.
+
+**M1 (2026-10-10, Mac mini).** `cargo test -p loadngo-code-editor`: 27
+tests, 15 of them whole flows on real temp folders (save, Save All, CRLF,
+close prompts, disk conflicts both ways, restart with backups, find, go to
+line, clipboard, idle). ui-core tests cover undo grouping, word and line
+moves, auto-indent and the lazy layout. Workspace fmt and strict clippy
+pass on macOS. iOS, Android (host library and editor) and Windows (type
+check, `blake3` pure) builds pass from macOS; Linux is left to CI.
+
+In the release build on macOS, with `CODE_EDITOR_TRACE=1` printing each
+frame's work:
+
+- the 4,328-line `archive_cas_browser.rs`: the frame that first laid it
+  out (restored at launch, with its backup applied) took 9.0 ms; before lazy
+  layout, opening it took 1,043 ms. Typing stays at or under 1.2 ms per
+  frame, jumping to the end of the file 10.5 ms, undo 3.2 ms.
+- a folder listing arrives 0.6 ms after the click that asked for it, as its
+  own frame.
+- idle with a file open: 0 frames in 15 s once the caret stops blinking,
+  0.0% CPU, 9 threads, 39 MB.
+- after the editor was killed with unsaved edits, the next launch restored
+  both tabs and the unsaved text.
+- `sng_rusty_editor`'s source pane, which uses the same `TextAreaModel`, was
+  checked by screenshot after these changes.

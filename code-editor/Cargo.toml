@@ -1,0 +1,23 @@
+[package]
+name = "loadngo-code-editor"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Multi-file code editor built on loadngo; see docs/CODE_EDITOR.md"
+
+[[bin]]
+name = "code_editor"
+path = "src/bin/code_editor.rs"
+
+[dependencies]
+blake3.workspace = true
+loadngo-host-core = { path = "../host-core" }
+loadngo-host-desktop = { path = "../host-desktop" }
+loadngo-persistence = { path = "../persistence" }
+serde.workspace = true
+serde_json.workspace = true
+ui-core = { path = "../ui-core" }
+
+[dev-dependencies]
+tempfile = "3"

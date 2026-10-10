@@ -1581,6 +1581,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "loadngo-code-editor"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "loadngo-host-core",
+ "loadngo-host-desktop",
+ "loadngo-persistence",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "ui-core",
+]
+
+[[package]]
 name = "loadngo-coreml"
 version = "0.1.0"
 dependencies = [
