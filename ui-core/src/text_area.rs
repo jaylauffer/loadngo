@@ -41,9 +41,20 @@ struct DocumentLineMetrics {
     source_start: usize,
     source_end: usize,
     display_text: String,
-    char_offsets: Vec<f32>,
+    /// Measured caret offsets, one per character plus the end; `None` until
+    /// the line is first laid out on screen. Measuring a line costs one text
+    /// measurement per character, so only lines that are seen pay it.
+    char_offsets: Option<Vec<f32>>,
+    /// Measured width, or an estimate while `char_offsets` is `None`.
     width: f32,
 }
+
+/// Distinct line texts whose measurements are kept; past this the cache
+/// starts over, so typing cannot grow it without bound.
+const LINE_METRICS_CACHE_LIMIT: usize = 16_384;
+/// Average advance as a share of the font size, for the widths of lines not
+/// measured yet.
+const ESTIMATED_ADVANCE: f32 = 0.55;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PendingTextEdit {
@@ -82,6 +93,12 @@ pub struct TextAreaModel {
     pub selection_head: usize,
     pub preferred_x: Option<f32>,
     pub tab_spaces: usize,
+    /// What the Tab key inserts. A tab character by default; code editors
+    /// set the language's indent unit.
+    pub tab_text: String,
+    /// Enter copies the current line's indentation, plus one `tab_text`
+    /// after an opening bracket.
+    pub auto_indent: bool,
     pub layout_cache: TextAreaLayoutCache,
     pub horizontal_scrollbar: ScrollbarModel,
     pub vertical_scrollbar: ScrollbarModel,
@@ -94,6 +111,35 @@ pub struct TextAreaModel {
     line_metrics_cache: HashMap<String, CachedLineMetrics>,
     cache_font_size: u16,
     cache_tab_spaces: usize,
+    edit_run: Option<EditRun>,
+}
+
+/// The run of edits the document's open undo group is collecting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditRun {
+    /// Typing; `in_space` once the newest typed character was whitespace.
+    Typing {
+        in_space: bool,
+    },
+    Deleting,
+}
+
+/// What a word-wise caret move or deletion treats as one word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CharClass {
+    Space,
+    Word,
+    Punctuation,
+}
+
+fn char_class(ch: char) -> CharClass {
+    if ch.is_whitespace() {
+        CharClass::Space
+    } else if ch.is_alphanumeric() || ch == '_' {
+        CharClass::Word
+    } else {
+        CharClass::Punctuation
+    }
 }
 
 impl TextAreaModel {
@@ -105,6 +151,7 @@ impl TextAreaModel {
     const VSCROLL_GAP: f32 = 4.0;
     const VSCROLL_HIT_PAD_X: f32 = 6.0;
     const VSCROLL_HIT_PAD_Y: f32 = 2.0;
+    const GUTTER_TEXT_GAP: f32 = 10.0;
 
     pub fn new(text: impl Into<String>, bounds: Rect) -> Self {
         let text = text.into();
@@ -151,6 +198,8 @@ impl TextAreaModel {
             selection_head: 0,
             preferred_x: None,
             tab_spaces: 4,
+            tab_text: "\t".to_string(),
+            auto_indent: false,
             layout_cache: TextAreaLayoutCache::default(),
             horizontal_scrollbar: ScrollbarModel::new(
                 ScrollbarAxis::Horizontal,
@@ -167,6 +216,7 @@ impl TextAreaModel {
             line_metrics_cache: HashMap::new(),
             cache_font_size,
             cache_tab_spaces: 4,
+            edit_run: None,
         }
     }
 
@@ -242,7 +292,12 @@ impl TextAreaModel {
 
     fn text_base_content_rect(&self) -> Rect {
         let base = self.base_content_rect();
-        let gutter = self.line_number_gutter_width().min(base.width);
+        // The gutter plus a gap, so text does not touch the gutter's edge.
+        let gutter = if self.show_line_numbers {
+            (self.line_number_gutter_width() + Self::GUTTER_TEXT_GAP).min(base.width)
+        } else {
+            0.0
+        };
         Rect {
             x: base.x + gutter,
             y: base.y,
@@ -287,6 +342,7 @@ impl TextAreaModel {
     }
 
     pub fn select_all(&mut self) {
+        self.end_edit_run();
         let len = self.char_len();
         self.selection_anchor = 0;
         self.selection_head = len;
@@ -295,6 +351,7 @@ impl TextAreaModel {
     }
 
     pub fn set_caret(&mut self, caret: usize) {
+        self.end_edit_run();
         let next = caret.min(self.char_len());
         self.selection_anchor = next;
         self.selection_head = next;
@@ -302,10 +359,42 @@ impl TextAreaModel {
         self.request_caret_visibility();
     }
 
+    /// Selects `start..end` (characters), with the caret at `end`.
+    pub fn select_range(&mut self, start: usize, end: usize) {
+        self.end_edit_run();
+        let len = self.char_len();
+        self.selection_anchor = start.min(len);
+        self.selection_head = end.min(len);
+        self.preferred_x = None;
+        self.request_caret_visibility();
+    }
+
+    /// Number of logical lines (a trailing newline starts an empty last line).
+    pub fn line_count(&mut self) -> usize {
+        self.ensure_line_index();
+        self.line_starts.len()
+    }
+
+    /// The zero-based logical line holding character `char_index`.
+    pub fn line_of_char(&mut self, char_index: usize) -> usize {
+        self.ensure_line_index();
+        self.line_index_for_char(char_index.min(self.char_len()))
+    }
+
+    /// The first character of zero-based logical line `line`, clamped to the
+    /// last line.
+    pub fn line_start_char(&mut self, line: usize) -> usize {
+        self.ensure_line_index();
+        self.line_starts[line.min(self.line_starts.len() - 1)]
+    }
+
+    /// Inserts `text` at the caret, replacing any selection, as its own undo
+    /// step.
     pub fn insert_text(&mut self, text: &str) {
         if text.is_empty() {
             return;
         }
+        self.end_edit_run();
         self.replace_selection(text);
         self.preferred_x = None;
         self.request_caret_visibility();
@@ -342,7 +431,7 @@ impl TextAreaModel {
             self.document_dirty_from_line = Some(0);
             self.pending_edit = None;
         }
-        self.ensure_document_layout(measure_width);
+        self.ensure_document_layout();
         let base_content_rect = self.text_base_content_rect();
         let line_box_height = single_line_text_box_height(self.style.font_size);
         let line_step = line_box_height + self.line_spacing.max(0.0);
@@ -365,8 +454,15 @@ impl TextAreaModel {
             .ceil()
             .max(0.0) as usize
             + 1;
+        let visible = visible_start.min(total_line_count)..visible_end.min(total_line_count);
+        for index in visible.clone() {
+            self.measure_line(index, measure_width);
+        }
+        if let Some(caret_line) = self.caret_line_index() {
+            self.measure_line(caret_line, measure_width);
+        }
         let mut lines = Vec::new();
-        for index in visible_start.min(total_line_count)..visible_end.min(total_line_count) {
+        for index in visible {
             let metrics = &self.document_lines[index];
             let rect = Rect {
                 x: base_content_rect.x,
@@ -379,7 +475,7 @@ impl TextAreaModel {
                 source_end: metrics.source_end,
                 display_text: metrics.display_text.clone(),
                 rect,
-                char_offsets: metrics.char_offsets.clone(),
+                char_offsets: metrics.char_offsets.clone().unwrap_or_else(|| vec![0.0]),
             };
 
             if let Some((selection_start, selection_end)) = selection_range {
@@ -406,14 +502,15 @@ impl TextAreaModel {
         }
 
         if let Some((line_index, local, _)) = self.line_position_for_caret() {
-            if let Some(metrics) = self.document_lines.get(line_index) {
+            if line_index < self.document_lines.len() {
                 let rect_y = base_content_rect.y + line_index as f32 * line_step - self.scroll_y;
                 let caret_top = rect_y + 1.0;
                 let caret_height =
                     (self.style.font_size as f32 + 1.0).min((line_box_height - 2.0).max(1.0));
-                let local = local.min(metrics.char_offsets.len().saturating_sub(1));
+                let offsets = self.line_offsets(line_index);
+                let local = local.min(offsets.len().saturating_sub(1));
                 caret_rect = Some(Rect {
-                    x: (base_content_rect.x + metrics.char_offsets[local] - self.scroll_x).round(),
+                    x: (base_content_rect.x + offsets[local] - self.scroll_x).round(),
                     y: caret_top,
                     width: 1.5,
                     height: caret_height,
@@ -461,6 +558,9 @@ impl TextAreaModel {
             self.style.font_size,
             measure_width,
         );
+        if self.line_metrics_cache.len() >= LINE_METRICS_CACHE_LIMIT {
+            self.line_metrics_cache.clear();
+        }
         self.line_metrics_cache.insert(
             source_text.to_string(),
             CachedLineMetrics {
@@ -471,10 +571,89 @@ impl TextAreaModel {
         (display_text, char_offsets)
     }
 
-    fn ensure_document_layout<F>(&mut self, measure_width: &mut F)
+    /// Measures line `index` if it has not been measured yet.
+    fn measure_line<F>(&mut self, index: usize, measure_width: &mut F)
     where
         F: FnMut(&str, u16) -> f32,
     {
+        let Some(line) = self.document_lines.get(index) else {
+            return;
+        };
+        if line.char_offsets.is_some() {
+            return;
+        }
+        let source_text = self.slice_chars(line.source_start, line.source_end);
+        let (display_text, char_offsets) = self.cached_display_text(&source_text, measure_width);
+        let width = char_offsets.last().copied().unwrap_or(0.0);
+        let line = &mut self.document_lines[index];
+        line.display_text = display_text;
+        line.char_offsets = Some(char_offsets);
+        line.width = width;
+        self.document_content_width = self.document_content_width.max(width);
+    }
+
+    /// Line `index`'s caret offsets: measured, or estimated from the font
+    /// size for a line not laid out on screen yet.
+    fn line_offsets(&self, index: usize) -> std::borrow::Cow<'_, [f32]> {
+        let line = &self.document_lines[index];
+        match &line.char_offsets {
+            Some(offsets) => std::borrow::Cow::Borrowed(offsets.as_slice()),
+            None => {
+                let advance = self.style.font_size as f32 * ESTIMATED_ADVANCE;
+                let count = line.source_end.saturating_sub(line.source_start);
+                std::borrow::Cow::Owned((0..=count).map(|i| i as f32 * advance).collect())
+            }
+        }
+    }
+
+    /// The source text of each `(start, end)` character range, ascending.
+    /// Many ranges are cut from one copy of the text in a single pass rather
+    /// than each walking the document from its start.
+    fn line_texts(&self, ranges: &[(usize, usize)]) -> Vec<String> {
+        if ranges.len() <= 8 {
+            return ranges
+                .iter()
+                .map(|&(start, end)| self.slice_chars(start, end))
+                .collect();
+        }
+        let text = self.document.to_string();
+        let mut boundaries: Vec<usize> = Vec::with_capacity(ranges.len() * 2);
+        for &(start, end) in ranges {
+            boundaries.push(start);
+            boundaries.push(end);
+        }
+        // Byte offsets of the wanted character positions, found in one walk.
+        let mut bytes = vec![text.len(); boundaries.len()];
+        let mut order: Vec<usize> = (0..boundaries.len()).collect();
+        order.sort_by_key(|&i| boundaries[i]);
+        let mut next = 0;
+        for (char_index, (byte_index, _)) in text.char_indices().enumerate() {
+            while next < order.len() && boundaries[order[next]] == char_index {
+                bytes[order[next]] = byte_index;
+                next += 1;
+            }
+            if next == order.len() {
+                break;
+            }
+        }
+        ranges
+            .iter()
+            .enumerate()
+            .map(|(i, _)| text[bytes[2 * i]..bytes[2 * i + 1]].to_string())
+            .collect()
+    }
+
+    /// The index in `document_lines` of the line holding the caret.
+    fn caret_line_index(&self) -> Option<usize> {
+        let head = self.selection_head;
+        let index = self
+            .document_lines
+            .partition_point(|line| line.source_start <= head)
+            .checked_sub(1)?;
+        (head <= self.document_lines[index].source_end).then_some(index)
+    }
+
+    fn ensure_document_layout(&mut self) {
         let Some(dirty_from_line) = self.document_dirty_from_line else {
             return;
         };
@@ -498,16 +677,29 @@ impl TextAreaModel {
             } else {
                 (line_ranges.len(), None)
             };
-        for (source_start, source_end) in line_ranges
+        let recompute: Vec<(usize, usize)> = line_ranges
             .iter()
             .copied()
             .skip(dirty_from_line)
             .take(recompute_end_exclusive.saturating_sub(dirty_from_line))
+            .collect();
+        let estimated_advance = self.style.font_size as f32 * ESTIMATED_ADVANCE;
+        for ((source_start, source_end), source_text) in
+            recompute.iter().copied().zip(self.line_texts(&recompute))
         {
-            let source_text = self.slice_chars(source_start, source_end);
-            let (display_text, char_offsets) =
-                self.cached_display_text(&source_text, measure_width);
-            let width = char_offsets.last().copied().unwrap_or(0.0);
+            let (display_text, char_offsets, width) =
+                match self.line_metrics_cache.get(&source_text) {
+                    Some(cached) => (
+                        cached.display_text.clone(),
+                        Some(cached.char_offsets.clone()),
+                        cached.char_offsets.last().copied().unwrap_or(0.0),
+                    ),
+                    None => {
+                        let display_text = expand_tabs(&source_text, self.tab_spaces);
+                        let width = display_text.chars().count() as f32 * estimated_advance;
+                        (display_text, None, width)
+                    }
+                };
             content_width = content_width.max(width);
             document_lines.push(DocumentLineMetrics {
                 source_start,
@@ -535,7 +727,7 @@ impl TextAreaModel {
                 source_start: 0,
                 source_end: 0,
                 display_text: String::new(),
-                char_offsets: vec![0.0],
+                char_offsets: Some(vec![0.0]),
                 width: 0.0,
             });
         }
@@ -588,6 +780,7 @@ impl TextAreaModel {
                 button: PointerButton::Primary,
                 state,
             } => {
+                self.end_edit_run();
                 if let Some(track) = self
                     .vertical_scrollbar
                     .interactive_rect(Self::VSCROLL_HIT_PAD_X, Self::VSCROLL_HIT_PAD_Y)
@@ -678,6 +871,7 @@ impl TextAreaModel {
                 WidgetResponse::default()
             }
             UiEvent::FocusChanged(focused) => {
+                self.end_edit_run();
                 if self.focused != focused {
                     self.focused = focused;
                     if !focused {
@@ -705,7 +899,7 @@ impl TextAreaModel {
                 if !self.focused || text.is_empty() {
                     return WidgetResponse::default();
                 }
-                self.replace_selection(&text);
+                self.type_text(&text);
                 self.preferred_x = None;
                 self.request_caret_visibility();
                 WidgetResponse::redraw_consumed()
@@ -868,17 +1062,59 @@ impl TextAreaModel {
             };
         }
 
+        // Option (macOS) or Ctrl (elsewhere) works by word; Cmd works by
+        // line, or by document for Up/Down: the platforms' own conventions.
+        let by_word = modifiers.alt || modifiers.ctrl;
+        let by_line = modifiers.meta;
+        let plain_delete = matches!(key, Key::Backspace | Key::Delete) && !by_word && !by_line;
+        if !plain_delete {
+            self.end_edit_run();
+        }
+        let extend = modifiers.shift;
         let changed = match key {
+            Key::Left if by_line => self.move_line_boundary(true, extend),
+            Key::Right if by_line => self.move_line_boundary(false, extend),
+            Key::Left if by_word => {
+                let target = self.word_boundary(self.selection_head, -1);
+                self.move_to(target, extend)
+            }
+            Key::Right if by_word => {
+                let target = self.word_boundary(self.selection_head, 1);
+                self.move_to(target, extend)
+            }
+            Key::Up if by_line => self.move_to(0, extend),
+            Key::Down if by_line => {
+                let end = self.char_len();
+                self.move_to(end, extend)
+            }
             Key::Left => self.move_horizontal(-1, modifiers.shift),
             Key::Right => self.move_horizontal(1, modifiers.shift),
             Key::Up => self.move_vertical(-1, modifiers.shift),
             Key::Down => self.move_vertical(1, modifiers.shift),
             Key::Home => self.move_line_boundary(true, modifiers.shift),
             Key::End => self.move_line_boundary(false, modifiers.shift),
+            Key::Backspace if by_line => {
+                let target = self.line_start_of(self.selection_head);
+                self.delete_to(target)
+            }
+            Key::Backspace if by_word => {
+                let target = self.word_boundary(self.selection_head, -1);
+                self.delete_to(target)
+            }
+            Key::Delete if by_word => {
+                let target = self.word_boundary(self.selection_head, 1);
+                self.delete_to(target)
+            }
             Key::Backspace => self.backspace(),
             Key::Delete => self.delete_forward(),
-            Key::Enter => self.insert_control_text("\n"),
-            Key::Tab => self.insert_control_text("\t"),
+            Key::Enter => {
+                let newline = self.newline_text();
+                self.insert_control_text(&newline)
+            }
+            Key::Tab => {
+                let tab = self.tab_text.clone();
+                self.insert_control_text(&tab)
+            }
             _ => false,
         };
 
@@ -929,8 +1165,9 @@ impl TextAreaModel {
         }
         let preferred_x = self.preferred_x.unwrap_or(caret_x);
         let next_line = &self.document_lines[next_line_index];
-        let next_local = closest_char_offset_index(&next_line.char_offsets, preferred_x)
-            .min(next_line.source_end.saturating_sub(next_line.source_start));
+        let next_local =
+            closest_char_offset_index(&self.line_offsets(next_line_index), preferred_x)
+                .min(next_line.source_end.saturating_sub(next_line.source_start));
         let next_caret = next_line.source_start + next_local;
         if extend_selection {
             self.selection_head = next_caret;
@@ -979,7 +1216,8 @@ impl TextAreaModel {
             return false;
         }
         let remove_start = self.selection_head - 1;
-        self.replace_char_range(remove_start, self.selection_head, "");
+        self.join_edit_run(EditRun::Deleting);
+        self.replace_char_range_with(remove_start, self.selection_head, "", true);
         self.selection_anchor = remove_start;
         self.selection_head = remove_start;
         self.preferred_x = None;
@@ -998,7 +1236,8 @@ impl TextAreaModel {
             return false;
         }
         let remove_end = self.selection_head + 1;
-        self.replace_char_range(self.selection_head, remove_end, "");
+        self.join_edit_run(EditRun::Deleting);
+        self.replace_char_range_with(self.selection_head, remove_end, "", true);
         self.preferred_x = None;
         self.request_caret_visibility();
         true
@@ -1016,6 +1255,10 @@ impl TextAreaModel {
     }
 
     fn replace_char_range(&mut self, start: usize, end: usize, replacement: &str) {
+        self.replace_char_range_with(start, end, replacement, false);
+    }
+
+    fn replace_char_range_with(&mut self, start: usize, end: usize, replacement: &str, join: bool) {
         self.ensure_line_index();
         let dirty_line = self.line_index_for_char(start);
         let old_suffix_start = self
@@ -1024,7 +1267,12 @@ impl TextAreaModel {
         let new_end_line = dirty_line + replacement.chars().filter(|&ch| ch == '\n').count();
         let char_delta = replacement.chars().count() as isize - end.saturating_sub(start) as isize;
         self.update_line_starts_for_replace(start, end, replacement);
-        self.document.replace_char_range(start, end, replacement);
+        if join {
+            self.document
+                .replace_char_range_joining(start, end, replacement);
+        } else {
+            self.document.replace_char_range(start, end, replacement);
+        }
         self.pending_edit = Some(PendingTextEdit {
             dirty_line,
             old_suffix_start,
@@ -1073,24 +1321,14 @@ impl TextAreaModel {
             as usize;
         let line = &self.document_lines[line_index];
         let local_x = (point.x - self.text_base_content_rect().x + self.scroll_x).max(0.0);
-        line.source_start + closest_char_offset_index(&line.char_offsets, local_x)
+        line.source_start + closest_char_offset_index(&self.line_offsets(line_index), local_x)
     }
 
     fn line_position_for_caret(&self) -> Option<(usize, usize, f32)> {
-        self.document_lines
-            .iter()
-            .enumerate()
-            .find_map(|(index, line)| {
-                if self.selection_head >= line.source_start
-                    && self.selection_head <= line.source_end
-                {
-                    let local = self.selection_head - line.source_start;
-                    let x = *line.char_offsets.get(local).unwrap_or(&0.0);
-                    Some((index, local, x))
-                } else {
-                    None
-                }
-            })
+        let index = self.caret_line_index()?;
+        let local = self.selection_head - self.document_lines[index].source_start;
+        let x = *self.line_offsets(index).get(local).unwrap_or(&0.0);
+        Some((index, local, x))
     }
 
     fn clamp_scroll(&mut self) {
@@ -1118,7 +1356,8 @@ impl TextAreaModel {
         }
     }
 
-    fn scroll_vertical(&mut self, delta: f32) -> bool {
+    /// Scrolls by `delta` pixels (positive moves toward the end).
+    pub fn scroll_vertical(&mut self, delta: f32) -> bool {
         let next = self.vertical_scrollbar.offset + delta;
         if (next - self.vertical_scrollbar.offset).abs() <= f32::EPSILON {
             return false;
@@ -1337,28 +1576,190 @@ impl TextAreaModel {
     }
 
     pub fn undo(&mut self) -> bool {
-        if !self.document.undo() {
+        self.edit_run = None;
+        let Some(caret) = self.document.undo_with_caret() else {
             return false;
-        }
-        self.after_document_history_change();
+        };
+        self.after_document_history_change(caret);
         true
     }
 
     pub fn redo(&mut self) -> bool {
-        if !self.document.redo() {
+        self.edit_run = None;
+        let Some(caret) = self.document.redo_with_caret() else {
             return false;
-        }
-        self.after_document_history_change();
+        };
+        self.after_document_history_change(caret);
         true
     }
 
-    fn after_document_history_change(&mut self) {
+    /// Ends the run of typing or deleting that undo would treat as one step.
+    fn end_edit_run(&mut self) {
+        self.edit_run = None;
+        self.document.seal_history();
+    }
+
+    /// Starts or continues an edit run of `run`'s kind, sealing the open undo
+    /// group when the kind changes.
+    fn join_edit_run(&mut self, run: EditRun) {
+        let continues = matches!(
+            (self.edit_run, run),
+            (Some(EditRun::Typing { .. }), EditRun::Typing { .. })
+                | (Some(EditRun::Deleting), EditRun::Deleting)
+        );
+        if !continues {
+            self.document.seal_history();
+        }
+        self.edit_run = Some(run);
+    }
+
+    /// Typed text joins the open undo group, so typing undoes a word at a
+    /// time: a group ends where a word starts after whitespace, or at a
+    /// newline, a selection or any other action.
+    fn type_text(&mut self, text: &str) {
+        let single_line = !text.contains('\n');
+        if self.selection_range().is_some() || !single_line {
+            self.end_edit_run();
+            self.replace_selection(text);
+            return;
+        }
+        let starts_word = text.chars().next().is_some_and(|ch| !ch.is_whitespace());
+        let ends_in_space = text.chars().last().is_some_and(char::is_whitespace);
+        if matches!(self.edit_run, Some(EditRun::Typing { in_space: true })) && starts_word {
+            self.document.seal_history();
+        }
+        self.join_edit_run(EditRun::Typing {
+            in_space: ends_in_space,
+        });
+        let at = self.selection_head;
+        self.replace_char_range_with(at, at, text, true);
+        let next = at + text.chars().count();
+        self.selection_anchor = next;
+        self.selection_head = next;
+    }
+
+    /// Moves the caret to `target`, extending the selection when asked.
+    fn move_to(&mut self, target: usize, extend_selection: bool) -> bool {
+        let target = target.min(self.char_len());
+        if !extend_selection && self.selection_range().is_none() && target == self.selection_head {
+            return false;
+        }
+        self.selection_head = target;
+        if !extend_selection {
+            self.selection_anchor = target;
+        }
+        self.preferred_x = None;
+        true
+    }
+
+    /// Deletes from the caret to `target` (either side), or the selection if
+    /// there is one, as its own undo step.
+    fn delete_to(&mut self, target: usize) -> bool {
+        if self.selection_range().is_some() {
+            self.replace_selection("");
+            return true;
+        }
+        let (start, end) = ordered_range(self.selection_head, target.min(self.char_len()));
+        if start == end {
+            return false;
+        }
+        self.replace_char_range(start, end, "");
+        self.selection_anchor = start;
+        self.selection_head = start;
+        self.preferred_x = None;
+        true
+    }
+
+    fn line_start_of(&mut self, char_index: usize) -> usize {
+        self.ensure_line_index();
+        self.line_starts[self.line_index_for_char(char_index)]
+    }
+
+    /// The logical line holding `char_index`, as `(first char, its chars)`.
+    fn line_chars_at(&mut self, char_index: usize) -> (usize, Vec<char>) {
+        self.ensure_line_index();
+        let line = self.line_index_for_char(char_index);
+        let start = self.line_starts[line];
+        let end = self
+            .line_starts
+            .get(line + 1)
+            .map(|next| next.saturating_sub(1))
+            .unwrap_or_else(|| self.char_len());
+        (start, self.slice_chars(start, end).chars().collect())
+    }
+
+    /// Where a word-wise move from `from` in `direction` (-1 or 1) lands:
+    /// past any whitespace, then past one run of word characters or of
+    /// punctuation. At a line's edge it crosses the line break.
+    fn word_boundary(&mut self, from: usize, direction: isize) -> usize {
+        let (line_start, chars) = self.line_chars_at(from);
+        let mut local = from - line_start;
+        if direction < 0 {
+            if local == 0 {
+                return from.saturating_sub(1);
+            }
+            while local > 0 && char_class(chars[local - 1]) == CharClass::Space {
+                local -= 1;
+            }
+            if local > 0 {
+                let class = char_class(chars[local - 1]);
+                while local > 0 && char_class(chars[local - 1]) == class {
+                    local -= 1;
+                }
+            }
+        } else {
+            if local >= chars.len() {
+                return (from + 1).min(self.char_len());
+            }
+            while local < chars.len() && char_class(chars[local]) == CharClass::Space {
+                local += 1;
+            }
+            if local < chars.len() {
+                let class = char_class(chars[local]);
+                while local < chars.len() && char_class(chars[local]) == class {
+                    local += 1;
+                }
+            }
+        }
+        line_start + local
+    }
+
+    /// What Enter inserts: a newline, then with `auto_indent` the current
+    /// line's leading whitespace, plus `tab_text` after an opening bracket.
+    fn newline_text(&mut self) -> String {
+        if !self.auto_indent {
+            return "\n".to_string();
+        }
+        let at = self
+            .selection_range()
+            .map_or(self.selection_head, |(start, _)| start);
+        let (line_start, chars) = self.line_chars_at(at);
+        let indent: String = chars
+            .iter()
+            .take_while(|ch| **ch == ' ' || **ch == '\t')
+            .collect();
+        let before_caret = &chars[..at - line_start];
+        let opens = before_caret
+            .iter()
+            .rev()
+            .find(|ch| !ch.is_whitespace())
+            .is_some_and(|ch| matches!(ch, '{' | '(' | '['));
+        let mut text = String::with_capacity(1 + indent.len() + self.tab_text.len());
+        text.push('\n');
+        text.push_str(&indent);
+        if opens {
+            text.push_str(&self.tab_text);
+        }
+        text
+    }
+
+    fn after_document_history_change(&mut self, caret: usize) {
         self.line_index_dirty = true;
         self.document_dirty_from_line = Some(0);
         self.pending_edit = None;
-        let len = self.char_len();
-        self.selection_anchor = self.selection_anchor.min(len);
-        self.selection_head = self.selection_head.min(len);
+        let caret = caret.min(self.char_len());
+        self.selection_anchor = caret;
+        self.selection_head = caret;
         self.preferred_x = None;
         self.request_caret_visibility();
     }
@@ -1403,6 +1804,14 @@ impl Component for TextArea {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
+}
+
+/// `source_text` as drawn: each tab becomes `tab_spaces` spaces.
+fn expand_tabs(source_text: &str, tab_spaces: usize) -> String {
+    if !source_text.contains('\t') {
+        return source_text.to_string();
+    }
+    source_text.replace('\t', &" ".repeat(tab_spaces.max(1)))
 }
 
 fn build_display_text<F>(
@@ -2164,5 +2573,187 @@ mod tests {
             area.line_position_for_caret().map(|(line, _, _)| line),
             Some(2)
         );
+    }
+
+    fn key(area: &mut TextAreaModel, key: Key, modifiers: Modifiers) {
+        let _ = area.handle_event(UiEvent::KeyPressed { key, modifiers });
+        area.relayout(measure_width);
+    }
+
+    fn type_text(area: &mut TextAreaModel, text: &str) {
+        for ch in text.chars() {
+            let _ = area.handle_event(UiEvent::TextInput {
+                text: ch.to_string(),
+            });
+        }
+        area.relayout(measure_width);
+    }
+
+    fn cmd() -> Modifiers {
+        Modifiers {
+            meta: true,
+            ..Modifiers::default()
+        }
+    }
+
+    fn option() -> Modifiers {
+        Modifiers {
+            alt: true,
+            ..Modifiers::default()
+        }
+    }
+
+    #[test]
+    fn undo_removes_typing_a_word_at_a_time_and_moves_the_caret() {
+        let mut area = area("");
+        type_text(&mut area, "let value = 1;");
+        assert_eq!(area.text(), "let value = 1;");
+        let undo = Key::Character('z');
+        key(&mut area, undo, cmd());
+        assert_eq!(area.text(), "let value = ");
+        assert_eq!(area.caret(), 12);
+        key(&mut area, undo, cmd());
+        assert_eq!(area.text(), "let value ");
+        key(&mut area, undo, cmd());
+        key(&mut area, undo, cmd());
+        assert_eq!(area.text(), "");
+        assert_eq!(area.caret(), 0);
+        let redo = Modifiers {
+            shift: true,
+            ..cmd()
+        };
+        key(&mut area, undo, redo);
+        assert_eq!(area.text(), "let ");
+        assert_eq!(area.caret(), 4);
+    }
+
+    #[test]
+    fn a_caret_move_ends_the_undo_group() {
+        let mut area = area("");
+        type_text(&mut area, "ab");
+        key(&mut area, Key::Left, Modifiers::default());
+        type_text(&mut area, "X");
+        assert_eq!(area.text(), "aXb");
+        key(&mut area, Key::Character('z'), cmd());
+        assert_eq!(area.text(), "ab");
+    }
+
+    #[test]
+    fn backspaces_undo_together_but_not_with_the_typing_before_them() {
+        let mut area = area("");
+        type_text(&mut area, "abcd");
+        key(&mut area, Key::Backspace, Modifiers::default());
+        key(&mut area, Key::Backspace, Modifiers::default());
+        assert_eq!(area.text(), "ab");
+        key(&mut area, Key::Character('z'), cmd());
+        assert_eq!(area.text(), "abcd");
+        assert_eq!(area.caret(), 4);
+    }
+
+    #[test]
+    fn option_arrows_move_by_word_and_cmd_arrows_by_line_and_document() {
+        let mut area = area("fn main() {\n    let x_1 = 2;\n}");
+        area.set_caret(19); // after "    let" on line 2
+        area.relayout(measure_width);
+        key(&mut area, Key::Right, option());
+        assert_eq!(area.caret(), 23, "past the space, then over x_1");
+        key(&mut area, Key::Right, option());
+        assert_eq!(area.caret(), 25, "past the space, then over =");
+        key(&mut area, Key::Left, option());
+        assert_eq!(area.caret(), 24);
+        key(&mut area, Key::Left, option());
+        assert_eq!(area.caret(), 20);
+        key(&mut area, Key::Left, cmd());
+        assert_eq!(area.caret(), 12, "start of line 2");
+        key(&mut area, Key::Left, option());
+        assert_eq!(area.caret(), 11, "crosses the line break");
+        key(&mut area, Key::Down, cmd());
+        assert_eq!(area.caret(), area.text().chars().count());
+        key(&mut area, Key::Up, cmd());
+        assert_eq!(area.caret(), 0);
+    }
+
+    #[test]
+    fn option_and_cmd_backspace_delete_a_word_and_to_line_start() {
+        let mut area = area("one two three");
+        area.set_caret(13);
+        area.relayout(measure_width);
+        key(&mut area, Key::Backspace, option());
+        assert_eq!(area.text(), "one two ");
+        key(&mut area, Key::Backspace, cmd());
+        assert_eq!(area.text(), "");
+        key(&mut area, Key::Character('z'), cmd());
+        assert_eq!(area.text(), "one two ");
+    }
+
+    #[test]
+    fn enter_with_auto_indent_keeps_indentation_and_indents_after_a_brace() {
+        let mut area = area("    fn f() {");
+        area.auto_indent = true;
+        area.tab_text = "    ".to_string();
+        area.set_caret(12);
+        area.relayout(measure_width);
+        key(&mut area, Key::Enter, Modifiers::default());
+        assert_eq!(area.text(), "    fn f() {\n        ");
+        type_text(&mut area, "x");
+        key(&mut area, Key::Enter, Modifiers::default());
+        assert_eq!(area.text(), "    fn f() {\n        x\n        ");
+        key(&mut area, Key::Tab, Modifiers::default());
+        assert!(area.text().ends_with("\n            "));
+    }
+
+    #[test]
+    fn opening_a_long_document_measures_only_what_is_on_screen() {
+        let text: String = (0..5_000)
+            .map(|line| format!("    let value_{line} = compute({line});\n"))
+            .collect();
+        let mut area = TextAreaModel::new(
+            text.clone(),
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 600.0,
+                height: 400.0,
+            },
+        );
+        area.focused = true;
+        let mut calls = 0usize;
+        area.relayout(|text: &str, size: u16| {
+            calls += 1;
+            measure_width(text, size)
+        });
+        let visible = area.layout_cache.lines.len();
+        assert!(visible > 5 && visible < 40, "{visible} lines on screen");
+        // One measurement per character of the visible lines, not of all
+        // 5,000 lines.
+        assert!(calls < 40 * 40, "{calls} measurements");
+
+        // Jumping to the end measures the lines there; the caret lands on
+        // measured offsets.
+        area.set_caret(text.chars().count());
+        area.relayout(measure_width);
+        assert_eq!(
+            area.layout_cache.lines.last().unwrap().source_start,
+            area.caret()
+        );
+        let caret = area.layout_cache.caret_rect.expect("caret shown");
+        assert!(caret.y < 400.0);
+    }
+
+    #[test]
+    fn up_and_down_reach_lines_not_measured_yet() {
+        let text: String = (0..200).map(|line| format!("line {line}\n")).collect();
+        let mut area = area(&text);
+        area.set_caret(2);
+        area.relayout(measure_width);
+        for _ in 0..150 {
+            let _ = area.handle_event(UiEvent::KeyPressed {
+                key: Key::Down,
+                modifiers: Modifiers::default(),
+            });
+        }
+        area.relayout(measure_width);
+        assert_eq!(area.line_of_char(area.caret()), 150);
+        assert_eq!(area.caret() - area.line_start_char(150), 2);
     }
 }
