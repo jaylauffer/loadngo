@@ -217,6 +217,7 @@ impl PendingInput {
             // Gamepads do not come from winit events like everything else
             // here; `capture_frame` polls evdev and fills them in.
             gamepads: Vec::new(),
+            menu_commands: Vec::new(),
         }
     }
 
@@ -1509,6 +1510,8 @@ fn map_host_key(event: &winit::event::KeyEvent) -> Option<HostKey> {
             "V" => Some(HostKey::V),
             "W" => Some(HostKey::W),
             "X" => Some(HostKey::X),
+            "O" => Some(HostKey::O),
+            "Q" => Some(HostKey::Q),
             "Y" => Some(HostKey::Y),
             "Z" => Some(HostKey::Z),
             _ => None,
@@ -2244,4 +2247,10 @@ mod tests {
             "stacked marks widened the cluster: {one} vs {stacked}"
         );
     }
+}
+
+/// This host has no system menu bar: returns `false`, and the app draws a
+/// `ui_core::MenuBarModel` instead. See `ui_core::menu`.
+pub fn set_menu_bar(_menu_bar: &ui_core::MenuBar) -> bool {
+    false
 }

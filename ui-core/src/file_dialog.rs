@@ -38,11 +38,16 @@ use crate::{
     widget::{WidgetAction, WidgetId, WidgetResponse},
 };
 
-/// Whether the dialog picks an existing file or names a file to write.
+/// Whether the dialog picks an existing file, names a file to write, or
+/// picks a folder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileDialogMode {
     Open,
     Save,
+    /// Lists folders only. Double-click or Enter on a folder goes into it;
+    /// the Open button picks the selected folder, or the folder being shown
+    /// when none is selected.
+    Folder,
 }
 
 /// Restricts the listing to one kind of file, e.g. `WAV audio (*.wav)`.
@@ -108,8 +113,9 @@ pub struct DirectoryEntry {
     pub size_bytes: Option<u64>,
 }
 
-/// Where the dialog gets its view of the filesystem.
-pub trait DirectorySource {
+/// Where the dialog gets its view of the filesystem. `Send` because a dialog
+/// lives in the app's future, which Android's host requires to be `Send`.
+pub trait DirectorySource: Send {
     fn list(&self, directory: &Path) -> io::Result<Vec<DirectoryEntry>>;
     /// `None` if nothing exists at `path`.
     fn kind(&self, path: &Path) -> Option<PathKind>;
@@ -326,6 +332,18 @@ impl FileDialogModel {
         dialog
     }
 
+    /// A dialog for choosing a folder, starting in `directory`.
+    pub fn choose_folder(
+        title: impl Into<String>,
+        directory: impl Into<PathBuf>,
+        source: Box<dyn DirectorySource>,
+    ) -> Self {
+        let mut dialog = Self::new(FileDialogMode::Folder, title.into(), None, source);
+        dialog.navigate_to(directory.into());
+        dialog.set_focus(Focus::List);
+        dialog
+    }
+
     /// A dialog for naming a file to write, starting in `directory` with
     /// `suggested_name` filled in and its stem selected, so typing replaces
     /// the name but keeps the extension.
@@ -355,7 +373,7 @@ impl FileDialogModel {
         source: Box<dyn DirectorySource>,
     ) -> Self {
         let confirm_label = match mode {
-            FileDialogMode::Open => "Open",
+            FileDialogMode::Open | FileDialogMode::Folder => "Open",
             FileDialogMode::Save => "Save",
         };
         let mut name_field = TextFieldModel::with_id(NAME_ID, "", Rect::default());
@@ -571,7 +589,11 @@ impl FileDialogModel {
         push_text(
             scene,
             self.layout.name_label,
-            "Name",
+            if self.mode == FileDialogMode::Folder {
+                "Folder"
+            } else {
+                "Name"
+            },
             BODY_FONT,
             DIM_TEXT,
             HorizontalAlign::Left,
@@ -608,10 +630,11 @@ impl FileDialogModel {
                     .filter(|entry| self.show_hidden || !entry.name.starts_with('.'))
                     .filter(|entry| {
                         entry.is_dir
-                            || self
-                                .filter
-                                .as_ref()
-                                .is_none_or(|filter| filter.matches(&entry.name))
+                            || self.mode != FileDialogMode::Folder
+                                && self
+                                    .filter
+                                    .as_ref()
+                                    .is_none_or(|filter| filter.matches(&entry.name))
                     })
                     .collect();
                 entries.sort_by(compare_entries);
@@ -672,13 +695,18 @@ impl FileDialogModel {
             return Some(FileDialogOutcome::Confirmed(path));
         }
         let typed = self.name_field.text().trim().to_string();
+        if self.mode == FileDialogMode::Folder {
+            return self.confirm_folder(&typed);
+        }
         if typed.is_empty() {
             return match self.selected_entry().cloned() {
                 Some(entry) => self.activate_entry(&entry),
                 None => {
                     self.message = Some(match self.mode {
                         FileDialogMode::Open => "Choose a file to open".to_string(),
-                        FileDialogMode::Save => "Type a name for the file".to_string(),
+                        FileDialogMode::Save | FileDialogMode::Folder => {
+                            "Type a name for the file".to_string()
+                        }
                     });
                     None
                 }
@@ -694,7 +722,26 @@ impl FileDialogModel {
         match self.mode {
             FileDialogMode::Open => self.confirm_open(path, &typed),
             FileDialogMode::Save => self.confirm_save(path),
+            FileDialogMode::Folder => None,
         }
+    }
+
+    /// Folder mode's Open: a typed folder, else the selected folder, else the
+    /// folder being shown.
+    fn confirm_folder(&mut self, typed: &str) -> Option<FileDialogOutcome> {
+        if !typed.is_empty() {
+            let path = self.resolve_typed(typed);
+            if self.source.kind(&path) == Some(PathKind::Directory) {
+                return Some(FileDialogOutcome::Confirmed(path));
+            }
+            self.message = Some(format!("No such folder: {typed}"));
+            return None;
+        }
+        let chosen = match self.selected_entry() {
+            Some(entry) if entry.is_dir => self.directory.join(&entry.name),
+            _ => self.directory.clone(),
+        };
+        Some(FileDialogOutcome::Confirmed(chosen))
     }
 
     fn confirm_open(&mut self, path: PathBuf, typed: &str) -> Option<FileDialogOutcome> {
@@ -781,6 +828,8 @@ impl FileDialogModel {
                 self.name_field.set_text(&entry.name);
                 self.confirm_save(self.directory.join(&entry.name))
             }
+            // Folder mode lists no files.
+            FileDialogMode::Folder => None,
         }
     }
 
@@ -1441,7 +1490,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::io;
     use std::path::{Path, PathBuf};
-    use std::rc::Rc;
+    use std::sync::Arc;
 
     use super::*;
     use crate::input::PointerState;
@@ -1449,7 +1498,7 @@ mod tests {
     /// An in-memory tree: path -> Some(size) for files, None for folders.
     #[derive(Clone, Default)]
     struct FakeFs {
-        nodes: Rc<BTreeMap<PathBuf, Option<u64>>>,
+        nodes: Arc<BTreeMap<PathBuf, Option<u64>>>,
     }
 
     impl FakeFs {
@@ -1464,7 +1513,7 @@ mod tests {
                 nodes.insert(path, *size);
             }
             Self {
-                nodes: Rc::new(nodes),
+                nodes: Arc::new(nodes),
             }
         }
     }
@@ -1862,5 +1911,61 @@ mod tests {
         assert!(filter.matches("a.Wave"));
         assert!(!filter.matches("wav"));
         assert_eq!(filter.description(), "WAV audio (*.wav, *.wave)");
+    }
+
+    fn folder_dialog() -> FileDialogModel {
+        laid_out(FileDialogModel::choose_folder(
+            "Open folder",
+            "/home/jay/Music/Takes",
+            Box::new(tree()),
+        ))
+    }
+
+    #[test]
+    fn folder_mode_lists_only_folders_and_opens_the_shown_one_by_default() {
+        let mut dialog = folder_dialog();
+        let names: Vec<_> = dialog.entries().iter().map(|e| e.name.clone()).collect();
+        assert_eq!(names, vec!["Archive", "bass"]);
+        assert_eq!(
+            dialog.confirm(),
+            Some(FileDialogOutcome::Confirmed(PathBuf::from(
+                "/home/jay/Music/Takes"
+            )))
+        );
+    }
+
+    #[test]
+    fn folder_mode_opens_the_selected_folder_and_enter_goes_into_it() {
+        let mut dialog = folder_dialog();
+        dialog.select_entry(1);
+        assert_eq!(
+            dialog.confirm(),
+            Some(FileDialogOutcome::Confirmed(PathBuf::from(
+                "/home/jay/Music/Takes/bass"
+            )))
+        );
+        dialog.select_entry(0);
+        let response = key(&mut dialog, Key::Enter);
+        assert_eq!(response.outcome, None, "Enter on a folder goes into it");
+        assert_eq!(
+            dialog.directory(),
+            Path::new("/home/jay/Music/Takes/Archive")
+        );
+        assert!(dialog.entries().is_empty(), "its only file is not listed");
+    }
+
+    #[test]
+    fn folder_mode_takes_a_typed_folder_and_refuses_a_file() {
+        let mut dialog = folder_dialog();
+        type_text(&mut dialog, "~/Music");
+        assert_eq!(
+            dialog.confirm(),
+            Some(FileDialogOutcome::Confirmed(PathBuf::from(
+                "/home/jay/Music"
+            )))
+        );
+        let mut dialog = folder_dialog();
+        type_text(&mut dialog, "notes.txt");
+        assert_eq!(dialog.confirm(), None);
     }
 }

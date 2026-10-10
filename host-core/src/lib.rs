@@ -321,6 +321,8 @@ pub enum HostKey {
     W,
     T,
     X,
+    O,
+    Q,
 }
 
 impl HostKey {
@@ -354,6 +356,8 @@ impl HostKey {
             HostKey::W => Key::Character('w'),
             HostKey::Y => Key::Character('y'),
             HostKey::X => Key::Character('x'),
+            HostKey::O => Key::Character('o'),
+            HostKey::Q => Key::Character('q'),
             HostKey::Z => Key::Character('z'),
             HostKey::F3 => return None,
         })
@@ -558,6 +562,10 @@ pub struct InputSnapshot {
     /// `loadngo/docs/GAMEPAD_INPUT.md`. Always empty elsewhere.
     #[serde(default)]
     pub gamepads: Vec<GamepadSnapshot>,
+    /// Menu items chosen since the last frame (by menu or key equivalent)
+    /// from the system menu bar set with `set_menu_bar`; see `ui_core::menu`.
+    #[serde(default)]
+    pub menu_commands: Vec<ui_core::MenuCommand>,
 }
 
 impl InputSnapshot {

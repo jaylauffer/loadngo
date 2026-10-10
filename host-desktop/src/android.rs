@@ -1061,6 +1061,7 @@ fn blank_snapshot() -> InputSnapshot {
         keys_down: Vec::new(),
         typed_text: String::new(),
         gamepads: Vec::new(),
+        menu_commands: Vec::new(),
     }
 }
 
@@ -3873,4 +3874,10 @@ fn noop_waker() -> Waker {
     static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
     let raw = RawWaker::new(std::ptr::null(), &VTABLE);
     unsafe { Waker::from_raw(raw) }
+}
+
+/// This host has no system menu bar: returns `false`, and the app draws a
+/// `ui_core::MenuBarModel` instead. See `ui_core::menu`.
+pub fn set_menu_bar(_menu_bar: &ui_core::MenuBar) -> bool {
+    false
 }

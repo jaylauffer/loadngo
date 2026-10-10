@@ -11,6 +11,7 @@ pub mod input;
 pub mod label;
 pub mod list;
 pub mod list_row;
+pub mod menu;
 pub mod overlay_layout;
 pub mod paint;
 pub mod panel;
@@ -47,6 +48,7 @@ pub use input::{Key, Modifiers, PointerButton, PointerSource, PointerState, UiEv
 pub use label::{Label, LabelModel};
 pub use list::{ListInteraction, ListState};
 pub use list_row::{ListRow, ListRowModel};
+pub use menu::{Menu, MenuBar, MenuBarModel, MenuBarResponse, MenuCommand, MenuItem, Shortcut};
 pub use overlay_layout::{OverlayStackLayout, OverlayStackMetrics};
 pub use paint::{
     HorizontalAlign, PaintOp, Particle, TextLayoutMode, TextOverflow, TextStyle,

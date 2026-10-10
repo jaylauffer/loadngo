@@ -231,6 +231,7 @@ impl PendingInput {
             keys_down: self.keys_down.clone(),
             typed_text: self.typed_text.clone(),
             gamepads: Vec::new(),
+            menu_commands: Vec::new(),
         }
     }
 
@@ -1691,6 +1692,8 @@ fn map_host_key(event: &winit::event::KeyEvent) -> Option<HostKey> {
             "V" => Some(HostKey::V),
             "W" => Some(HostKey::W),
             "X" => Some(HostKey::X),
+            "O" => Some(HostKey::O),
+            "Q" => Some(HostKey::Q),
             "Y" => Some(HostKey::Y),
             "Z" => Some(HostKey::Z),
             _ => None,
@@ -1794,4 +1797,10 @@ fn sanitized_typed_text(text: &str) -> Option<String> {
     } else {
         Some(filtered)
     }
+}
+
+/// This host has no system menu bar: returns `false`, and the app draws a
+/// `ui_core::MenuBarModel` instead. See `ui_core::menu`.
+pub fn set_menu_bar(_menu_bar: &ui_core::MenuBar) -> bool {
+    false
 }

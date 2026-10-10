@@ -23,11 +23,12 @@ use loadngo_host_core::{
 use loadngo_proactor::{CompletionKind, KqueuePort};
 use loadngo_renderer::{FrameCommand, Renderer, RendererConfig};
 use objc2::{
-    class,
+    class, define_class,
     encode::{Encode, Encoding},
     msg_send,
     rc::Retained,
-    runtime::AnyObject,
+    runtime::{AnyObject, NSObject},
+    sel, MainThreadMarker, MainThreadOnly,
 };
 use objc2_game_controller::{GCController, GCExtendedGamepad};
 use ui_core::{
@@ -191,6 +192,7 @@ impl Default for InputState {
                 keys_down: Vec::new(),
                 typed_text: String::new(),
                 gamepads: Vec::new(),
+                menu_commands: Vec::new(),
             },
         }
     }
@@ -215,6 +217,7 @@ impl InputState {
         self.snapshot.down_pressed = false;
         self.snapshot.key_events.clear();
         self.snapshot.typed_text.clear();
+        self.snapshot.menu_commands.clear();
         self.snapshot.touches = [None; 8];
     }
 
@@ -513,6 +516,8 @@ const KEYCODE_S: u16 = 1;
 const KEYCODE_T: u16 = 17;
 const KEYCODE_W: u16 = 13;
 const KEYCODE_X: u16 = 7;
+const KEYCODE_O: u16 = 31;
+const KEYCODE_Q: u16 = 12;
 const KEYCODE_V: u16 = 9;
 const KEYCODE_Y: u16 = 16;
 const KEYCODE_Z: u16 = 6;
@@ -1335,6 +1340,7 @@ fn create_window(
         promote_process_to_foreground();
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
         let _: () = msg_send![app, finishLaunching];
+        install_main_menu(&[]);
         if let Some(icon) = icon {
             if let Some(image) = ns_image_from_rgba(&icon.big_rgba8, 64, 64) {
                 let _: () = msg_send![app, setApplicationIconImage: &*image];
@@ -1498,11 +1504,7 @@ fn pump_events_until(timeout: Option<Duration>) {
             dequeue: true
         ];
         if !event.is_null() {
-            let event_type: u64 = msg_send![event, type];
-            handle_event(event);
-            if should_forward_event_to_app(event_type) {
-                let _: () = msg_send![app, sendEvent: event];
-            }
+            dispatch_event(app, event);
             let distant_past: *mut AnyObject = msg_send![class!(NSDate), distantPast];
             loop {
                 let event: *mut AnyObject = msg_send![
@@ -1515,11 +1517,7 @@ fn pump_events_until(timeout: Option<Duration>) {
                 if event.is_null() {
                     break;
                 }
-                let event_type: u64 = msg_send![event, type];
-                handle_event(event);
-                if should_forward_event_to_app(event_type) {
-                    let _: () = msg_send![app, sendEvent: event];
-                }
+                dispatch_event(app, event);
             }
         }
         let _: () = msg_send![app, updateWindows];
@@ -1548,6 +1546,277 @@ fn pump_events_until(timeout: Option<Duration>) {
             update_window_cursor(&state.window);
         }
     });
+}
+
+// ----- menu bar -----
+
+define_class!(
+    /// Receives every loadngo menu item's action; the item's tag names the
+    /// command.
+    #[unsafe(super = NSObject)]
+    #[thread_kind = MainThreadOnly]
+    struct LoadngoMenuTarget;
+
+    impl LoadngoMenuTarget {
+        #[unsafe(method(loadngoMenuItem:))]
+        fn menu_item(&self, sender: *mut AnyObject) {
+            let tag: isize = unsafe { msg_send![sender, tag] };
+            menu_item_chosen(tag);
+        }
+    }
+);
+
+thread_local! {
+    static MENU_TARGET: RefCell<Option<Retained<LoadngoMenuTarget>>> = const { RefCell::new(None) };
+    /// What the application menu's Quit sends; `None` quits.
+    static MENU_QUIT: RefCell<Option<ui_core::MenuCommand>> = const { RefCell::new(None) };
+}
+
+/// The tag of the application menu's Quit item.
+const QUIT_TAG: isize = -1;
+const NSEVENT_MODIFIER_FLAG_SHIFT_MASK: usize = 1 << 17;
+const NSEVENT_MODIFIER_FLAG_OPTION_MASK: usize = 1 << 19;
+const NSEVENT_MODIFIER_FLAG_COMMAND_MASK: usize = 1 << 20;
+
+fn menu_item_chosen(tag: isize) {
+    let command = if tag == QUIT_TAG {
+        MENU_QUIT.with(|quit| *quit.borrow())
+    } else {
+        Some(ui_core::MenuCommand(tag as u32))
+    };
+    APP_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let Some(state) = state.as_mut() else {
+            return;
+        };
+        match command {
+            Some(command) => state.input.snapshot.menu_commands.push(command),
+            None => state.should_close = true,
+        }
+        state.event_epoch = state.event_epoch.saturating_add(1);
+        for waker in state.next_frame_wakers.drain(..) {
+            waker.wake();
+        }
+    });
+}
+
+fn menu_target() -> Retained<LoadngoMenuTarget> {
+    MENU_TARGET.with(|target| {
+        target
+            .borrow_mut()
+            .get_or_insert_with(|| {
+                let mtm =
+                    MainThreadMarker::new().expect("loadngo menus are built on the main thread");
+                unsafe { msg_send![LoadngoMenuTarget::alloc(mtm), init] }
+            })
+            .clone()
+    })
+}
+
+/// A new, empty NSMenu that keeps the enabled state each item is given.
+unsafe fn new_menu(title: &str) -> Retained<AnyObject> {
+    let title = ns_string(title);
+    let menu: *mut AnyObject = msg_send![class!(NSMenu), alloc];
+    let menu: *mut AnyObject = msg_send![menu, initWithTitle: &*title];
+    let menu = Retained::from_raw(menu).expect("NSMenu allocation");
+    let _: () = msg_send![&*menu, setAutoenablesItems: false];
+    menu
+}
+
+/// Adds an item to `menu`. With `tag` the item sends `loadngoMenuItem:` to
+/// the loadngo target; otherwise `action` goes up the responder chain.
+unsafe fn add_menu_item(
+    menu: &AnyObject,
+    title: &str,
+    action: objc2::runtime::Sel,
+    key: &str,
+    modifiers: usize,
+    tag: Option<isize>,
+    enabled: bool,
+) {
+    let title = ns_string(title);
+    let key = ns_string(key);
+    let item: *mut AnyObject = msg_send![class!(NSMenuItem), alloc];
+    let item: *mut AnyObject =
+        msg_send![item, initWithTitle: &*title, action: action, keyEquivalent: &*key];
+    let item = Retained::from_raw(item).expect("NSMenuItem allocation");
+    let _: () = msg_send![&*item, setKeyEquivalentModifierMask: modifiers];
+    if let Some(tag) = tag {
+        let target = menu_target();
+        let _: () = msg_send![&*item, setTarget: &*target];
+        let _: () = msg_send![&*item, setTag: tag];
+    }
+    let _: () = msg_send![&*item, setEnabled: enabled];
+    let _: () = msg_send![menu, addItem: &*item];
+}
+
+unsafe fn add_separator(menu: &AnyObject) {
+    let item: *mut AnyObject = msg_send![class!(NSMenuItem), separatorItem];
+    let _: () = msg_send![menu, addItem: item];
+}
+
+/// Adds `submenu` to the menu bar `main_menu` under its title.
+unsafe fn add_submenu(main_menu: &AnyObject, submenu: &AnyObject) {
+    let item: *mut AnyObject = msg_send![class!(NSMenuItem), new];
+    let item = Retained::from_raw(item).expect("NSMenuItem allocation");
+    let _: () = msg_send![&*item, setSubmenu: submenu];
+    let _: () = msg_send![main_menu, addItem: &*item];
+}
+
+fn shortcut_mask(shortcut: &ui_core::Shortcut) -> usize {
+    let mut mask = NSEVENT_MODIFIER_FLAG_COMMAND_MASK;
+    if shortcut.shift {
+        mask |= NSEVENT_MODIFIER_FLAG_SHIFT_MASK;
+    }
+    if shortcut.alt {
+        mask |= NSEVENT_MODIFIER_FLAG_OPTION_MASK;
+    }
+    mask
+}
+
+/// Shows `menu_bar` in the system menu bar, between the standard
+/// application menu (Hide, Hide Others, Show All, Quit) and Window menu
+/// (Minimize, Zoom). Chosen items arrive as `InputSnapshot::menu_commands`.
+/// Returns `true`: macOS shows the menus itself. Call again when titles or
+/// enabled states change; each call rebuilds the menu bar.
+pub fn set_menu_bar(menu_bar: &ui_core::MenuBar) -> bool {
+    MENU_QUIT.with(|quit| *quit.borrow_mut() = menu_bar.quit);
+    install_main_menu(&menu_bar.menus);
+    true
+}
+
+/// The standard menus every loadngo app gets at launch, before the app sets
+/// its own.
+fn install_main_menu(app_menus: &[ui_core::Menu]) {
+    unsafe {
+        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        let process: *mut AnyObject = msg_send![class!(NSProcessInfo), processInfo];
+        let name: *mut AnyObject = msg_send![process, processName];
+        let name = ns_string_to_rust(name).unwrap_or_default();
+        let main_menu = new_menu("");
+
+        let app_menu = new_menu(&name);
+        let none = 0usize;
+        let cmd = NSEVENT_MODIFIER_FLAG_COMMAND_MASK;
+        add_menu_item(
+            &app_menu,
+            &format!("Hide {name}"),
+            sel!(hide:),
+            "h",
+            cmd,
+            None,
+            true,
+        );
+        add_menu_item(
+            &app_menu,
+            "Hide Others",
+            sel!(hideOtherApplications:),
+            "h",
+            cmd | NSEVENT_MODIFIER_FLAG_OPTION_MASK,
+            None,
+            true,
+        );
+        add_menu_item(
+            &app_menu,
+            "Show All",
+            sel!(unhideAllApplications:),
+            "",
+            none,
+            None,
+            true,
+        );
+        add_separator(&app_menu);
+        add_menu_item(
+            &app_menu,
+            &format!("Quit {name}"),
+            sel!(loadngoMenuItem:),
+            "q",
+            cmd,
+            Some(QUIT_TAG),
+            true,
+        );
+        add_submenu(&main_menu, &app_menu);
+
+        for menu in app_menus {
+            let submenu = new_menu(&menu.title);
+            for item in &menu.items {
+                match item {
+                    ui_core::MenuItem::Separator => add_separator(&submenu),
+                    ui_core::MenuItem::Command {
+                        command,
+                        title,
+                        shortcut,
+                        enabled,
+                    } => {
+                        let (key, mask) = shortcut.map_or((String::new(), none), |shortcut| {
+                            (shortcut.key.to_string(), shortcut_mask(&shortcut))
+                        });
+                        add_menu_item(
+                            &submenu,
+                            title,
+                            sel!(loadngoMenuItem:),
+                            &key,
+                            mask,
+                            Some(command.0 as isize),
+                            *enabled,
+                        );
+                    }
+                }
+            }
+            add_submenu(&main_menu, &submenu);
+        }
+
+        let window_menu = new_menu("Window");
+        add_menu_item(
+            &window_menu,
+            "Minimize",
+            sel!(performMiniaturize:),
+            "m",
+            cmd,
+            None,
+            true,
+        );
+        add_menu_item(
+            &window_menu,
+            "Zoom",
+            sel!(performZoom:),
+            "",
+            none,
+            None,
+            true,
+        );
+        add_submenu(&main_menu, &window_menu);
+
+        let _: () = msg_send![app, setMainMenu: &*main_menu];
+        let _: () = msg_send![app, setWindowsMenu: &*window_menu];
+    }
+}
+
+/// Offers a Cmd key press to the menu bar first, as AppKit does; true when
+/// a menu item took it, so the app never also sees the key.
+unsafe fn menu_takes_key(app: *mut AnyObject, event: *mut AnyObject) -> bool {
+    let flags: u64 = msg_send![event, modifierFlags];
+    if flags & NSEVENT_MODIFIER_FLAG_COMMAND == 0 {
+        return false;
+    }
+    let main_menu: *mut AnyObject = msg_send![app, mainMenu];
+    if main_menu.is_null() {
+        return false;
+    }
+    msg_send![main_menu, performKeyEquivalent: event]
+}
+
+/// Routes one AppKit event: key equivalents to the menu bar, everything else
+/// into loadngo's input state and, where AppKit needs it, on to the app.
+unsafe fn dispatch_event(app: *mut AnyObject, event: *mut AnyObject) {
+    let event_type: u64 = msg_send![event, type];
+    if event_type == NSEVENT_TYPE_KEY_DOWN && menu_takes_key(app, event) {
+        return;
+    }
+    handle_event(event);
+    if should_forward_event_to_app(event_type) {
+        let _: () = msg_send![app, sendEvent: event];
+    }
 }
 
 fn should_forward_event_to_app(event_type: u64) -> bool {
@@ -1826,6 +2095,8 @@ fn host_key_from_key_code(key_code: u16) -> Option<HostKey> {
         KEYCODE_T => HostKey::T,
         KEYCODE_W => HostKey::W,
         KEYCODE_X => HostKey::X,
+        KEYCODE_O => HostKey::O,
+        KEYCODE_Q => HostKey::Q,
         KEYCODE_V => HostKey::V,
         KEYCODE_Y => HostKey::Y,
         KEYCODE_Z => HostKey::Z,

@@ -126,6 +126,7 @@ impl DesktopPlatformBackend for LoadngoPlaceholderPlatformHost {
                 keys_down: Vec::new(),
                 typed_text: String::new(),
                 gamepads: Vec::new(),
+                menu_commands: Vec::new(),
             },
             foreground: true,
             focused: true,
@@ -536,4 +537,10 @@ mod tests {
         assert!(!status.metal_initialized);
         assert!(!status.metal_surface_bound);
     }
+}
+
+/// This host has no system menu bar: returns `false`, and the app draws a
+/// `ui_core::MenuBarModel` instead. See `ui_core::menu`.
+pub fn set_menu_bar(_menu_bar: &ui_core::MenuBar) -> bool {
+    false
 }
