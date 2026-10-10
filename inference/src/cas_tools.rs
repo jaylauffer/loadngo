@@ -993,10 +993,14 @@ mod tests {
         let progress = root.join(data::archive_cas_compress::PROGRESS_FILE);
         std::fs::write(&progress, pass(now - 5, false)).unwrap();
         let running = tools.call("cas_archives", "{}").unwrap();
-        assert!(
-            running.contains("started 13 h 53 min ago, running (pid 7, updated 5 s ago): 461,031 of 700,000 stored objects done (65.9%), 238,969 left; 120,000 compressed, saving 185.71 GiB; 280,000 kept as they are; 0 failed"),
-            "{running}"
-        );
+        // "updated 5 s ago" ages while the tool runs; a slow machine (CI's
+        // Windows runner) can read 6 or 7.
+        let updated = (5..=7).any(|seconds| {
+            running.contains(&format!(
+                "started 13 h 53 min ago, running (pid 7, updated {seconds} s ago): 461,031 of 700,000 stored objects done (65.9%), 238,969 left; 120,000 compressed, saving 185.71 GiB; 280,000 kept as they are; 0 failed"
+            ))
+        });
+        assert!(updated, "{running}");
         std::fs::write(&progress, pass(now - 7_200, false)).unwrap();
         let stopped = tools.call("cas_archives", "{}").unwrap();
         assert!(
