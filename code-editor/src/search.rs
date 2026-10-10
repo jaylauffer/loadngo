@@ -226,11 +226,14 @@ mod tests {
             .iter()
             .map(|m| {
                 (
+                    // Joined with `/` on every platform.
                     m.path
                         .strip_prefix(dir.path())
                         .unwrap()
-                        .display()
-                        .to_string(),
+                        .iter()
+                        .map(|part| part.to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("/"),
                     m.line,
                     m.column,
                     m.text.clone(),
