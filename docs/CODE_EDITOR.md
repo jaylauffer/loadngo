@@ -8,6 +8,17 @@ CI checks.
 This document records the decisions and the order of work. The editing core
 it builds on is described in [`TEXT_EDITOR_MODEL.md`](TEXT_EDITOR_MODEL.md).
 
+## Running it
+
+```
+~/pudding/launch-ide.sh                     # the folder open last time
+~/pudding/launch-ide.sh ~/pudding/loadngo   # this folder
+```
+
+The script (at the pudding root, outside any repository) builds the release
+binary when loadngo has changed and then runs it; `--help` lists its options.
+The binary is `loadngo/target/release/code_editor [FOLDER]`.
+
 ## Decisions (Jay, 2026-10-10)
 
 - **Proportional fonts are the default.** Nothing assumes a fixed character
