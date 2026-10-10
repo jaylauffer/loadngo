@@ -1360,6 +1360,9 @@ fn create_window(
         promote_process_to_foreground();
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
         let _: () = msg_send![app, finishLaunching];
+        // No window tabs: loadngo apps have one window, and AppKit would
+        // otherwise add Show Tab Bar / Show All Tabs to a View menu.
+        let _: () = msg_send![class!(NSWindow), setAllowsAutomaticWindowTabbing: false];
         install_main_menu(&[]);
         if let Some(icon) = icon {
             if let Some(image) = ns_image_from_rgba(&icon.big_rgba8, 64, 64) {

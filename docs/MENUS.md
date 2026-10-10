@@ -12,7 +12,10 @@ asks for anything:
   Quit (Cmd-Q);
 - a Window menu: Minimize (Cmd-M), Zoom.
 
-Before this, loadngo apps had no menu bar at all, and Cmd-Q did nothing. Quit
+Before this, loadngo apps had no menu bar at all, and Cmd-Q did nothing.
+Automatic window tabbing is off (loadngo apps have one window), so AppKit
+adds no Show Tab Bar items to a menu named View; it still adds Enter Full
+Screen there. Quit
 closes the app unless the app asks to decide (below).
 
 The other hosts have no system menu bar, so they install nothing.
