@@ -3184,6 +3184,7 @@ impl NextFrameFuture {
         let wait = match demand {
             FrameDemand::After(delay) if delay <= NEXT_FRAME_THRESHOLD => Some(FrameWait::Short),
             FrameDemand::After(delay) => Some(FrameWait::Long(Instant::now() + delay)),
+            FrameDemand::IdleUntil(delay) => Some(FrameWait::Long(Instant::now() + delay)),
             FrameDemand::Idle => None,
         };
         Self {
@@ -3214,6 +3215,13 @@ impl Future for NextFrameFuture {
                 Some(FrameWait::Long(deadline)) => Instant::now() >= deadline,
                 None => true,
             },
+            // Its deadline is checked at display frame callbacks, like a
+            // long `After`.
+            FrameDemand::IdleUntil(_) => {
+                let state = app_state().lock().expect("android app state poisoned");
+                state.event_epoch > self.observed_event_epoch
+                    || matches!(self.wait, Some(FrameWait::Long(deadline)) if Instant::now() >= deadline)
+            }
         };
         if ready {
             return Poll::Ready(());
@@ -3223,7 +3231,10 @@ impl Future for NextFrameFuture {
             let mut state = app_state().lock().expect("android app state poisoned");
             state.next_frame_wakers.push(cx.waker().clone());
         }
-        if matches!(self.demand, FrameDemand::After(_)) {
+        if matches!(
+            self.demand,
+            FrameDemand::After(_) | FrameDemand::IdleUntil(_)
+        ) {
             request_frame_callback();
         }
         Poll::Pending

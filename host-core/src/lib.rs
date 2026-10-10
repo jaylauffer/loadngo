@@ -144,8 +144,17 @@ pub struct FrameTiming {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameDemand {
+    /// The next frame comes with the next input event (or anything else the
+    /// host treats as one, such as a finished offload job on macOS).
     Idle,
+    /// The next frame comes after the duration, paced: input arriving
+    /// sooner waits for it. For animation at a steady cadence.
     After(Duration),
+    /// [`FrameDemand::Idle`], but no later than the duration: input still
+    /// brings the frame at once. For a UI that is static apart from a
+    /// deadline, such as a blinking caret or a delayed save, which must not
+    /// delay input until the deadline.
+    IdleUntil(Duration),
 }
 
 impl FrameDemand {
@@ -155,6 +164,10 @@ impl FrameDemand {
 
     pub fn after(duration: Duration) -> Self {
         Self::After(duration)
+    }
+
+    pub fn idle_until(duration: Duration) -> Self {
+        Self::IdleUntil(duration)
     }
 }
 
@@ -307,6 +320,7 @@ pub enum HostKey {
     F,
     W,
     T,
+    X,
 }
 
 impl HostKey {
@@ -339,6 +353,7 @@ impl HostKey {
             HostKey::V => Key::Character('v'),
             HostKey::W => Key::Character('w'),
             HostKey::Y => Key::Character('y'),
+            HostKey::X => Key::Character('x'),
             HostKey::Z => Key::Character('z'),
             HostKey::F3 => return None,
         })
@@ -900,6 +915,7 @@ mod ui_event_tests {
 
     #[test]
     fn letter_keys_map_to_lowercase_characters_for_shortcuts() {
+        assert_eq!(HostKey::X.ui_key(), Some(Key::Character('x')));
         assert_eq!(HostKey::Z.ui_key(), Some(Key::Character('z')));
         assert_eq!(HostKey::F3.ui_key(), None);
     }

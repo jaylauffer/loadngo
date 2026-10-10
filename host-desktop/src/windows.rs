@@ -554,7 +554,7 @@ pub async fn next_frame(demand: FrameDemand) {
                 }
             }
             if !self.timer_registered {
-                if let FrameDemand::After(delay) = self.demand {
+                if let FrameDemand::After(delay) | FrameDemand::IdleUntil(delay) = self.demand {
                     self.timer_registered = true;
                     schedule_frame_timer(delay);
                 }
@@ -1397,6 +1397,7 @@ fn map_host_key(event: &winit::event::KeyEvent) -> Option<HostKey> {
             "T" => Some(HostKey::T),
             "V" => Some(HostKey::V),
             "W" => Some(HostKey::W),
+            "X" => Some(HostKey::X),
             "Y" => Some(HostKey::Y),
             "Z" => Some(HostKey::Z),
             _ => None,

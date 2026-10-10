@@ -512,6 +512,7 @@ const KEYCODE_F: u16 = 3;
 const KEYCODE_S: u16 = 1;
 const KEYCODE_T: u16 = 17;
 const KEYCODE_W: u16 = 13;
+const KEYCODE_X: u16 = 7;
 const KEYCODE_V: u16 = 9;
 const KEYCODE_Y: u16 = 16;
 const KEYCODE_Z: u16 = 6;
@@ -698,25 +699,40 @@ fn runtime_waker() -> Waker {
     with_mac_proactor(HostProactor::waker)
 }
 
+/// Subtype of the application-defined event that wakes the AppKit wait for
+/// the persistent log's worker. It is not input, so it runs no idle frame.
+const WAKE_SUBTYPE_LOG: i16 = 31201;
+/// Subtype of the application-defined event posted once an offloaded job's
+/// result is queued: it wakes the AppKit wait so the result is dispatched,
+/// and counts as an event, so an idle frame runs and can take the result.
+const WAKE_SUBTYPE_OFFLOAD: i16 = 31202;
+
+/// A function, callable from any thread, that posts an application-defined
+/// event with `subtype` to wake the AppKit wait. Must be called on the main
+/// thread; NSApplication lives for the process, and Apple's
+/// postEvent:atStart: explicitly supports posting from subthreads.
+fn app_wake_poster(subtype: i16) -> impl Fn() + Send + Sync + Clone + 'static {
+    let app: *mut AnyObject = unsafe { msg_send![class!(NSApplication), sharedApplication] };
+    let app_address = app as usize;
+    move || {
+        objc2::rc::autoreleasepool(|_| unsafe {
+            let event: *mut AnyObject = msg_send![class!(NSEvent),
+                otherEventWithType: 15u64, location: CGPoint { x: 0.0, y: 0.0 },
+                modifierFlags: 0usize, timestamp: 0.0f64, windowNumber: 0isize,
+                context: std::ptr::null_mut::<AnyObject>(), subtype: subtype,
+                data1: 0isize, data2: 0isize];
+            let app = app_address as *mut AnyObject;
+            let _: () = msg_send![app, postEvent: event, atStart: false];
+        });
+    }
+}
+
 pub(crate) fn create_persistent_log(
     config: loadngo_proactor::PersistentLogConfig,
 ) -> Result<loadngo_proactor::PersistentLog, String> {
-    // NSApplication lives for the process. Capture it on the main thread;
-    // Apple's postEvent:atStart: explicitly supports posting from subthreads.
-    let app: *mut AnyObject = unsafe { msg_send![class!(NSApplication), sharedApplication] };
-    let app_address = app as usize;
+    let wake = app_wake_poster(WAKE_SUBTYPE_LOG);
     with_mac_proactor(|proactor| {
-        loadngo_proactor::PersistentLog::new_with_wake(proactor.handle.clone(), config, move || {
-            objc2::rc::autoreleasepool(|_| unsafe {
-                let event: *mut AnyObject = msg_send![class!(NSEvent),
-                    otherEventWithType: 15u64, location: CGPoint { x: 0.0, y: 0.0 },
-                    modifierFlags: 0usize, timestamp: 0.0f64, windowNumber: 0isize,
-                    context: std::ptr::null_mut::<AnyObject>(), subtype: 31201i16,
-                    data1: 0isize, data2: 0isize];
-                let app = app_address as *mut AnyObject;
-                let _: () = msg_send![app, postEvent: event, atStart: false];
-            });
-        })
+        loadngo_proactor::PersistentLog::new_with_wake(proactor.handle.clone(), config, wake)
     })
     .map_err(|error| error.to_string())
 }
@@ -934,9 +950,14 @@ pub fn app_data_dir(app_id: &str) -> Result<String, String> {
 }
 
 /// Runs `job` on the host's bounded worker pool; its result comes back as a
-/// completion on the host proactor. See [`crate::Offloaded`].
+/// completion on the host proactor, and an app waiting on an idle frame gets
+/// a frame to take it in. See [`crate::Offloaded`].
 pub fn offload<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> crate::Offloaded<T> {
-    crate::offload::offload_through(with_mac_proactor(|proactor| proactor.handle.clone()), job)
+    crate::offload::offload_through_with_wake(
+        with_mac_proactor(|proactor| proactor.handle.clone()),
+        job,
+        app_wake_poster(WAKE_SUBTYPE_OFFLOAD),
+    )
 }
 
 pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
@@ -1541,9 +1562,11 @@ fn handle_event(event: *mut AnyObject) {
     let event_type: u64 = unsafe { msg_send![event, type] };
     if event_type == 15 {
         let subtype: i16 = unsafe { msg_send![event, subtype] };
-        if subtype == 31201 {
+        if subtype == WAKE_SUBTYPE_LOG {
             return;
         }
+        // WAKE_SUBTYPE_OFFLOAD falls through: it changes no input, but
+        // advances the event epoch below so an idle frame runs.
     }
     APP_STATE.with(|state| {
         let mut state = state.borrow_mut();
@@ -1750,11 +1773,21 @@ impl Future for NextFrameFuture {
                         false
                     }
                 }
+                FrameDemand::IdleUntil(_) => {
+                    if state.event_epoch > self.observed_event_epoch
+                        || state.frame_epoch >= self.target_frame_epoch
+                    {
+                        true
+                    } else {
+                        state.next_frame_wakers.push(cx.waker().clone());
+                        false
+                    }
+                }
             }
         });
         if !ready {
             if !self.scheduled {
-                if let FrameDemand::After(delay) = self.demand {
+                if let FrameDemand::After(delay) | FrameDemand::IdleUntil(delay) = self.demand {
                     schedule_next_frame_tick(delay);
                     self.scheduled = true;
                 }
@@ -1792,6 +1825,7 @@ fn host_key_from_key_code(key_code: u16) -> Option<HostKey> {
         KEYCODE_S => HostKey::S,
         KEYCODE_T => HostKey::T,
         KEYCODE_W => HostKey::W,
+        KEYCODE_X => HostKey::X,
         KEYCODE_V => HostKey::V,
         KEYCODE_Y => HostKey::Y,
         KEYCODE_Z => HostKey::Z,
