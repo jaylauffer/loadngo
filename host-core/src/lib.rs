@@ -323,6 +323,7 @@ pub enum HostKey {
     X,
     O,
     Q,
+    N,
 }
 
 impl HostKey {
@@ -358,6 +359,7 @@ impl HostKey {
             HostKey::X => Key::Character('x'),
             HostKey::O => Key::Character('o'),
             HostKey::Q => Key::Character('q'),
+            HostKey::N => Key::Character('n'),
             HostKey::Z => Key::Character('z'),
             HostKey::F3 => return None,
         })

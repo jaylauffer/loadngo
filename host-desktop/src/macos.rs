@@ -518,6 +518,7 @@ const KEYCODE_W: u16 = 13;
 const KEYCODE_X: u16 = 7;
 const KEYCODE_O: u16 = 31;
 const KEYCODE_Q: u16 = 12;
+const KEYCODE_N: u16 = 45;
 const KEYCODE_V: u16 = 9;
 const KEYCODE_Y: u16 = 16;
 const KEYCODE_Z: u16 = 6;
@@ -2116,6 +2117,7 @@ fn host_key_from_key_code(key_code: u16) -> Option<HostKey> {
         KEYCODE_X => HostKey::X,
         KEYCODE_O => HostKey::O,
         KEYCODE_Q => HostKey::Q,
+        KEYCODE_N => HostKey::N,
         KEYCODE_V => HostKey::V,
         KEYCODE_Y => HostKey::Y,
         KEYCODE_Z => HostKey::Z,
