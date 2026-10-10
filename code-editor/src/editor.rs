@@ -22,6 +22,7 @@ use crate::file_tree::{FileTree, TreeAction};
 use crate::fs_ops::{self, DiskStamp, FileOp, IoRequest, IoResponse, ReadError, WriteError};
 use crate::highlight::Highlighter;
 use crate::lsp::{CompletionItem, LspEvent, LspSession, Position, TextEdit};
+use crate::search::{SearchMatch, SearchOutcome};
 use crate::session::{self, Backup, Session, SessionTab};
 use crate::text_file::LineEnding;
 use crate::theme;
@@ -131,6 +132,7 @@ enum Focus {
     Editor,
     Find,
     Goto,
+    Search,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,6 +147,8 @@ enum Command {
     GoToDefinition,
     GoBack,
     RenameSymbol,
+    FindInFiles,
+    RunSearch,
     NewFile,
     NewFolder,
     RenameFile,
@@ -176,7 +180,8 @@ enum Command {
 
 impl Command {
     /// The commands a menu item can send.
-    const IN_MENUS: [Command; 23] = [
+    const IN_MENUS: [Command; 24] = [
+        Command::FindInFiles,
         Command::NewFile,
         Command::NewFolder,
         Command::RenameFile,
@@ -245,6 +250,9 @@ struct Layout {
     editor: Rect,
     status: Rect,
     problems: Option<Rect>,
+    search: Option<Rect>,
+    search_field: Option<Rect>,
+    search_button: Option<Rect>,
     status_check: Option<Rect>,
 }
 
@@ -333,7 +341,8 @@ pub struct Editor {
     problems_scroll: usize,
     marks: Vec<Mark>,
     /// Go here (file, one-based line and column) once the file has loaded.
-    pending_goto: Option<(PathBuf, usize, usize)>,
+    /// And select this many characters there (a search match).
+    pending_goto: Option<(PathBuf, usize, usize, usize)>,
     /// The rust-analyzer conversation, while one runs.
     lsp: Option<LspSession>,
     /// The folder a server should be started for (the app starts it).
@@ -359,6 +368,10 @@ pub struct Editor {
     pending_edits: HashMap<PathBuf, Vec<TextEdit>>,
     /// Asking before moving this to the Trash.
     trash_prompt: Option<PathBuf>,
+    search: Option<SearchPanel>,
+    search_open: bool,
+    search_outbox: Option<SearchRequest>,
+    next_search_id: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -398,6 +411,27 @@ impl BarMode {
         }
     }
 }
+
+/// A search to run (see `search::search`), replacing any still running.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchRequest {
+    pub id: u64,
+    pub root: PathBuf,
+    pub query: String,
+}
+
+/// The Find in Files panel.
+struct SearchPanel {
+    field: TextFieldModel,
+    results: Vec<SearchMatch>,
+    /// The search running, if one is.
+    running: Option<u64>,
+    /// How the last search went.
+    summary: Option<SearchOutcome>,
+    scroll: usize,
+}
+
+const SEARCH_HEADER_HEIGHT: f32 = 34.0;
 
 /// The completion list under the caret.
 struct CompletionPopup {
@@ -483,6 +517,10 @@ impl Editor {
             rename_request: None,
             pending_edits: HashMap::new(),
             trash_prompt: None,
+            search: None,
+            search_open: false,
+            search_outbox: None,
+            next_search_id: 1,
         };
         if let Some(root) = &root {
             editor.open_folder(root.clone());
@@ -738,10 +776,15 @@ impl Editor {
                 if self
                     .pending_goto
                     .as_ref()
-                    .is_some_and(|(file, _, _)| *file == path)
+                    .is_some_and(|(file, _, _, _)| *file == path)
                 {
-                    if let Some((_, line, column)) = self.pending_goto.take() {
+                    if let Some((_, line, column, length)) = self.pending_goto.take() {
                         self.go_to(index, line, column);
+                        if length > 0 {
+                            let area = &mut self.buffers[index].area;
+                            let start = area.caret();
+                            area.select_range(start, start + length);
+                        }
                     }
                 }
             }
@@ -1137,7 +1180,7 @@ impl Editor {
                             if self.buffers[index].loaded {
                                 self.go_to(index, line, column);
                             } else {
-                                self.pending_goto = Some((path, line, column));
+                                self.pending_goto = Some((path, line, column, 0));
                             }
                         }
                     }
@@ -1522,6 +1565,214 @@ impl Editor {
                 );
             }
             popup.rows.push((*item_index, row_rect));
+        }
+    }
+
+    // ----- find in files -----
+
+    /// The search to start, if one was asked for since the last call.
+    pub fn take_search_request(&mut self) -> Option<SearchRequest> {
+        self.search_outbox.take()
+    }
+
+    fn run_search(&mut self) {
+        let Some(root) = self.tree.as_ref().map(|tree| tree.root().to_path_buf()) else {
+            return;
+        };
+        let Some(search) = &mut self.search else {
+            return;
+        };
+        let query = search.field.text();
+        if query.is_empty() {
+            return;
+        }
+        let id = self.next_search_id;
+        self.next_search_id += 1;
+        search.running = Some(id);
+        search.scroll = 0;
+        self.search_outbox = Some(SearchRequest { id, root, query });
+    }
+
+    /// Takes in a finished search; a replaced one's result is ignored.
+    pub fn apply_search(&mut self, id: u64, outcome: SearchOutcome) {
+        let Some(search) = &mut self.search else {
+            return;
+        };
+        if search.running != Some(id) {
+            return;
+        }
+        search.running = None;
+        search.results = outcome.matches.clone();
+        search.summary = Some(outcome);
+    }
+
+    fn search_panel_pressed(
+        &mut self,
+        point: Point,
+        panel: Rect,
+        state: PointerState,
+        host: &dyn EditorHost,
+    ) {
+        if self
+            .layout
+            .search_button
+            .is_some_and(|rect| rect.contains(point))
+        {
+            self.run(Command::RunSearch, host);
+            return;
+        }
+        if self
+            .layout
+            .search_field
+            .is_some_and(|rect| rect.contains(point))
+        {
+            self.set_focus(Focus::Search);
+            if let Some(search) = &mut self.search {
+                let _ = search.field.handle_event(UiEvent::PointerPressed {
+                    button: PointerButton::Primary,
+                    state,
+                });
+            }
+            return;
+        }
+        let row = ((point.y - panel.y - SEARCH_HEADER_HEIGHT) / PROBLEM_ROW_HEIGHT).floor();
+        let found = self.search.as_ref().and_then(|search| {
+            (row >= 0.0)
+                .then(|| search.results.get(search.scroll + row as usize).cloned())
+                .flatten()
+        });
+        if let Some(found) = found {
+            self.remember_place();
+            self.open_file(found.path.clone());
+            let Some(index) = self.active else {
+                return;
+            };
+            if self.buffers[index].loaded {
+                self.select_match(index, &found);
+            } else {
+                self.pending_goto = Some((
+                    found.path.clone(),
+                    found.line,
+                    found.column,
+                    found.end_column - found.column,
+                ));
+            }
+        }
+    }
+
+    /// Selects a search match in buffer `index`.
+    fn select_match(&mut self, index: usize, found: &SearchMatch) {
+        self.go_to(index, found.line, found.column);
+        let area = &mut self.buffers[index].area;
+        let start = area.caret();
+        area.select_range(start, start + (found.end_column - found.column));
+    }
+
+    fn paint_search(&self, scene: &mut Vec<PaintOp>, panel: Rect, layout: &Layout) {
+        let Some(search) = &self.search else {
+            return;
+        };
+        draw::fill(scene, panel, theme::PANEL);
+        draw::hline(scene, panel.x, panel.y + 0.5, panel.width, theme::BORDER);
+        draw::label(
+            scene,
+            "Find in files",
+            Rect {
+                x: panel.x + 12.0,
+                y: panel.y,
+                width: 104.0,
+                height: SEARCH_HEADER_HEIGHT,
+            },
+            theme::TEXT_DIM,
+            theme::UI_FONT,
+            HorizontalAlign::Left,
+        );
+        search.field.paint(scene);
+        if let Some(button) = layout.search_button {
+            draw::button(scene, button, "Search", button.contains(self.pointer), true);
+            let summary = match (&search.summary, search.running) {
+                (_, Some(_)) => "Searching…".to_string(),
+                (Some(outcome), None) => {
+                    let files: std::collections::HashSet<&Path> =
+                        outcome.matches.iter().map(|m| m.path.as_path()).collect();
+                    format!(
+                        "{} {} in {} of {} files{} ({:.1} s)",
+                        outcome.matches.len(),
+                        if outcome.matches.len() == 1 {
+                            "match"
+                        } else {
+                            "matches"
+                        },
+                        files.len(),
+                        outcome.files_searched,
+                        if outcome.truncated {
+                            ", stopped at the limit"
+                        } else {
+                            ""
+                        },
+                        outcome.elapsed.as_secs_f32()
+                    )
+                }
+                (None, None) => "Searches files as saved; build output is skipped.".to_string(),
+            };
+            draw::label(
+                scene,
+                &summary,
+                Rect {
+                    x: button.right() + 14.0,
+                    y: panel.y,
+                    width: (panel.right() - button.right() - 26.0).max(0.0),
+                    height: SEARCH_HEADER_HEIGHT,
+                },
+                theme::TEXT_DIM,
+                theme::UI_FONT,
+                HorizontalAlign::Left,
+            );
+        }
+        let rows = ((panel.height - SEARCH_HEADER_HEIGHT) / PROBLEM_ROW_HEIGHT)
+            .floor()
+            .max(0.0) as usize;
+        let place_width = (panel.width * 0.3).min(320.0);
+        for (row, found) in search
+            .results
+            .iter()
+            .skip(search.scroll)
+            .take(rows)
+            .enumerate()
+        {
+            let rect = Rect {
+                x: panel.x,
+                y: panel.y + SEARCH_HEADER_HEIGHT + PROBLEM_ROW_HEIGHT * row as f32,
+                width: panel.width,
+                height: PROBLEM_ROW_HEIGHT,
+            };
+            if rect.contains(self.pointer) {
+                draw::fill(scene, rect, theme::HOVER);
+            }
+            draw::label(
+                scene,
+                &format!("{}:{}", self.shown_path(&found.path), found.line),
+                Rect {
+                    x: rect.x + 12.0,
+                    width: place_width,
+                    ..rect
+                },
+                theme::TEXT_DIM,
+                theme::UI_FONT,
+                HorizontalAlign::Left,
+            );
+            draw::label(
+                scene,
+                &found.text,
+                Rect {
+                    x: rect.x + 24.0 + place_width,
+                    width: (rect.width - place_width - 36.0).max(0.0),
+                    ..rect
+                },
+                theme::TEXT,
+                theme::UI_FONT,
+                HorizontalAlign::Left,
+            );
         }
     }
 
@@ -1935,7 +2186,12 @@ impl Editor {
         if self.buffers[index].loaded {
             self.go_to(index, diagnostic.line, diagnostic.column);
         } else {
-            self.pending_goto = Some((diagnostic.file.clone(), diagnostic.line, diagnostic.column));
+            self.pending_goto = Some((
+                diagnostic.file.clone(),
+                diagnostic.line,
+                diagnostic.column,
+                0,
+            ));
         }
     }
 
@@ -2100,6 +2356,9 @@ impl Editor {
                 .with_shortcut(Shortcut::primary('f'))
                 .enabled(has_file),
             item(Command::GoToLine, "Go to Line…").enabled(has_file),
+            item(Command::FindInFiles, "Find in Files…")
+                .with_shortcut(Shortcut::primary_shift('f'))
+                .enabled(self.tree.is_some()),
         ];
         MenuBar {
             menus: vec![
@@ -2459,15 +2718,37 @@ impl Editor {
             layout.bar = Some(bar);
         }
         let mut bottom = layout.status.y;
-        if self.problems_open {
-            let height = PROBLEMS_HEIGHT.min((bottom - y) * 0.6);
+        if self.problems_open || self.search_open {
+            let height = if self.search_open {
+                (PROBLEMS_HEIGHT + 60.0).min((bottom - y) * 0.6)
+            } else {
+                PROBLEMS_HEIGHT.min((bottom - y) * 0.6)
+            };
             bottom -= height;
-            layout.problems = Some(Rect {
+            let panel = Rect {
                 x: right_x,
                 y: bottom,
                 width: right_width,
                 height,
-            });
+            };
+            if self.search_open {
+                layout.search = Some(panel);
+                let field = Rect {
+                    x: panel.x + 120.0,
+                    y: panel.y + 5.0,
+                    width: (panel.width - 260.0).clamp(120.0, 420.0),
+                    height: SEARCH_HEADER_HEIGHT - 10.0,
+                };
+                layout.search_field = Some(field);
+                layout.search_button = Some(Rect {
+                    x: field.right() + 8.0,
+                    y: field.y,
+                    width: host.measure("Search", theme::UI_FONT) + 24.0,
+                    height: field.height,
+                });
+            } else {
+                layout.problems = Some(panel);
+            }
         }
         layout.editor = Rect {
             x: right_x,
@@ -2503,6 +2784,10 @@ impl Editor {
         if let (Some(goto), Some(field)) = (&mut self.goto, layout.bar_field) {
             goto.set_bounds(field);
             goto.relayout(measure);
+        }
+        if let (Some(search), Some(field)) = (&mut self.search, layout.search_field) {
+            search.field.set_bounds(field);
+            search.field.relayout(measure);
         }
         self.layout = layout;
     }
@@ -2694,6 +2979,9 @@ impl Editor {
         if let Some(goto) = &mut self.goto {
             fields.push(goto);
         }
+        if let Some(search) = &mut self.search {
+            fields.push(&mut search.field);
+        }
         fields
     }
 
@@ -2779,6 +3067,11 @@ impl Editor {
             .is_some_and(|rect| rect.contains(point))
         {
             self.problems_open = !self.problems_open;
+            self.search_open = false;
+            return;
+        }
+        if let Some(panel) = self.layout.search.filter(|rect| rect.contains(point)) {
+            self.search_panel_pressed(point, panel, state, host);
             return;
         }
         if let Some(panel) = self.layout.problems.filter(|rect| rect.contains(point)) {
@@ -2863,9 +3156,30 @@ impl Editor {
         if let Some(goto) = &mut self.goto {
             let _ = goto.handle_event(UiEvent::FocusChanged(focus == Focus::Goto));
         }
+        if let Some(search) = &mut self.search {
+            let _ = search
+                .field
+                .handle_event(UiEvent::FocusChanged(focus == Focus::Search));
+        }
     }
 
     fn wheel(&mut self, point: Point, input: &InputSnapshot) {
+        if self
+            .layout
+            .search
+            .is_some_and(|panel| panel.contains(point))
+        {
+            if let Some(search) = &mut self.search {
+                let rows = if input.mouse_wheel_precise {
+                    (-input.mouse_wheel_y / PROBLEM_ROW_HEIGHT).round() as isize
+                } else {
+                    (-input.mouse_wheel_y * 3.0).round() as isize
+                };
+                let last = search.results.len().saturating_sub(1);
+                search.scroll = (search.scroll as isize + rows).clamp(0, last as isize) as usize;
+            }
+            return;
+        }
         if self
             .layout
             .problems
@@ -2974,6 +3288,13 @@ impl Editor {
                     let _ = goto.handle_event(event);
                 }
             }
+            Focus::Search => {
+                if key == Key::Enter {
+                    self.run(Command::RunSearch, host);
+                } else if let Some(search) = &mut self.search {
+                    let _ = search.field.handle_event(event);
+                }
+            }
         }
     }
 
@@ -2985,6 +3306,7 @@ impl Editor {
                 .map(|buffer| &buffer.area),
             Focus::Find => self.find.as_ref().map(|find| &find.field.area),
             Focus::Goto => self.goto.as_ref().map(|goto| &goto.area),
+            Focus::Search => self.search.as_ref().map(|search| &search.field.area),
         }
     }
 
@@ -2996,6 +3318,7 @@ impl Editor {
                 .map(|buffer| &mut buffer.area),
             Focus::Find => self.find.as_mut().map(|find| &mut find.field.area),
             Focus::Goto => self.goto.as_mut().map(|goto| &mut goto.area),
+            Focus::Search => self.search.as_mut().map(|search| &mut search.field.area),
         }
     }
 
@@ -3023,7 +3346,7 @@ impl Editor {
                     area.insert_text(&text);
                 }
             }
-            Focus::Find | Focus::Goto => self.route_text(&text),
+            Focus::Find | Focus::Goto | Focus::Search => self.route_text(&text),
         }
     }
 
@@ -3048,6 +3371,11 @@ impl Editor {
             Focus::Goto => {
                 if let Some(goto) = &mut self.goto {
                     let _ = goto.handle_event(event);
+                }
+            }
+            Focus::Search => {
+                if let Some(search) = &mut self.search {
+                    let _ = search.field.handle_event(event);
                 }
             }
         }
@@ -3089,6 +3417,7 @@ impl Editor {
             }
             Command::ToggleProblems => {
                 self.problems_open = !self.problems_open;
+                self.search_open = false;
                 self.problems_scroll = 0;
             }
             Command::CloseTab => {
@@ -3246,6 +3575,29 @@ impl Editor {
                     from: from.clone(),
                 }),
             },
+            Command::FindInFiles => {
+                let seed = self.active_buffer().and_then(|buffer| {
+                    let (start, end) = buffer.area.selection_range()?;
+                    let text = buffer.area.document.slice_chars(start, end);
+                    (!text.contains('\n')).then_some(text)
+                });
+                let search = self.search.get_or_insert_with(|| SearchPanel {
+                    field: TextFieldModel::new("", Rect::default()),
+                    results: Vec::new(),
+                    running: None,
+                    summary: None,
+                    scroll: 0,
+                });
+                style_field(&mut search.field);
+                if let Some(seed) = seed {
+                    search.field.set_text(&seed);
+                }
+                search.field.select_all();
+                self.search_open = true;
+                self.problems_open = false;
+                self.set_focus(Focus::Search);
+            }
+            Command::RunSearch => self.run_search(),
             Command::NewFile => self.start_file_bar(true),
             Command::NewFolder => self.start_file_bar(false),
             Command::RenameFile => self.start_rename_file(),
@@ -3369,6 +3721,9 @@ impl Editor {
         self.paint_completion(scene, layout.editor);
         if let Some(panel) = layout.problems {
             self.paint_problems(scene, panel);
+        }
+        if let Some(panel) = layout.search {
+            self.paint_search(scene, panel, &layout);
         }
         self.paint_status(scene, &layout);
         if let Some(menu) = &self.drawn_menu {
@@ -5427,5 +5782,44 @@ mod tests {
         );
         assert!(rig.editor.buffers.is_empty(), "its tab closed");
         assert!(rig.status().starts_with("Moved a.rs to the Trash"));
+    }
+
+    #[test]
+    fn find_in_files_lists_matches_and_a_click_selects_one() {
+        let dir = workspace(&[
+            ("src/lib.rs", "pub fn helper() {}\n"),
+            (
+                "src/other.rs",
+                "use crate::helper;\nfn b() {\n    helper();\n}\n",
+            ),
+        ]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.key(
+            HostKey::F,
+            Modifiers {
+                shift: true,
+                ..cmd()
+            },
+        );
+        assert!(rig.editor.search_open);
+        rig.type_text("helper");
+        rig.key(HostKey::Enter, Modifiers::default());
+        let request = rig.editor.take_search_request().expect("a search");
+        assert_eq!(request.query, "helper");
+        let outcome = crate::search::search(&request.root, &request.query, &Default::default());
+        assert_eq!(outcome.matches.len(), 3);
+        rig.editor.apply_search(request.id, outcome);
+        rig.frame(InputSnapshot::default());
+        let panel = rig.editor.layout.search.expect("panel shown");
+        // The third result: src/other.rs line 3.
+        rig.click(Point {
+            x: panel.x + 200.0,
+            y: panel.y + SEARCH_HEADER_HEIGHT + PROBLEM_ROW_HEIGHT * 2.5,
+        });
+        assert_eq!(rig.active().path, dir.path().join("src/other.rs"));
+        let area = &rig.active().area;
+        let (start, end) = area.selection_range().expect("the match selected");
+        assert_eq!(area.document.slice_chars(start, end), "helper");
+        assert_eq!(caret_line_column(area).0, 3);
     }
 }

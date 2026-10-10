@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use loadngo_code_editor::cargo_check::{self, Cancel, CheckOutcome};
 use loadngo_code_editor::lsp::{transport::find_program, LspProcess};
+use loadngo_code_editor::search::{self, SearchOutcome};
 use loadngo_code_editor::{perform, Editor, EditorHost, IoRequest, IoResponse};
 use loadngo_host_core::{FrameDemand, WindowDescriptor};
 use loadngo_host_desktop::Offloaded;
@@ -122,6 +123,8 @@ async fn run(folder: Option<PathBuf>) {
     let mut scene = Vec::new();
     // The one cargo check running: its id, how to stop it, its result.
     let mut check: Option<(u64, Cancel, Offloaded<CheckOutcome>)> = None;
+    // The one search running: its id, how to stop it, its result.
+    let mut searching: Option<(u64, search::Cancel, Offloaded<SearchOutcome>)> = None;
     // rust-analyzer, while one runs; its messages wake the frame.
     let mut server: Option<LspProcess> = None;
     let waker = loadngo_host_desktop::frame_waker();
@@ -154,6 +157,15 @@ async fn run(folder: Option<PathBuf>) {
                     check = None;
                 }
                 None => {}
+            }
+        }
+
+        if let Some((id, _, result)) = &mut searching {
+            if let Some(outcome) = result.try_take() {
+                if let Ok(outcome) = outcome {
+                    editor.apply_search(*id, outcome);
+                }
+                searching = None;
             }
         }
 
@@ -201,6 +213,23 @@ async fn run(folder: Option<PathBuf>) {
             }
         }
 
+        if let Some(request) = editor.take_search_request() {
+            if let Some((_, cancel, _)) = searching.take() {
+                cancel.cancel();
+            }
+            let (completer, result) = loadngo_host_desktop::completion();
+            let cancel = search::Cancel::default();
+            let running = cancel.clone();
+            let spawned = std::thread::Builder::new()
+                .name("find-in-files".to_string())
+                .spawn(move || {
+                    completer.complete(search::search(&request.root, &request.query, &running))
+                });
+            if spawned.is_ok() {
+                searching = Some((request.id, cancel, result));
+            }
+        }
+
         if editor.take_lsp_stop() {
             if let Some(process) = &server {
                 for message in editor.lsp_outgoing() {
@@ -237,6 +266,9 @@ async fn run(folder: Option<PathBuf>) {
         // Quit once the last saves and the session write have landed.
         if outcome.quit && waiting.is_empty() && in_flight.is_empty() {
             if let Some((_, cancel, _)) = check.take() {
+                cancel.cancel();
+            }
+            if let Some((_, cancel, _)) = searching.take() {
                 cancel.cancel();
             }
             break;

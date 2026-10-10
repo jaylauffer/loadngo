@@ -12,6 +12,7 @@ pub mod fs_ops;
 pub mod highlight;
 pub mod lsp;
 pub mod rust_lexer;
+pub mod search;
 pub mod session;
 pub mod text_file;
 pub mod theme;
