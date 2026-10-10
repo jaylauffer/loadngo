@@ -19,7 +19,7 @@ use ui_core::{
 use crate::cargo_check::{CheckOutcome, Diagnostic, Level};
 use crate::draw;
 use crate::file_tree::{FileTree, TreeAction};
-use crate::fs_ops::{self, DiskStamp, IoRequest, IoResponse, ReadError, WriteError};
+use crate::fs_ops::{self, DiskStamp, FileOp, IoRequest, IoResponse, ReadError, WriteError};
 use crate::highlight::Highlighter;
 use crate::lsp::{CompletionItem, LspEvent, LspSession, Position, TextEdit};
 use crate::session::{self, Backup, Session, SessionTab};
@@ -145,6 +145,12 @@ enum Command {
     GoToDefinition,
     GoBack,
     RenameSymbol,
+    NewFile,
+    NewFolder,
+    RenameFile,
+    TrashFile,
+    TrashConfirm,
+    TrashCancel,
     OpenFolder,
     CloseTab,
     Quit,
@@ -170,7 +176,11 @@ enum Command {
 
 impl Command {
     /// The commands a menu item can send.
-    const IN_MENUS: [Command; 19] = [
+    const IN_MENUS: [Command; 23] = [
+        Command::NewFile,
+        Command::NewFolder,
+        Command::RenameFile,
+        Command::TrashFile,
         Command::RenameSymbol,
         Command::GoToDefinition,
         Command::GoBack,
@@ -347,15 +357,46 @@ pub struct Editor {
     rename_request: Option<u64>,
     /// A rename's edits for files still loading.
     pending_edits: HashMap<PathBuf, Vec<TextEdit>>,
+    /// Asking before moving this to the Trash.
+    trash_prompt: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum BarMode {
     GoToLine,
     /// Renaming the symbol whose name starts at this character.
     Rename {
         at: usize,
     },
+    NewFile {
+        dir: PathBuf,
+    },
+    NewFolder {
+        dir: PathBuf,
+    },
+    RenameFile {
+        from: PathBuf,
+    },
+}
+
+impl BarMode {
+    fn label(&self) -> &'static str {
+        match self {
+            BarMode::GoToLine => "Go to line",
+            BarMode::Rename { .. } => "Rename to",
+            BarMode::NewFile { .. } => "New file",
+            BarMode::NewFolder { .. } => "New folder",
+            BarMode::RenameFile { .. } => "Rename to",
+        }
+    }
+
+    fn action(&self) -> &'static str {
+        match self {
+            BarMode::GoToLine => "Go",
+            BarMode::Rename { .. } | BarMode::RenameFile { .. } => "Rename",
+            BarMode::NewFile { .. } | BarMode::NewFolder { .. } => "Create",
+        }
+    }
 }
 
 /// The completion list under the caret.
@@ -441,6 +482,7 @@ impl Editor {
             bar_mode: BarMode::GoToLine,
             rename_request: None,
             pending_edits: HashMap::new(),
+            trash_prompt: None,
         };
         if let Some(root) = &root {
             editor.open_folder(root.clone());
@@ -649,6 +691,7 @@ impl Editor {
                 }
             }
             IoResponse::Stats { stamps } => self.apply_stats(stamps),
+            IoResponse::FileOpDone { op, result } => self.apply_file_op(op, result),
         }
         self.after_change(now);
     }
@@ -1482,6 +1525,190 @@ impl Editor {
         }
     }
 
+    /// What the file commands act on: the tree's selection, else the open
+    /// file.
+    fn file_target(&self) -> Option<PathBuf> {
+        self.tree
+            .as_ref()
+            .and_then(|tree| tree.selected.clone())
+            .filter(|path| self.tree.as_ref().is_some_and(|tree| path != tree.root()))
+            .or_else(|| self.active_buffer().map(|buffer| buffer.path.clone()))
+    }
+
+    /// `path` relative to the folder, for messages.
+    fn shown_path(&self, path: &Path) -> String {
+        self.tree
+            .as_ref()
+            .and_then(|tree| path.strip_prefix(tree.root()).ok())
+            .unwrap_or(path)
+            .display()
+            .to_string()
+    }
+
+    /// Opens the name bar for a new file or folder, in the selected folder
+    /// (or the selected file's folder, or the folder's root).
+    fn start_file_bar(&mut self, file: bool) {
+        let Some(root) = self.tree.as_ref().map(|tree| tree.root().to_path_buf()) else {
+            return;
+        };
+        let dir = match self.file_target() {
+            Some(path) if self.tree_is_dir(&path) => path,
+            Some(path) => path.parent().map_or(root.clone(), Path::to_path_buf),
+            None => root,
+        };
+        self.find = None;
+        self.bar_mode = if file {
+            BarMode::NewFile { dir }
+        } else {
+            BarMode::NewFolder { dir }
+        };
+        let field = self
+            .goto
+            .get_or_insert_with(|| TextFieldModel::new("", Rect::default()));
+        style_field(field);
+        field.set_text("");
+        self.set_focus(Focus::Goto);
+    }
+
+    fn tree_is_dir(&mut self, path: &Path) -> bool {
+        self.tree
+            .as_mut()
+            .is_some_and(|tree| tree.rows().iter().any(|row| row.path == path && row.is_dir))
+    }
+
+    fn start_rename_file(&mut self) {
+        let Some(from) = self.file_target() else {
+            return;
+        };
+        let name = from
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.find = None;
+        self.bar_mode = BarMode::RenameFile { from };
+        let field = self
+            .goto
+            .get_or_insert_with(|| TextFieldModel::new("", Rect::default()));
+        style_field(field);
+        field.set_text(&name);
+        // Select the stem, so typing replaces the name and keeps the
+        // extension.
+        let stem = Path::new(&name)
+            .file_stem()
+            .map_or(0, |stem| stem.to_string_lossy().chars().count());
+        field.select_range(0, stem);
+        self.set_focus(Focus::Goto);
+    }
+
+    /// The name bar's Enter for file operations: sends `op` for the typed
+    /// name.
+    fn finish_file_op(&mut self, op: impl FnOnce(&str) -> FileOp) {
+        let name = self
+            .goto
+            .as_ref()
+            .map(|field| field.text().trim().to_string())
+            .unwrap_or_default();
+        self.goto = None;
+        self.bar_mode = BarMode::GoToLine;
+        self.set_focus(Focus::Editor);
+        if name.is_empty() || name.contains("..") {
+            if !name.is_empty() {
+                self.set_status("Names cannot contain \"..\".", StatusKind::Warning);
+            }
+            return;
+        }
+        self.outbox.push(IoRequest::FileOp(op(&name)));
+    }
+
+    fn apply_file_op(&mut self, op: FileOp, result: Result<(), String>) {
+        if let Err(error) = result {
+            let what = match &op {
+                FileOp::CreateFile(path) | FileOp::CreateFolder(path) => {
+                    format!("Could not create {}", self.shown_path(path))
+                }
+                FileOp::Rename { from, .. } => {
+                    format!("Could not rename {}", self.shown_path(from))
+                }
+                FileOp::Trash(path) => {
+                    format!("Could not move {} to the Trash", self.shown_path(path))
+                }
+            };
+            self.set_status(format!("{what}: {error}"), StatusKind::Error);
+            return;
+        }
+        if let Some(tree) = &mut self.tree {
+            tree.refresh();
+        }
+        match op {
+            FileOp::CreateFile(path) => {
+                if let Some(tree) = &mut self.tree {
+                    tree.reveal(&path);
+                }
+                self.open_file(path);
+            }
+            FileOp::CreateFolder(path) => {
+                if let Some(tree) = &mut self.tree {
+                    tree.reveal(&path);
+                    tree.set_expanded(&path, true);
+                }
+            }
+            FileOp::Rename { from, to } => self.renamed(&from, &to),
+            FileOp::Trash(path) => {
+                let shown = self.shown_path(&path);
+                while let Some(index) = self.buffers.iter().position(|b| b.path.starts_with(&path))
+                {
+                    self.close(index);
+                }
+                if let Some(tree) = &mut self.tree {
+                    tree.selected = None;
+                }
+                self.set_status(format!("Moved {shown} to the Trash."), StatusKind::Info);
+            }
+        }
+        self.touch_session();
+    }
+
+    /// Open files at or under `from` now live under `to`.
+    fn renamed(&mut self, from: &Path, to: &Path) {
+        let state_dir = self.state_dir.clone();
+        for buffer in &mut self.buffers {
+            let Ok(rest) = buffer.path.strip_prefix(from) else {
+                continue;
+            };
+            let old = buffer.path.clone();
+            let new = if rest.as_os_str().is_empty() {
+                to.to_path_buf()
+            } else {
+                to.join(rest)
+            };
+            if let Some(lsp) = &mut self.lsp {
+                lsp.close_document(&old);
+            }
+            if buffer.has_backup_file {
+                if let Some(state_dir) = &state_dir {
+                    self.outbox.push(IoRequest::RemoveState {
+                        path: session::backup_path(state_dir, &old),
+                    });
+                }
+                buffer.has_backup_file = false;
+                buffer.backup_revision = None;
+            }
+            buffer.title = new
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            buffer.highlighter = Highlighter::for_path(&new);
+            // The disk stamp (modified time, size) moves with the file.
+            buffer.path = new;
+        }
+        if let Some(tree) = &mut self.tree {
+            tree.reveal(to);
+        }
+        let shown = self.shown_path(to);
+        self.set_status(format!("Renamed to {shown}."), StatusKind::Info);
+        self.backup_due = Some(self.frame_time);
+    }
+
     /// Opens the rename bar with the name under the caret.
     fn start_rename(&mut self) {
         let Some(buffer) = self.active_buffer().filter(|buffer| buffer.loaded) else {
@@ -1822,6 +2049,13 @@ impl Editor {
         let editing = self.focused_area_ref().is_some() && self.folder_dialog.is_none();
         let item = |command: Command, title: &str| MenuItem::command(command.menu_command(), title);
         let mut file = vec![
+            item(Command::NewFile, "New File…")
+                .with_shortcut(Shortcut::primary('n'))
+                .enabled(self.tree.is_some()),
+            item(Command::NewFolder, "New Folder…").enabled(self.tree.is_some()),
+            item(Command::RenameFile, "Rename…").enabled(self.file_target().is_some()),
+            item(Command::TrashFile, "Move to Trash").enabled(self.file_target().is_some()),
+            MenuItem::Separator,
             item(Command::OpenFolder, "Open Folder…").with_shortcut(Shortcut::primary('o')),
             item(Command::Refresh, "Refresh Folder").enabled(self.tree.is_some()),
             MenuItem::Separator,
@@ -2181,6 +2415,7 @@ impl Editor {
         let mut x = 8.0;
         for (command, text) in [
             (Command::OpenFolder, "Open Folder…"),
+            (Command::NewFile, "New File"),
             (Command::Save, "Save"),
             (Command::SaveAll, "Save All"),
             (Command::Find, "Find"),
@@ -2317,7 +2552,12 @@ impl Editor {
         host: &dyn EditorHost,
         layout: &mut Layout,
     ) -> Option<Rect> {
-        let commands: Vec<(Command, &str)> = if self.quit_prompt {
+        let commands: Vec<(Command, &str)> = if self.trash_prompt.is_some() {
+            vec![
+                (Command::TrashConfirm, "Move to Trash"),
+                (Command::TrashCancel, "Cancel"),
+            ]
+        } else if self.quit_prompt {
             vec![
                 (Command::QuitSaveAll, "Save All and Quit"),
                 (Command::QuitDiscard, "Quit Without Saving"),
@@ -2342,13 +2582,7 @@ impl Editor {
             ]
         } else if self.goto.is_some() {
             vec![
-                (
-                    Command::GotoGo,
-                    match self.bar_mode {
-                        BarMode::GoToLine => "Go",
-                        BarMode::Rename { .. } => "Rename",
-                    },
-                ),
+                (Command::GotoGo, self.bar_mode.action()),
                 (Command::CloseBar, "Close"),
             ]
         } else {
@@ -2378,6 +2612,7 @@ impl Editor {
         layout.bar_buttons.reverse();
         let shows_field = self.find.is_some() || self.goto.is_some();
         if shows_field
+            && self.trash_prompt.is_none()
             && !self.quit_prompt
             && self.close_prompt.is_none()
             && !self.active_buffer().is_some_and(|b| b.conflict)
@@ -2698,7 +2933,8 @@ impl Editor {
             return;
         }
         if key == Key::Escape {
-            if self.quit_prompt {
+            if self.trash_prompt.take().is_some() {
+            } else if self.quit_prompt {
                 self.quit_prompt = false;
             } else if self.close_prompt.take().is_none() {
                 self.find = None;
@@ -2994,10 +3230,36 @@ impl Editor {
                 self.goto = None;
                 self.set_focus(Focus::Editor);
             }
-            Command::GotoGo => match self.bar_mode {
+            Command::GotoGo => match self.bar_mode.clone() {
                 BarMode::GoToLine => self.go_to_line(),
                 BarMode::Rename { at } => self.request_rename(at),
+                BarMode::NewFile { dir } => {
+                    self.finish_file_op(|name| FileOp::CreateFile(dir.join(name)))
+                }
+                BarMode::NewFolder { dir } => {
+                    self.finish_file_op(|name| FileOp::CreateFolder(dir.join(name)))
+                }
+                BarMode::RenameFile { from } => self.finish_file_op(|name| FileOp::Rename {
+                    to: from
+                        .parent()
+                        .map_or_else(|| PathBuf::from(name), |dir| dir.join(name)),
+                    from: from.clone(),
+                }),
             },
+            Command::NewFile => self.start_file_bar(true),
+            Command::NewFolder => self.start_file_bar(false),
+            Command::RenameFile => self.start_rename_file(),
+            Command::TrashFile => {
+                if let Some(path) = self.file_target() {
+                    self.trash_prompt = Some(path);
+                }
+            }
+            Command::TrashConfirm => {
+                if let Some(path) = self.trash_prompt.take() {
+                    self.outbox.push(IoRequest::FileOp(FileOp::Trash(path)));
+                }
+            }
+            Command::TrashCancel => self.trash_prompt = None,
             Command::RenameSymbol => self.start_rename(),
         }
     }
@@ -3314,6 +3576,7 @@ impl Editor {
         for (command, rect) in &layout.buttons {
             let (text, enabled) = match command {
                 Command::OpenFolder => ("Open Folder…", true),
+                Command::NewFile => ("New File", self.tree.is_some()),
                 Command::Save => ("Save", active_dirty),
                 Command::SaveAll => ("Save All", any_dirty),
                 Command::Find => ("Find", self.active.is_some()),
@@ -3463,7 +3726,26 @@ impl Editor {
             .active_buffer()
             .map(|buffer| buffer.title.clone())
             .unwrap_or_default();
-        if self.quit_prompt {
+        if let Some(path) = &self.trash_prompt {
+            let shown = self.shown_path(path);
+            let unsaved = self
+                .buffers
+                .iter()
+                .any(|buffer| buffer.path.starts_with(path) && buffer.dirty());
+            let text = if unsaved {
+                format!("Move {shown} to the Trash? Its unsaved changes will be lost.")
+            } else {
+                format!("Move {shown} to the Trash?")
+            };
+            draw::label(
+                scene,
+                &text,
+                message_rect,
+                theme::WARNING,
+                theme::UI_FONT,
+                HorizontalAlign::Left,
+            );
+        } else if self.quit_prompt {
             let dirty = self.buffers.iter().filter(|buffer| buffer.dirty()).count();
             let text = if dirty == 1 {
                 "1 file has unsaved changes.".to_string()
@@ -3538,10 +3820,7 @@ impl Editor {
         } else if let Some(goto) = &self.goto {
             draw::label(
                 scene,
-                match self.bar_mode {
-                    BarMode::GoToLine => "Go to line",
-                    BarMode::Rename { .. } => "Rename to",
-                },
+                self.bar_mode.label(),
                 Rect {
                     width: 90.0,
                     ..message_rect
@@ -3554,6 +3833,8 @@ impl Editor {
         }
         for (command, rect) in &layout.bar_buttons {
             let text = match command {
+                Command::TrashConfirm => "Move to Trash",
+                Command::TrashCancel => "Cancel",
                 Command::QuitSaveAll => "Save All and Quit",
                 Command::QuitDiscard => "Quit Without Saving",
                 Command::QuitCancel => "Cancel",
@@ -3565,10 +3846,7 @@ impl Editor {
                 Command::FindPrevious => "Previous",
                 Command::FindNext => "Next",
                 Command::CloseBar => "Close",
-                Command::GotoGo => match self.bar_mode {
-                    BarMode::GoToLine => "Go",
-                    BarMode::Rename { .. } => "Rename",
-                },
+                Command::GotoGo => self.bar_mode.action(),
                 _ => continue,
             };
             draw::button(scene, *rect, text, rect.contains(self.pointer), true);
@@ -4467,8 +4745,9 @@ mod tests {
         let file_title = Point { x: 20.0, y: 10.0 };
         rig.click(file_title);
         assert!(rig.editor.drawn_menu.as_ref().unwrap().is_open());
-        // Down to "Save" (past Open Folder… and Refresh Folder) and Enter.
-        for _ in 0..3 {
+        // Down to "Save" (past the four file commands, Open Folder… and
+        // Refresh Folder; separators are skipped) and Enter.
+        for _ in 0..7 {
             rig.key(HostKey::Down, Modifiers::default());
         }
         rig.key(HostKey::Enter, Modifiers::default());
@@ -5039,5 +5318,114 @@ mod tests {
             shown.contains(&"fn assist(value: i32) -> i32 {".to_string()),
             "{shown:?}"
         );
+    }
+
+    #[test]
+    fn new_file_and_new_folder_go_into_the_selected_folder() {
+        let dir = workspace(&[("src/lib.rs", "")]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.editor
+            .tree
+            .as_mut()
+            .unwrap()
+            .reveal(&dir.path().join("src/lib.rs"));
+        rig.editor.tree.as_mut().unwrap().selected = Some(dir.path().join("src"));
+        rig.settle();
+        rig.outcome(menu_input(Command::NewFile));
+        rig.type_text("util.rs");
+        rig.key(HostKey::Enter, Modifiers::default());
+        rig.settle();
+        let created = dir.path().join("src/util.rs");
+        assert!(created.is_file());
+        assert_eq!(rig.active().path, created, "opened in a tab");
+
+        rig.editor.tree.as_mut().unwrap().selected = Some(dir.path().join("src/lib.rs"));
+        rig.outcome(menu_input(Command::NewFolder));
+        rig.type_text("nested");
+        rig.key(HostKey::Enter, Modifiers::default());
+        rig.settle();
+        assert!(
+            dir.path().join("src/nested").is_dir(),
+            "beside the selected file"
+        );
+
+        rig.editor.tree.as_mut().unwrap().selected = Some(dir.path().join("src"));
+        rig.outcome(menu_input(Command::NewFile));
+        rig.type_text("util.rs");
+        rig.key(HostKey::Enter, Modifiers::default());
+        rig.settle();
+        assert!(rig.status().contains("already exists"), "{}", rig.status());
+    }
+
+    #[test]
+    fn renaming_an_open_file_keeps_its_tab_and_unsaved_text() {
+        let (dir, mut rig) = with_server(&[("src/old.rs", "fn a() {}\n")], "src/old.rs");
+        sent(&mut rig);
+        rig.type_text("// edited\n");
+        sent(&mut rig);
+        rig.outcome(menu_input(Command::RenameFile));
+        assert_eq!(rig.editor.goto.as_ref().unwrap().text(), "old.rs");
+        // The stem is selected: typing replaces it and keeps ".rs".
+        rig.type_text("new");
+        rig.key(HostKey::Enter, Modifiers::default());
+        rig.settle();
+        let new = dir.path().join("src/new.rs");
+        assert!(new.is_file() && !dir.path().join("src/old.rs").exists());
+        assert_eq!(rig.active().path, new);
+        assert_eq!(rig.active().title, "new.rs");
+        assert!(rig.active().dirty(), "unsaved text kept");
+        assert_eq!(std::fs::read_to_string(&new).unwrap(), "fn a() {}\n");
+        let told = methods(&sent(&mut rig));
+        assert!(
+            told.contains(&"textDocument/didClose".to_string()),
+            "{told:?}"
+        );
+        assert!(
+            told.contains(&"textDocument/didOpen".to_string()),
+            "{told:?}"
+        );
+        rig.key(HostKey::S, cmd());
+        assert_eq!(
+            std::fs::read_to_string(&new).unwrap(),
+            "// edited\nfn a() {}\n"
+        );
+    }
+
+    #[test]
+    fn move_to_trash_asks_first_and_closes_the_tab() {
+        let dir = workspace(&[("a.rs", "a"), ("b.rs", "b")]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.editor.open_file(dir.path().join("a.rs"));
+        rig.settle();
+        rig.type_text("x");
+        rig.outcome(menu_input(Command::TrashFile));
+        assert_eq!(
+            rig.editor.trash_prompt.as_deref(),
+            Some(dir.path().join("a.rs").as_path())
+        );
+        rig.key(HostKey::Escape, Modifiers::default());
+        assert!(rig.editor.trash_prompt.is_none(), "Escape cancels");
+        rig.outcome(menu_input(Command::TrashFile));
+        // Confirm, but take the request rather than run it: the real Trash
+        // is not for tests.
+        rig.editor.run(Command::TrashConfirm, &rig.host);
+        let requests = rig.editor.take_requests();
+        let trash = requests
+            .iter()
+            .find_map(|request| match request {
+                IoRequest::FileOp(op @ FileOp::Trash(_)) => Some(op.clone()),
+                _ => None,
+            })
+            .expect("a Trash request");
+        assert_eq!(trash, FileOp::Trash(dir.path().join("a.rs")));
+        rig.editor.apply(
+            IoResponse::FileOpDone {
+                op: trash,
+                result: Ok(()),
+            },
+            rig.now,
+        );
+        assert!(rig.editor.buffers.is_empty(), "its tab closed");
+        assert!(rig.status().starts_with("Moved a.rs to the Trash"));
     }
 }

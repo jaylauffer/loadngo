@@ -65,6 +65,24 @@ pub enum IoRequest {
     StatFiles {
         paths: Vec<PathBuf>,
     },
+    /// Creates, renames or trashes a file or folder.
+    FileOp(FileOp),
+}
+
+/// A change to the folder's files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileOp {
+    /// A new empty file (with any missing parent folders); never replaces
+    /// one that exists.
+    CreateFile(PathBuf),
+    CreateFolder(PathBuf),
+    /// Never replaces what is at `to`.
+    Rename {
+        from: PathBuf,
+        to: PathBuf,
+    },
+    /// To the system Trash, so it can be got back.
+    Trash(PathBuf),
 }
 
 /// What came back.
@@ -93,6 +111,10 @@ pub enum IoResponse {
     },
     Stats {
         stamps: Vec<(PathBuf, Option<DiskStamp>)>,
+    },
+    FileOpDone {
+        op: FileOp,
+        result: Result<(), String>,
     },
 }
 
@@ -165,6 +187,10 @@ pub fn perform(request: IoRequest) -> IoResponse {
             };
             IoResponse::StateRead { path, result }
         }
+        IoRequest::FileOp(op) => {
+            let result = file_op(&op);
+            IoResponse::FileOpDone { op, result }
+        }
         IoRequest::StatFiles { paths } => IoResponse::Stats {
             stamps: paths
                 .into_iter()
@@ -174,6 +200,42 @@ pub fn perform(request: IoRequest) -> IoResponse {
                 })
                 .collect(),
         },
+    }
+}
+
+fn file_op(op: &FileOp) -> Result<(), String> {
+    let exists = |path: &Path| fs::symlink_metadata(path).is_ok();
+    match op {
+        FileOp::CreateFile(path) => {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .map(drop)
+                .map_err(|error| match error.kind() {
+                    io::ErrorKind::AlreadyExists => "it already exists".to_string(),
+                    _ => error.to_string(),
+                })
+        }
+        FileOp::CreateFolder(path) => {
+            if exists(path) {
+                return Err("it already exists".to_string());
+            }
+            fs::create_dir_all(path).map_err(|error| error.to_string())
+        }
+        FileOp::Rename { from, to } => {
+            if exists(to) {
+                return Err(format!("{} already exists", to.display()));
+            }
+            if let Some(parent) = to.parent() {
+                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            fs::rename(from, to).map_err(|error| error.to_string())
+        }
+        FileOp::Trash(path) => loadngo_host_desktop::move_to_trash(path),
     }
 }
 
@@ -310,5 +372,40 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn files_are_created_and_renamed_without_replacing_anything() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("src/new.rs");
+        assert_eq!(file_op(&FileOp::CreateFile(file.clone())), Ok(()));
+        assert!(file.is_file());
+        assert_eq!(
+            file_op(&FileOp::CreateFile(file.clone())),
+            Err("it already exists".to_string())
+        );
+        let folder = dir.path().join("docs");
+        assert_eq!(file_op(&FileOp::CreateFolder(folder.clone())), Ok(()));
+        assert!(file_op(&FileOp::CreateFolder(folder.clone())).is_err());
+        let renamed = dir.path().join("src/old.rs");
+        assert_eq!(
+            file_op(&FileOp::Rename {
+                from: file.clone(),
+                to: renamed.clone()
+            }),
+            Ok(())
+        );
+        assert!(renamed.is_file() && !file.exists());
+        std::fs::write(&file, "x").unwrap();
+        assert!(file_op(&FileOp::Rename {
+            from: file.clone(),
+            to: renamed.clone()
+        })
+        .is_err());
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "x",
+            "nothing moved"
+        );
     }
 }
