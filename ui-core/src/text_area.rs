@@ -20,6 +20,15 @@ pub struct TextAreaLineLayout {
     pub char_offsets: Vec<f32>,
 }
 
+/// A colored stretch of one line, for [`TextAreaModel::paint_with_runs`]:
+/// characters `start..end` of the line (not of the document).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextRun {
+    pub start: usize,
+    pub end: usize,
+    pub color: Color,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TextAreaLayoutCache {
     pub lines: Vec<TextAreaLineLayout>,
@@ -112,6 +121,9 @@ pub struct TextAreaModel {
     cache_font_size: u16,
     cache_tab_spaces: usize,
     edit_run: Option<EditRun>,
+    /// The first line changed since [`TextAreaModel::take_changed_from_line`]
+    /// was last called; `Some(0)` for a new document.
+    changed_from_line: Option<usize>,
 }
 
 /// The run of edits the document's open undo group is collecting.
@@ -217,6 +229,7 @@ impl TextAreaModel {
             cache_font_size,
             cache_tab_spaces: 4,
             edit_run: None,
+            changed_from_line: Some(0),
         }
     }
 
@@ -909,7 +922,59 @@ impl TextAreaModel {
         }
     }
 
+    /// The first line changed since the last call (every line, the first
+    /// time), for anything derived from the text line by line, such as
+    /// syntax highlighting.
+    pub fn take_changed_from_line(&mut self) -> Option<usize> {
+        self.changed_from_line.take()
+    }
+
+    /// The text of logical line `line` without its line break, as of the
+    /// last `relayout`.
+    pub fn line_text(&self, line: usize) -> Option<std::borrow::Cow<'_, str>> {
+        let metrics = self.document_lines.get(line)?;
+        let chars = metrics.source_end.saturating_sub(metrics.source_start);
+        if metrics.display_text.chars().count() == chars {
+            // No tabs: what is drawn is the source text.
+            Some(std::borrow::Cow::Borrowed(metrics.display_text.as_str()))
+        } else {
+            Some(std::borrow::Cow::Owned(
+                self.slice_chars(metrics.source_start, metrics.source_end),
+            ))
+        }
+    }
+
+    /// The logical lines on screen as of the last `relayout`.
+    pub fn visible_lines(&self) -> std::ops::Range<usize> {
+        let line_of = |source_start: usize| {
+            self.line_starts
+                .partition_point(|&start| start <= source_start)
+                .saturating_sub(1)
+        };
+        match (
+            self.layout_cache.lines.first(),
+            self.layout_cache.lines.last(),
+        ) {
+            (Some(first), Some(last)) => {
+                line_of(first.source_start)..line_of(last.source_start) + 1
+            }
+            _ => 0..0,
+        }
+    }
+
     pub fn paint(&self, scene: &mut Vec<PaintOp>) {
+        self.paint_with_runs(scene, &|_| None);
+    }
+
+    /// [`paint`](Self::paint), drawing each line for which `runs` has colored
+    /// runs as those runs instead of one string in the style's color.
+    /// Characters outside every run are not drawn, so runs should cover all
+    /// but whitespace. A line holding tabs is drawn plainly.
+    pub fn paint_with_runs<'r>(
+        &self,
+        scene: &mut Vec<PaintOp>,
+        runs: &dyn Fn(usize) -> Option<&'r [TextRun]>,
+    ) {
         if let Some(color) = self.background {
             scene.push(PaintOp::FillRect {
                 rect: self.bounds,
@@ -978,7 +1043,18 @@ impl TextAreaModel {
                     },
                 });
             }
-            if !line.display_text.is_empty() && rect_intersects(line.rect, content) {
+            let line_index = self
+                .line_starts
+                .partition_point(|&start| start <= line.source_start)
+                .saturating_sub(1);
+            let line_runs = runs(line_index).filter(|_| {
+                line.display_text.chars().count() == line.source_end - line.source_start
+            });
+            if let Some(line_runs) = line_runs {
+                if rect_intersects(line.rect, content) {
+                    self.paint_runs(scene, line, line_runs, content);
+                }
+            } else if !line.display_text.is_empty() && rect_intersects(line.rect, content) {
                 scene.push(PaintOp::Text {
                     rect: Rect {
                         x: line.rect.x - self.scroll_x,
@@ -1266,6 +1342,10 @@ impl TextAreaModel {
             .partition_point(|&line_start| line_start <= end);
         let new_end_line = dirty_line + replacement.chars().filter(|&ch| ch == '\n').count();
         let char_delta = replacement.chars().count() as isize - end.saturating_sub(start) as isize;
+        self.changed_from_line = Some(
+            self.changed_from_line
+                .map_or(dirty_line, |line| line.min(dirty_line)),
+        );
         self.update_line_starts_for_replace(start, end, replacement);
         if join {
             self.document
@@ -1377,6 +1457,56 @@ impl TextAreaModel {
         self.sync_scroll_offsets_from_scrollbars();
         self.caret_visibility_pending = false;
         true
+    }
+
+    /// Draws one line as colored runs, each a text op at its measured offset.
+    fn paint_runs(
+        &self,
+        scene: &mut Vec<PaintOp>,
+        line: &TextAreaLineLayout,
+        runs: &[TextRun],
+        content: Rect,
+    ) {
+        let mut boundaries: Vec<usize> = line
+            .display_text
+            .char_indices()
+            .map(|(byte, _)| byte)
+            .collect();
+        boundaries.push(line.display_text.len());
+        let chars = boundaries.len() - 1;
+        let offsets = &line.char_offsets;
+        for run in runs {
+            let start = run.start.min(chars);
+            let end = run.end.min(chars);
+            if start >= end || end >= offsets.len() {
+                continue;
+            }
+            let x = line.rect.x + offsets[start] - self.scroll_x;
+            let width = offsets[end] - offsets[start];
+            if x > content.right() || x + width < content.x {
+                continue;
+            }
+            scene.push(PaintOp::Text {
+                rect: Rect {
+                    x,
+                    y: line.rect.y,
+                    // Room for a final glyph's overhang; the clip is the
+                    // text area's content.
+                    width: width + self.style.font_size as f32,
+                    height: line.rect.height,
+                },
+                clip_rect: Some(content),
+                text: line.display_text[boundaries[start]..boundaries[end]].to_string(),
+                style: TextStyle {
+                    color: run.color,
+                    horizontal_align: HorizontalAlign::Left,
+                    vertical_align: VerticalAlign::Top,
+                    layout_mode: TextLayoutMode::SingleLine,
+                    overflow: TextOverflow::Clip,
+                    ..self.style.clone()
+                },
+            });
+        }
     }
 
     fn horizontal_scrollbar_total_height(&self) -> f32 {
@@ -1754,6 +1884,7 @@ impl TextAreaModel {
     }
 
     fn after_document_history_change(&mut self, caret: usize) {
+        self.changed_from_line = Some(0);
         self.line_index_dirty = true;
         self.document_dirty_from_line = Some(0);
         self.pending_edit = None;

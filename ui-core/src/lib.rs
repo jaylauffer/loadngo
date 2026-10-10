@@ -66,7 +66,7 @@ pub use stack::{VerticalStack, VerticalStackModel};
 pub use stepper::StepperModel;
 pub use tabs::{TabGroupModel, TabPage, TabbedContainer};
 pub use text::{multiline_line_step, single_line_text_box_height};
-pub use text_area::{TextArea, TextAreaLayoutCache, TextAreaLineLayout, TextAreaModel};
+pub use text_area::{TextArea, TextAreaLayoutCache, TextAreaLineLayout, TextAreaModel, TextRun};
 pub use text_block::{TextBlock, TextBlockModel};
 pub use text_document::TextDocument;
 pub use text_field::TextFieldModel;
