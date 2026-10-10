@@ -59,6 +59,34 @@ impl<T> Offloaded<T> {
     }
 }
 
+/// Wakes the app from any thread, for a stream of results it collects
+/// itself (such as messages from a language server): each `wake` gets the
+/// app a frame, on macOS even with an idle frame demand; elsewhere at its
+/// next frame, as for an offloaded job. From `frame_waker()`.
+#[derive(Clone)]
+pub struct FrameWaker {
+    wake: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl FrameWaker {
+    #[cfg_attr(target_os = "netbsd", allow(dead_code))]
+    pub(crate) fn new(wake: impl Fn() + Send + Sync + 'static) -> Self {
+        Self {
+            wake: Arc::new(wake),
+        }
+    }
+
+    pub fn wake(&self) {
+        (self.wake)();
+    }
+}
+
+impl std::fmt::Debug for FrameWaker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FrameWaker")
+    }
+}
+
 /// The finishing half of `completion()`: whoever holds it delivers the result
 /// to the paired [`Offloaded`], from any thread. Dropping it unfinished
 /// delivers an error, so the reader is never left waiting.

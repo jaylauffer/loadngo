@@ -909,6 +909,14 @@ pub fn completion<T: Send + 'static>() -> (crate::Completer<T>, crate::Offloaded
     })
 }
 
+/// A [`crate::FrameWaker`] any thread can use to get the app a frame.
+pub fn frame_waker() -> crate::FrameWaker {
+    let handle = proactor().handle.clone();
+    crate::FrameWaker::new(move || {
+        let _ = handle.enqueue_work(|_| {});
+    })
+}
+
 pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|err| format!("failed to read {path}: {err}"))
 }

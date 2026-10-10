@@ -23,7 +23,7 @@ pub use text_overflow::{fit_text_to_width, ELLIPSIS};
 mod audio_mixer;
 pub use audio_mixer::*;
 mod offload;
-pub use offload::{Completer, OffloadResult, Offloaded};
+pub use offload::{Completer, FrameWaker, OffloadResult, Offloaded};
 
 #[cfg(target_os = "android")]
 mod android;

@@ -315,6 +315,11 @@ pub fn completion<T: Send + 'static>() -> (crate::Completer<T>, crate::Offloaded
     crate::offload::completion_via(|store| store())
 }
 
+/// A [`crate::FrameWaker`] any thread can use to get the app a frame.
+pub fn frame_waker() -> crate::FrameWaker {
+    crate::FrameWaker::new(|| {})
+}
+
 pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
     LoadngoPlaceholderAssetIo::load_bytes(path).await
 }
