@@ -159,6 +159,14 @@ async fn run(folder: Option<PathBuf>) {
 
         if let Some(process) = &server {
             let messages = process.drain();
+            if trace {
+                for message in &messages {
+                    if message.get("id").is_some() {
+                        let text = message.to_string();
+                        eprintln!("lsp <- {}", &text[..text.len().min(600)]);
+                    }
+                }
+            }
             if !messages.is_empty() {
                 editor.apply_lsp(messages);
             }
@@ -210,6 +218,10 @@ async fn run(folder: Option<PathBuf>) {
         }
         if let Some(process) = &server {
             for message in editor.lsp_outgoing() {
+                if trace && message.get("id").is_some() {
+                    let text = message.to_string();
+                    eprintln!("lsp -> {}", &text[..text.len().min(300)]);
+                }
                 process.send(&message);
             }
         }

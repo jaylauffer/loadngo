@@ -5,6 +5,7 @@
 //! goes out through [`Editor::paint`]. The app runs the requests on the
 //! host's offload workers.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -20,7 +21,7 @@ use crate::draw;
 use crate::file_tree::{FileTree, TreeAction};
 use crate::fs_ops::{self, DiskStamp, IoRequest, IoResponse, ReadError, WriteError};
 use crate::highlight::Highlighter;
-use crate::lsp::{LspEvent, LspSession, Position};
+use crate::lsp::{CompletionItem, LspEvent, LspSession, Position, TextEdit};
 use crate::session::{self, Backup, Session, SessionTab};
 use crate::text_file::LineEnding;
 use crate::theme;
@@ -143,6 +144,7 @@ enum Command {
     ToggleProblems,
     GoToDefinition,
     GoBack,
+    RenameSymbol,
     OpenFolder,
     CloseTab,
     Quit,
@@ -168,7 +170,8 @@ enum Command {
 
 impl Command {
     /// The commands a menu item can send.
-    const IN_MENUS: [Command; 18] = [
+    const IN_MENUS: [Command; 19] = [
+        Command::RenameSymbol,
         Command::GoToDefinition,
         Command::GoBack,
         Command::Check,
@@ -338,7 +341,37 @@ pub struct Editor {
     back_stack: Vec<(PathBuf, usize)>,
     /// The time of the frame being handled.
     frame_time: Instant,
+    completion: Option<CompletionPopup>,
+    /// What the Go to Line bar is doing: going to a line, or renaming.
+    bar_mode: BarMode,
+    rename_request: Option<u64>,
+    /// A rename's edits for files still loading.
+    pending_edits: HashMap<PathBuf, Vec<TextEdit>>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BarMode {
+    GoToLine,
+    /// Renaming the symbol whose name starts at this character.
+    Rename {
+        at: usize,
+    },
+}
+
+/// The completion list under the caret.
+struct CompletionPopup {
+    items: Vec<CompletionItem>,
+    selected: usize,
+    /// Where the word being completed starts.
+    anchor: usize,
+    /// The newest request, while it is unanswered.
+    request: Option<u64>,
+    /// Rows on screen, for clicks: item index and rect.
+    rows: Vec<(usize, Rect)>,
+}
+
+const COMPLETION_ROWS: usize = 10;
+const COMPLETION_ROW_HEIGHT: f32 = 22.0;
 
 /// How long the pointer rests on a symbol before its hover shows.
 const HOVER_DELAY: Duration = Duration::from_millis(450);
@@ -404,6 +437,10 @@ impl Editor {
             definition_request: None,
             back_stack: Vec::new(),
             frame_time: now,
+            completion: None,
+            bar_mode: BarMode::GoToLine,
+            rename_request: None,
+            pending_edits: HashMap::new(),
         };
         if let Some(root) = &root {
             editor.open_folder(root.clone());
@@ -651,6 +688,9 @@ impl Editor {
                 if self.restore_active.as_ref() == Some(&path) {
                     self.restore_active = None;
                     self.activate(index);
+                }
+                if let Some(edits) = self.pending_edits.remove(&path) {
+                    self.apply_edits(index, &edits);
                 }
                 if self
                     .pending_goto
@@ -1061,7 +1101,28 @@ impl Editor {
                     None => self.set_status("No definition found.", StatusKind::Info),
                 }
             }
+            LspEvent::Completion { request, items } => {
+                if let Some(popup) = &mut self.completion {
+                    if popup.request == Some(request) {
+                        popup.request = None;
+                        if items.is_empty() {
+                            self.completion = None;
+                        } else {
+                            popup.items = items;
+                            popup.selected = 0;
+                        }
+                    }
+                }
+            }
+            LspEvent::Edit { request, edits } if self.rename_request == Some(request) => {
+                self.rename_request = None;
+                self.apply_workspace_edit(edits);
+            }
             LspEvent::Failed { request, message } => {
+                if Some(request) == self.rename_request {
+                    self.rename_request = None;
+                    self.set_status(format!("Rename: {message}"), StatusKind::Warning);
+                }
                 if Some(request) == self.definition_request {
                     self.definition_request = None;
                     self.set_status(format!("Go to Definition: {message}"), StatusKind::Warning);
@@ -1088,6 +1149,7 @@ impl Editor {
         let Some(index) = self.active else {
             return;
         };
+        self.sync_language_server();
         let at = self.lsp_position(index, char_index);
         let path = self.buffers[index].path.clone();
         let Some(lsp) = &mut self.lsp else {
@@ -1112,6 +1174,424 @@ impl Editor {
         };
         self.request_definition(char_index);
         true
+    }
+
+    /// After text was typed into the editor: ask for completions when it
+    /// continues a name or follows `.` or `::`; close the list otherwise.
+    fn after_typing(&mut self, text: &str) {
+        let Some(last) = text.chars().last() else {
+            return;
+        };
+        let Some(index) = self.active else {
+            return;
+        };
+        let buffer = &self.buffers[index];
+        if !buffer.loaded || buffer.highlighter.is_none() {
+            return;
+        }
+        let caret = buffer.area.caret();
+        let before = |n: usize| {
+            caret
+                .checked_sub(n)
+                .map(|start| buffer.area.document.slice_chars(start, caret))
+        };
+        let continues_name = last.is_alphanumeric() || last == '_';
+        let after_path = last == '.' || before(2).as_deref() == Some("::");
+        if !continues_name && !after_path {
+            self.completion = None;
+            return;
+        }
+        // The word being completed starts after the last non-name character.
+        let line_start = {
+            let area = &mut self.buffers[index].area;
+            let line = area.line_of_char(caret);
+            area.line_start_char(line)
+        };
+        let typed: Vec<char> = self.buffers[index]
+            .area
+            .document
+            .slice_chars(line_start, caret)
+            .chars()
+            .collect();
+        let word = typed
+            .iter()
+            .rev()
+            .take_while(|ch| ch.is_alphanumeric() || **ch == '_')
+            .count();
+        let anchor = caret - word;
+        // The server must have the text just typed before it is asked.
+        self.sync_language_server();
+        let at = self.lsp_position(index, caret);
+        let path = self.buffers[index].path.clone();
+        let Some(request) = self
+            .lsp
+            .as_mut()
+            .filter(|lsp| lsp.ready)
+            .and_then(|lsp| lsp.completion(&path, at))
+        else {
+            return;
+        };
+        match &mut self.completion {
+            Some(popup) if popup.anchor == anchor => popup.request = Some(request),
+            _ => {
+                self.completion = Some(CompletionPopup {
+                    items: Vec::new(),
+                    selected: 0,
+                    anchor,
+                    request: Some(request),
+                    rows: Vec::new(),
+                });
+            }
+        }
+    }
+
+    /// After a deletion with the list open: ask again for what is left of
+    /// the word, or close the list once the caret is before it.
+    fn refresh_completion(&mut self) {
+        let (Some(anchor), Some(index)) = (self.completion.as_ref().map(|p| p.anchor), self.active)
+        else {
+            return;
+        };
+        let caret = self.buffers[index].area.caret();
+        if caret < anchor {
+            self.completion = None;
+            return;
+        }
+        self.sync_language_server();
+        let at = self.lsp_position(index, caret);
+        let path = self.buffers[index].path.clone();
+        let request = self.lsp.as_mut().and_then(|lsp| lsp.completion(&path, at));
+        if let Some(popup) = &mut self.completion {
+            popup.request = request;
+        }
+    }
+
+    /// The word typed since the completion list opened.
+    fn completion_prefix(&self) -> String {
+        match (&self.completion, self.active_buffer()) {
+            (Some(popup), Some(buffer)) => {
+                let caret = buffer.area.caret();
+                if caret >= popup.anchor {
+                    buffer.area.document.slice_chars(popup.anchor, caret)
+                } else {
+                    String::new()
+                }
+            }
+            _ => String::new(),
+        }
+    }
+
+    /// The items the list shows: those still matching what was typed since
+    /// the server answered.
+    fn visible_completions(&self) -> Vec<usize> {
+        let Some(popup) = &self.completion else {
+            return Vec::new();
+        };
+        let prefix = self.completion_prefix().to_lowercase();
+        popup
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.label.to_lowercase().contains(&prefix))
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// A key while the list is open; true when the list took it.
+    fn completion_key(&mut self, key: Key) -> bool {
+        let visible = self.visible_completions();
+        let Some(popup) = &mut self.completion else {
+            return false;
+        };
+        let position = visible.iter().position(|&item| item == popup.selected);
+        match key {
+            Key::Up | Key::Down if !visible.is_empty() => {
+                let next = match (key, position) {
+                    (Key::Down, Some(at)) => (at + 1).min(visible.len() - 1),
+                    (Key::Up, Some(at)) => at.saturating_sub(1),
+                    _ => 0,
+                };
+                popup.selected = visible[next];
+                true
+            }
+            Key::Enter | Key::Tab if !visible.is_empty() => {
+                if position.is_none() {
+                    popup.selected = visible[0];
+                }
+                self.accept_completion();
+                true
+            }
+            Key::Escape => {
+                self.completion = None;
+                true
+            }
+            Key::Backspace => {
+                // Let the deletion happen, then ask again or close.
+                false
+            }
+            _ => {
+                self.completion = None;
+                false
+            }
+        }
+    }
+
+    /// Inserts the selected completion: its edit, stretched to the caret
+    /// (the user may have typed on since asking), and its further edits.
+    fn accept_completion(&mut self) {
+        let Some(popup) = self.completion.take() else {
+            return;
+        };
+        let Some(item) = popup.items.get(popup.selected).cloned() else {
+            return;
+        };
+        let Some(index) = self.active else {
+            return;
+        };
+        let caret = self.buffers[index].area.caret();
+        let (start, text) = match &item.edit {
+            Some(edit) => (
+                self.char_index(index, edit.range.start),
+                edit.new_text.clone(),
+            ),
+            None => (popup.anchor, item.insert_text.clone()),
+        };
+        let mut edits: Vec<(usize, usize, String)> = vec![(start.min(caret), caret, text)];
+        for extra in &item.additional_edits {
+            let from = self.char_index(index, extra.range.start);
+            let to = self.char_index(index, extra.range.end);
+            edits.push((from, to, extra.new_text.clone()));
+        }
+        // From the end of the file back, so earlier positions stay valid.
+        edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
+        let main_start = start.min(caret);
+        let mut caret_after = None;
+        let mut shift: isize = 0;
+        for (from, to, text) in &edits {
+            let area = &mut self.buffers[index].area;
+            area.replace_range(*from, *to, text);
+            if *from == main_start && caret_after.is_none() {
+                caret_after = Some(from + text.chars().count());
+            } else if *from < main_start {
+                shift += text.chars().count() as isize - (to - from) as isize;
+            }
+        }
+        if let Some(after) = caret_after {
+            let target = (after as isize + shift).max(0) as usize;
+            self.buffers[index].area.set_caret(target);
+        }
+    }
+
+    /// The character index of LSP position `at` in buffer `index`.
+    fn char_index(&mut self, index: usize, at: Position) -> usize {
+        let area = &mut self.buffers[index].area;
+        let start = area.line_start_char(at.line);
+        let next = area.line_start_char(at.line + 1);
+        let end = if next > start {
+            next - 1
+        } else {
+            area.document.len_chars()
+        };
+        (start + at.character).min(end)
+    }
+
+    fn paint_completion(&mut self, scene: &mut Vec<PaintOp>, bounds: Rect) {
+        let visible = self.visible_completions();
+        let caret = self
+            .active_buffer()
+            .and_then(|buffer| buffer.area.layout_cache.caret_rect);
+        let Some(popup) = &mut self.completion else {
+            return;
+        };
+        popup.rows.clear();
+        let (Some(caret), false) = (caret, visible.is_empty()) else {
+            return;
+        };
+        let selected_at = visible
+            .iter()
+            .position(|&item| item == popup.selected)
+            .unwrap_or(0);
+        let first = selected_at.saturating_sub(COMPLETION_ROWS - 1);
+        let shown: Vec<usize> = visible
+            .iter()
+            .copied()
+            .skip(first)
+            .take(COMPLETION_ROWS)
+            .collect();
+        let width = 440.0f32.min(bounds.width - 16.0);
+        let height = shown.len() as f32 * COMPLETION_ROW_HEIGHT + 6.0;
+        let x = caret
+            .x
+            .min(bounds.right() - width - 4.0)
+            .max(bounds.x + 4.0);
+        let below = caret.y + caret.height + 4.0;
+        let y = if below + height <= bounds.bottom() {
+            below
+        } else {
+            (caret.y - height - 4.0).max(bounds.y)
+        };
+        let rect = Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        draw::fill(scene, rect, theme::PANEL);
+        scene.push(PaintOp::StrokeRect {
+            rect,
+            color: theme::BORDER,
+        });
+        for (row, item_index) in shown.iter().enumerate() {
+            let item = &popup.items[*item_index];
+            let row_rect = Rect {
+                x: x + 3.0,
+                y: y + 3.0 + row as f32 * COMPLETION_ROW_HEIGHT,
+                width: width - 6.0,
+                height: COMPLETION_ROW_HEIGHT,
+            };
+            if *item_index == popup.selected || (row == 0 && !visible.contains(&popup.selected)) {
+                draw::fill(scene, row_rect, theme::SELECTED);
+            }
+            draw::label(
+                scene,
+                &item.label,
+                Rect {
+                    x: row_rect.x + 8.0,
+                    width: row_rect.width * 0.55,
+                    ..row_rect
+                },
+                theme::TEXT,
+                theme::UI_FONT,
+                HorizontalAlign::Left,
+            );
+            if let Some(detail) = &item.detail {
+                draw::label(
+                    scene,
+                    detail,
+                    Rect {
+                        x: row_rect.x + row_rect.width * 0.55 + 12.0,
+                        width: row_rect.width * 0.45 - 20.0,
+                        ..row_rect
+                    },
+                    theme::TEXT_DIM,
+                    theme::UI_FONT,
+                    HorizontalAlign::Right,
+                );
+            }
+            popup.rows.push((*item_index, row_rect));
+        }
+    }
+
+    /// Opens the rename bar with the name under the caret.
+    fn start_rename(&mut self) {
+        let Some(buffer) = self.active_buffer().filter(|buffer| buffer.loaded) else {
+            return;
+        };
+        let text: Vec<char> = buffer.area.text().chars().collect();
+        let caret = buffer.area.caret().min(text.len());
+        let is_name = |ch: char| ch.is_alphanumeric() || ch == '_';
+        let mut start = caret;
+        while start > 0 && is_name(text[start - 1]) {
+            start -= 1;
+        }
+        let mut end = caret;
+        while end < text.len() && is_name(text[end]) {
+            end += 1;
+        }
+        if start == end {
+            self.set_status("Put the caret on a name to rename it.", StatusKind::Info);
+            return;
+        }
+        let name: String = text[start..end].iter().collect();
+        self.find = None;
+        self.bar_mode = BarMode::Rename { at: start };
+        let field = self
+            .goto
+            .get_or_insert_with(|| TextFieldModel::new("", Rect::default()));
+        style_field(field);
+        field.set_text(&name);
+        field.select_all();
+        self.set_focus(Focus::Goto);
+    }
+
+    fn request_rename(&mut self, at: usize) {
+        let new_name = self
+            .goto
+            .as_ref()
+            .map(|field| field.text().trim().to_string())
+            .unwrap_or_default();
+        self.goto = None;
+        self.bar_mode = BarMode::GoToLine;
+        self.set_focus(Focus::Editor);
+        let Some(index) = self.active else {
+            return;
+        };
+        if new_name.is_empty() {
+            return;
+        }
+        self.sync_language_server();
+        let position = self.lsp_position(index, at);
+        let path = self.buffers[index].path.clone();
+        self.rename_request = self
+            .lsp
+            .as_mut()
+            .and_then(|lsp| lsp.rename(&path, position, &new_name));
+        if self.rename_request.is_none() {
+            self.set_status("rust-analyzer is not ready.", StatusKind::Info);
+        }
+    }
+
+    /// Applies a rename's edits: to open files now, to the rest once
+    /// opened. Every changed file is left unsaved for Save All.
+    fn apply_workspace_edit(&mut self, edits: Vec<(PathBuf, Vec<TextEdit>)>) {
+        let files = edits.len();
+        let active = self.active;
+        for (path, file_edits) in edits {
+            match self.buffers.iter().position(|buffer| buffer.path == path) {
+                Some(index) if self.buffers[index].loaded => self.apply_edits(index, &file_edits),
+                _ => {
+                    self.pending_edits.insert(path.clone(), file_edits);
+                    self.open_file(path);
+                }
+            }
+        }
+        if let Some(active) = active.filter(|&index| index < self.buffers.len()) {
+            self.activate(active);
+        }
+        self.set_status(
+            if files == 1 {
+                "Renamed in 1 file; save to keep it.".to_string()
+            } else {
+                format!("Renamed in {files} files; Save All keeps them.")
+            },
+            StatusKind::Info,
+        );
+    }
+
+    /// Applies `edits` to buffer `index`, from the end of the file back so
+    /// each position is read before the text before it moves.
+    fn apply_edits(&mut self, index: usize, edits: &[TextEdit]) {
+        let caret = self.buffers[index].area.caret();
+        let mut ranges: Vec<(usize, usize, String)> = edits
+            .iter()
+            .map(|edit| {
+                (
+                    self.char_index(index, edit.range.start),
+                    self.char_index(index, edit.range.end),
+                    edit.new_text.clone(),
+                )
+            })
+            .collect();
+        ranges.sort_by_key(|range| std::cmp::Reverse(range.0));
+        let mut shift: isize = 0;
+        for (from, to, text) in &ranges {
+            self.buffers[index].area.replace_range(*from, *to, text);
+            if *to <= caret {
+                shift += text.chars().count() as isize - (to - from) as isize;
+            }
+        }
+        let caret = (caret as isize + shift).max(0) as usize;
+        self.buffers[index].area.set_caret(caret);
     }
 
     /// Pushes the active file and caret for Back.
@@ -1161,6 +1641,7 @@ impl Editor {
         let Some(index) = self.active else {
             return;
         };
+        self.sync_language_server();
         let at = self.lsp_position(index, char_index);
         let path = self.buffers[index].path.clone();
         self.hover_request = self.lsp.as_mut().and_then(|lsp| lsp.hover(&path, at));
@@ -1394,6 +1875,8 @@ impl Editor {
                     "Navigate",
                     vec![
                         item(Command::GoToDefinition, "Go to Definition")
+                            .enabled(has_file && self.lsp.as_ref().is_some_and(|lsp| lsp.ready)),
+                        item(Command::RenameSymbol, "Rename Symbol…")
                             .enabled(has_file && self.lsp.as_ref().is_some_and(|lsp| lsp.ready)),
                         item(Command::GoBack, "Back")
                             .with_shortcut(Shortcut::primary('['))
@@ -1858,7 +2341,16 @@ impl Editor {
                 (Command::CloseBar, "Close"),
             ]
         } else if self.goto.is_some() {
-            vec![(Command::GotoGo, "Go"), (Command::CloseBar, "Close")]
+            vec![
+                (
+                    Command::GotoGo,
+                    match self.bar_mode {
+                        BarMode::GoToLine => "Go",
+                        BarMode::Rename { .. } => "Rename",
+                    },
+                ),
+                (Command::CloseBar, "Close"),
+            ]
         } else {
             return None;
         };
@@ -2018,6 +2510,23 @@ impl Editor {
     }
 
     fn pointer_pressed(&mut self, point: Point, state: PointerState, host: &dyn EditorHost) {
+        if let Some(popup) = &self.completion {
+            let row = popup
+                .rows
+                .iter()
+                .find(|(_, rect)| rect.contains(point))
+                .map(|(item, _)| *item);
+            match row {
+                Some(item) => {
+                    if let Some(popup) = &mut self.completion {
+                        popup.selected = item;
+                    }
+                    self.accept_completion();
+                    return;
+                }
+                None => self.completion = None,
+            }
+        }
         let hit_command = self
             .layout
             .bar_buttons
@@ -2185,6 +2694,9 @@ impl Editor {
                 return;
             }
         }
+        if self.focus == Focus::Editor && self.completion.is_some() && self.completion_key(key) {
+            return;
+        }
         if key == Key::Escape {
             if self.quit_prompt {
                 self.quit_prompt = false;
@@ -2202,6 +2714,9 @@ impl Editor {
                     if buffer.loaded {
                         let _ = buffer.area.handle_event(event);
                     }
+                }
+                if key == Key::Backspace {
+                    self.refresh_completion();
                 }
             }
             Focus::Find => {
@@ -2287,6 +2802,7 @@ impl Editor {
                         let _ = buffer.area.handle_event(event);
                     }
                 }
+                self.after_typing(text);
             }
             Focus::Find => {
                 if let Some(find) = &mut self.find {
@@ -2422,6 +2938,7 @@ impl Editor {
             }
             Command::GoToLine => {
                 self.find = None;
+                self.bar_mode = BarMode::GoToLine;
                 let goto = self
                     .goto
                     .get_or_insert_with(|| TextFieldModel::new("", Rect::default()));
@@ -2477,7 +2994,11 @@ impl Editor {
                 self.goto = None;
                 self.set_focus(Focus::Editor);
             }
-            Command::GotoGo => self.go_to_line(),
+            Command::GotoGo => match self.bar_mode {
+                BarMode::GoToLine => self.go_to_line(),
+                BarMode::Rename { at } => self.request_rename(at),
+            },
+            Command::RenameSymbol => self.start_rename(),
         }
     }
 
@@ -2583,6 +3104,7 @@ impl Editor {
         }
         self.paint_marks(scene);
         self.paint_hover(scene, layout.editor);
+        self.paint_completion(scene, layout.editor);
         if let Some(panel) = layout.problems {
             self.paint_problems(scene, panel);
         }
@@ -3016,7 +3538,10 @@ impl Editor {
         } else if let Some(goto) = &self.goto {
             draw::label(
                 scene,
-                "Go to line",
+                match self.bar_mode {
+                    BarMode::GoToLine => "Go to line",
+                    BarMode::Rename { .. } => "Rename to",
+                },
                 Rect {
                     width: 90.0,
                     ..message_rect
@@ -3040,7 +3565,10 @@ impl Editor {
                 Command::FindPrevious => "Previous",
                 Command::FindNext => "Next",
                 Command::CloseBar => "Close",
-                Command::GotoGo => "Go",
+                Command::GotoGo => match self.bar_mode {
+                    BarMode::GoToLine => "Go",
+                    BarMode::Rename { .. } => "Rename",
+                },
                 _ => continue,
             };
             draw::button(scene, *rect, text, rect.contains(self.pointer), true);
@@ -4138,7 +4666,11 @@ mod tests {
         assert_eq!(opened[1]["params"]["textDocument"]["text"], "fn a() {}\n");
         rig.type_text("x");
         let changed = sent(&mut rig);
-        assert_eq!(methods(&changed), vec!["textDocument/didChange"]);
+        // The change goes first; typing a name also asks for completions.
+        assert_eq!(
+            methods(&changed),
+            vec!["textDocument/didChange", "textDocument/completion"]
+        );
         assert_eq!(
             changed[0]["params"]["contentChanges"][0]["text"],
             "xfn a() {}\n"
@@ -4274,5 +4806,238 @@ mod tests {
         assert!(rig.editor.lsp.is_none());
         assert!(rig.editor.take_lsp_start().is_none());
         assert!(rig.status().starts_with("rust-analyzer stopped"));
+    }
+
+    fn completion_reply(id: &serde_json::Value) -> serde_json::Value {
+        serde_json::json!({"jsonrpc": "2.0", "id": id.clone(), "result": {"isIncomplete": true, "items": [
+            {"label": "HashMap", "sortText": "a", "detail": "std::collections::HashMap",
+             "textEdit": {"range": {"start": {"line": 1, "character": 12}, "end": {"line": 1, "character": 14}},
+                          "newText": "HashMap"},
+             "additionalTextEdits": [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}},
+                                      "newText": "use std::collections::HashMap;\n"}]},
+            {"label": "HashSet", "sortText": "b"},
+            {"label": "Hasher", "sortText": "c"}
+        ]}})
+    }
+
+    #[test]
+    fn typing_a_name_lists_completions_and_enter_inserts_with_its_import() {
+        let (_dir, mut rig) = with_server(
+            &[("src/lib.rs", "fn a() {\n    let m = \n}\n")],
+            "src/lib.rs",
+        );
+        sent(&mut rig);
+        let caret = rig.active().area.document.to_string().find("= ").unwrap() + 2;
+        rig.editor
+            .active_buffer_mut()
+            .unwrap()
+            .area
+            .set_caret(caret);
+        rig.type_text("Ha");
+        let asked = sent(&mut rig);
+        let requests: Vec<_> = asked
+            .iter()
+            .filter(|m| m["method"] == "textDocument/completion")
+            .collect();
+        assert!(!requests.is_empty(), "{asked:?}");
+        let last = requests.last().unwrap();
+        assert_eq!(
+            last["params"]["position"],
+            serde_json::json!({"line": 1, "character": 14})
+        );
+        rig.editor.apply_lsp(vec![completion_reply(&last["id"])]);
+        assert_eq!(rig.editor.visible_completions().len(), 3);
+        // Typing on narrows the list before the next answer arrives.
+        rig.type_text("shM");
+        assert_eq!(rig.editor.visible_completions(), vec![0]);
+        rig.key(HostKey::Enter, Modifiers::default());
+        assert_eq!(
+            rig.active().area.text(),
+            "use std::collections::HashMap;\nfn a() {\n    let m = HashMap\n}\n"
+        );
+        let text = rig.active().area.text();
+        assert_eq!(
+            rig.active().area.caret(),
+            text.find("HashMap\n}").unwrap() + 7
+        );
+        assert!(rig.editor.completion.is_none());
+    }
+
+    #[test]
+    fn escape_or_a_space_closes_the_list_and_a_click_accepts() {
+        let (_dir, mut rig) = with_server(
+            &[("src/lib.rs", "fn a() {\n    let m = \n}\n")],
+            "src/lib.rs",
+        );
+        sent(&mut rig);
+        let caret = rig.active().area.document.to_string().find("= ").unwrap() + 2;
+        rig.editor
+            .active_buffer_mut()
+            .unwrap()
+            .area
+            .set_caret(caret);
+        rig.type_text("Ha");
+        let id = sent(&mut rig).last().unwrap()["id"].clone();
+        rig.editor.apply_lsp(vec![completion_reply(&id)]);
+        rig.key(HostKey::Escape, Modifiers::default());
+        assert!(rig.editor.completion.is_none());
+        rig.type_text("s");
+        let id = sent(&mut rig).last().unwrap()["id"].clone();
+        rig.editor.apply_lsp(vec![completion_reply(&id)]);
+        rig.type_text(" ");
+        assert!(rig.editor.completion.is_none(), "a space ends the word");
+
+        rig.key(HostKey::Backspace, Modifiers::default());
+        rig.type_text("h");
+        let id = sent(&mut rig).last().unwrap()["id"].clone();
+        rig.editor.apply_lsp(vec![completion_reply(&id)]);
+        let mut scene = Vec::new();
+        rig.editor.paint(&mut scene);
+        let (_, row) = rig.editor.completion.as_ref().unwrap().rows[1];
+        rig.click(Point {
+            x: row.x + 10.0,
+            y: row.y + 5.0,
+        });
+        assert!(
+            rig.active().area.text().contains("let m = HashSet"),
+            "{}",
+            rig.active().area.text()
+        );
+    }
+
+    #[test]
+    fn typing_with_completions_open_still_undoes_a_word_at_a_time() {
+        let (_dir, mut rig) = with_server(&[("src/lib.rs", "fn a() {}\n")], "src/lib.rs");
+        sent(&mut rig);
+        for ch in ["h", "e", "l"] {
+            rig.type_text(ch);
+            let asked = sent(&mut rig);
+            if let Some(request) = asked
+                .iter()
+                .rev()
+                .find(|m| m["method"] == "textDocument/completion")
+            {
+                rig.editor.apply_lsp(vec![completion_reply(&request["id"])]);
+            }
+            rig.frame(InputSnapshot::default());
+        }
+        assert_eq!(rig.active().area.text(), "helfn a() {}\n");
+        rig.outcome(menu_input(Command::Undo));
+        assert_eq!(rig.active().area.text(), "fn a() {}\n");
+    }
+
+    #[test]
+    fn rename_edits_the_open_file_and_opens_the_others() {
+        let (dir, mut rig) = with_server(
+            &[
+                (
+                    "src/lib.rs",
+                    "mod other;\nfn helper() {}\nfn a() { helper(); }\n",
+                ),
+                ("src/other.rs", "use crate::helper;\nfn b() { helper(); }\n"),
+            ],
+            "src/lib.rs",
+        );
+        sent(&mut rig);
+        // Caret inside `helper` on line 2.
+        rig.editor.active_buffer_mut().unwrap().area.set_caret(16);
+        rig.outcome(menu_input(Command::RenameSymbol));
+        assert_eq!(rig.editor.goto.as_ref().unwrap().text(), "helper");
+        rig.key(HostKey::A, cmd());
+        rig.type_text("assist");
+        rig.key(HostKey::Enter, Modifiers::default());
+        let asked = sent(&mut rig);
+        let rename = asked
+            .iter()
+            .find(|m| m["method"] == "textDocument/rename")
+            .expect("a rename request");
+        assert_eq!(rename["params"]["newName"], "assist");
+        assert_eq!(
+            rename["params"]["position"],
+            serde_json::json!({"line": 1, "character": 3})
+        );
+        let lib = crate::lsp::uri::from_path(&dir.path().join("src/lib.rs"));
+        let other = crate::lsp::uri::from_path(&dir.path().join("src/other.rs"));
+        let edit = |line: u64, start: u64| {
+            serde_json::json!({"range": {"start": {"line": line, "character": start},
+                "end": {"line": line, "character": start + 6}}, "newText": "assist"})
+        };
+        rig.editor.apply_lsp(vec![serde_json::json!({"jsonrpc": "2.0", "id": rename["id"].clone(),
+            "result": {"changes": {lib: [edit(1, 3), edit(2, 9)], other: [edit(0, 11), edit(1, 9)]}}})]);
+        rig.settle();
+        assert_eq!(rig.active().path, dir.path().join("src/lib.rs"));
+        assert_eq!(
+            rig.active().area.text(),
+            "mod other;\nfn assist() {}\nfn a() { assist(); }\n"
+        );
+        let other_buffer = rig
+            .editor
+            .buffers
+            .iter()
+            .find(|buffer| buffer.path == dir.path().join("src/other.rs"))
+            .expect("opened for the rename");
+        assert_eq!(
+            other_buffer.area.text(),
+            "use crate::assist;\nfn b() { assist(); }\n"
+        );
+        assert!(other_buffer.dirty() && rig.active().dirty());
+    }
+
+    #[test]
+    fn a_real_rename_reply_edits_every_place() {
+        let main_text = "mod other;\n\nfn main() {\n    let total = helper(41);\n    println!(\"{total}\");\n}\n\nfn helper(value: i32) -> i32 {\n    other::twice(value)\n}\n";
+        let (dir, mut rig) = with_server(
+            &[
+                ("src/main.rs", main_text),
+                (
+                    "src/other.rs",
+                    "pub fn twice(value: i32) -> i32 {\n    crate::helper(0) + value * 2\n}\n",
+                ),
+            ],
+            "src/main.rs",
+        );
+        sent(&mut rig);
+        let at = main_text.find("fn helper").unwrap() + 4;
+        rig.editor.active_buffer_mut().unwrap().area.set_caret(at);
+        rig.outcome(menu_input(Command::RenameSymbol));
+        rig.key(HostKey::A, cmd());
+        rig.type_text("assist");
+        rig.key(HostKey::Enter, Modifiers::default());
+        let asked = sent(&mut rig);
+        let rename = asked
+            .iter()
+            .find(|m| m["method"] == "textDocument/rename")
+            .unwrap();
+        let main = crate::lsp::uri::from_path(&dir.path().join("src/main.rs"));
+        let other = crate::lsp::uri::from_path(&dir.path().join("src/other.rs"));
+        let edit = |line: u64, start: u64| {
+            serde_json::json!({"newText": "assist", "range": {"start": {"line": line, "character": start},
+                "end": {"line": line, "character": start + 6}}})
+        };
+        rig.editor.apply_lsp(vec![
+            serde_json::json!({"id": rename["id"].clone(), "jsonrpc": "2.0",
+            "result": {"documentChanges": [
+                {"edits": [edit(3, 16), edit(7, 3)], "textDocument": {"uri": main, "version": 1}},
+                {"edits": [edit(1, 11)], "textDocument": {"uri": other, "version": null}}
+            ]}}),
+        ]);
+        rig.settle();
+        let text = rig.active().area.text();
+        assert!(text.contains("let total = assist(41);"), "{text}");
+        assert!(text.contains("fn assist(value: i32)"), "{text}");
+        // And it is what is drawn: several edits in one frame used to leave
+        // earlier-edited lines showing their old text.
+        let shown: Vec<String> = rig
+            .active()
+            .area
+            .layout_cache
+            .lines
+            .iter()
+            .map(|line| line.display_text.clone())
+            .collect();
+        assert!(
+            shown.contains(&"fn assist(value: i32) -> i32 {".to_string()),
+            "{shown:?}"
+        );
     }
 }

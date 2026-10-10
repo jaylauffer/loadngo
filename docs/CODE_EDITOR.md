@@ -183,9 +183,36 @@ the file as last saved and can drift while you edit, until the next save
 checks again. cargo is taken from `PATH`, else `~/.cargo/bin`, so a Finder
 launch finds it too.
 
-**M4, rust-analyzer.** LSP over stdio: diagnostics as you type, go to
-definition, hover, completion and rename, with document sync from the piece
-table's edits.
+**M4, rust-analyzer.** Done 2026-10-11. rust-analyzer (`rustup component
+add rust-analyzer`; found on `PATH` or in `~/.cargo/bin`) starts for the
+open folder when the first Rust file loads, as a child process speaking LSP
+over stdio. A writer, a reader and a stderr thread keep the frame thread
+from ever waiting on it. The reader wakes the frame through the host's new
+`frame_waker()` after each message. The protocol logic (`lsp/session.rs`)
+has no process in it, so its tests play the server. Positions are UTF-32,
+the editor's own character indices, which rust-analyzer agrees to.
+rust-analyzer's own cargo check is off: the editor runs one on save (M3),
+and two would fight over the build lock.
+
+- Every open Rust file is kept in step: opened, its whole text sent once
+  per change (sent before any request, so an answer is never about older
+  text), saved and closed.
+- rust-analyzer's own diagnostics (syntax errors, and what it finds without
+  cargo) show live as you type, with cargo check's, in the gutter, the status
+  bar and the Problems panel. Its state ("indexing…", "ready") is in the status
+  bar.
+- Hover: rest the pointer on a name for 450 ms.
+- Go to Definition: Cmd-click (Ctrl elsewhere) or Navigate > Go to
+  Definition; Navigate > Back (Cmd-[) returns.
+- Completion: typing a name, `.` or `::` lists completions under the caret,
+  narrowed as you type; Up/Down, Enter or Tab, or a click inserts one with
+  any `use` line it brings; Escape or any other key closes it.
+- Rename: Navigate > Rename Symbol… renames across the workspace; files not
+  open are opened, and every changed file is left unsaved for Save All.
+
+A server that stops is reported and not restarted until the folder is
+opened again; switching folders or quitting stops it, with its proc-macro
+servers.
 
 Later, as needed: find in files, splits, file create/rename/delete in the
 tree, and running on Linux and Windows.
@@ -254,3 +281,26 @@ a type error showed the gutter bar, the underline under `"no"`, "1 error" in
 the status bar, the message on the caret's line, and the Problems row;
 fixing it and pressing Cmd-S re-checked by itself and showed the three
 warnings rustc reports once there is no error.
+
+**rust-analyzer (2026-10-11, Mac mini).** 77 editor tests, among them:
+- the session's protocol logic against a played server;
+- a run against the real rust-analyzer 1.99.0, skipped where it is not
+  installed, as on CI: a syntax error reported on its line and a hover
+  answered, 2.7 s;
+- editor flows for sync order, live diagnostics, hover, Cmd-click and Back,
+  completion with an import, and rename across an open and an unopened
+  file, replaying rust-analyzer's real reply.
+
+Release build: hover on a function; Cmd-click to its definition and back; a
+live syntax error marked unsaved; `hel` completed to `helper`; `helper`
+renamed to `assist` in two files, saved, and cargo check clean. Quitting
+left no rust-analyzer process.
+
+The rename found a `TextAreaModel` bug: when several edits came before a
+layout, the lines changed by all but the last kept showing their old text,
+though the text itself was right (saving would have written `fn assist`
+under a displayed `fn helper`). Completions with an import hit it too. Now
+any second edit before a layout re-lays out from the first changed line
+(ui-core test, which fails without the fix). Testing through synthetic input
+also showed a test-tool artifact: Cmd chords sent without the Cmd key's
+release made later clicks arrive as Cmd-clicks. The tool now releases it.
