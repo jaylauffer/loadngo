@@ -15,6 +15,7 @@ use ui_core::{
     Rect, Shortcut, StdDirectorySource, TextAreaModel, TextFieldModel, UiEvent,
 };
 
+use crate::cargo_check::{CheckOutcome, Diagnostic, Level};
 use crate::draw;
 use crate::file_tree::{FileTree, TreeAction};
 use crate::fs_ops::{self, DiskStamp, IoRequest, IoResponse, ReadError, WriteError};
@@ -137,6 +138,8 @@ enum Command {
     Find,
     GoToLine,
     Refresh,
+    Check,
+    ToggleProblems,
     OpenFolder,
     CloseTab,
     Quit,
@@ -162,7 +165,9 @@ enum Command {
 
 impl Command {
     /// The commands a menu item can send.
-    const IN_MENUS: [Command; 14] = [
+    const IN_MENUS: [Command; 16] = [
+        Command::Check,
+        Command::ToggleProblems,
         Command::OpenFolder,
         Command::Refresh,
         Command::Save,
@@ -221,7 +226,37 @@ struct Layout {
     bar_field: Option<Rect>,
     editor: Rect,
     status: Rect,
+    problems: Option<Rect>,
+    status_check: Option<Rect>,
 }
+
+/// A `cargo check` the app should run (see `cargo_check::run`), replacing
+/// any still running.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckRequest {
+    pub id: u64,
+    /// The check covers the package holding this file.
+    pub file: PathBuf,
+}
+
+/// How the last check went, for the status bar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CheckSummary {
+    errors: usize,
+    warnings: usize,
+    elapsed: Duration,
+}
+
+/// A diagnostic's marks on screen: a bar in the gutter and an underline.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Mark {
+    bar: Rect,
+    underline: Option<(f32, f32, f32)>,
+    level: Level,
+}
+
+const PROBLEMS_HEIGHT: f32 = 190.0;
+const PROBLEM_ROW_HEIGHT: f32 = 22.0;
 
 /// What a frame asks of the window.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -271,6 +306,16 @@ pub struct Editor {
     quit_prompt: bool,
     quit_after_save: bool,
     quitting: bool,
+    check_outbox: Option<CheckRequest>,
+    next_check_id: u64,
+    check_running: Option<u64>,
+    diagnostics: Vec<Diagnostic>,
+    check_summary: Option<CheckSummary>,
+    problems_open: bool,
+    problems_scroll: usize,
+    marks: Vec<Mark>,
+    /// Go here (file, one-based line and column) once the file has loaded.
+    pending_goto: Option<(PathBuf, usize, usize)>,
 }
 
 impl Editor {
@@ -315,6 +360,15 @@ impl Editor {
             quit_prompt: false,
             quit_after_save: false,
             quitting: false,
+            check_outbox: None,
+            next_check_id: 1,
+            check_running: None,
+            diagnostics: Vec::new(),
+            check_summary: None,
+            problems_open: false,
+            problems_scroll: 0,
+            marks: Vec::new(),
+            pending_goto: None,
         };
         if let Some(root) = &root {
             editor.open_folder(root.clone());
@@ -553,6 +607,15 @@ impl Editor {
                     self.restore_active = None;
                     self.activate(index);
                 }
+                if self
+                    .pending_goto
+                    .as_ref()
+                    .is_some_and(|(file, _, _)| *file == path)
+                {
+                    if let Some((_, line, column)) = self.pending_goto.take() {
+                        self.go_to(index, line, column);
+                    }
+                }
             }
             Err(error) => {
                 let buffer = &self.buffers[index];
@@ -609,6 +672,9 @@ impl Editor {
                     self.close(index);
                 }
                 self.set_status(format!("Saved {title}."), StatusKind::Info);
+                if !self.quitting && path.extension().is_some_and(|ext| ext == "rs") {
+                    self.request_check(path.to_path_buf());
+                }
                 if self.quit_after_save
                     && self
                         .buffers
@@ -808,6 +874,7 @@ impl Editor {
                 highlighter.update(&mut buffer.area);
             }
         }
+        self.update_marks();
         self.update_find_matches();
         let blink_on = !self.caret_blinking(now)
             || (now.duration_since(self.blink_origin).as_millis() / BLINK_HALF_PERIOD_MS)
@@ -832,6 +899,130 @@ impl Editor {
             menu_bar: self.publish_menu(),
             quit: self.quitting,
         }
+    }
+
+    fn request_check(&mut self, file: PathBuf) {
+        let id = self.next_check_id;
+        self.next_check_id += 1;
+        self.check_running = Some(id);
+        self.check_outbox = Some(CheckRequest { id, file });
+    }
+
+    /// The `cargo check` to start, if one was asked for since the last call.
+    /// Starting it replaces any check still running.
+    pub fn take_check_request(&mut self) -> Option<CheckRequest> {
+        self.check_outbox.take()
+    }
+
+    /// Takes in a finished check; a result for a check since replaced is
+    /// ignored.
+    pub fn apply_check(&mut self, id: u64, outcome: CheckOutcome) {
+        if self.check_running != Some(id) {
+            return;
+        }
+        self.check_running = None;
+        if outcome.cancelled {
+            return;
+        }
+        if let Some(failure) = &outcome.failure {
+            self.set_status(format!("cargo check failed: {failure}"), StatusKind::Error);
+        }
+        let errors = outcome
+            .diagnostics
+            .iter()
+            .filter(|d| d.level == Level::Error)
+            .count();
+        self.check_summary = Some(CheckSummary {
+            errors,
+            warnings: outcome.diagnostics.len() - errors,
+            elapsed: outcome.elapsed,
+        });
+        self.diagnostics = outcome.diagnostics;
+        self.problems_scroll = 0;
+    }
+
+    fn go_to_diagnostic(&mut self, diagnostic: &Diagnostic) {
+        self.open_file(diagnostic.file.clone());
+        let Some(index) = self.active else {
+            return;
+        };
+        if self.buffers[index].loaded {
+            self.go_to(index, diagnostic.line, diagnostic.column);
+        } else {
+            self.pending_goto = Some((diagnostic.file.clone(), diagnostic.line, diagnostic.column));
+        }
+    }
+
+    /// Puts buffer `index`'s caret at one-based `line` and `column`.
+    fn go_to(&mut self, index: usize, line: usize, column: usize) {
+        let area = &mut self.buffers[index].area;
+        let line_start = area.line_start_char(line.saturating_sub(1));
+        let next_line = area.line_start_char(line);
+        let line_end = if next_line > line_start {
+            next_line - 1
+        } else {
+            area.document.len_chars()
+        };
+        area.set_caret((line_start + column.saturating_sub(1)).min(line_end));
+        self.set_focus(Focus::Editor);
+    }
+
+    /// Where the active file's diagnostics show on screen.
+    fn update_marks(&mut self) {
+        self.marks.clear();
+        let Some(index) = self.active else {
+            return;
+        };
+        let buffer = &mut self.buffers[index];
+        if !buffer.loaded {
+            return;
+        }
+        let area = &mut buffer.area;
+        let content = area.layout_cache.content_rect;
+        for diagnostic in self.diagnostics.iter().filter(|d| d.file == buffer.path) {
+            let line_start = area.line_start_char(diagnostic.line.saturating_sub(1));
+            let Some(line) = area
+                .layout_cache
+                .lines
+                .iter()
+                .find(|line| line.source_start == line_start)
+            else {
+                continue;
+            };
+            let bar = Rect {
+                x: area.bounds.x + 1.0,
+                y: line.rect.y,
+                width: 3.0,
+                height: line.rect.height,
+            };
+            let chars = line.char_offsets.len().saturating_sub(1);
+            let start = diagnostic.column.saturating_sub(1).min(chars);
+            let end = if diagnostic.end_line == diagnostic.line {
+                diagnostic.end_column.saturating_sub(1).min(chars)
+            } else {
+                chars
+            };
+            let underline = (end > start).then(|| {
+                let x0 = (line.rect.x + line.char_offsets[start] - area.scroll_x).max(content.x);
+                let x1 =
+                    (line.rect.x + line.char_offsets[end] - area.scroll_x).min(content.right());
+                (x0, x1, line.rect.y + line.rect.height - 1.0)
+            });
+            self.marks.push(Mark {
+                bar,
+                underline: underline.filter(|(x0, x1, _)| x1 > x0),
+                level: diagnostic.level,
+            });
+        }
+    }
+
+    /// The diagnostic on the caret's line in the active file, if any.
+    fn diagnostic_at_caret(&self) -> Option<&Diagnostic> {
+        let buffer = self.active_buffer().filter(|buffer| buffer.loaded)?;
+        let (line, _) = caret_line_column(&buffer.area);
+        self.diagnostics
+            .iter()
+            .find(|d| d.file == buffer.path && d.line == line)
     }
 
     /// Tells the editor the host shows its menus in the system menu bar, so
@@ -903,7 +1094,18 @@ impl Editor {
             item(Command::GoToLine, "Go to Line…").enabled(has_file),
         ];
         MenuBar {
-            menus: vec![Menu::new("File", file), Menu::new("Edit", edit)],
+            menus: vec![
+                Menu::new("File", file),
+                Menu::new("Edit", edit),
+                Menu::new(
+                    "Build",
+                    vec![
+                        item(Command::Check, "Check (cargo check)")
+                            .enabled(self.tree.is_some() && self.check_running.is_none()),
+                        item(Command::ToggleProblems, "Show or Hide Problems"),
+                    ],
+                ),
+            ],
             quit: Some(Command::Quit.menu_command()),
         }
     }
@@ -1193,6 +1395,7 @@ impl Editor {
             (Command::SaveAll, "Save All"),
             (Command::Find, "Find"),
             (Command::GoToLine, "Go to Line"),
+            (Command::Check, "Check"),
             (Command::Refresh, "Refresh Folder"),
         ] {
             let button_width = host.measure(text, theme::UI_FONT) + 24.0;
@@ -1230,12 +1433,31 @@ impl Editor {
             y = bar.bottom();
             layout.bar = Some(bar);
         }
+        let mut bottom = layout.status.y;
+        if self.problems_open {
+            let height = PROBLEMS_HEIGHT.min((bottom - y) * 0.6);
+            bottom -= height;
+            layout.problems = Some(Rect {
+                x: right_x,
+                y: bottom,
+                width: right_width,
+                height,
+            });
+        }
         layout.editor = Rect {
             x: right_x,
             y,
             width: right_width,
-            height: (layout.status.y - y).max(0.0),
+            height: (bottom - y).max(0.0),
         };
+        if self.check_running.is_some() || self.check_summary.is_some() {
+            layout.status_check = Some(Rect {
+                x: layout.status.right() - 280.0 - 200.0,
+                y: layout.status.y,
+                width: 200.0,
+                height: layout.status.height,
+            });
+        }
         if let Some(tree) = &mut self.tree {
             tree.bounds = layout.tree;
         }
@@ -1493,6 +1715,24 @@ impl Editor {
             self.run(command, host);
             return;
         }
+        if self
+            .layout
+            .status_check
+            .is_some_and(|rect| rect.contains(point))
+        {
+            self.problems_open = !self.problems_open;
+            return;
+        }
+        if let Some(panel) = self.layout.problems.filter(|rect| rect.contains(point)) {
+            let row = ((point.y - panel.y - PROBLEM_ROW_HEIGHT) / PROBLEM_ROW_HEIGHT).floor();
+            if row >= 0.0 {
+                let index = self.problems_scroll + row as usize;
+                if let Some(diagnostic) = self.diagnostics.get(index).cloned() {
+                    self.go_to_diagnostic(&diagnostic);
+                }
+            }
+            return;
+        }
         if let Some(index) = self
             .layout
             .tab_slots
@@ -1562,6 +1802,21 @@ impl Editor {
     }
 
     fn wheel(&mut self, point: Point, input: &InputSnapshot) {
+        if self
+            .layout
+            .problems
+            .is_some_and(|panel| panel.contains(point))
+        {
+            let rows = if input.mouse_wheel_precise {
+                (-input.mouse_wheel_y / PROBLEM_ROW_HEIGHT).round() as isize
+            } else {
+                (-input.mouse_wheel_y * 3.0).round() as isize
+            };
+            let last = self.diagnostics.len().saturating_sub(1);
+            self.problems_scroll =
+                (self.problems_scroll as isize + rows).clamp(0, last as isize) as usize;
+            return;
+        }
         let row = theme::TREE_ROW_HEIGHT;
         let pixels_y = if input.mouse_wheel_precise {
             -input.mouse_wheel_y
@@ -1729,6 +1984,23 @@ impl Editor {
     fn run(&mut self, command: Command, host: &dyn EditorHost) {
         match command {
             Command::OpenFolder => self.show_folder_dialog(),
+            Command::Check => {
+                let file = self
+                    .active_buffer()
+                    .map(|buffer| buffer.path.clone())
+                    .or_else(|| {
+                        self.tree
+                            .as_ref()
+                            .map(|tree| tree.root().join("Cargo.toml"))
+                    });
+                if let Some(file) = file {
+                    self.request_check(file);
+                }
+            }
+            Command::ToggleProblems => {
+                self.problems_open = !self.problems_open;
+                self.problems_scroll = 0;
+            }
             Command::CloseTab => {
                 if let Some(index) = self.active {
                     self.request_close(index);
@@ -1971,6 +2243,10 @@ impl Editor {
                 "Open a file from the folder on the left.",
             ),
         }
+        self.paint_marks(scene);
+        if let Some(panel) = layout.problems {
+            self.paint_problems(scene, panel);
+        }
         self.paint_status(scene, &layout);
         if let Some(menu) = &self.drawn_menu {
             menu.paint(scene);
@@ -1988,6 +2264,110 @@ impl Editor {
             dialog.paint(scene);
         }
         self.layout = layout;
+    }
+
+    fn paint_marks(&self, scene: &mut Vec<PaintOp>) {
+        for mark in &self.marks {
+            let color = level_color(mark.level);
+            draw::fill(scene, mark.bar, color);
+            if let Some((x0, x1, y)) = mark.underline {
+                draw::hline(scene, x0, y, x1 - x0, color);
+                draw::hline(scene, x0, y - 1.0, x1 - x0, color);
+            }
+        }
+    }
+
+    fn paint_problems(&self, scene: &mut Vec<PaintOp>, panel: Rect) {
+        draw::fill(scene, panel, theme::PANEL);
+        draw::hline(scene, panel.x, panel.y + 0.5, panel.width, theme::BORDER);
+        let header = match (&self.check_summary, self.check_running) {
+            (_, Some(_)) => "Problems: checking…".to_string(),
+            (Some(summary), None) => format!(
+                "Problems: {} (cargo check, {:.1} s)",
+                count_text(summary.errors, summary.warnings),
+                summary.elapsed.as_secs_f32()
+            ),
+            (None, None) => "Problems: no check run yet (Build > Check)".to_string(),
+        };
+        draw::label(
+            scene,
+            &header,
+            Rect {
+                x: panel.x + 12.0,
+                y: panel.y,
+                width: panel.width - 24.0,
+                height: PROBLEM_ROW_HEIGHT,
+            },
+            theme::TEXT_DIM,
+            theme::UI_FONT,
+            HorizontalAlign::Left,
+        );
+        let root = self.tree.as_ref().map(|tree| tree.root().to_path_buf());
+        let rows = ((panel.height - PROBLEM_ROW_HEIGHT) / PROBLEM_ROW_HEIGHT)
+            .floor()
+            .max(0.0) as usize;
+        for (row, diagnostic) in self
+            .diagnostics
+            .iter()
+            .skip(self.problems_scroll)
+            .take(rows)
+            .enumerate()
+        {
+            let rect = Rect {
+                x: panel.x,
+                y: panel.y + PROBLEM_ROW_HEIGHT * (row + 1) as f32,
+                width: panel.width,
+                height: PROBLEM_ROW_HEIGHT,
+            };
+            if rect.contains(self.pointer) {
+                draw::fill(scene, rect, theme::HOVER);
+            }
+            draw::fill(
+                scene,
+                Rect {
+                    x: rect.x + 12.0,
+                    y: rect.y + 7.0,
+                    width: 8.0,
+                    height: 8.0,
+                },
+                level_color(diagnostic.level),
+            );
+            let shown = root
+                .as_ref()
+                .and_then(|root| diagnostic.file.strip_prefix(root).ok())
+                .unwrap_or(&diagnostic.file);
+            let place = format!(
+                "{}:{}:{}",
+                shown.display(),
+                diagnostic.line,
+                diagnostic.column
+            );
+            let place_width = (panel.width * 0.25).min(280.0);
+            draw::label(
+                scene,
+                &place,
+                Rect {
+                    x: rect.x + 28.0,
+                    width: place_width,
+                    ..rect
+                },
+                theme::TEXT_DIM,
+                theme::UI_FONT,
+                HorizontalAlign::Left,
+            );
+            draw::label(
+                scene,
+                &diagnostic_text(diagnostic),
+                Rect {
+                    x: rect.x + 36.0 + place_width,
+                    width: (rect.width - place_width - 48.0).max(0.0),
+                    ..rect
+                },
+                theme::TEXT,
+                theme::UI_FONT,
+                HorizontalAlign::Left,
+            );
+        }
     }
 
     fn paint_hint(&self, scene: &mut Vec<PaintOp>, rect: Rect, text: &str) {
@@ -2026,6 +2406,14 @@ impl Editor {
                 Command::SaveAll => ("Save All", any_dirty),
                 Command::Find => ("Find", self.active.is_some()),
                 Command::GoToLine => ("Go to Line", self.active.is_some()),
+                Command::Check => (
+                    if self.check_running.is_some() {
+                        "Checking…"
+                    } else {
+                        "Check"
+                    },
+                    self.tree.is_some() && self.check_running.is_none(),
+                ),
                 Command::Refresh => ("Refresh Folder", self.tree.is_some()),
                 _ => continue,
             };
@@ -2295,8 +2683,39 @@ impl Editor {
             theme::UI_FONT,
             HorizontalAlign::Right,
         );
-        let (left_text, color) = match &self.status {
-            Some((text, kind)) => (
+        if let Some(check_rect) = layout.status_check {
+            let (text, color) = match (&self.check_summary, self.check_running) {
+                (_, Some(_)) => ("Checking…".to_string(), theme::TEXT_DIM),
+                (Some(summary), None) => (
+                    count_text(summary.errors, summary.warnings),
+                    if summary.errors > 0 {
+                        theme::ERROR
+                    } else if summary.warnings > 0 {
+                        theme::WARNING
+                    } else {
+                        theme::TEXT_DIM
+                    },
+                ),
+                (None, None) => (String::new(), theme::TEXT_DIM),
+            };
+            if check_rect.contains(self.pointer) {
+                draw::fill(scene, check_rect, theme::HOVER);
+            }
+            draw::label(
+                scene,
+                &text,
+                check_rect,
+                color,
+                theme::UI_FONT,
+                HorizontalAlign::Right,
+            );
+        }
+        let at_caret = self
+            .diagnostic_at_caret()
+            .map(|d| (diagnostic_text(d), level_color(d.level)));
+        let (left_text, color) = match (at_caret, &self.status) {
+            (Some(found), _) => found,
+            (None, Some((text, kind))) => (
                 text.clone(),
                 match kind {
                     StatusKind::Info => theme::TEXT_DIM,
@@ -2304,7 +2723,7 @@ impl Editor {
                     StatusKind::Error => theme::ERROR,
                 },
             ),
-            None => (
+            (None, None) => (
                 self.active_buffer()
                     .map(|buffer| buffer.path.display().to_string())
                     .unwrap_or_default(),
@@ -2317,13 +2736,55 @@ impl Editor {
             Rect {
                 x: rect.x + 12.0,
                 y: rect.y,
-                width: (rect.width - right_width - 36.0).max(0.0),
+                width: (rect.width - right_width - 236.0).max(0.0),
                 height: rect.height,
             },
             color,
             theme::UI_FONT,
             HorizontalAlign::Left,
         );
+    }
+}
+
+fn level_color(level: Level) -> ui_core::Color {
+    match level {
+        Level::Error => theme::ERROR,
+        Level::Warning => theme::WARNING,
+    }
+}
+
+fn count_text(errors: usize, warnings: usize) -> String {
+    let plural = |n: usize, word: &str| {
+        if n == 1 {
+            format!("1 {word}")
+        } else {
+            format!("{n} {word}s")
+        }
+    };
+    match (errors, warnings) {
+        (0, 0) => "No problems".to_string(),
+        (e, 0) => plural(e, "error"),
+        (0, w) => plural(w, "warning"),
+        (e, w) => format!("{}, {}", plural(e, "error"), plural(w, "warning")),
+    }
+}
+
+/// `error[E0308]: mismatched types — expected `u32`, found `&str``.
+fn diagnostic_text(diagnostic: &Diagnostic) -> String {
+    let level = match diagnostic.level {
+        Level::Error => "error",
+        Level::Warning => "warning",
+    };
+    let code = diagnostic
+        .code
+        .as_ref()
+        .map(|code| format!("[{code}]"))
+        .unwrap_or_default();
+    match &diagnostic.label {
+        Some(label) if !label.is_empty() => {
+            format!("{level}{code}: {} — {label}", diagnostic.message)
+        }
+        _ => format!("{level}{code}: {}", diagnostic.message),
     }
 }
 
@@ -3068,5 +3529,152 @@ mod tests {
         assert_eq!(fs::read_to_string(dir.path().join("b.rs")).unwrap(), "yb");
         assert!(!rig.editor.drawn_menu.as_ref().unwrap().is_open());
         assert_eq!(rig.active().area.text(), "yb", "the keys went to the menu");
+    }
+
+    fn diagnostic(file: &Path, line: usize, column: usize, level: Level) -> Diagnostic {
+        Diagnostic {
+            level,
+            file: file.to_path_buf(),
+            line,
+            column,
+            end_line: line,
+            end_column: column + 3,
+            message: "mismatched types".to_string(),
+            label: Some("expected `u32`".to_string()),
+            code: Some("E0308".to_string()),
+        }
+    }
+
+    fn checked(diagnostics: Vec<Diagnostic>) -> CheckOutcome {
+        CheckOutcome {
+            diagnostics,
+            success: false,
+            cancelled: false,
+            failure: None,
+            elapsed: Duration::from_millis(1200),
+            package_dir: None,
+        }
+    }
+
+    #[test]
+    fn saving_a_rust_file_asks_for_a_check_and_other_files_do_not() {
+        let dir = workspace(&[("src/lib.rs", "pub fn a() {}"), ("notes.md", "x")]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.editor.open_file(dir.path().join("notes.md"));
+        rig.settle();
+        rig.type_text("y");
+        rig.key(HostKey::S, cmd());
+        assert_eq!(rig.editor.take_check_request(), None);
+        rig.editor.open_file(dir.path().join("src/lib.rs"));
+        rig.settle();
+        rig.type_text("// ");
+        rig.key(HostKey::S, cmd());
+        let request = rig.editor.take_check_request().expect("a check");
+        assert_eq!(request.file, dir.path().join("src/lib.rs"));
+        assert!(rig.editor.check_running.is_some());
+    }
+
+    #[test]
+    fn a_replaced_checks_result_is_ignored_and_the_latest_is_kept() {
+        let dir = workspace(&[("src/lib.rs", "pub fn a() {}\n")]);
+        let file = dir.path().join("src/lib.rs");
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.editor.open_file(file.clone());
+        rig.settle();
+        rig.editor.run(Command::Check, &rig.host);
+        let first = rig.editor.take_check_request().unwrap();
+        rig.editor.run(Command::Check, &rig.host);
+        let second = rig.editor.take_check_request().unwrap();
+        rig.editor.apply_check(
+            first.id,
+            checked(vec![diagnostic(&file, 1, 1, Level::Error)]),
+        );
+        assert!(rig.editor.diagnostics.is_empty(), "stale result ignored");
+        rig.editor.apply_check(
+            second.id,
+            checked(vec![
+                diagnostic(&file, 1, 8, Level::Error),
+                diagnostic(&file, 1, 1, Level::Warning),
+            ]),
+        );
+        assert_eq!(rig.editor.diagnostics.len(), 2);
+        assert_eq!(rig.editor.check_running, None);
+        let summary = rig.editor.check_summary.clone().unwrap();
+        assert_eq!(
+            count_text(summary.errors, summary.warnings),
+            "1 error, 1 warning"
+        );
+        // The caret is on line 1, so the status shows that line's message.
+        rig.frame(InputSnapshot::default());
+        let at_caret = rig.editor.diagnostic_at_caret().map(diagnostic_text);
+        assert_eq!(
+            at_caret.as_deref(),
+            Some("error[E0308]: mismatched types — expected `u32`")
+        );
+        // And the line is marked: a gutter bar and an underline.
+        assert_eq!(rig.editor.marks.len(), 2);
+        assert!(rig.editor.marks[0].underline.is_some());
+    }
+
+    #[test]
+    fn a_problem_opens_its_file_at_its_line_and_column() {
+        let dir = workspace(&[
+            ("src/lib.rs", "pub fn a() {}\n"),
+            ("src/other.rs", "one\ntwo\n    three\n"),
+        ]);
+        let other = dir.path().join("src/other.rs");
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.editor.open_file(dir.path().join("src/lib.rs"));
+        rig.settle();
+        rig.editor.run(Command::Check, &rig.host);
+        let request = rig.editor.take_check_request().unwrap();
+        rig.editor.apply_check(
+            request.id,
+            checked(vec![diagnostic(&other, 3, 5, Level::Warning)]),
+        );
+        rig.outcome(menu_input(Command::ToggleProblems));
+        let panel = rig.editor.layout.problems.expect("panel shown");
+        rig.click(Point {
+            x: panel.x + 100.0,
+            y: panel.y + PROBLEM_ROW_HEIGHT * 1.5,
+        });
+        assert_eq!(rig.active().path, other);
+        assert_eq!(caret_line_column(&rig.active().area), (3, 5));
+    }
+
+    /// The whole path with the real cargo: save a broken file, run the check
+    /// the editor asks for, and the error lands on its line.
+    #[test]
+    fn a_real_cargo_check_after_saving_marks_the_error() {
+        let dir = workspace(&[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"broken\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[workspace]\n",
+            ),
+            ("src/main.rs", "fn main() {\n}\n"),
+        ]);
+        let file = dir.path().join("src/main.rs");
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.editor.open_file(file.clone());
+        rig.settle();
+        rig.editor.go_to(rig.editor.active.unwrap(), 1, 12);
+        rig.type_text("\n    let x: u32 = \"no\";");
+        rig.key(HostKey::S, cmd());
+        let request = rig
+            .editor
+            .take_check_request()
+            .expect("a check after saving");
+        let outcome =
+            crate::cargo_check::run(&request.file, &crate::cargo_check::Cancel::default());
+        rig.editor.apply_check(request.id, outcome);
+        let errors: Vec<_> = rig
+            .editor
+            .diagnostics
+            .iter()
+            .filter(|d| d.level == Level::Error)
+            .collect();
+        assert_eq!(errors.len(), 1, "{:?}", rig.editor.diagnostics);
+        assert_eq!((errors[0].line, errors[0].column), (2, 18));
+        assert_eq!(errors[0].file, file);
     }
 }

@@ -165,10 +165,23 @@ bottom of the screen. An edit drops what was kept from its line on, so
 typing re-lexes from the edited line to the bottom of the screen. A line
 holding tabs is drawn plain.
 
-**M3, `cargo check`.** Run `cargo check --message-format=json` on save
-through a supervised subprocess, show errors and warnings in the gutter and
-in a list, and jump to them. One run at a time; a newer save cancels the
-older run.
+**M3, `cargo check`.** Done 2026-10-10. Saving a `.rs` file, the Check
+button or Build > Check runs `cargo check --all-targets
+--message-format=json` in the package holding the file (the nearest
+`Cargo.toml` above it). One check runs at a time; a newer one kills the
+older one, and its late result is ignored. The check runs on a thread of
+its own, since it can take minutes and the two offload workers serve the
+editor's file I/O. Its result comes back through the host's new
+`completion()`: a `Completer` another thread finishes, read like an
+offloaded job, and on macOS it wakes an idle frame.
+
+Errors and warnings show as a bar in the gutter and an underline under the
+primary span; the caret's line shows its message in the status bar; and the
+count in the status bar opens the Problems panel (also Build > Show or Hide
+Problems), whose rows open the file at the line and column. Marks refer to
+the file as last saved and can drift while you edit, until the next save
+checks again. cargo is taken from `PATH`, else `~/.cargo/bin`, so a Finder
+launch finds it too.
 
 **M4, rust-analyzer.** LSP over stdio: diagnostics as you type, go to
 definition, hover, completion and rename, with document sync from the piece
@@ -228,3 +241,16 @@ file left inside a comment or string (0.55 s). Release build with
 highlighting: typing at most 1.28 ms of frame work (1.2 ms without), the
 jump to the end, which lexes all 4,328 lines, 12.3 ms (10.5 ms without),
 undo 0.95 ms; about 275 paint ops per frame against about 105.
+
+**cargo check (2026-10-10, Mac mini).** 56 editor tests. Among them:
+cargo's JSON parsed at the primary span, duplicate messages from bin and test
+targets reported once, paths given the way the editor opened the folder
+(cargo reports `/private/var/…` for `/var/…`), a cancelled check ending
+quietly, and the real cargo run on a broken crate both directly and through
+the editor from save to the marked line. Host: `completion()` delivers a
+result finished on another thread only through the proactor, and a dropped
+`Completer` delivers an error. In the release build: Check on a crate with
+a type error showed the gutter bar, the underline under `"no"`, "1 error" in
+the status bar, the message on the caret's line, and the Problems row;
+fixing it and pressing Cmd-S re-checked by itself and showed the three
+warnings rustc reports once there is no error.

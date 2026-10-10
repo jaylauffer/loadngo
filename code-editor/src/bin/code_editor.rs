@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Instant;
 
+use loadngo_code_editor::cargo_check::{self, Cancel, CheckOutcome};
 use loadngo_code_editor::{perform, Editor, EditorHost, IoRequest, IoResponse};
 use loadngo_host_core::{FrameDemand, WindowDescriptor};
 use loadngo_host_desktop::Offloaded;
@@ -118,6 +119,8 @@ async fn run(folder: Option<PathBuf>) {
     let mut waiting: VecDeque<IoRequest> = VecDeque::new();
     let mut in_flight: Vec<Offloaded<IoResponse>> = Vec::new();
     let mut scene = Vec::new();
+    // The one cargo check running: its id, how to stop it, its result.
+    let mut check: Option<(u64, Cancel, Offloaded<CheckOutcome>)> = None;
     let trace = std::env::var_os("CODE_EDITOR_TRACE").is_some();
 
     loop {
@@ -136,6 +139,20 @@ async fn run(folder: Option<PathBuf>) {
             None => true,
         });
 
+        if let Some((id, _, result)) = &mut check {
+            match result.try_take() {
+                Some(Ok(outcome)) => {
+                    editor.apply_check(*id, outcome);
+                    check = None;
+                }
+                Some(Err(error)) => {
+                    loadngo_host_desktop::log_error(format_args!("cargo check failed: {error}"));
+                    check = None;
+                }
+                None => {}
+            }
+        }
+
         let outcome = editor.frame(
             &frame.input,
             frame.focused,
@@ -148,6 +165,19 @@ async fn run(folder: Option<PathBuf>) {
             loadngo_host_desktop::set_menu_bar(menu_bar);
         }
 
+        if let Some(request) = editor.take_check_request() {
+            if let Some((_, cancel, _)) = check.take() {
+                cancel.cancel();
+            }
+            check = start_check(request.id, request.file);
+            if check.is_none() {
+                editor.apply_check(
+                    request.id,
+                    CheckOutcome::failed("could not start a thread for cargo"),
+                );
+            }
+        }
+
         waiting.extend(editor.take_requests());
         while in_flight.len() < MAX_IN_FLIGHT {
             let Some(request) = waiting.pop_front() else {
@@ -158,6 +188,9 @@ async fn run(folder: Option<PathBuf>) {
 
         // Quit once the last saves and the session write have landed.
         if outcome.quit && waiting.is_empty() && in_flight.is_empty() {
+            if let Some((_, cancel, _)) = check.take() {
+                cancel.cancel();
+            }
             break;
         }
 
@@ -181,5 +214,23 @@ async fn run(folder: Option<PathBuf>) {
             None => FrameDemand::idle(),
         };
         loadngo_host_desktop::next_frame(demand).await;
+    }
+}
+
+/// Runs `cargo check` on a thread of its own (it can take minutes, so not on
+/// an offload worker); the result comes back like an offloaded job's.
+fn start_check(id: u64, file: PathBuf) -> Option<(u64, Cancel, Offloaded<CheckOutcome>)> {
+    let (completer, result) = loadngo_host_desktop::completion();
+    let cancel = Cancel::default();
+    let running = cancel.clone();
+    let spawned = std::thread::Builder::new()
+        .name("cargo-check".to_string())
+        .spawn(move || completer.complete(cargo_check::run(&file, &running)));
+    match spawned {
+        Ok(_) => Some((id, cancel, result)),
+        Err(error) => {
+            loadngo_host_desktop::log_error(format_args!("cannot start cargo check: {error}"));
+            None
+        }
     }
 }

@@ -4,6 +4,7 @@
 //! `code_editor` binary connects it to `loadngo-host-desktop` and runs its
 //! file work on the host's offload workers.
 
+pub mod cargo_check;
 pub mod draw;
 pub mod editor;
 pub mod file_tree;
