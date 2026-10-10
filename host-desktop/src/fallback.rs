@@ -526,6 +526,12 @@ fn font_size_and_scale(size: f32) -> (u16, f32) {
     (font_size, font_scale)
 }
 
+/// This host has no system menu bar: returns `false`, and the app draws a
+/// `ui_core::MenuBarModel` instead. See `ui_core::menu`.
+pub fn set_menu_bar(_menu_bar: &ui_core::MenuBar) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,10 +543,4 @@ mod tests {
         assert!(!status.metal_initialized);
         assert!(!status.metal_surface_bound);
     }
-}
-
-/// This host has no system menu bar: returns `false`, and the app draws a
-/// `ui_core::MenuBarModel` instead. See `ui_core::menu`.
-pub fn set_menu_bar(_menu_bar: &ui_core::MenuBar) -> bool {
-    false
 }

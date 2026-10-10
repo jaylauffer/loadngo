@@ -2014,6 +2014,12 @@ fn draw_text_line(
     }
 }
 
+/// This host has no system menu bar: returns `false`, and the app draws a
+/// `ui_core::MenuBarModel` instead. See `ui_core::menu`.
+pub fn set_menu_bar(_menu_bar: &ui_core::MenuBar) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2247,10 +2253,4 @@ mod tests {
             "stacked marks widened the cluster: {one} vs {stacked}"
         );
     }
-}
-
-/// This host has no system menu bar: returns `false`, and the app draws a
-/// `ui_core::MenuBarModel` instead. See `ui_core::menu`.
-pub fn set_menu_bar(_menu_bar: &ui_core::MenuBar) -> bool {
-    false
 }
