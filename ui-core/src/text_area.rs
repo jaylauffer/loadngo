@@ -401,6 +401,29 @@ impl TextAreaModel {
         self.line_starts[line.min(self.line_starts.len() - 1)]
     }
 
+    /// The character position under `point`, if it is over the text.
+    pub fn char_at_point(&self, point: Point) -> Option<usize> {
+        self.prefers_text_cursor(point)
+            .then(|| self.hit_test(point))
+    }
+
+    /// Replaces characters `start..end` with `text` as its own undo step and
+    /// puts the caret after it.
+    pub fn replace_range(&mut self, start: usize, end: usize, text: &str) {
+        self.end_edit_run();
+        let len = self.char_len();
+        let (start, end) = ordered_range(start.min(len), end.min(len));
+        if start == end && text.is_empty() {
+            return;
+        }
+        self.replace_char_range(start, end, text);
+        let caret = start + text.chars().count();
+        self.selection_anchor = caret;
+        self.selection_head = caret;
+        self.preferred_x = None;
+        self.request_caret_visibility();
+    }
+
     /// Inserts `text` at the caret, replacing any selection, as its own undo
     /// step.
     pub fn insert_text(&mut self, text: &str) {
@@ -2886,5 +2909,27 @@ mod tests {
         area.relayout(measure_width);
         assert_eq!(area.line_of_char(area.caret()), 150);
         assert_eq!(area.caret() - area.line_start_char(150), 2);
+    }
+
+    #[test]
+    fn replace_range_is_one_undo_step_and_char_at_point_finds_text() {
+        let mut area = area("let value = 1;");
+        area.replace_range(4, 9, "count");
+        assert_eq!(area.text(), "let count = 1;");
+        assert_eq!(area.caret(), 9);
+        area.replace_range(0, 0, "// ");
+        assert_eq!(area.text(), "// let count = 1;");
+        key(&mut area, Key::Character('z'), cmd());
+        assert_eq!(area.text(), "let count = 1;");
+        key(&mut area, Key::Character('z'), cmd());
+        assert_eq!(area.text(), "let value = 1;");
+        area.relayout(measure_width);
+        let line = area.layout_cache.lines[0].clone();
+        let point = Point {
+            x: line.rect.x + line.char_offsets[5] + 1.0,
+            y: line.rect.y + 2.0,
+        };
+        assert_eq!(area.char_at_point(point), Some(5));
+        assert_eq!(area.char_at_point(Point { x: -50.0, y: -50.0 }), None);
     }
 }
