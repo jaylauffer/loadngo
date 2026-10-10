@@ -980,29 +980,38 @@ mod tests {
             "{drives}"
         );
         assert!(!drives.contains("compression pass"), "{drives}");
-        let now = unix_now();
+
+        // How far a compression pass got. The tool call reads the real
+        // clock, so through it only what does not depend on the time is
+        // checked; the ages are checked against a fixed `now` below.
+        const NOW: u64 = 1_800_000_000;
         let pass = |updated: u64, finished: bool| {
             format!(
                 r#"{{"level": 3, "pid": 7, "started_at_unix_secs": {}, "updated_at_unix_secs": {updated},
                 "finished": {finished}, "objects": 700000, "examined": 400000, "examined_bytes": 1,
                 "compressed": 120000, "saved_bytes": 199400000000, "kept_small": 250000,
                 "kept_incompressible": 30000, "failed": 0, "already_compressed": 61031}}"#,
-                now - 50_000
+                NOW - 50_000
             )
         };
         let progress = root.join(data::archive_cas_compress::PROGRESS_FILE);
-        std::fs::write(&progress, pass(now - 5, false)).unwrap();
-        let running = tools.call("cas_archives", "{}").unwrap();
-        // "updated 5 s ago" ages while the tool runs; a slow machine (CI's
-        // Windows runner) can read 6 or 7.
-        let updated = (5..=7).any(|seconds| {
-            running.contains(&format!(
-                "started 13 h 53 min ago, running (pid 7, updated {seconds} s ago): 461,031 of 700,000 stored objects done (65.9%), 238,969 left; 120,000 compressed, saving 185.71 GiB; 280,000 kept as they are; 0 failed"
-            ))
-        });
-        assert!(updated, "{running}");
-        std::fs::write(&progress, pass(now - 7_200, false)).unwrap();
-        let stopped = tools.call("cas_archives", "{}").unwrap();
+        std::fs::write(&progress, pass(unix_now(), false)).unwrap();
+        let drives = tools.call("cas_archives", "{}").unwrap();
+        assert!(
+            drives.contains("compression pass at zstd level 3")
+                && drives.contains("running (pid 7, updated ")
+                && drives.contains("461,031 of 700,000 stored objects done (65.9%)"),
+            "{drives}"
+        );
+
+        std::fs::write(&progress, pass(NOW - 5, false)).unwrap();
+        let running = store_status(&root, NOW);
+        assert!(
+            running.contains("started 13 h 53 min ago, running (pid 7, updated 5 s ago): 461,031 of 700,000 stored objects done (65.9%), 238,969 left; 120,000 compressed, saving 185.71 GiB; 280,000 kept as they are; 0 failed"),
+            "{running}"
+        );
+        std::fs::write(&progress, pass(NOW - 7_200, false)).unwrap();
+        let stopped = store_status(&root, NOW);
         assert!(
             stopped.contains("stopped without finishing (no update for 2 h 0 min): 461,031 of")
                 && stopped.contains("0 failed; running archive_cas_compress again resumes it"),
