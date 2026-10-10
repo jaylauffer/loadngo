@@ -1376,12 +1376,21 @@ impl TextAreaModel {
         } else {
             self.document.replace_char_range(start, end, replacement);
         }
-        self.pending_edit = Some(PendingTextEdit {
-            dirty_line,
-            old_suffix_start,
-            new_end_line,
-            char_delta,
-        });
+        // The laid-out lines after an edit can be reused, shifted, only when
+        // it is the one edit since the last layout. A second one (a rename's
+        // or a completion's several edits) relays out from the first changed
+        // line instead: reusing after the last edit alone kept the lines an
+        // earlier edit had changed showing their old text.
+        self.pending_edit = if self.document_dirty_from_line.is_some() {
+            None
+        } else {
+            Some(PendingTextEdit {
+                dirty_line,
+                old_suffix_start,
+                new_end_line,
+                char_delta,
+            })
+        };
         self.document_dirty_from_line = Some(
             self.document_dirty_from_line
                 .map(|existing| existing.min(dirty_line))
@@ -2931,5 +2940,22 @@ mod tests {
         };
         assert_eq!(area.char_at_point(point), Some(5));
         assert_eq!(area.char_at_point(Point { x: -50.0, y: -50.0 }), None);
+    }
+
+    #[test]
+    fn several_edits_before_a_layout_all_show() {
+        let mut area = area("one\ntwo\nthree\nfour\n");
+        area.relayout(measure_width);
+        // From the end back, as a rename applies its edits.
+        area.replace_range(14, 18, "FOUR");
+        area.replace_range(0, 3, "ONE");
+        area.relayout(measure_width);
+        let shown: Vec<_> = area
+            .layout_cache
+            .lines
+            .iter()
+            .map(|line| line.display_text.clone())
+            .collect();
+        assert_eq!(shown, vec!["ONE", "two", "three", "FOUR", ""]);
     }
 }
