@@ -10,8 +10,9 @@ use std::time::{Duration, Instant};
 
 use loadngo_host_core::InputSnapshot;
 use ui_core::{
-    HorizontalAlign, Key, Modifiers, PaintOp, Point, PointerButton, PointerState, Rect,
-    TextAreaModel, TextFieldModel, UiEvent,
+    FileDialogModel, FileDialogOutcome, FileDialogPlace, HorizontalAlign, Key, Menu, MenuBar,
+    MenuBarModel, MenuCommand, MenuItem, Modifiers, PaintOp, Point, PointerButton, PointerState,
+    Rect, Shortcut, StdDirectorySource, TextAreaModel, TextFieldModel, UiEvent,
 };
 
 use crate::draw;
@@ -131,6 +132,18 @@ enum Command {
     Find,
     GoToLine,
     Refresh,
+    OpenFolder,
+    CloseTab,
+    Quit,
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+    QuitSaveAll,
+    QuitDiscard,
+    QuitCancel,
     PromptSave,
     PromptDiscard,
     PromptCancel,
@@ -140,6 +153,36 @@ enum Command {
     FindNext,
     CloseBar,
     GotoGo,
+}
+
+impl Command {
+    /// The commands a menu item can send.
+    const IN_MENUS: [Command; 14] = [
+        Command::OpenFolder,
+        Command::Refresh,
+        Command::Save,
+        Command::SaveAll,
+        Command::CloseTab,
+        Command::Quit,
+        Command::Undo,
+        Command::Redo,
+        Command::Cut,
+        Command::Copy,
+        Command::Paste,
+        Command::SelectAll,
+        Command::Find,
+        Command::GoToLine,
+    ];
+
+    fn menu_command(self) -> MenuCommand {
+        MenuCommand(self as u32)
+    }
+
+    fn from_menu(command: MenuCommand) -> Option<Self> {
+        Self::IN_MENUS
+            .into_iter()
+            .find(|candidate| candidate.menu_command() == command)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,10 +219,16 @@ struct Layout {
 }
 
 /// What a frame asks of the window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FrameOutcome {
     /// Show the text (I-beam) pointer.
     pub text_cursor: bool,
+    /// The menus changed (titles or enabled states): give them to the
+    /// host's system menu bar. Only after [`Editor::set_native_menu`].
+    pub menu_bar: Option<MenuBar>,
+    /// The editor has finished: every save asked for is done and the
+    /// session is written once the pending file work completes.
+    pub quit: bool,
 }
 
 pub struct Editor {
@@ -206,6 +255,17 @@ pub struct Editor {
     backup_due: Option<Instant>,
     session_due: Option<Instant>,
     written_session: Option<Vec<u8>>,
+    /// The menu bar drawn in the window, when the host has no system one.
+    drawn_menu: Option<MenuBarModel>,
+    /// The menus as last given to the system menu bar.
+    published_menu: Option<MenuBar>,
+    native_menu: bool,
+    folder_dialog: Option<FileDialogModel>,
+    dialog_clock: Instant,
+    dialog_animating: bool,
+    quit_prompt: bool,
+    quit_after_save: bool,
+    quitting: bool,
 }
 
 impl Editor {
@@ -241,6 +301,15 @@ impl Editor {
             backup_due: None,
             session_due: None,
             written_session: None,
+            drawn_menu: Some(MenuBarModel::default()),
+            published_menu: None,
+            native_menu: false,
+            folder_dialog: None,
+            dialog_clock: now,
+            dialog_animating: false,
+            quit_prompt: false,
+            quit_after_save: false,
+            quitting: false,
         };
         if let Some(root) = &root {
             editor.open_folder(root.clone());
@@ -289,6 +358,9 @@ impl Editor {
         }
         if let Some(at) = self.session_due {
             consider(at);
+        }
+        if self.dialog_animating {
+            consider(now + Duration::from_millis(16));
         }
         wake.map(|at| at.saturating_duration_since(now))
     }
@@ -532,8 +604,18 @@ impl Editor {
                     self.close(index);
                 }
                 self.set_status(format!("Saved {title}."), StatusKind::Info);
+                if self.quit_after_save
+                    && self
+                        .buffers
+                        .iter()
+                        .all(|buffer| !buffer.dirty() && buffer.saving.is_none())
+                {
+                    self.quit_now();
+                }
             }
             Err(WriteError::ChangedOnDisk) => {
+                self.quit_after_save = false;
+                let buffer = &mut self.buffers[index];
                 buffer.conflict = true;
                 buffer.close_after_save = false;
                 let title = buffer.title.clone();
@@ -544,6 +626,8 @@ impl Editor {
                 );
             }
             Err(WriteError::Io(error)) => {
+                self.quit_after_save = false;
+                let buffer = &mut self.buffers[index];
                 buffer.close_after_save = false;
                 let title = buffer.title.clone();
                 self.set_status(
@@ -696,12 +780,21 @@ impl Editor {
             self.blink_origin = now;
         }
 
-        self.route_pointer(input);
-        for event in &input.key_events {
-            self.route_key(event.key, event.modifiers, host);
+        for &command in &input.menu_commands {
+            if let Some(command) = Command::from_menu(command) {
+                self.run(command, host);
+            }
         }
-        if !input.typed_text.is_empty() {
-            self.route_text(&input.typed_text);
+        if self.folder_dialog.is_some() {
+            self.route_dialog(input, now);
+        } else {
+            self.route_pointer(input, host);
+            for event in &input.key_events {
+                self.route_key(event.key, event.modifiers, host);
+            }
+            if !input.typed_text.is_empty() {
+                self.route_text(&input.typed_text);
+            }
         }
 
         self.relayout(surface, host);
@@ -726,6 +819,200 @@ impl Editor {
         self.run_due(now);
         FrameOutcome {
             text_cursor: self.wants_text_cursor(),
+            menu_bar: self.publish_menu(),
+            quit: self.quitting,
+        }
+    }
+
+    /// Tells the editor the host shows its menus in the system menu bar, so
+    /// it draws none and takes chosen items from the frame's input.
+    pub fn set_native_menu(&mut self, native: bool) {
+        self.native_menu = native;
+        self.drawn_menu = if native {
+            None
+        } else {
+            Some(MenuBarModel::new(self.menu_bar()))
+        };
+        // The host shows whatever was set before this call; publish again
+        // so the menus match the kind of menu bar (Quit moves).
+        self.published_menu = None;
+    }
+
+    /// The menus as they stand: File and Edit, with each item enabled only
+    /// when it can act.
+    pub fn menu_bar(&self) -> MenuBar {
+        let any_dirty = self.buffers.iter().any(Buffer::dirty);
+        let active_dirty = self.active_buffer().is_some_and(Buffer::dirty);
+        let has_file = self.active_buffer().is_some_and(|buffer| buffer.loaded);
+        let editing = self.focused_area_ref().is_some() && self.folder_dialog.is_none();
+        let item = |command: Command, title: &str| MenuItem::command(command.menu_command(), title);
+        let mut file = vec![
+            item(Command::OpenFolder, "Open Folder…").with_shortcut(Shortcut::primary('o')),
+            item(Command::Refresh, "Refresh Folder").enabled(self.tree.is_some()),
+            MenuItem::Separator,
+            item(Command::Save, "Save")
+                .with_shortcut(Shortcut::primary('s'))
+                .enabled(active_dirty),
+            item(Command::SaveAll, "Save All")
+                .with_shortcut(Shortcut::primary_shift('s'))
+                .enabled(any_dirty),
+            MenuItem::Separator,
+            item(Command::CloseTab, "Close Tab")
+                .with_shortcut(Shortcut::primary('w'))
+                .enabled(self.active.is_some()),
+        ];
+        if !self.native_menu {
+            // The system's application menu holds Quit where there is one.
+            file.push(MenuItem::Separator);
+            file.push(item(Command::Quit, "Quit").with_shortcut(Shortcut::primary('q')));
+        }
+        let edit = vec![
+            item(Command::Undo, "Undo")
+                .with_shortcut(Shortcut::primary('z'))
+                .enabled(editing),
+            item(Command::Redo, "Redo")
+                .with_shortcut(Shortcut::primary_shift('z'))
+                .enabled(editing),
+            MenuItem::Separator,
+            item(Command::Cut, "Cut")
+                .with_shortcut(Shortcut::primary('x'))
+                .enabled(editing),
+            item(Command::Copy, "Copy")
+                .with_shortcut(Shortcut::primary('c'))
+                .enabled(editing),
+            item(Command::Paste, "Paste")
+                .with_shortcut(Shortcut::primary('v'))
+                .enabled(editing),
+            item(Command::SelectAll, "Select All")
+                .with_shortcut(Shortcut::primary('a'))
+                .enabled(editing),
+            MenuItem::Separator,
+            item(Command::Find, "Find…")
+                .with_shortcut(Shortcut::primary('f'))
+                .enabled(has_file),
+            item(Command::GoToLine, "Go to Line…").enabled(has_file),
+        ];
+        MenuBar {
+            menus: vec![Menu::new("File", file), Menu::new("Edit", edit)],
+            quit: Some(Command::Quit.menu_command()),
+        }
+    }
+
+    /// Brings the menus up to date; returns them when the system menu bar
+    /// needs them.
+    fn publish_menu(&mut self) -> Option<MenuBar> {
+        let menu = self.menu_bar();
+        if self.published_menu.as_ref() == Some(&menu) {
+            return None;
+        }
+        self.published_menu = Some(menu.clone());
+        match &mut self.drawn_menu {
+            Some(drawn) => {
+                drawn.set_menu_bar(menu);
+                None
+            }
+            None => Some(menu),
+        }
+    }
+
+    /// Input while the Open Folder dialog is up: all of it goes to the
+    /// dialog.
+    fn route_dialog(&mut self, input: &InputSnapshot, now: Instant) {
+        let Some(dialog) = &mut self.folder_dialog else {
+            return;
+        };
+        let delta = now.duration_since(self.dialog_clock).as_secs_f32();
+        self.dialog_clock = now;
+        self.dialog_animating = dialog.advance(delta);
+        let point = Point {
+            x: input.mouse_x,
+            y: input.mouse_y,
+        };
+        self.pointer = point;
+        let state = PointerState::mouse(point, input.modifiers);
+        let mut events = vec![UiEvent::PointerMoved(state)];
+        if input.mouse_pressed {
+            events.push(UiEvent::PointerPressed {
+                button: PointerButton::Primary,
+                state,
+            });
+        }
+        if input.mouse_released {
+            events.push(UiEvent::PointerReleased {
+                button: PointerButton::Primary,
+                state,
+            });
+        }
+        for event in &input.key_events {
+            if let Some(key) = event.key.ui_key() {
+                events.push(UiEvent::KeyPressed {
+                    key,
+                    modifiers: event.modifiers,
+                });
+            }
+        }
+        if !input.typed_text.is_empty() {
+            events.push(UiEvent::TextInput {
+                text: input.typed_text.clone(),
+            });
+        }
+        if input.mouse_wheel_y != 0.0 {
+            dialog.scroll_wheel(point, input.mouse_wheel_y, input.mouse_wheel_precise);
+            self.dialog_animating = true;
+        }
+        let mut outcome = None;
+        for event in events {
+            if let Some(result) = dialog.handle_event(event).outcome {
+                outcome = Some(result);
+                break;
+            }
+        }
+        match outcome {
+            Some(FileDialogOutcome::Confirmed(folder)) => {
+                self.folder_dialog = None;
+                self.dialog_animating = false;
+                self.set_status(format!("Opened {}.", folder.display()), StatusKind::Info);
+                self.open_folder(folder);
+            }
+            Some(FileDialogOutcome::Cancelled) => {
+                self.folder_dialog = None;
+                self.dialog_animating = false;
+            }
+            None => {}
+        }
+    }
+
+    fn show_folder_dialog(&mut self) {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let start = self
+            .tree
+            .as_ref()
+            .and_then(|tree| tree.root().parent().map(Path::to_path_buf))
+            .or_else(|| home.clone())
+            .unwrap_or_else(|| PathBuf::from("/"));
+        let mut dialog =
+            FileDialogModel::choose_folder("Open Folder", start, Box::new(StdDirectorySource));
+        let mut places = Vec::new();
+        if let Some(home) = home {
+            places.push(FileDialogPlace::new("Home", home));
+        }
+        if let Some(tree) = &self.tree {
+            places.push(FileDialogPlace::new("This folder", tree.root()));
+        }
+        dialog.set_places(places);
+        self.folder_dialog = Some(dialog);
+        self.dialog_animating = false;
+    }
+
+    /// Quits now: the session is written at once, and the app stops once
+    /// the file work in flight completes.
+    fn quit_now(&mut self) {
+        self.quit_prompt = false;
+        self.quit_after_save = false;
+        self.quitting = true;
+        if self.state_dir.is_some() {
+            self.session_due = Some(Instant::now());
+            self.run_due(Instant::now());
         }
     }
 
@@ -851,10 +1138,33 @@ impl Editor {
     // ----- layout -----
 
     fn relayout(&mut self, (width, height): (f32, f32), host: &dyn EditorHost) {
+        let surface = Rect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        };
+        let top = if let Some(menu) = &mut self.drawn_menu {
+            menu.relayout(surface, |text, size| host.measure(text, size));
+            MenuBarModel::height()
+        } else {
+            0.0
+        };
+        if let Some(dialog) = &mut self.folder_dialog {
+            let dialog_width = (width - 80.0).clamp(320.0, 760.0);
+            let dialog_height = (height - 120.0).clamp(240.0, 520.0);
+            dialog.set_bounds(Rect {
+                x: (width - dialog_width) / 2.0,
+                y: (height - dialog_height) / 2.0,
+                width: dialog_width,
+                height: dialog_height,
+            });
+            dialog.relayout(|text, size| host.measure(text, size));
+        }
         let mut layout = Layout {
             toolbar: Rect {
                 x: 0.0,
-                y: 0.0,
+                y: top,
                 width,
                 height: theme::TOOLBAR_HEIGHT,
             },
@@ -868,6 +1178,7 @@ impl Editor {
         };
         let mut x = 8.0;
         for (command, text) in [
+            (Command::OpenFolder, "Open Folder…"),
             (Command::Save, "Save"),
             (Command::SaveAll, "Save All"),
             (Command::Find, "Find"),
@@ -879,14 +1190,14 @@ impl Editor {
                 command,
                 Rect {
                     x,
-                    y: 6.0,
+                    y: top + 6.0,
                     width: button_width,
                     height: theme::TOOLBAR_HEIGHT - 12.0,
                 },
             ));
             x += button_width + 6.0;
         }
-        let body_top = theme::TOOLBAR_HEIGHT;
+        let body_top = top + theme::TOOLBAR_HEIGHT;
         let body_height = (layout.status.y - body_top).max(0.0);
         let tree_width = theme::TREE_WIDTH.min(width * 0.4);
         layout.tree = Rect {
@@ -980,7 +1291,13 @@ impl Editor {
         host: &dyn EditorHost,
         layout: &mut Layout,
     ) -> Option<Rect> {
-        let commands: Vec<(Command, &str)> = if self.close_prompt.is_some() {
+        let commands: Vec<(Command, &str)> = if self.quit_prompt {
+            vec![
+                (Command::QuitSaveAll, "Save All and Quit"),
+                (Command::QuitDiscard, "Quit Without Saving"),
+                (Command::QuitCancel, "Cancel"),
+            ]
+        } else if self.close_prompt.is_some() {
             vec![
                 (Command::PromptSave, "Save"),
                 (Command::PromptDiscard, "Don't Save"),
@@ -1026,6 +1343,7 @@ impl Editor {
         layout.bar_buttons.reverse();
         let shows_field = self.find.is_some() || self.goto.is_some();
         if shows_field
+            && !self.quit_prompt
             && self.close_prompt.is_none()
             && !self.active_buffer().is_some_and(|b| b.conflict)
         {
@@ -1042,11 +1360,15 @@ impl Editor {
 
     // ----- input -----
 
-    fn route_pointer(&mut self, input: &InputSnapshot) {
+    fn route_pointer(&mut self, input: &InputSnapshot, host: &dyn EditorHost) {
         let point = Point {
             x: input.mouse_x,
             y: input.mouse_y,
         };
+        if self.route_drawn_menu_pointer(input, point, host) {
+            self.pointer = point;
+            return;
+        }
         let moved = point != self.pointer;
         self.pointer = point;
         let state = PointerState::mouse(point, input.modifiers);
@@ -1072,7 +1394,7 @@ impl Editor {
             }
         }
         if input.mouse_pressed {
-            self.pointer_pressed(point, state);
+            self.pointer_pressed(point, state, host);
         }
         if input.mouse_released {
             let released = UiEvent::PointerReleased {
@@ -1102,7 +1424,54 @@ impl Editor {
         fields
     }
 
-    fn pointer_pressed(&mut self, point: Point, state: PointerState) {
+    /// Offers pointer input to the drawn menu bar; true when it took it.
+    fn route_drawn_menu_pointer(
+        &mut self,
+        input: &InputSnapshot,
+        point: Point,
+        host: &dyn EditorHost,
+    ) -> bool {
+        let Some(menu) = &mut self.drawn_menu else {
+            return false;
+        };
+        let state = PointerState::mouse(point, input.modifiers);
+        let mut events = Vec::new();
+        if point != self.pointer {
+            events.push(UiEvent::PointerMoved(state));
+        }
+        if input.mouse_pressed {
+            events.push(UiEvent::PointerPressed {
+                button: PointerButton::Primary,
+                state,
+            });
+        }
+        if input.mouse_released {
+            events.push(UiEvent::PointerReleased {
+                button: PointerButton::Primary,
+                state,
+            });
+        }
+        let mut consumed = false;
+        let mut chosen = None;
+        for event in &events {
+            let response = menu.handle_event(event);
+            // Hover over a closed bar is not taken; a press or an open menu is.
+            if response.consumed && !matches!(event, UiEvent::PointerMoved(_)) {
+                consumed = true;
+            }
+            if response.consumed && menu.is_open() {
+                consumed = true;
+            }
+            chosen = chosen.or(response.command);
+        }
+        if let Some(command) = chosen.and_then(Command::from_menu) {
+            self.run(command, host);
+            consumed = true;
+        }
+        consumed
+    }
+
+    fn pointer_pressed(&mut self, point: Point, state: PointerState, host: &dyn EditorHost) {
         let hit_command = self
             .layout
             .bar_buttons
@@ -1111,7 +1480,7 @@ impl Editor {
             .find(|(_, rect)| rect.contains(point))
             .map(|(command, _)| *command);
         if let Some(command) = hit_command {
-            self.run(command);
+            self.run(command, host);
             return;
         }
         if let Some(index) = self
@@ -1222,35 +1591,24 @@ impl Editor {
         let Some(key) = key.ui_key() else {
             return;
         };
-        let command = modifiers.meta || modifiers.ctrl;
-        match key {
-            Key::Character('s') if command => {
-                if modifiers.shift {
-                    self.save_all();
-                } else if let Some(index) = self.active {
-                    self.save(index);
-                }
+        if let Some(menu) = &mut self.drawn_menu {
+            let response = menu.handle_event(&UiEvent::KeyPressed { key, modifiers });
+            if let Some(command) = response.command.and_then(Command::from_menu) {
+                self.run(command, host);
+            }
+            if response.consumed {
                 return;
             }
-            Key::Character('c') | Key::Character('x') if command => {
-                self.copy(key == Key::Character('x'), host);
-                return;
+        }
+        if key == Key::Escape {
+            if self.quit_prompt {
+                self.quit_prompt = false;
+            } else if self.close_prompt.take().is_none() {
+                self.find = None;
+                self.goto = None;
             }
-            Key::Character('v') if command => {
-                if let Some(text) = host.read_clipboard() {
-                    self.paste(&text);
-                }
-                return;
-            }
-            Key::Escape => {
-                if self.close_prompt.take().is_none() {
-                    self.find = None;
-                    self.goto = None;
-                }
-                self.set_focus(Focus::Editor);
-                return;
-            }
-            _ => {}
+            self.set_focus(Focus::Editor);
+            return;
         }
         let event = UiEvent::KeyPressed { key, modifiers };
         match self.focus {
@@ -1263,22 +1621,34 @@ impl Editor {
             }
             Focus::Find => {
                 if key == Key::Enter {
-                    self.run(if modifiers.shift {
+                    let step = if modifiers.shift {
                         Command::FindPrevious
                     } else {
                         Command::FindNext
-                    });
+                    };
+                    self.run(step, host);
                 } else if let Some(find) = &mut self.find {
                     let _ = find.field.handle_event(event);
                 }
             }
             Focus::Goto => {
                 if key == Key::Enter {
-                    self.run(Command::GotoGo);
+                    self.run(Command::GotoGo, host);
                 } else if let Some(goto) = &mut self.goto {
                     let _ = goto.handle_event(event);
                 }
             }
+        }
+    }
+
+    fn focused_area_ref(&self) -> Option<&TextAreaModel> {
+        match self.focus {
+            Focus::Editor => self
+                .active_buffer()
+                .filter(|buffer| buffer.loaded)
+                .map(|buffer| &buffer.area),
+            Focus::Find => self.find.as_ref().map(|find| &find.field.area),
+            Focus::Goto => self.goto.as_ref().map(|goto| &goto.area),
         }
     }
 
@@ -1346,8 +1716,65 @@ impl Editor {
         }
     }
 
-    fn run(&mut self, command: Command) {
+    fn run(&mut self, command: Command, host: &dyn EditorHost) {
         match command {
+            Command::OpenFolder => self.show_folder_dialog(),
+            Command::CloseTab => {
+                if let Some(index) = self.active {
+                    self.request_close(index);
+                }
+            }
+            Command::Quit => {
+                if self.buffers.iter().any(Buffer::dirty) {
+                    self.quit_prompt = true;
+                } else {
+                    self.quit_now();
+                }
+            }
+            Command::QuitSaveAll => {
+                self.quit_prompt = false;
+                self.quit_after_save = true;
+                self.save_all();
+                if !self.buffers.iter().any(Buffer::dirty) {
+                    self.quit_now();
+                }
+            }
+            Command::QuitDiscard => {
+                // Discarding on purpose: the backups go too, or the next
+                // launch would bring the edits back.
+                if let Some(state_dir) = self.state_dir.clone() {
+                    for buffer in &mut self.buffers {
+                        if buffer.has_backup_file || buffer.dirty() {
+                            self.outbox.push(IoRequest::RemoveState {
+                                path: session::backup_path(&state_dir, &buffer.path),
+                            });
+                            buffer.has_backup_file = false;
+                        }
+                    }
+                }
+                self.backup_due = None;
+                self.quit_now();
+            }
+            Command::QuitCancel => self.quit_prompt = false,
+            Command::Undo | Command::Redo | Command::SelectAll => {
+                if let Some(area) = self.focused_area() {
+                    match command {
+                        Command::Undo => {
+                            area.undo();
+                        }
+                        Command::Redo => {
+                            area.redo();
+                        }
+                        _ => area.select_all(),
+                    }
+                }
+            }
+            Command::Cut | Command::Copy => self.copy(command == Command::Cut, host),
+            Command::Paste => {
+                if let Some(text) = host.read_clipboard() {
+                    self.paste(&text);
+                }
+            }
             Command::Save => {
                 if let Some(index) = self.active {
                     self.save(index);
@@ -1530,6 +1957,21 @@ impl Editor {
             ),
         }
         self.paint_status(scene, &layout);
+        if let Some(menu) = &self.drawn_menu {
+            menu.paint(scene);
+        }
+        if let Some(dialog) = &self.folder_dialog {
+            FileDialogModel::paint_scrim(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: layout.toolbar.width,
+                    height: layout.status.bottom(),
+                },
+                scene,
+            );
+            dialog.paint(scene);
+        }
         self.layout = layout;
     }
 
@@ -1564,6 +2006,7 @@ impl Editor {
         let mut right_edge = 0.0f32;
         for (command, rect) in &layout.buttons {
             let (text, enabled) = match command {
+                Command::OpenFolder => ("Open Folder…", true),
                 Command::Save => ("Save", active_dirty),
                 Command::SaveAll => ("Save All", any_dirty),
                 Command::Find => ("Find", self.active.is_some()),
@@ -1580,7 +2023,7 @@ impl Editor {
                 &tree.root().display().to_string(),
                 Rect {
                     x: right_edge + 16.0,
-                    y: 0.0,
+                    y: layout.toolbar.y,
                     width: (layout.toolbar.width - right_edge - 28.0).max(0.0),
                     height: layout.toolbar.height,
                 },
@@ -1705,7 +2148,22 @@ impl Editor {
             .active_buffer()
             .map(|buffer| buffer.title.clone())
             .unwrap_or_default();
-        if let Some(id) = self.close_prompt {
+        if self.quit_prompt {
+            let dirty = self.buffers.iter().filter(|buffer| buffer.dirty()).count();
+            let text = if dirty == 1 {
+                "1 file has unsaved changes.".to_string()
+            } else {
+                format!("{dirty} files have unsaved changes.")
+            };
+            draw::label(
+                scene,
+                &text,
+                message_rect,
+                theme::WARNING,
+                theme::UI_FONT,
+                HorizontalAlign::Left,
+            );
+        } else if let Some(id) = self.close_prompt {
             let name = self
                 .buffer_index(id)
                 .map(|index| self.buffers[index].title.clone())
@@ -1778,6 +2236,9 @@ impl Editor {
         }
         for (command, rect) in &layout.bar_buttons {
             let text = match command {
+                Command::QuitSaveAll => "Save All and Quit",
+                Command::QuitDiscard => "Quit Without Saving",
+                Command::QuitCancel => "Cancel",
                 Command::PromptSave => "Save",
                 Command::PromptDiscard => "Don't Save",
                 Command::PromptCancel => "Cancel",
@@ -1948,6 +2409,7 @@ mod tests {
     use loadngo_host_core::{HostKey, HostKeyEvent};
     use std::cell::RefCell;
     use std::fs;
+    use ui_core::{MenuBar, MenuItem};
 
     struct FakeHost {
         clipboard: RefCell<Option<String>>,
@@ -2329,7 +2791,12 @@ mod tests {
         let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
         rig.editor.open_file(dir.path().join("a.rs"));
         rig.settle();
-        rig.editor.run(Command::Find);
+        rig.editor.run(
+            Command::Find,
+            &FakeHost {
+                clipboard: RefCell::new(None),
+            },
+        );
         rig.type_text("value");
         rig.frame(InputSnapshot::default());
         assert_eq!(rig.editor.find.as_ref().unwrap().matches.len(), 3);
@@ -2354,7 +2821,12 @@ mod tests {
         let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
         rig.editor.open_file(dir.path().join("a.rs"));
         rig.settle();
-        rig.editor.run(Command::GoToLine);
+        rig.editor.run(
+            Command::GoToLine,
+            &FakeHost {
+                clipboard: RefCell::new(None),
+            },
+        );
         rig.type_text("3");
         rig.key(HostKey::Enter, Modifiers::default());
         assert_eq!(rig.active().area.caret(), 8);
@@ -2394,5 +2866,192 @@ mod tests {
         rig.frame(InputSnapshot::default());
         assert_eq!(rig.editor.next_wake(rig.now), None);
         assert!(rig.active().area.show_caret, "a still caret is shown");
+    }
+
+    fn menu_input(command: Command) -> InputSnapshot {
+        InputSnapshot {
+            menu_commands: vec![command.menu_command()],
+            ..InputSnapshot::default()
+        }
+    }
+
+    impl Rig {
+        fn outcome(&mut self, input: InputSnapshot) -> FrameOutcome {
+            let outcome = self
+                .editor
+                .frame(&input, true, (1200.0, 800.0), self.now, &self.host);
+            for _ in 0..20 {
+                let requests = self.editor.take_requests();
+                if requests.is_empty() {
+                    break;
+                }
+                for request in requests {
+                    self.editor.apply(fs_ops::perform(request), self.now);
+                }
+            }
+            outcome
+        }
+    }
+
+    #[test]
+    fn system_menu_commands_drive_the_editor_and_menus_follow_its_state() {
+        let dir = workspace(&[("a.rs", "abc")]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.editor.set_native_menu(true);
+        assert!(rig.editor.drawn_menu.is_none());
+        rig.editor.open_file(dir.path().join("a.rs"));
+        rig.settle();
+        let save_enabled = |bar: &MenuBar| {
+            bar.menus[0].items.iter().any(|item| {
+                matches!(item, MenuItem::Command { title, enabled: true, .. } if title == "Save")
+            })
+        };
+        let published = rig
+            .outcome(InputSnapshot {
+                typed_text: "x".to_string(),
+                ..InputSnapshot::default()
+            })
+            .menu_bar;
+        assert!(
+            published.as_ref().is_some_and(save_enabled),
+            "Save turns on"
+        );
+        assert_eq!(
+            rig.outcome(InputSnapshot::default()).menu_bar,
+            None,
+            "unchanged"
+        );
+        rig.outcome(menu_input(Command::Save));
+        assert_eq!(fs::read_to_string(dir.path().join("a.rs")).unwrap(), "xabc");
+        let published = rig.outcome(InputSnapshot::default()).menu_bar;
+        assert!(
+            published.is_some_and(|bar| !save_enabled(&bar)),
+            "Save turns off"
+        );
+        rig.editor
+            .active_buffer_mut()
+            .unwrap()
+            .area
+            .select_range(0, 2);
+        rig.outcome(menu_input(Command::Copy));
+        assert_eq!(rig.host.read_clipboard().as_deref(), Some("xa"));
+        rig.outcome(menu_input(Command::Undo));
+        assert_eq!(rig.active().area.text(), "abc");
+    }
+
+    #[test]
+    fn quit_with_nothing_unsaved_finishes_and_writes_the_session() {
+        let dir = workspace(&[("a.rs", "abc")]);
+        let state = tempfile::tempdir().unwrap();
+        let mut rig = Rig::new(
+            Some(state.path().to_path_buf()),
+            Some(dir.path().to_path_buf()),
+        );
+        rig.editor.open_file(dir.path().join("a.rs"));
+        rig.settle();
+        assert!(rig.outcome(menu_input(Command::Quit)).quit);
+        let session: Session =
+            serde_json::from_slice(&fs::read(session::session_path(state.path())).unwrap())
+                .unwrap();
+        assert_eq!(session.tabs.len(), 1);
+    }
+
+    #[test]
+    fn quit_with_unsaved_work_asks_first() {
+        let dir = workspace(&[("a.rs", "abc"), ("b.rs", "b")]);
+        let state = tempfile::tempdir().unwrap();
+        let mut rig = Rig::new(
+            Some(state.path().to_path_buf()),
+            Some(dir.path().to_path_buf()),
+        );
+        rig.editor.open_file(dir.path().join("a.rs"));
+        rig.settle();
+        rig.type_text("x");
+        rig.later(3);
+        let backup = session::backup_path(state.path(), &dir.path().join("a.rs"));
+        assert!(backup.exists());
+
+        assert!(!rig.outcome(menu_input(Command::Quit)).quit);
+        assert!(rig.editor.quit_prompt);
+        rig.click(rig.bar_button(Command::QuitCancel));
+        assert!(!rig.editor.quit_prompt);
+
+        rig.outcome(menu_input(Command::Quit));
+        rig.click(rig.bar_button(Command::QuitSaveAll));
+        assert!(rig.outcome(InputSnapshot::default()).quit);
+        assert_eq!(fs::read_to_string(dir.path().join("a.rs")).unwrap(), "xabc");
+        assert!(!backup.exists());
+    }
+
+    #[test]
+    fn quit_without_saving_drops_the_backups() {
+        let dir = workspace(&[("a.rs", "abc")]);
+        let state = tempfile::tempdir().unwrap();
+        let mut rig = Rig::new(
+            Some(state.path().to_path_buf()),
+            Some(dir.path().to_path_buf()),
+        );
+        rig.editor.open_file(dir.path().join("a.rs"));
+        rig.settle();
+        rig.type_text("x");
+        rig.later(3);
+        let backup = session::backup_path(state.path(), &dir.path().join("a.rs"));
+        assert!(backup.exists());
+        rig.outcome(menu_input(Command::Quit));
+        rig.click(rig.bar_button(Command::QuitDiscard));
+        assert!(rig.outcome(InputSnapshot::default()).quit);
+        assert!(!backup.exists());
+        assert_eq!(fs::read_to_string(dir.path().join("a.rs")).unwrap(), "abc");
+    }
+
+    #[test]
+    fn open_folder_switches_the_tree_to_the_chosen_folder() {
+        let dir = workspace(&[("one/a.rs", "a"), ("two/b.rs", "b")]);
+        let root = dir.path().canonicalize().unwrap();
+        let mut rig = Rig::new(None, Some(root.join("one")));
+        rig.outcome(menu_input(Command::OpenFolder));
+        assert!(rig.editor.folder_dialog.is_some());
+        // Typing a path in the dialog and pressing Enter chooses it.
+        rig.type_text(&root.join("two").display().to_string());
+        rig.key(HostKey::Enter, Modifiers::default());
+        assert!(rig.editor.folder_dialog.is_none());
+        rig.settle();
+        let tree = rig.editor.tree.as_mut().unwrap();
+        assert_eq!(tree.root(), root.join("two"));
+        let names: Vec<_> = tree.rows().iter().map(|row| row.name.clone()).collect();
+        assert_eq!(names, vec!["b.rs"]);
+    }
+
+    #[test]
+    fn escape_closes_the_folder_dialog() {
+        let dir = workspace(&[("a.rs", "a")]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.outcome(menu_input(Command::OpenFolder));
+        rig.key(HostKey::Escape, Modifiers::default());
+        assert!(rig.editor.folder_dialog.is_none());
+        assert_eq!(rig.editor.tree.as_ref().unwrap().root(), dir.path());
+    }
+
+    #[test]
+    fn the_drawn_menu_bar_opens_and_runs_items() {
+        let dir = workspace(&[("a.rs", "abc"), ("b.rs", "b")]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.editor.open_file(dir.path().join("a.rs"));
+        rig.editor.open_file(dir.path().join("b.rs"));
+        rig.settle();
+        rig.type_text("y");
+        // The toolbar sits below the drawn menu bar.
+        assert_eq!(rig.editor.layout.toolbar.y, MenuBarModel::height());
+        let file_title = Point { x: 20.0, y: 10.0 };
+        rig.click(file_title);
+        assert!(rig.editor.drawn_menu.as_ref().unwrap().is_open());
+        // Down to "Save" (past Open Folder… and Refresh Folder) and Enter.
+        for _ in 0..3 {
+            rig.key(HostKey::Down, Modifiers::default());
+        }
+        rig.key(HostKey::Enter, Modifiers::default());
+        assert_eq!(fs::read_to_string(dir.path().join("b.rs")).unwrap(), "yb");
+        assert!(!rig.editor.drawn_menu.as_ref().unwrap().is_open());
+        assert_eq!(rig.active().area.text(), "yb", "the keys went to the menu");
     }
 }

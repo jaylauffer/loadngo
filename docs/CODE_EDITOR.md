@@ -18,6 +18,10 @@ it builds on is described in [`TEXT_EDITOR_MODEL.md`](TEXT_EDITOR_MODEL.md).
   (Cmd-Shift-S), and the platform's own Undo/Redo, Cut/Copy/Paste and
   Select All. Every other command sits on a visible control, never only on
   a key chord. On Windows and Linux, Ctrl replaces Cmd.
+- **Standard menus** (Jay, 2026-10-10), as loadngo's own menu support
+  (`docs/MENUS.md`). On macOS that is the system menu bar; elsewhere a menu
+  bar drawn in the window. The menus also carry the platform's usual open,
+  close, quit and find shortcuts.
 - **rust-analyzer runs as an external process** that speaks LSP over stdio.
   It is spawned and supervised like `airplay2-sender`, not linked or
   rewritten.
@@ -105,9 +109,15 @@ changes on disk at focus, find in the current file, go to line, and reopen
 the last folder and tabs at launch. Proportional font, current text path
 (one `Text` op per visible line).
 
-Done 2026-10-10 except opening a folder from inside the editor: the folder
-comes from the command line or the last session (`code_editor --help`).
-Along the way, every `TextAreaModel` gained:
+Done 2026-10-10. File menu: Open Folder… (Cmd-O, the file dialog's new
+folder mode), Refresh Folder, Save, Save All, Close Tab (Cmd-W), and Quit
+on hosts with no application menu. Edit menu: Undo, Redo, Cut, Copy, Paste,
+Select All, Find… (Cmd-F), Go to Line…. Quit, from the menu or Cmd-Q, asks
+first when files are unsaved: Save All and Quit, Quit Without Saving
+(which also drops their backups), or Cancel. The app stops only once the
+saves and the session write have landed. A new folder keeps the open tabs;
+nothing is closed by switching. Along the way, every `TextAreaModel`
+gained:
 
 - undo by word: typing groups until whitespace is followed by a new word,
   deletions group with deletions, and any caret move ends a group. Undo
@@ -170,3 +180,18 @@ frame's work:
   both tabs and the unsaved text.
 - `sng_rusty_editor`'s source pane, which uses the same `TextAreaModel`, was
   checked by screenshot after these changes.
+
+**Open Folder and menus (2026-10-10, Mac mini).** 34 editor tests (new: system
+menu commands and republished enabled states, Quit with nothing unsaved,
+Quit asking then Save All and Quit, Quit Without Saving dropping backups,
+Open Folder by typed path, Escape closing the dialog, the drawn menu bar by
+click and keys), 6 menu-model tests and 3 folder-mode dialog tests. In the
+release build: the system menu bar shows the application, File, Edit and
+Window menus with the right items disabled; Cmd-O opened the dialog; picking
+a folder and Open switched the tree; Cmd-Q with an unsaved file showed the
+prompt; Escape cancelled it; Cmd-S saved through the menu's key equivalent;
+Cmd-Q then quit and the session recorded the new folder. The drawn bar was
+checked on macOS with `CODE_EDITOR_DRAWN_MENU=1`. `sng_rusty_editor` now
+gets the standard application and Window menus, and Cmd-Q quits it. iOS,
+Android (all binaries, now that a file dialog's source is `Send`) and Windows
+(type check) builds pass from macOS.

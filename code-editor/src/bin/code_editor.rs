@@ -22,9 +22,11 @@ Usage: code_editor [FOLDER]
                          directory.
   -h, --help   optional  Print this help.
 
-Keys: Cmd-S saves the file in front, Cmd-Shift-S saves all files, plus the
-platform's own undo, redo, cut, copy, paste and select all (Ctrl instead of
-Cmd on Linux and Windows). Everything else is on the buttons.
+Everything is in the File and Edit menus (the system menu bar on macOS, a
+menu bar in the window elsewhere) and on the toolbar. Keys: Cmd-S saves the
+file in front, Cmd-Shift-S saves all files, plus the platform's own open,
+close, quit, undo, redo, cut, copy, paste, select all and find (Ctrl instead
+of Cmd on Linux and Windows).
 
 Open tabs, the folder and unsaved edits are kept in the app data folder
 (on macOS ~/Library/Application Support/loadngo-code-editor), so closing the
@@ -106,6 +108,13 @@ async fn run(folder: Option<PathBuf>) {
         })
         .ok();
     let mut editor = Editor::new(state_dir, folder, fallback_root(), Instant::now());
+    // macOS shows the menus in the system menu bar; elsewhere the editor
+    // draws its own.
+    // CODE_EDITOR_DRAWN_MENU=1 shows the drawn menu bar on macOS too, to
+    // check what Linux and Windows get.
+    let native_menu = std::env::var_os("CODE_EDITOR_DRAWN_MENU").is_none()
+        && loadngo_host_desktop::set_menu_bar(&editor.menu_bar());
+    editor.set_native_menu(native_menu);
     let mut waiting: VecDeque<IoRequest> = VecDeque::new();
     let mut in_flight: Vec<Offloaded<IoResponse>> = Vec::new();
     let mut scene = Vec::new();
@@ -135,6 +144,9 @@ async fn run(folder: Option<PathBuf>) {
             &host,
         );
         loadngo_host_desktop::set_text_cursor_active(outcome.text_cursor);
+        if let Some(menu_bar) = &outcome.menu_bar {
+            loadngo_host_desktop::set_menu_bar(menu_bar);
+        }
 
         waiting.extend(editor.take_requests());
         while in_flight.len() < MAX_IN_FLIGHT {
@@ -142,6 +154,11 @@ async fn run(folder: Option<PathBuf>) {
                 break;
             };
             in_flight.push(loadngo_host_desktop::offload(move || perform(request)));
+        }
+
+        // Quit once the last saves and the session write have landed.
+        if outcome.quit && waiting.is_empty() && in_flight.is_empty() {
+            break;
         }
 
         scene.clear();
