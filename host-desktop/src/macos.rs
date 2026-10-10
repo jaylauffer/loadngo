@@ -965,6 +965,19 @@ pub fn offload<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> c
     )
 }
 
+/// A result another thread will deliver: finish the [`crate::Completer`]
+/// from any thread and read the [`crate::Offloaded`] like an offloaded job's.
+/// On macOS a delivered result runs a frame, as an offloaded job's does.
+pub fn completion<T: Send + 'static>() -> (crate::Completer<T>, crate::Offloaded<T>) {
+    let handle = with_mac_proactor(|proactor| proactor.handle.clone());
+    let wake = app_wake_poster(WAKE_SUBTYPE_OFFLOAD);
+    crate::offload::completion_via(move |store| {
+        if handle.enqueue_work(move |_| store()).is_ok() {
+            wake();
+        }
+    })
+}
+
 pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|err| format!("failed to read {path}: {err}"))
 }

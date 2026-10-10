@@ -3357,6 +3357,15 @@ pub fn offload<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> c
     crate::offload::offload_through(proactor_handle(), job)
 }
 
+/// A result another thread will deliver: finish the [`crate::Completer`]
+/// from any thread and read the [`crate::Offloaded`] like an offloaded job's.
+pub fn completion<T: Send + 'static>() -> (crate::Completer<T>, crate::Offloaded<T>) {
+    let handle = proactor_handle();
+    crate::offload::completion_via(move |store| {
+        let _ = handle.enqueue_work(move |_| store());
+    })
+}
+
 pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
     if let Ok(bytes) = std::fs::read(path) {
         return Ok(bytes);

@@ -309,6 +309,12 @@ pub fn offload<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> c
     crate::Offloaded::ready(job())
 }
 
+/// A result another thread will deliver: finish the [`crate::Completer`]
+/// from any thread and read the [`crate::Offloaded`] like an offloaded job's.
+pub fn completion<T: Send + 'static>() -> (crate::Completer<T>, crate::Offloaded<T>) {
+    crate::offload::completion_via(|store| store())
+}
+
 pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
     LoadngoPlaceholderAssetIo::load_bytes(path).await
 }

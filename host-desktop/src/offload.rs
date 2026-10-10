@@ -13,6 +13,12 @@
 //! The pool is deliberately small (two workers) to keep a phone cool. It queues
 //! without limit, so the caller bounds how many jobs it has in flight; that
 //! bound is also what bounds the memory held by unread results.
+//!
+//! Work that must not hold a pool worker, such as waiting minutes on a child
+//! process, runs on a thread of its own and hands its result back through
+//! `completion()` (also exported by every host): a [`Completer`] that thread
+//! finishes, paired with the [`Offloaded`] the app reads, delivered the same
+//! way.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -51,6 +57,50 @@ impl<T> Offloaded<T> {
             slot: Arc::new(Mutex::new(Some(Ok(result)))),
         }
     }
+}
+
+/// The finishing half of `completion()`: whoever holds it delivers the result
+/// to the paired [`Offloaded`], from any thread. Dropping it unfinished
+/// delivers an error, so the reader is never left waiting.
+pub struct Completer<T: Send + 'static> {
+    deliver: Option<Box<dyn FnOnce(OffloadResult<T>) + Send>>,
+}
+
+impl<T: Send + 'static> Completer<T> {
+    pub fn complete(mut self, value: T) {
+        if let Some(deliver) = self.deliver.take() {
+            deliver(Ok(value));
+        }
+    }
+}
+
+impl<T: Send + 'static> Drop for Completer<T> {
+    fn drop(&mut self) {
+        if let Some(deliver) = self.deliver.take() {
+            deliver(Err("the work ended without a result".to_string()));
+        }
+    }
+}
+
+/// A [`Completer`] and its [`Offloaded`]. `post` hands the host a closure that
+/// stores the result; the host runs it where results are delivered.
+#[cfg_attr(target_os = "netbsd", allow(dead_code))]
+pub(crate) fn completion_via<T: Send + 'static>(
+    post: impl FnOnce(Box<dyn FnOnce() + Send>) + Send + 'static,
+) -> (Completer<T>, Offloaded<T>) {
+    let slot = Arc::new(Mutex::new(None));
+    let delivered = Arc::clone(&slot);
+    let deliver = Box::new(move |result: OffloadResult<T>| {
+        post(Box::new(move || {
+            *delivered.lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
+        }));
+    });
+    (
+        Completer {
+            deliver: Some(deliver),
+        },
+        Offloaded { slot },
+    )
 }
 
 #[cfg(any(
@@ -231,5 +281,55 @@ mod pool {
                 assert_eq!(run_until(&proactor, &mut job), Ok(value));
             }
         }
+    }
+}
+
+#[cfg(all(
+    test,
+    any(target_os = "macos", target_os = "linux", target_os = "windows")
+))]
+mod completion_tests {
+    use super::completion_via;
+    use loadngo_proactor::{ChannelPort, Proactor};
+    use std::time::{Duration, Instant};
+
+    fn pair(proactor: &Proactor<ChannelPort>) -> (super::Completer<u32>, super::Offloaded<u32>) {
+        let handle = proactor.handle();
+        completion_via(move |store| {
+            let _ = handle.enqueue_work(move |_| store());
+        })
+    }
+
+    fn wait(
+        proactor: &Proactor<ChannelPort>,
+        reader: &mut super::Offloaded<u32>,
+    ) -> Result<u32, String> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(result) = reader.try_take() {
+                return result;
+            }
+            assert!(Instant::now() < deadline, "no result delivered");
+            proactor.run_once().expect("proactor poll failed");
+        }
+    }
+
+    #[test]
+    fn a_result_completed_on_another_thread_arrives_through_the_proactor() {
+        let proactor = Proactor::new(ChannelPort::new());
+        let (completer, mut reader) = pair(&proactor);
+        std::thread::spawn(move || completer.complete(7))
+            .join()
+            .unwrap();
+        assert!(reader.try_take().is_none(), "not until the proactor runs");
+        assert_eq!(wait(&proactor, &mut reader), Ok(7));
+    }
+
+    #[test]
+    fn dropping_the_completer_delivers_an_error() {
+        let proactor = Proactor::new(ChannelPort::new());
+        let (completer, mut reader) = pair(&proactor);
+        drop(completer);
+        assert!(wait(&proactor, &mut reader).is_err());
     }
 }
