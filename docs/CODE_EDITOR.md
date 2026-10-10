@@ -214,8 +214,30 @@ A server that stops is reported and not restarted until the folder is
 opened again; switching folders or quitting stops it, with its proc-macro
 servers.
 
-Later, as needed: find in files, splits, file create/rename/delete in the
-tree, and running on Linux and Windows.
+**M5, files, search and a split.** Done 2026-10-11.
+
+- File menu: New File… (Cmd-N, also a toolbar button) and New Folder… in
+  the tree's selected folder (or beside the selected file); Rename… with the
+  stem selected; Move to Trash (the system Trash, Recycle Bin on Windows),
+  after asking. Nothing on disk is ever replaced. Open tabs follow a rename,
+  keeping unsaved text, and rust-analyzer is told; tabs under a trashed path
+  close.
+- Find in Files… (Cmd-Shift-F): a panel where Problems sits; plain text,
+  case ignored unless the query has a capital; build output, `.git`,
+  `CACHEDIR.TAG` folders, binary files, files over 2 MB and symlinked
+  folders skipped; up to 5,000 matches; on its own thread, a newer search
+  cancelling the older. It searches files as saved. Clicking a result opens
+  the file with the match selected.
+- View > Split Editor: two panes, the second showing the file active before
+  the current one; a click focuses a pane, and tabs open in the focused one.
+  Both panes on one file share its view (one caret and scroll), so the
+  editor keeps them on different files when it can.
+
+`CODE_EDITOR_STATE_DIR` puts a run's session and backups in another folder
+(test runs must not share the everyday ones).
+
+Later, as needed: replace in files, a symbol outline, running and
+debugging.
 
 ## Evidence
 
@@ -304,3 +326,24 @@ any second edit before a layout re-lays out from the first changed line
 (ui-core test, which fails without the fix). Testing through synthetic input
 also showed a test-tool artifact: Cmd chords sent without the Cmd key's
 release made later clicks arrive as Cmd-clicks. The tool now releases it.
+
+**M5 (2026-10-11, Mac mini).** 86 editor tests: file operations (create in
+the selected folder, refuse to replace, rename an open unsaved file with
+rust-analyzer told, the Trash prompt, with the request taken rather than
+run), the search module (order, skips, case, cancel) and its panel flow, and
+the split (focus moves on a click, panes stay on different files, the split
+closes with one file left). Host: an opt-in test moved a scratch file to the
+real macOS Trash and found it there. In the release build, isolated with
+`CODE_EDITOR_STATE_DIR` and with every keystroke gated on the test window
+being frontmost (`lsappinfo`): Cmd-N created and opened `src/notes.rs`;
+Rename made it `notes2.rs` (tab and tree followed); Find in Files found
+`twice` in 2 of 5 files and opened `other.rs` with it selected; the split
+showed two files and moved focus on a click; Move to Trash asked and
+removed `notes2.rs`. Find in Files took 0.1 s over loadngo's 566 files and
+10.2 s over the 41,320 files of `~/pudding`.
+
+That run found that closing the focused pane's file left both panes on
+one file. Now the focused pane takes the other pane's file, and the split
+closes when no other file is open. AppKit was adding Show Tab Bar and Show All
+Tabs to a menu named View; the macOS host now turns off automatic window
+tabbing.

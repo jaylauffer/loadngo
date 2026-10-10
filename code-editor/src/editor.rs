@@ -149,6 +149,7 @@ enum Command {
     RenameSymbol,
     FindInFiles,
     RunSearch,
+    ToggleSplit,
     NewFile,
     NewFolder,
     RenameFile,
@@ -180,7 +181,8 @@ enum Command {
 
 impl Command {
     /// The commands a menu item can send.
-    const IN_MENUS: [Command; 24] = [
+    const IN_MENUS: [Command; 25] = [
+        Command::ToggleSplit,
         Command::FindInFiles,
         Command::NewFile,
         Command::NewFolder,
@@ -254,6 +256,8 @@ struct Layout {
     search_field: Option<Rect>,
     search_button: Option<Rect>,
     status_check: Option<Rect>,
+    /// The pane without focus, when split.
+    other_pane: Option<Rect>,
 }
 
 /// A `cargo check` the app should run (see `cargo_check::run`), replacing
@@ -372,6 +376,20 @@ pub struct Editor {
     search_open: bool,
     search_outbox: Option<SearchRequest>,
     next_search_id: u64,
+    /// The second pane, when the editor is split.
+    split: Option<Split>,
+    /// The buffer active before the current one, for a new split.
+    previous_active: Option<u64>,
+}
+
+/// Two panes side by side: the focused one shows the active buffer, the
+/// other this one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Split {
+    /// The buffer (by id) in the pane without focus.
+    other: u64,
+    /// Whether the focused pane is the right one.
+    focused_right: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -521,6 +539,8 @@ impl Editor {
             search_open: false,
             search_outbox: None,
             next_search_id: 1,
+            split: None,
+            previous_active: None,
         };
         if let Some(root) = &root {
             editor.open_folder(root.clone());
@@ -629,6 +649,10 @@ impl Editor {
         if let Some(previous) = self.active_buffer_mut() {
             let _ = previous.area.handle_event(UiEvent::FocusChanged(false));
         }
+        let previous_id = self.active_buffer().map(|buffer| buffer.id);
+        if previous_id != Some(self.buffers[index].id) {
+            self.previous_active = previous_id;
+        }
         self.active = Some(index);
         self.focus = Focus::Editor;
         let path = self.buffers[index].path.clone();
@@ -664,16 +688,46 @@ impl Editor {
         if self.close_prompt == Some(buffer.id) {
             self.close_prompt = None;
         }
+        let was_active = self.active == Some(index);
         self.active = match self.active {
             _ if self.buffers.is_empty() => None,
             Some(active) if active > index => Some(active - 1),
+            // The focused pane's file closed: in a split it takes the other
+            // pane's file.
+            Some(_) if was_active && self.split.is_some() => self
+                .split
+                .and_then(|split| self.buffer_index(split.other))
+                .or(Some(index.min(self.buffers.len() - 1))),
             Some(active) if active == index => Some(index.min(self.buffers.len() - 1)),
             other => other,
         };
         if let Some(active) = self.active {
             self.activate(active);
         }
+        self.repair_split();
         self.touch_session();
+    }
+
+    /// Keeps the second pane showing another open file than the focused
+    /// one; with no other file left the split closes.
+    fn repair_split(&mut self) {
+        let Some(split) = self.split else {
+            return;
+        };
+        let active = self.active_buffer().map(|buffer| buffer.id);
+        if self.buffer_index(split.other).is_some() && Some(split.other) != active {
+            return;
+        }
+        let replacement = self
+            .previous_active
+            .filter(|id| Some(*id) != active && self.buffer_index(*id).is_some())
+            .or_else(|| {
+                self.buffers
+                    .iter()
+                    .map(|buffer| buffer.id)
+                    .find(|id| Some(*id) != active)
+            });
+        self.split = replacement.map(|other| Split { other, ..split });
     }
 
     fn save(&mut self, index: usize) {
@@ -1045,6 +1099,12 @@ impl Editor {
 
         self.relayout(surface, host);
         if let Some(buffer) = self.active_buffer_mut() {
+            if let (true, Some(highlighter)) = (buffer.loaded, &mut buffer.highlighter) {
+                highlighter.update(&mut buffer.area);
+            }
+        }
+        if let Some(index) = self.split.and_then(|split| self.buffer_index(split.other)) {
+            let buffer = &mut self.buffers[index];
             if let (true, Some(highlighter)) = (buffer.loaded, &mut buffer.highlighter) {
                 highlighter.update(&mut buffer.area);
             }
@@ -1566,6 +1626,22 @@ impl Editor {
             }
             popup.rows.push((*item_index, row_rect));
         }
+    }
+
+    /// Focuses the other pane: its buffer becomes the active one.
+    fn switch_pane(&mut self) {
+        let Some(split) = self.split else {
+            return;
+        };
+        let Some(other_index) = self.buffer_index(split.other) else {
+            return;
+        };
+        let current = self.active_buffer().map(|buffer| buffer.id);
+        self.activate(other_index);
+        self.split = Some(Split {
+            other: current.unwrap_or(split.other),
+            focused_right: !split.focused_right,
+        });
     }
 
     // ----- find in files -----
@@ -2365,6 +2441,18 @@ impl Editor {
                 Menu::new("File", file),
                 Menu::new("Edit", edit),
                 Menu::new(
+                    "View",
+                    vec![item(
+                        Command::ToggleSplit,
+                        if self.split.is_some() {
+                            "Unsplit Editor"
+                        } else {
+                            "Split Editor"
+                        },
+                    )
+                    .enabled(self.active.is_some())],
+                ),
+                Menu::new(
                     "Navigate",
                     vec![
                         item(Command::GoToDefinition, "Go to Definition")
@@ -2771,6 +2859,33 @@ impl Editor {
         if let Some(tree) = &mut self.tree {
             tree.bounds = layout.tree;
         }
+        if let Some(split) = self.split {
+            let whole = layout.editor;
+            let half = ((whole.width - 1.0) / 2.0).floor();
+            let left = Rect {
+                width: half,
+                ..whole
+            };
+            let right = Rect {
+                x: whole.x + half + 1.0,
+                width: whole.width - half - 1.0,
+                ..whole
+            };
+            let (focused, other) = if split.focused_right {
+                (right, left)
+            } else {
+                (left, right)
+            };
+            layout.editor = focused;
+            layout.other_pane = Some(other);
+            if let Some(index) = self.buffer_index(split.other) {
+                if Some(index) != self.active {
+                    let area = &mut self.buffers[index].area;
+                    area.set_bounds(other);
+                    area.relayout(|text: &str, size: u16| host.measure(text, size));
+                }
+            }
+        }
         let editor_rect = layout.editor;
         let measure = |text: &str, size: u16| host.measure(text, size);
         if let Some(buffer) = self.active_buffer_mut() {
@@ -3124,6 +3239,15 @@ impl Editor {
             }
             return;
         }
+        if self
+            .layout
+            .other_pane
+            .is_some_and(|pane| pane.contains(point))
+        {
+            self.switch_pane();
+            // The press then lands in the pane now focused.
+            self.layout.editor = self.layout.other_pane.take().unwrap_or(self.layout.editor);
+        }
         if self.layout.editor.contains(point)
             && (state.modifiers.meta || state.modifiers.ctrl)
             && self.definition_at_point(point)
@@ -3210,6 +3334,14 @@ impl Editor {
             if let Some(tree) = &mut self.tree {
                 tree.scroll_by(pixels_y);
             }
+        } else if let Some(index) = self
+            .layout
+            .other_pane
+            .filter(|pane| pane.contains(point))
+            .and(self.split)
+            .and_then(|split| self.buffer_index(split.other))
+        {
+            self.buffers[index].area.scroll_vertical(pixels_y);
         } else if self.layout.editor.contains(point) {
             let shift = input.modifiers.shift;
             if let Some(buffer) = self.active_buffer_mut() {
@@ -3598,6 +3730,20 @@ impl Editor {
                 self.set_focus(Focus::Search);
             }
             Command::RunSearch => self.run_search(),
+            Command::ToggleSplit => {
+                if self.split.take().is_none() {
+                    if let Some(active) = self.active_buffer().map(|buffer| buffer.id) {
+                        let other = self
+                            .previous_active
+                            .filter(|id| *id != active && self.buffer_index(*id).is_some())
+                            .unwrap_or(active);
+                        self.split = Some(Split {
+                            other,
+                            focused_right: false,
+                        });
+                    }
+                }
+            }
             Command::NewFile => self.start_file_bar(true),
             Command::NewFolder => self.start_file_bar(false),
             Command::RenameFile => self.start_rename_file(),
@@ -3702,6 +3848,36 @@ impl Editor {
         );
         self.paint_tabs(scene, &layout);
         self.paint_bar(scene, &layout);
+        if let (Some(pane), Some(index)) = (
+            layout.other_pane,
+            self.split.and_then(|split| self.buffer_index(split.other)),
+        ) {
+            let buffer = &self.buffers[index];
+            if Some(index) == self.active {
+                // The same buffer in both panes: one view, drawn once.
+                self.paint_hint(
+                    scene,
+                    pane,
+                    &format!("{} is in the other pane.", buffer.title),
+                );
+            } else if buffer.loaded {
+                match &buffer.highlighter {
+                    Some(highlighter) => buffer
+                        .area
+                        .paint_with_runs(scene, &|line| highlighter.runs(line)),
+                    None => buffer.area.paint(scene),
+                }
+            } else {
+                self.paint_hint(scene, pane, "Loading…");
+            }
+            draw::vline(
+                scene,
+                layout.editor.x.min(pane.x) + layout.editor.width.min(pane.width) + 0.5,
+                pane.y,
+                pane.height,
+                theme::BORDER,
+            );
+        }
         match self.active_buffer() {
             Some(buffer) if buffer.loaded => match &buffer.highlighter {
                 Some(highlighter) => buffer
@@ -5821,5 +5997,63 @@ mod tests {
         let (start, end) = area.selection_range().expect("the match selected");
         assert_eq!(area.document.slice_chars(start, end), "helper");
         assert_eq!(caret_line_column(area).0, 3);
+    }
+
+    #[test]
+    fn the_split_shows_two_files_and_a_click_moves_focus() {
+        let dir = workspace(&[
+            ("a.rs", "fn a() {}\n"),
+            ("b.rs", "fn b() {}\n"),
+            ("c.rs", "fn c() {}\n"),
+        ]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.editor.open_file(dir.path().join("a.rs"));
+        rig.editor.open_file(dir.path().join("b.rs"));
+        rig.settle();
+        rig.outcome(menu_input(Command::ToggleSplit));
+        rig.frame(InputSnapshot::default());
+        let left = rig.editor.layout.editor;
+        let right = rig.editor.layout.other_pane.expect("two panes");
+        assert!(left.right() <= right.x, "focused pane on the left");
+        let other = rig.editor.split.unwrap().other;
+        let a = rig.editor.buffer_index(other).unwrap();
+        assert_eq!(
+            rig.editor.buffers[a].path,
+            dir.path().join("a.rs"),
+            "the previous file"
+        );
+        assert_eq!(rig.active().path, dir.path().join("b.rs"));
+        assert_eq!(rig.editor.buffers[a].area.bounds, right);
+
+        // A click in the right pane focuses it and lands in its text.
+        rig.click(Point {
+            x: right.x + 120.0,
+            y: right.y + 14.0,
+        });
+        assert_eq!(rig.active().path, dir.path().join("a.rs"));
+        assert!(rig.editor.split.unwrap().focused_right);
+        assert_eq!(rig.editor.layout.editor, right);
+        rig.type_text("x");
+        assert!(rig.active().area.text().contains('x'));
+
+        // Closing the focused pane's file: it takes the other pane's file,
+        // and with no third file open the split closes.
+        let a = rig.editor.active.unwrap();
+        rig.editor.close(a);
+        rig.frame(InputSnapshot::default());
+        assert_eq!(rig.active().path, dir.path().join("b.rs"));
+        assert!(rig.editor.split.is_none(), "one file left: no split");
+
+        // With three files, the second pane gets another one.
+        rig.editor.open_file(dir.path().join("a.rs"));
+        rig.editor.open_file(dir.path().join("c.rs"));
+        rig.settle();
+        rig.outcome(menu_input(Command::ToggleSplit));
+        let focused = rig.editor.active.unwrap();
+        rig.editor.close(focused);
+        rig.frame(InputSnapshot::default());
+        let split = rig.editor.split.expect("still split");
+        let other = rig.editor.buffer_index(split.other).unwrap();
+        assert_ne!(Some(other), rig.editor.active, "two different files");
     }
 }

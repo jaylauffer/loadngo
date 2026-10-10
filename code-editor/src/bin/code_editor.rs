@@ -33,7 +33,8 @@ of Cmd on Linux and Windows).
 
 Open tabs, the folder and unsaved edits are kept in the app data folder
 (on macOS ~/Library/Application Support/loadngo-code-editor), so closing the
-window loses nothing; unsaved edits come back at the next launch.
+window loses nothing; unsaved edits come back at the next launch. Set
+CODE_EDITOR_STATE_DIR to keep them elsewhere (for test runs).
 
 Example:
   code_editor ~/pudding/loadngo
@@ -104,12 +105,17 @@ fn fallback_root() -> PathBuf {
 
 async fn run(folder: Option<PathBuf>) {
     let host = DesktopHost;
-    let state_dir = loadngo_host_desktop::app_data_dir(APP_ID)
-        .map(PathBuf::from)
-        .map_err(|error| {
-            loadngo_host_desktop::log_error(format_args!("no app data folder: {error}"))
-        })
-        .ok();
+    // CODE_EDITOR_STATE_DIR keeps a test run's session and backups apart
+    // from the everyday ones.
+    let state_dir = match std::env::var_os("CODE_EDITOR_STATE_DIR") {
+        Some(dir) => Some(PathBuf::from(dir)),
+        None => loadngo_host_desktop::app_data_dir(APP_ID)
+            .map(PathBuf::from)
+            .map_err(|error| {
+                loadngo_host_desktop::log_error(format_args!("no app data folder: {error}"))
+            })
+            .ok(),
+    };
     let mut editor = Editor::new(state_dir, folder, fallback_root(), Instant::now());
     // macOS shows the menus in the system menu bar; elsewhere the editor
     // draws its own.
