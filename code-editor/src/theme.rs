@@ -26,3 +26,16 @@ pub const BAR_HEIGHT: f32 = 38.0;
 pub const TREE_ROW_HEIGHT: f32 = 24.0;
 pub const TREE_INDENT: f32 = 16.0;
 pub const TREE_WIDTH: f32 = 280.0;
+
+// Syntax colors.
+pub const SYNTAX_KEYWORD: Color = Color::rgba(0xc7, 0x92, 0xea, 0xff);
+pub const SYNTAX_TYPE: Color = Color::rgba(0x4f, 0xd6, 0xbe, 0xff);
+pub const SYNTAX_FUNCTION: Color = Color::rgba(0x82, 0xaa, 0xff, 0xff);
+pub const SYNTAX_MACRO: Color = Color::rgba(0xff, 0xcb, 0x6b, 0xff);
+pub const SYNTAX_LIFETIME: Color = Color::rgba(0xff, 0x9e, 0x64, 0xff);
+pub const SYNTAX_STRING: Color = Color::rgba(0xc3, 0xe8, 0x8d, 0xff);
+pub const SYNTAX_NUMBER: Color = Color::rgba(0xf7, 0x8c, 0x6c, 0xff);
+pub const SYNTAX_COMMENT: Color = Color::rgba(0x6a, 0x75, 0x90, 0xff);
+pub const SYNTAX_DOC: Color = Color::rgba(0x8f, 0x9d, 0xb8, 0xff);
+pub const SYNTAX_ATTRIBUTE: Color = Color::rgba(0x89, 0xdd, 0xff, 0xff);
+pub const SYNTAX_PUNCTUATION: Color = Color::rgba(0xa6, 0xae, 0xbd, 0xff);

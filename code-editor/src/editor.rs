@@ -18,6 +18,7 @@ use ui_core::{
 use crate::draw;
 use crate::file_tree::{FileTree, TreeAction};
 use crate::fs_ops::{self, DiskStamp, IoRequest, IoResponse, ReadError, WriteError};
+use crate::highlight::Highlighter;
 use crate::session::{self, Backup, Session, SessionTab};
 use crate::text_file::LineEnding;
 use crate::theme;
@@ -65,6 +66,8 @@ struct Buffer {
     /// A backup that arrived before the file did.
     pending_backup: Option<String>,
     restore_caret: Option<usize>,
+    /// Syntax colors, for languages that have them.
+    highlighter: Option<Highlighter>,
 }
 
 impl Buffer {
@@ -73,6 +76,7 @@ impl Buffer {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string_lossy().into_owned());
+        let highlighter = Highlighter::for_path(&path);
         Self {
             id,
             path,
@@ -90,6 +94,7 @@ impl Buffer {
             has_backup_file: false,
             pending_backup: None,
             restore_caret: None,
+            highlighter,
         }
     }
 
@@ -798,6 +803,11 @@ impl Editor {
         }
 
         self.relayout(surface, host);
+        if let Some(buffer) = self.active_buffer_mut() {
+            if let (true, Some(highlighter)) = (buffer.loaded, &mut buffer.highlighter) {
+                highlighter.update(&mut buffer.area);
+            }
+        }
         self.update_find_matches();
         let blink_on = !self.caret_blinking(now)
             || (now.duration_since(self.blink_origin).as_millis() / BLINK_HALF_PERIOD_MS)
@@ -1948,7 +1958,12 @@ impl Editor {
         self.paint_tabs(scene, &layout);
         self.paint_bar(scene, &layout);
         match self.active_buffer() {
-            Some(buffer) if buffer.loaded => buffer.area.paint(scene),
+            Some(buffer) if buffer.loaded => match &buffer.highlighter {
+                Some(highlighter) => buffer
+                    .area
+                    .paint_with_runs(scene, &|line| highlighter.runs(line)),
+                None => buffer.area.paint(scene),
+            },
             Some(_) => self.paint_hint(scene, layout.editor, "Loading…"),
             None => self.paint_hint(
                 scene,

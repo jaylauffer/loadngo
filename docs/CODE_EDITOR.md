@@ -134,11 +134,25 @@ gained:
   lines carry an estimated width until they scroll into view, and the
   cache of measured lines is bounded.
 
-**M2, highlighting.** A glyph cache with colored runs in `ui-core` and on the
-macOS renderer first (other renderers fall back to one `Text` op per run
-until they get the cache). A Rust lexer written here: comments, strings,
-chars, lifetimes, numbers, keywords, macros, attributes. Re-lexing starts at
-the edited line and stops where the lexer state matches again.
+**M2, highlighting.** Done 2026-10-10 for Rust (`.rs` files), without the
+glyph cache this plan first called for. Each colored token is drawn as its
+own `Text` op at the offset `TextAreaModel` already measures for the caret
+(`TextAreaModel::paint_with_runs`), so every renderer draws it with the text
+caches it already has. Tokens such as `let`, `fn` and `(` repeat, so most
+come from cache; an edit creates textures only for the tokens it changes.
+Measured below: about 2.6 times the text ops of plain drawing, with typing
+still at about 1.3 ms of work per frame. A glyph cache stays available if a
+platform shows text-texture churn.
+
+The lexer (`code-editor/src/rust_lexer.rs`) is written here: keywords,
+types (capitalized and primitive), function definitions and calls, macros,
+lifetimes, strings (including raw and multi-line), chars, numbers,
+constants, comments, doc comments and attributes. It lexes one line at a
+time; what continues past a line (a block comment, a string) is a small
+state. The highlighter keeps each line's colors and lexes only down to the
+bottom of the screen. An edit drops what was kept from its line on, so
+typing re-lexes from the edited line to the bottom of the screen. A line
+holding tabs is drawn plain.
 
 **M3, `cargo check`.** Run `cargo check --message-format=json` on save
 through a supervised subprocess, show errors and warnings in the gutter and
@@ -195,3 +209,11 @@ checked on macOS with `CODE_EDITOR_DRAWN_MENU=1`. `sng_rusty_editor` now
 gets the standard application and Window menus, and Cmd-Q quits it. iOS,
 Android (all binaries, now that a file dialog's source is `Send`) and Windows
 (type check) builds pass from macOS.
+
+**Highlighting (2026-10-10, Mac mini).** 47 editor tests, among them every
+`.rs` file in the loadngo workspace lexed with no gaps or overlaps and no
+file left inside a comment or string (0.55 s). Release build with
+`CODE_EDITOR_TRACE=1` on the 4,328-line `archive_cas_browser.rs`, with
+highlighting: typing at most 1.28 ms of frame work (1.2 ms without), the
+jump to the end, which lexes all 4,328 lines, 12.3 ms (10.5 ms without),
+undo 0.95 ms; about 275 paint ops per frame against about 105.
