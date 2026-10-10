@@ -20,6 +20,7 @@ use crate::draw;
 use crate::file_tree::{FileTree, TreeAction};
 use crate::fs_ops::{self, DiskStamp, IoRequest, IoResponse, ReadError, WriteError};
 use crate::highlight::Highlighter;
+use crate::lsp::{LspEvent, LspSession, Position};
 use crate::session::{self, Backup, Session, SessionTab};
 use crate::text_file::LineEnding;
 use crate::theme;
@@ -140,6 +141,8 @@ enum Command {
     Refresh,
     Check,
     ToggleProblems,
+    GoToDefinition,
+    GoBack,
     OpenFolder,
     CloseTab,
     Quit,
@@ -165,7 +168,9 @@ enum Command {
 
 impl Command {
     /// The commands a menu item can send.
-    const IN_MENUS: [Command; 16] = [
+    const IN_MENUS: [Command; 18] = [
+        Command::GoToDefinition,
+        Command::GoBack,
         Command::Check,
         Command::ToggleProblems,
         Command::OpenFolder,
@@ -316,7 +321,27 @@ pub struct Editor {
     marks: Vec<Mark>,
     /// Go here (file, one-based line and column) once the file has loaded.
     pending_goto: Option<(PathBuf, usize, usize)>,
+    /// The rust-analyzer conversation, while one runs.
+    lsp: Option<LspSession>,
+    /// The folder a server should be started for (the app starts it).
+    lsp_start: Option<PathBuf>,
+    /// The running server should be stopped (folder switch, quit).
+    lsp_stop: bool,
+    /// Why the server stopped, if it did; it is not restarted on its own.
+    lsp_failure: Option<String>,
+    hover: Option<(String, Point)>,
+    /// The pointer resting on text since: where, which character, when.
+    hover_wait: Option<(Point, usize, Instant)>,
+    hover_request: Option<u64>,
+    definition_request: Option<u64>,
+    /// Where Go to Definition and problem jumps came from, for Back.
+    back_stack: Vec<(PathBuf, usize)>,
+    /// The time of the frame being handled.
+    frame_time: Instant,
 }
+
+/// How long the pointer rests on a symbol before its hover shows.
+const HOVER_DELAY: Duration = Duration::from_millis(450);
 
 impl Editor {
     /// An editor showing `root`, or else the folder of the saved session in
@@ -369,6 +394,16 @@ impl Editor {
             problems_scroll: 0,
             marks: Vec::new(),
             pending_goto: None,
+            lsp: None,
+            lsp_start: None,
+            lsp_stop: false,
+            lsp_failure: None,
+            hover: None,
+            hover_wait: None,
+            hover_request: None,
+            definition_request: None,
+            back_stack: Vec::new(),
+            frame_time: now,
         };
         if let Some(root) = &root {
             editor.open_folder(root.clone());
@@ -421,6 +456,9 @@ impl Editor {
         if self.dialog_animating {
             consider(now + Duration::from_millis(16));
         }
+        if let Some((_, _, since)) = self.hover_wait {
+            consider(since + HOVER_DELAY);
+        }
         wake.map(|at| at.saturating_duration_since(now))
     }
 
@@ -449,6 +487,10 @@ impl Editor {
     // ----- folders, files and tabs -----
 
     fn open_folder(&mut self, root: PathBuf) {
+        if self.lsp.take().is_some() {
+            self.lsp_stop = true;
+        }
+        self.lsp_failure = None;
         self.tree = Some(FileTree::new(root));
         self.touch_session();
     }
@@ -492,6 +534,9 @@ impl Editor {
 
     fn close(&mut self, index: usize) {
         let buffer = self.buffers.remove(index);
+        if let Some(lsp) = &mut self.lsp {
+            lsp.close_document(&buffer.path);
+        }
         if buffer.has_backup_file {
             if let Some(state_dir) = &self.state_dir {
                 self.outbox.push(IoRequest::RemoveState {
@@ -675,6 +720,9 @@ impl Editor {
                 if !self.quitting && path.extension().is_some_and(|ext| ext == "rs") {
                     self.request_check(path.to_path_buf());
                 }
+                if let Some(lsp) = &mut self.lsp {
+                    lsp.save_document(path);
+                }
                 if self.quit_after_save
                     && self
                         .buffers
@@ -834,6 +882,7 @@ impl Editor {
         now: Instant,
         host: &dyn EditorHost,
     ) -> FrameOutcome {
+        self.frame_time = now;
         if window_focused && !self.window_focused {
             self.check_disk();
         }
@@ -894,11 +943,239 @@ impl Editor {
         }
         self.after_change(now);
         self.run_due(now);
+        self.sync_language_server();
+        self.update_hover(now);
         FrameOutcome {
             text_cursor: self.wants_text_cursor(),
             menu_bar: self.publish_menu(),
             quit: self.quitting,
         }
+    }
+
+    // ----- rust-analyzer -----
+
+    /// The folder to start rust-analyzer for, once, when it is wanted.
+    pub fn take_lsp_start(&mut self) -> Option<PathBuf> {
+        self.lsp_start.take()
+    }
+
+    /// Whether the running server should be stopped (asked once).
+    pub fn take_lsp_stop(&mut self) -> bool {
+        std::mem::take(&mut self.lsp_stop)
+    }
+
+    /// Messages for the server.
+    pub fn lsp_outgoing(&mut self) -> Vec<serde_json::Value> {
+        self.lsp
+            .as_mut()
+            .map(LspSession::take_outgoing)
+            .unwrap_or_default()
+    }
+
+    /// Messages from the server.
+    pub fn apply_lsp(&mut self, messages: Vec<serde_json::Value>) {
+        let Some(lsp) = &mut self.lsp else {
+            return;
+        };
+        for message in messages {
+            lsp.handle(message);
+        }
+        for event in lsp.take_events() {
+            self.lsp_event(event);
+        }
+    }
+
+    /// The server's output ended: it is not restarted on its own; opening
+    /// the folder again starts a new one.
+    pub fn lsp_ended(&mut self, reason: String) {
+        if self.lsp.take().is_some() {
+            self.set_status(
+                format!("rust-analyzer stopped: {reason}"),
+                StatusKind::Warning,
+            );
+            self.lsp_failure = Some(reason);
+        }
+    }
+
+    /// Starts a session for the folder once a Rust file is open, and keeps
+    /// every open Rust file's text in step with the server.
+    fn sync_language_server(&mut self) {
+        let wants_server = self
+            .buffers
+            .iter()
+            .any(|buffer| buffer.loaded && buffer.path.extension().is_some_and(|ext| ext == "rs"));
+        if self.lsp.is_none() && wants_server && self.lsp_failure.is_none() && !self.quitting {
+            if let Some(tree) = &self.tree {
+                let root = tree.root().to_path_buf();
+                self.lsp = Some(LspSession::new(&root));
+                self.lsp_start = Some(root);
+            }
+        }
+        let Some(lsp) = &mut self.lsp else {
+            return;
+        };
+        for buffer in &self.buffers {
+            if !buffer.loaded || buffer.path.extension().is_none_or(|ext| ext != "rs") {
+                continue;
+            }
+            let revision = buffer.area.revision();
+            if !lsp.is_open(&buffer.path) {
+                lsp.open_document(&buffer.path, &buffer.area.text(), revision);
+            } else if !lsp.in_sync(&buffer.path, revision) {
+                lsp.change_document(&buffer.path, &buffer.area.text(), revision);
+            }
+        }
+    }
+
+    fn lsp_event(&mut self, event: LspEvent) {
+        match event {
+            LspEvent::Hover { request, text } if self.hover_request == Some(request) => {
+                self.hover_request = None;
+                if let Some((point, _, _)) = self.hover_wait.take() {
+                    if !text.trim().is_empty() {
+                        self.hover = Some((text, point));
+                    }
+                }
+            }
+            LspEvent::Definition { request, locations }
+                if self.definition_request == Some(request) =>
+            {
+                self.definition_request = None;
+                match locations.first() {
+                    Some(location) => {
+                        self.remember_place();
+                        let path = location.path.clone();
+                        let (line, column) = (
+                            location.range.start.line + 1,
+                            location.range.start.character + 1,
+                        );
+                        self.open_file(path.clone());
+                        if let Some(index) = self.active {
+                            if self.buffers[index].loaded {
+                                self.go_to(index, line, column);
+                            } else {
+                                self.pending_goto = Some((path, line, column));
+                            }
+                        }
+                    }
+                    None => self.set_status("No definition found.", StatusKind::Info),
+                }
+            }
+            LspEvent::Failed { request, message } => {
+                if Some(request) == self.definition_request {
+                    self.definition_request = None;
+                    self.set_status(format!("Go to Definition: {message}"), StatusKind::Warning);
+                }
+                if Some(request) == self.hover_request {
+                    self.hover_request = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Where buffer `index`'s character `char_index` is, as LSP counts.
+    fn lsp_position(&mut self, index: usize, char_index: usize) -> Position {
+        let area = &mut self.buffers[index].area;
+        let line = area.line_of_char(char_index);
+        Position {
+            line,
+            character: char_index - area.line_start_char(line),
+        }
+    }
+
+    fn request_definition(&mut self, char_index: usize) {
+        let Some(index) = self.active else {
+            return;
+        };
+        let at = self.lsp_position(index, char_index);
+        let path = self.buffers[index].path.clone();
+        let Some(lsp) = &mut self.lsp else {
+            self.set_status("rust-analyzer is not running.", StatusKind::Info);
+            return;
+        };
+        self.definition_request = lsp.definition(&path, at);
+        if self.definition_request.is_none() {
+            self.set_status("rust-analyzer is still starting.", StatusKind::Info);
+        }
+    }
+
+    /// Cmd-click (Ctrl elsewhere) on a name: go to its definition. True
+    /// when the click was on text.
+    fn definition_at_point(&mut self, point: Point) -> bool {
+        let Some(char_index) = self
+            .active_buffer()
+            .filter(|buffer| buffer.loaded)
+            .and_then(|buffer| buffer.area.char_at_point(point))
+        else {
+            return false;
+        };
+        self.request_definition(char_index);
+        true
+    }
+
+    /// Pushes the active file and caret for Back.
+    fn remember_place(&mut self) {
+        if let Some(buffer) = self.active_buffer().filter(|buffer| buffer.loaded) {
+            let place = (buffer.path.clone(), buffer.area.caret());
+            if self.back_stack.last() != Some(&place) {
+                self.back_stack.push(place);
+                if self.back_stack.len() > 100 {
+                    self.back_stack.remove(0);
+                }
+            }
+        }
+    }
+
+    /// The pointer moved (or pressed, or scrolled): any hover goes, and
+    /// resting on text starts the wait for a new one.
+    fn track_hover(&mut self, point: Point, pressing: bool) {
+        if let Some((_, at)) = &self.hover {
+            if (at.x - point.x).abs() + (at.y - point.y).abs() > 6.0 || pressing {
+                self.hover = None;
+            }
+        }
+        self.hover_request = None;
+        self.hover_wait = None;
+        if pressing || self.lsp.as_ref().is_none_or(|lsp| !lsp.ready) || self.hover.is_some() {
+            return;
+        }
+        let Some(char_index) = self
+            .active_buffer()
+            .filter(|buffer| buffer.loaded && self.layout.editor.contains(point))
+            .and_then(|buffer| buffer.area.char_at_point(point))
+        else {
+            return;
+        };
+        self.hover_wait = Some((point, char_index, self.frame_time));
+    }
+
+    /// Asks for the hover once the pointer has rested long enough.
+    fn update_hover(&mut self, now: Instant) {
+        let Some((_, char_index, since)) = self.hover_wait else {
+            return;
+        };
+        if self.hover_request.is_some() || now.duration_since(since) < HOVER_DELAY {
+            return;
+        }
+        let Some(index) = self.active else {
+            return;
+        };
+        let at = self.lsp_position(index, char_index);
+        let path = self.buffers[index].path.clone();
+        self.hover_request = self.lsp.as_mut().and_then(|lsp| lsp.hover(&path, at));
+        if self.hover_request.is_none() {
+            self.hover_wait = None;
+        }
+    }
+
+    /// Cargo's diagnostics and rust-analyzer's, for marks and the panel.
+    fn shown_diagnostics(&self) -> Vec<&Diagnostic> {
+        let mut shown: Vec<&Diagnostic> = self.diagnostics.iter().collect();
+        if let Some(lsp) = &self.lsp {
+            shown.extend(lsp.all_diagnostics());
+        }
+        shown
     }
 
     fn request_check(&mut self, file: PathBuf) {
@@ -942,6 +1219,7 @@ impl Editor {
     }
 
     fn go_to_diagnostic(&mut self, diagnostic: &Diagnostic) {
+        self.remember_place();
         self.open_file(diagnostic.file.clone());
         let Some(index) = self.active else {
             return;
@@ -973,13 +1251,19 @@ impl Editor {
         let Some(index) = self.active else {
             return;
         };
-        let buffer = &mut self.buffers[index];
-        if !buffer.loaded {
+        if !self.buffers[index].loaded {
             return;
         }
-        let area = &mut buffer.area;
+        let path = self.buffers[index].path.clone();
+        let diagnostics: Vec<Diagnostic> = self
+            .shown_diagnostics()
+            .into_iter()
+            .filter(|d| d.file == path)
+            .cloned()
+            .collect();
+        let area = &mut self.buffers[index].area;
         let content = area.layout_cache.content_rect;
-        for diagnostic in self.diagnostics.iter().filter(|d| d.file == buffer.path) {
+        for diagnostic in &diagnostics {
             let line_start = area.line_start_char(diagnostic.line.saturating_sub(1));
             let Some(line) = area
                 .layout_cache
@@ -996,12 +1280,21 @@ impl Editor {
                 height: line.rect.height,
             };
             let chars = line.char_offsets.len().saturating_sub(1);
-            let start = diagnostic.column.saturating_sub(1).min(chars);
-            let end = if diagnostic.end_line == diagnostic.line {
+            let mut start = diagnostic.column.saturating_sub(1).min(chars);
+            let mut end = if diagnostic.end_line == diagnostic.line {
                 diagnostic.end_column.saturating_sub(1).min(chars)
             } else {
                 chars
             };
+            // A point (rust-analyzer's syntax errors) still gets one
+            // character underlined: the one at it, or before it at a line's
+            // end.
+            if end <= start {
+                if start == chars {
+                    start = start.saturating_sub(1);
+                }
+                end = (start + 1).min(chars);
+            }
             let underline = (end > start).then(|| {
                 let x0 = (line.rect.x + line.char_offsets[start] - area.scroll_x).max(content.x);
                 let x1 =
@@ -1020,8 +1313,8 @@ impl Editor {
     fn diagnostic_at_caret(&self) -> Option<&Diagnostic> {
         let buffer = self.active_buffer().filter(|buffer| buffer.loaded)?;
         let (line, _) = caret_line_column(&buffer.area);
-        self.diagnostics
-            .iter()
+        self.shown_diagnostics()
+            .into_iter()
             .find(|d| d.file == buffer.path && d.line == line)
     }
 
@@ -1097,6 +1390,16 @@ impl Editor {
             menus: vec![
                 Menu::new("File", file),
                 Menu::new("Edit", edit),
+                Menu::new(
+                    "Navigate",
+                    vec![
+                        item(Command::GoToDefinition, "Go to Definition")
+                            .enabled(has_file && self.lsp.as_ref().is_some_and(|lsp| lsp.ready)),
+                        item(Command::GoBack, "Back")
+                            .with_shortcut(Shortcut::primary('['))
+                            .enabled(!self.back_stack.is_empty()),
+                    ],
+                ),
                 Menu::new(
                     "Build",
                     vec![
@@ -1219,12 +1522,16 @@ impl Editor {
     /// Quits now: the session is written at once, and the app stops once
     /// the file work in flight completes.
     fn quit_now(&mut self) {
+        if let Some(mut lsp) = self.lsp.take() {
+            lsp.shutdown();
+            self.lsp_stop = true;
+        }
         self.quit_prompt = false;
         self.quit_after_save = false;
         self.quitting = true;
         if self.state_dir.is_some() {
-            self.session_due = Some(Instant::now());
-            self.run_due(Instant::now());
+            self.session_due = Some(self.frame_time);
+            self.run_due(self.frame_time);
         }
     }
 
@@ -1260,7 +1567,7 @@ impl Editor {
     fn touch_session(&mut self) {
         if self.state_dir.is_some() && !self.awaiting_session {
             self.session_due
-                .get_or_insert(Instant::now() + SESSION_DELAY);
+                .get_or_insert(self.frame_time + SESSION_DELAY);
         }
     }
 
@@ -1450,7 +1757,11 @@ impl Editor {
             width: right_width,
             height: (bottom - y).max(0.0),
         };
-        if self.check_running.is_some() || self.check_summary.is_some() {
+        let lsp_diagnostics = self
+            .lsp
+            .as_ref()
+            .is_some_and(|lsp| lsp.all_diagnostics().next().is_some());
+        if self.check_running.is_some() || self.check_summary.is_some() || lsp_diagnostics {
             layout.status_check = Some(Rect {
                 x: layout.status.right() - 280.0 - 200.0,
                 y: layout.status.y,
@@ -1604,6 +1915,9 @@ impl Editor {
         let moved = point != self.pointer;
         self.pointer = point;
         let state = PointerState::mouse(point, input.modifiers);
+        if moved || input.mouse_pressed || input.mouse_wheel_y != 0.0 {
+            self.track_hover(point, input.mouse_down || input.mouse_pressed);
+        }
         if moved || input.mouse_down {
             if let Some(tree) = &mut self.tree {
                 tree.pointer_moved(point);
@@ -1727,7 +2041,7 @@ impl Editor {
             let row = ((point.y - panel.y - PROBLEM_ROW_HEIGHT) / PROBLEM_ROW_HEIGHT).floor();
             if row >= 0.0 {
                 let index = self.problems_scroll + row as usize;
-                if let Some(diagnostic) = self.diagnostics.get(index).cloned() {
+                if let Some(diagnostic) = self.shown_diagnostics().get(index).copied().cloned() {
                     self.go_to_diagnostic(&diagnostic);
                 }
             }
@@ -1773,6 +2087,12 @@ impl Editor {
             }
             return;
         }
+        if self.layout.editor.contains(point)
+            && (state.modifiers.meta || state.modifiers.ctrl)
+            && self.definition_at_point(point)
+        {
+            return;
+        }
         if self.layout.editor.contains(point) {
             self.set_focus(Focus::Editor);
             if let Some(buffer) = self.active_buffer_mut() {
@@ -1812,7 +2132,7 @@ impl Editor {
             } else {
                 (-input.mouse_wheel_y * 3.0).round() as isize
             };
-            let last = self.diagnostics.len().saturating_sub(1);
+            let last = self.shown_diagnostics().len().saturating_sub(1);
             self.problems_scroll =
                 (self.problems_scroll as isize + rows).clamp(0, last as isize) as usize;
             return;
@@ -1984,6 +2304,24 @@ impl Editor {
     fn run(&mut self, command: Command, host: &dyn EditorHost) {
         match command {
             Command::OpenFolder => self.show_folder_dialog(),
+            Command::GoToDefinition => {
+                if let Some(buffer) = self.active_buffer() {
+                    let caret = buffer.area.caret();
+                    self.request_definition(caret);
+                }
+            }
+            Command::GoBack => {
+                if let Some((path, caret)) = self.back_stack.pop() {
+                    self.open_file(path);
+                    if let Some(buffer) = self.active_buffer_mut() {
+                        if buffer.loaded {
+                            buffer.area.set_caret(caret);
+                        } else {
+                            buffer.restore_caret = Some(caret);
+                        }
+                    }
+                }
+            }
             Command::Check => {
                 let file = self
                     .active_buffer()
@@ -2244,6 +2582,7 @@ impl Editor {
             ),
         }
         self.paint_marks(scene);
+        self.paint_hover(scene, layout.editor);
         if let Some(panel) = layout.problems {
             self.paint_problems(scene, panel);
         }
@@ -2266,6 +2605,57 @@ impl Editor {
         self.layout = layout;
     }
 
+    /// The hover box near the pointer: up to 14 lines, kept inside the
+    /// editor.
+    fn paint_hover(&self, scene: &mut Vec<PaintOp>, bounds: Rect) {
+        let Some((text, at)) = &self.hover else {
+            return;
+        };
+        let lines: Vec<&str> = text.lines().take(14).collect();
+        let line_height = 20.0;
+        let width = 560.0f32.min(bounds.width - 16.0).max(120.0);
+        let height = lines.len() as f32 * line_height + 16.0;
+        let x = (at.x + 12.0)
+            .min(bounds.right() - width - 8.0)
+            .max(bounds.x + 8.0);
+        let below = at.y + 18.0;
+        let y = if below + height <= bounds.bottom() {
+            below
+        } else {
+            (at.y - height - 6.0).max(bounds.y + 4.0)
+        };
+        let rect = Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        draw::fill(scene, rect, theme::PANEL);
+        scene.push(PaintOp::StrokeRect {
+            rect,
+            color: theme::BORDER,
+        });
+        for (row, line) in lines.iter().enumerate() {
+            draw::label(
+                scene,
+                line,
+                Rect {
+                    x: x + 10.0,
+                    y: y + 8.0 + row as f32 * line_height,
+                    width: width - 20.0,
+                    height: line_height,
+                },
+                if row == 0 {
+                    theme::TEXT
+                } else {
+                    theme::TEXT_DIM
+                },
+                theme::UI_FONT,
+                HorizontalAlign::Left,
+            );
+        }
+    }
+
     fn paint_marks(&self, scene: &mut Vec<PaintOp>) {
         for mark in &self.marks {
             let color = level_color(mark.level);
@@ -2280,15 +2670,16 @@ impl Editor {
     fn paint_problems(&self, scene: &mut Vec<PaintOp>, panel: Rect) {
         draw::fill(scene, panel, theme::PANEL);
         draw::hline(scene, panel.x, panel.y + 0.5, panel.width, theme::BORDER);
-        let header = match (&self.check_summary, self.check_running) {
-            (_, Some(_)) => "Problems: checking…".to_string(),
-            (Some(summary), None) => format!(
-                "Problems: {} (cargo check, {:.1} s)",
-                count_text(summary.errors, summary.warnings),
-                summary.elapsed.as_secs_f32()
-            ),
-            (None, None) => "Problems: no check run yet (Build > Check)".to_string(),
+        let shown = self.shown_diagnostics();
+        let (errors, warnings) = level_counts(&shown);
+        let cargo = match (&self.check_summary, self.check_running) {
+            (_, Some(_)) => "cargo check running".to_string(),
+            (Some(summary), None) => {
+                format!("cargo check took {:.1} s", summary.elapsed.as_secs_f32())
+            }
+            (None, None) => "no cargo check yet".to_string(),
         };
+        let header = format!("Problems: {} ({cargo})", count_text(errors, warnings));
         draw::label(
             scene,
             &header,
@@ -2306,8 +2697,7 @@ impl Editor {
         let rows = ((panel.height - PROBLEM_ROW_HEIGHT) / PROBLEM_ROW_HEIGHT)
             .floor()
             .max(0.0) as usize;
-        for (row, diagnostic) in self
-            .diagnostics
+        for (row, diagnostic) in shown
             .iter()
             .skip(self.problems_scroll)
             .take(rows)
@@ -2684,19 +3074,20 @@ impl Editor {
             HorizontalAlign::Right,
         );
         if let Some(check_rect) = layout.status_check {
-            let (text, color) = match (&self.check_summary, self.check_running) {
-                (_, Some(_)) => ("Checking…".to_string(), theme::TEXT_DIM),
-                (Some(summary), None) => (
-                    count_text(summary.errors, summary.warnings),
-                    if summary.errors > 0 {
+            let (errors, warnings) = level_counts(&self.shown_diagnostics());
+            let (text, color) = if self.check_running.is_some() {
+                ("Checking…".to_string(), theme::TEXT_DIM)
+            } else {
+                (
+                    count_text(errors, warnings),
+                    if errors > 0 {
                         theme::ERROR
-                    } else if summary.warnings > 0 {
+                    } else if warnings > 0 {
                         theme::WARNING
                     } else {
                         theme::TEXT_DIM
                     },
-                ),
-                (None, None) => (String::new(), theme::TEXT_DIM),
+                )
             };
             if check_rect.contains(self.pointer) {
                 draw::fill(scene, check_rect, theme::HOVER);
@@ -2710,6 +3101,25 @@ impl Editor {
                 HorizontalAlign::Right,
             );
         }
+        let server = match (&self.lsp, &self.lsp_failure) {
+            (Some(lsp), _) => format!("rust-analyzer: {}", lsp.status),
+            (None, Some(_)) => "rust-analyzer: stopped".to_string(),
+            (None, None) => String::new(),
+        };
+        let server_width = 220.0;
+        draw::label(
+            scene,
+            &server,
+            Rect {
+                x: rect.right() - right_width - 236.0 - server_width,
+                y: rect.y,
+                width: server_width,
+                height: rect.height,
+            },
+            theme::TEXT_DIM,
+            theme::UI_FONT,
+            HorizontalAlign::Right,
+        );
         let at_caret = self
             .diagnostic_at_caret()
             .map(|d| (diagnostic_text(d), level_color(d.level)));
@@ -2736,7 +3146,7 @@ impl Editor {
             Rect {
                 x: rect.x + 12.0,
                 y: rect.y,
-                width: (rect.width - right_width - 236.0).max(0.0),
+                width: (rect.width - right_width - 236.0 - server_width).max(0.0),
                 height: rect.height,
             },
             color,
@@ -2751,6 +3161,14 @@ fn level_color(level: Level) -> ui_core::Color {
         Level::Error => theme::ERROR,
         Level::Warning => theme::WARNING,
     }
+}
+
+fn level_counts(diagnostics: &[&Diagnostic]) -> (usize, usize) {
+    let errors = diagnostics
+        .iter()
+        .filter(|d| d.level == Level::Error)
+        .count();
+    (errors, diagnostics.len() - errors)
 }
 
 fn count_text(errors: usize, warnings: usize) -> String {
@@ -3676,5 +4094,185 @@ mod tests {
         assert_eq!(errors.len(), 1, "{:?}", rig.editor.diagnostics);
         assert_eq!((errors[0].line, errors[0].column), (2, 18));
         assert_eq!(errors[0].file, file);
+    }
+
+    /// The editor's messages for the server, by method.
+    fn sent(rig: &mut Rig) -> Vec<serde_json::Value> {
+        rig.editor.lsp_outgoing()
+    }
+
+    fn methods(messages: &[serde_json::Value]) -> Vec<String> {
+        messages
+            .iter()
+            .map(|m| m["method"].as_str().unwrap_or("(response)").to_string())
+            .collect()
+    }
+
+    /// A rig with `files` open and a server that answered initialize and
+    /// says it is ready.
+    fn with_server(files: &[(&str, &str)], open: &str) -> (tempfile::TempDir, Rig) {
+        let dir = workspace(files);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.editor.open_file(dir.path().join(open));
+        rig.settle();
+        assert_eq!(rig.editor.take_lsp_start().as_deref(), Some(dir.path()));
+        let first = sent(&mut rig);
+        assert_eq!(methods(&first), vec!["initialize"]);
+        rig.editor
+            .apply_lsp(vec![serde_json::json!({"jsonrpc": "2.0", "id": 1,
+            "result": {"capabilities": {"positionEncoding": "utf-32"}}})]);
+        rig.editor.apply_lsp(vec![serde_json::json!({"jsonrpc": "2.0",
+            "method": "experimental/serverStatus", "params": {"health": "ok", "quiescent": true}})]);
+        rig.frame(InputSnapshot::default());
+        (dir, rig)
+    }
+
+    #[test]
+    fn rust_files_are_kept_in_step_with_the_server() {
+        let (dir, mut rig) = with_server(&[("src/lib.rs", "fn a() {}\n")], "src/lib.rs");
+        let opened = sent(&mut rig);
+        assert_eq!(
+            methods(&opened),
+            vec!["initialized", "textDocument/didOpen"]
+        );
+        assert_eq!(opened[1]["params"]["textDocument"]["text"], "fn a() {}\n");
+        rig.type_text("x");
+        let changed = sent(&mut rig);
+        assert_eq!(methods(&changed), vec!["textDocument/didChange"]);
+        assert_eq!(
+            changed[0]["params"]["contentChanges"][0]["text"],
+            "xfn a() {}\n"
+        );
+        rig.key(HostKey::S, cmd());
+        assert!(methods(&sent(&mut rig)).contains(&"textDocument/didSave".to_string()));
+        let index = rig.editor.active.unwrap();
+        rig.editor.close(index);
+        assert_eq!(methods(&sent(&mut rig)), vec!["textDocument/didClose"]);
+        assert!(
+            rig.editor.take_lsp_start().is_none(),
+            "one server per folder"
+        );
+        drop(dir);
+    }
+
+    #[test]
+    fn the_servers_diagnostics_are_marked_and_counted_live() {
+        let (dir, mut rig) = with_server(
+            &[("src/lib.rs", "fn a() {\n    let x = ;\n}\n")],
+            "src/lib.rs",
+        );
+        let uri = crate::lsp::uri::from_path(&dir.path().join("src/lib.rs"));
+        rig.editor.apply_lsp(vec![serde_json::json!({"jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics", "params": {"uri": uri, "diagnostics": [
+                {"range": {"start": {"line": 1, "character": 12}, "end": {"line": 1, "character": 13}},
+                 "severity": 1, "message": "Syntax Error: expected expression"}]}})]);
+        rig.frame(InputSnapshot::default());
+        assert_eq!(rig.editor.marks.len(), 1);
+        assert_eq!(level_counts(&rig.editor.shown_diagnostics()), (1, 0));
+        assert!(rig.editor.layout.status_check.is_some());
+    }
+
+    #[test]
+    fn resting_the_pointer_on_a_name_shows_its_hover() {
+        let (_dir, mut rig) = with_server(&[("src/lib.rs", "fn alpha() {}\n")], "src/lib.rs");
+        sent(&mut rig);
+        let line = rig.active().area.layout_cache.lines[0].clone();
+        let point = Point {
+            x: line.rect.x + line.char_offsets[5] + 1.0,
+            y: line.rect.y + 4.0,
+        };
+        rig.frame(InputSnapshot {
+            mouse_x: point.x,
+            mouse_y: point.y,
+            ..InputSnapshot::default()
+        });
+        assert!(rig
+            .editor
+            .next_wake(rig.now)
+            .is_some_and(|wait| wait <= HOVER_DELAY));
+        assert!(methods(&sent(&mut rig)).is_empty(), "not before the delay");
+        rig.now += HOVER_DELAY;
+        rig.frame(InputSnapshot {
+            mouse_x: point.x,
+            mouse_y: point.y,
+            ..InputSnapshot::default()
+        });
+        let asked = sent(&mut rig);
+        assert_eq!(methods(&asked), vec!["textDocument/hover"]);
+        assert_eq!(
+            asked[0]["params"]["position"],
+            serde_json::json!({"line": 0, "character": 5})
+        );
+        let id = asked[0]["id"].clone();
+        rig.editor
+            .apply_lsp(vec![serde_json::json!({"jsonrpc": "2.0", "id": id,
+            "result": {"contents": {"kind": "markdown", "value": "```rust\nfn alpha()\n```"}}})]);
+        assert_eq!(
+            rig.editor.hover.as_ref().map(|(text, _)| text.as_str()),
+            Some("fn alpha()")
+        );
+        rig.frame(InputSnapshot {
+            mouse_x: point.x + 40.0,
+            mouse_y: point.y + 40.0,
+            ..InputSnapshot::default()
+        });
+        assert!(rig.editor.hover.is_none(), "moving away hides it");
+    }
+
+    #[test]
+    fn cmd_click_goes_to_the_definition_and_back_returns() {
+        let (dir, mut rig) = with_server(
+            &[
+                (
+                    "src/lib.rs",
+                    "mod other;\nfn use_it() { other::target(); }\n",
+                ),
+                ("src/other.rs", "\n\npub fn target() {}\n"),
+            ],
+            "src/lib.rs",
+        );
+        sent(&mut rig);
+        rig.editor.active_buffer_mut().unwrap().area.set_caret(3);
+        rig.frame(InputSnapshot::default());
+        let line = rig.active().area.layout_cache.lines[1].clone();
+        let point = Point {
+            x: line.rect.x + line.char_offsets[23] + 1.0,
+            y: line.rect.y + 4.0,
+        };
+        rig.frame(InputSnapshot {
+            mouse_x: point.x,
+            mouse_y: point.y,
+            mouse_pressed: true,
+            mouse_down: true,
+            modifiers: cmd(),
+            ..InputSnapshot::default()
+        });
+        let asked = sent(&mut rig);
+        assert_eq!(methods(&asked), vec!["textDocument/definition"]);
+        assert_eq!(
+            asked[0]["params"]["position"],
+            serde_json::json!({"line": 1, "character": 23})
+        );
+        let other = dir.path().join("src/other.rs");
+        rig.editor.apply_lsp(vec![serde_json::json!({"jsonrpc": "2.0", "id": asked[0]["id"].clone(),
+            "result": [{"uri": crate::lsp::uri::from_path(&other),
+                        "range": {"start": {"line": 2, "character": 7}, "end": {"line": 2, "character": 13}}}]})]);
+        rig.settle();
+        assert_eq!(rig.active().path, other);
+        assert_eq!(caret_line_column(&rig.active().area), (3, 8));
+        rig.outcome(menu_input(Command::GoBack));
+        assert_eq!(rig.active().path, dir.path().join("src/lib.rs"));
+        assert_eq!(rig.active().area.caret(), 3);
+    }
+
+    #[test]
+    fn a_server_that_stops_is_reported_and_not_restarted() {
+        let (_dir, mut rig) = with_server(&[("src/lib.rs", "fn a() {}\n")], "src/lib.rs");
+        rig.editor
+            .lsp_ended("the server closed its output".to_string());
+        rig.frame(InputSnapshot::default());
+        assert!(rig.editor.lsp.is_none());
+        assert!(rig.editor.take_lsp_start().is_none());
+        assert!(rig.status().starts_with("rust-analyzer stopped"));
     }
 }

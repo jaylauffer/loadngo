@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use loadngo_code_editor::cargo_check::{self, Cancel, CheckOutcome};
+use loadngo_code_editor::lsp::{transport::find_program, LspProcess};
 use loadngo_code_editor::{perform, Editor, EditorHost, IoRequest, IoResponse};
 use loadngo_host_core::{FrameDemand, WindowDescriptor};
 use loadngo_host_desktop::Offloaded;
@@ -121,6 +122,9 @@ async fn run(folder: Option<PathBuf>) {
     let mut scene = Vec::new();
     // The one cargo check running: its id, how to stop it, its result.
     let mut check: Option<(u64, Cancel, Offloaded<CheckOutcome>)> = None;
+    // rust-analyzer, while one runs; its messages wake the frame.
+    let mut server: Option<LspProcess> = None;
+    let waker = loadngo_host_desktop::frame_waker();
     let trace = std::env::var_os("CODE_EDITOR_TRACE").is_some();
 
     loop {
@@ -153,6 +157,17 @@ async fn run(folder: Option<PathBuf>) {
             }
         }
 
+        if let Some(process) = &server {
+            let messages = process.drain();
+            if !messages.is_empty() {
+                editor.apply_lsp(messages);
+            }
+            if let Some(reason) = process.ended() {
+                editor.lsp_ended(reason);
+                server = None;
+            }
+        }
+
         let outcome = editor.frame(
             &frame.input,
             frame.focused,
@@ -175,6 +190,27 @@ async fn run(folder: Option<PathBuf>) {
                     request.id,
                     CheckOutcome::failed("could not start a thread for cargo"),
                 );
+            }
+        }
+
+        if editor.take_lsp_stop() {
+            if let Some(process) = &server {
+                for message in editor.lsp_outgoing() {
+                    process.send(&message);
+                }
+            }
+            server = None;
+        }
+        if let Some(root) = editor.take_lsp_start() {
+            let wake = waker.clone();
+            match LspProcess::start(&find_program("rust-analyzer"), &root, move || wake.wake()) {
+                Ok(process) => server = Some(process),
+                Err(error) => editor.lsp_ended(format!("cannot start rust-analyzer: {error}")),
+            }
+        }
+        if let Some(process) = &server {
+            for message in editor.lsp_outgoing() {
+                process.send(&message);
             }
         }
 
