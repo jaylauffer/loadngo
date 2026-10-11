@@ -232,6 +232,9 @@ impl PendingInput {
             typed_text: self.typed_text.clone(),
             gamepads: Vec::new(),
             menu_commands: Vec::new(),
+            control_text: String::new(),
+            dropped_files: Vec::new(),
+            file_drag_over: false,
         }
     }
 

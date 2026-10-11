@@ -31,6 +31,7 @@ use objc2::{
     sel, MainThreadMarker, MainThreadOnly,
 };
 use objc2_game_controller::{GCController, GCExtendedGamepad};
+use std::path::PathBuf;
 use ui_core::{
     geometry::{Color as UiColor, Rect as UiRect},
     paint::PaintOp,
@@ -193,6 +194,9 @@ impl Default for InputState {
                 typed_text: String::new(),
                 gamepads: Vec::new(),
                 menu_commands: Vec::new(),
+                control_text: String::new(),
+                dropped_files: Vec::new(),
+                file_drag_over: false,
             },
         }
     }
@@ -218,6 +222,8 @@ impl InputState {
         self.snapshot.key_events.clear();
         self.snapshot.typed_text.clear();
         self.snapshot.menu_commands.clear();
+        self.snapshot.control_text.clear();
+        self.snapshot.dropped_files.clear();
         self.snapshot.touches = [None; 8];
     }
 
@@ -533,6 +539,8 @@ const KEYCODE_UP: u16 = 126;
 const KEYCODE_DOWN: u16 = 125;
 const KEYCODE_HOME: u16 = 115;
 const KEYCODE_END: u16 = 119;
+const KEYCODE_PAGE_UP: u16 = 116;
+const KEYCODE_PAGE_DOWN: u16 = 121;
 const NSEVENT_MODIFIER_FLAG_SHIFT: u64 = 1 << 17;
 const NSEVENT_MODIFIER_FLAG_CONTROL: u64 = 1 << 18;
 const NSEVENT_MODIFIER_FLAG_OPTION: u64 = 1 << 19;
@@ -1399,6 +1407,16 @@ fn create_window(
             msg_send![&*window_obj, makeKeyAndOrderFront: std::ptr::null_mut::<AnyObject>()];
         let _: () = msg_send![app, activateIgnoringOtherApps: true];
 
+        // The content view is loadngo's own NSView subclass, which accepts
+        // files dragged from Finder.
+        let view_ptr: *mut AnyObject = msg_send![file_drop_view_class(), alloc];
+        let view_ptr: *mut AnyObject = msg_send![view_ptr, initWithFrame: frame];
+        let _: () = msg_send![&*window_obj, setContentView: view_ptr];
+        // The window retains its content view.
+        let _: () = msg_send![view_ptr, release];
+        let file_url = ns_string("public.file-url");
+        let types: *mut AnyObject = msg_send![class!(NSArray), arrayWithObject: &*file_url];
+        let _: () = msg_send![view_ptr, registerForDraggedTypes: types];
         let view_ptr: *mut AnyObject = msg_send![&*window_obj, contentView];
         let _: () = msg_send![&*window_obj, invalidateCursorRectsForView: view_ptr];
         let view_obj = Retained::retain(view_ptr)
@@ -1569,6 +1587,140 @@ fn pump_events_until(timeout: Option<Duration>) {
             update_window_cursor(&state.window);
         }
     });
+}
+
+// ----- file drops -----
+
+/// NSDragOperationCopy and NSDragOperationNone.
+const DRAG_OPERATION_COPY: usize = 1;
+const DRAG_OPERATION_NONE: usize = 0;
+
+/// A plain NSView subclass whose only addition is being a dragging
+/// destination for file URLs. Built at run time so the host needs no AppKit
+/// bindings crate.
+fn file_drop_view_class() -> &'static objc2::runtime::AnyClass {
+    static CLASS: std::sync::OnceLock<&'static objc2::runtime::AnyClass> =
+        std::sync::OnceLock::new();
+    CLASS.get_or_init(|| {
+        let mut builder = objc2::runtime::ClassBuilder::new(c"LoadngoContentView", class!(NSView))
+            .expect("LoadngoContentView is defined once");
+        unsafe {
+            builder.add_method(
+                sel!(draggingEntered:),
+                dragging_updated as unsafe extern "C-unwind" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(draggingUpdated:),
+                dragging_updated as unsafe extern "C-unwind" fn(_, _, _) -> _,
+            );
+            builder.add_method(
+                sel!(draggingExited:),
+                dragging_exited as unsafe extern "C-unwind" fn(_, _, _),
+            );
+            builder.add_method(
+                sel!(performDragOperation:),
+                perform_drag_operation as unsafe extern "C-unwind" fn(_, _, _) -> _,
+            );
+        }
+        builder.register()
+    })
+}
+
+/// The file paths on a drag's pasteboard; empty when it carries no files.
+unsafe fn dragged_paths(info: *mut AnyObject) -> Vec<PathBuf> {
+    let pasteboard: *mut AnyObject = msg_send![info, draggingPasteboard];
+    if pasteboard.is_null() {
+        return Vec::new();
+    }
+    let classes: *mut AnyObject = msg_send![class!(NSArray), arrayWithObject: class!(NSURL)];
+    let urls: *mut AnyObject = msg_send![
+        pasteboard,
+        readObjectsForClasses: classes,
+        options: std::ptr::null_mut::<AnyObject>()
+    ];
+    if urls.is_null() {
+        return Vec::new();
+    }
+    let count: usize = msg_send![urls, count];
+    let mut paths = Vec::with_capacity(count);
+    for index in 0..count {
+        let url: *mut AnyObject = msg_send![urls, objectAtIndex: index];
+        let is_file: bool = msg_send![url, isFileURL];
+        if !is_file {
+            continue;
+        }
+        let path: *mut AnyObject = msg_send![url, path];
+        if let Some(path) = ns_string_to_rust(path) {
+            paths.push(PathBuf::from(path));
+        }
+    }
+    paths
+}
+
+/// Updates the drag state from a dragging callback and wakes an idle frame.
+unsafe fn record_drag(
+    view: *mut AnyObject,
+    info: *mut AnyObject,
+    over: bool,
+    dropped: Vec<PathBuf>,
+) {
+    let point_in_window: CGPoint = msg_send![info, draggingLocation];
+    let point: CGPoint = msg_send![
+        view,
+        convertPoint: point_in_window,
+        fromView: std::ptr::null_mut::<AnyObject>()
+    ];
+    let bounds: CGRect = msg_send![view, bounds];
+    APP_STATE.with(|state| {
+        // AppKit calls these while dispatching an event, outside any borrow
+        // of the host state; a drag update that does find it borrowed is
+        // dropped, and the next one carries the same information.
+        let Ok(mut state) = state.try_borrow_mut() else {
+            return;
+        };
+        let Some(state) = state.as_mut() else {
+            return;
+        };
+        state.input.snapshot.mouse_x = point.x as f32;
+        state.input.snapshot.mouse_y = (bounds.size.height - point.y) as f32;
+        state.input.snapshot.file_drag_over = over;
+        state.input.snapshot.dropped_files.extend(dropped);
+        state.event_epoch = state.event_epoch.saturating_add(1);
+        for waker in state.next_frame_wakers.drain(..) {
+            waker.wake();
+        }
+    });
+}
+
+unsafe extern "C-unwind" fn dragging_updated(
+    this: *mut AnyObject,
+    _sel: objc2::runtime::Sel,
+    info: *mut AnyObject,
+) -> usize {
+    if dragged_paths(info).is_empty() {
+        return DRAG_OPERATION_NONE;
+    }
+    record_drag(this, info, true, Vec::new());
+    DRAG_OPERATION_COPY
+}
+
+unsafe extern "C-unwind" fn dragging_exited(
+    this: *mut AnyObject,
+    _sel: objc2::runtime::Sel,
+    info: *mut AnyObject,
+) {
+    record_drag(this, info, false, Vec::new());
+}
+
+unsafe extern "C-unwind" fn perform_drag_operation(
+    this: *mut AnyObject,
+    _sel: objc2::runtime::Sel,
+    info: *mut AnyObject,
+) -> objc2::runtime::Bool {
+    let paths = dragged_paths(info);
+    let accepted = !paths.is_empty();
+    record_drag(this, info, false, paths);
+    objc2::runtime::Bool::new(accepted)
 }
 
 // ----- menu bar -----
@@ -1921,6 +2073,11 @@ fn handle_event(event: *mut AnyObject) {
                 let key_code: u16 = unsafe { msg_send![event, keyCode] };
                 let typed_text = typed_text_from_event(event);
                 state.input.apply_key_down(key_code, modifiers, &typed_text);
+                if modifiers.ctrl && !modifiers.meta {
+                    if let Some(code) = control_code_from_event(event) {
+                        state.input.snapshot.control_text.push(code);
+                    }
+                }
             }
             NSEVENT_TYPE_KEY_UP => {
                 let key_code: u16 = unsafe { msg_send![event, keyCode] };
@@ -2135,6 +2292,8 @@ fn host_key_from_key_code(key_code: u16) -> Option<HostKey> {
         KEYCODE_DOWN => HostKey::Down,
         KEYCODE_HOME => HostKey::Home,
         KEYCODE_END => HostKey::End,
+        KEYCODE_PAGE_UP => HostKey::PageUp,
+        KEYCODE_PAGE_DOWN => HostKey::PageDown,
         _ => return None,
     })
 }
@@ -2147,6 +2306,19 @@ fn typed_text_from_event(event: *mut AnyObject) -> String {
     text.chars()
         .filter(|&ch| is_printable_text_input_char(ch))
         .collect()
+}
+
+/// The control code of a Ctrl key press: the key's character without
+/// modifiers, mapped as a terminal maps it.
+fn control_code_from_event(event: *mut AnyObject) -> Option<char> {
+    let characters: *mut AnyObject = unsafe { msg_send![event, charactersIgnoringModifiers] };
+    let text = ns_string_to_rust(characters)?;
+    let mut chars = text.chars();
+    let ch = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    InputSnapshot::control_code(ch)
 }
 
 fn ns_string_to_rust(ns_string: *mut AnyObject) -> Option<String> {

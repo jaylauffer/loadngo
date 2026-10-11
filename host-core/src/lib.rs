@@ -324,6 +324,8 @@ pub enum HostKey {
     O,
     Q,
     N,
+    PageUp,
+    PageDown,
 }
 
 impl HostKey {
@@ -361,7 +363,7 @@ impl HostKey {
             HostKey::Q => Key::Character('q'),
             HostKey::N => Key::Character('n'),
             HostKey::Z => Key::Character('z'),
-            HostKey::F3 => return None,
+            HostKey::F3 | HostKey::PageUp | HostKey::PageDown => return None,
         })
     }
 }
@@ -568,6 +570,20 @@ pub struct InputSnapshot {
     /// from the system menu bar set with `set_menu_bar`; see `ui_core::menu`.
     #[serde(default)]
     pub menu_commands: Vec<ui_core::MenuCommand>,
+    /// Characters typed with Ctrl held (and not Cmd), as the C0 control
+    /// codes a terminal sends: Ctrl-C is `'\u{3}'`, Ctrl-[ is Escape. These
+    /// never appear in `typed_text`.
+    #[serde(default)]
+    pub control_text: String,
+    /// Files and folders dropped onto the window since the last frame, from
+    /// the system's file manager. The drop point is `mouse_x`/`mouse_y`.
+    #[serde(default)]
+    pub dropped_files: Vec<std::path::PathBuf>,
+    /// Whether files are being dragged over the window right now. On macOS
+    /// `mouse_x`/`mouse_y` follow the drag; winit hosts report no position
+    /// during a drag, so there they keep the last pointer position.
+    #[serde(default)]
+    pub file_drag_over: bool,
 }
 
 impl InputSnapshot {
@@ -587,6 +603,26 @@ impl InputSnapshot {
         self.key_events.clear();
         self.keys_down.clear();
         self.typed_text.clear();
+        self.control_text.clear();
+    }
+
+    /// The control code Ctrl plus `ch` sends in a terminal, if any: letters
+    /// and `@[\]^_` map to 0x00-0x1f, `?` to DEL, space and `2` to NUL.
+    #[must_use]
+    pub fn control_code(ch: char) -> Option<char> {
+        let code = match ch {
+            'a'..='z' => ch as u32 - 'a' as u32 + 1,
+            'A'..='Z' => ch as u32 - 'A' as u32 + 1,
+            '@' | ' ' | '2' => 0,
+            '[' | '3' => 0x1b,
+            '\\' | '4' => 0x1c,
+            ']' | '5' => 0x1d,
+            '^' | '6' => 0x1e,
+            '_' | '-' | '7' => 0x1f,
+            '?' | '8' => 0x7f,
+            _ => return None,
+        };
+        char::from_u32(code)
     }
 
     pub fn key_pressed(&self, key: HostKey) -> bool {

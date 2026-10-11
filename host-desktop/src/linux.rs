@@ -164,6 +164,9 @@ struct PendingInput {
     key_events: Vec<HostKeyEvent>,
     keys_down: Vec<HostKey>,
     typed_text: String,
+    control_text: String,
+    dropped_files: Vec<std::path::PathBuf>,
+    file_drag_over: bool,
 }
 
 impl Default for PendingInput {
@@ -187,6 +190,9 @@ impl Default for PendingInput {
             key_events: Vec::new(),
             keys_down: Vec::new(),
             typed_text: String::new(),
+            control_text: String::new(),
+            dropped_files: Vec::new(),
+            file_drag_over: false,
         }
     }
 }
@@ -218,6 +224,9 @@ impl PendingInput {
             // here; `capture_frame` polls evdev and fills them in.
             gamepads: Vec::new(),
             menu_commands: Vec::new(),
+            control_text: self.control_text.clone(),
+            dropped_files: self.dropped_files.clone(),
+            file_drag_over: self.file_drag_over,
         }
     }
 
@@ -234,6 +243,8 @@ impl PendingInput {
         self.down_pressed = false;
         self.key_events.clear();
         self.typed_text.clear();
+        self.control_text.clear();
+        self.dropped_files.clear();
     }
 
     fn clear_keyboard_state(&mut self) {
@@ -248,6 +259,7 @@ impl PendingInput {
         self.key_events.clear();
         self.keys_down.clear();
         self.typed_text.clear();
+        self.control_text.clear();
     }
 
     fn set_key_down(&mut self, key: HostKey, down: bool) {
@@ -573,6 +585,8 @@ pub fn capture_frame() -> HostFrame {
     state.latest_frame.input.down_pressed = false;
     state.latest_frame.input.key_events.clear();
     state.latest_frame.input.typed_text.clear();
+    state.latest_frame.input.control_text.clear();
+    state.latest_frame.input.dropped_files.clear();
     frame
 }
 
@@ -1374,6 +1388,18 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
                 };
                 state.pending_redraw = true;
             }
+            WindowEvent::HoveredFile(_) => {
+                lock_state().pending_input.file_drag_over = true;
+            }
+            WindowEvent::HoveredFileCancelled => {
+                lock_state().pending_input.file_drag_over = false;
+            }
+            WindowEvent::DroppedFile(path) => {
+                let mut state = lock_state();
+                state.pending_input.file_drag_over = false;
+                state.pending_input.dropped_files.push(path);
+                state.pending_redraw = true;
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 handle_keyboard_input(event);
                 lock_state().pending_redraw = true;
@@ -1486,6 +1512,16 @@ fn handle_keyboard_input(event: winit::event::KeyEvent) {
     }
 
     if pressed {
+        if modifiers.ctrl && !modifiers.meta {
+            if let WinitKey::Character(text) = &event.logical_key {
+                let mut chars = text.chars();
+                if let (Some(ch), None) = (chars.next(), chars.next()) {
+                    if let Some(code) = InputSnapshot::control_code(ch) {
+                        state.pending_input.control_text.push(code);
+                    }
+                }
+            }
+        }
         if !modifiers.ctrl && !modifiers.meta {
             if let Some(text) = event.text.as_ref() {
                 if let Some(filtered) = sanitized_typed_text(text.as_str()) {
@@ -1512,6 +1548,8 @@ fn map_host_key(event: &winit::event::KeyEvent) -> Option<HostKey> {
         WinitKey::Named(NamedKey::ArrowRight) => Some(HostKey::Right),
         WinitKey::Named(NamedKey::Home) => Some(HostKey::Home),
         WinitKey::Named(NamedKey::End) => Some(HostKey::End),
+        WinitKey::Named(NamedKey::PageUp) => Some(HostKey::PageUp),
+        WinitKey::Named(NamedKey::PageDown) => Some(HostKey::PageDown),
         WinitKey::Named(NamedKey::Enter) => Some(HostKey::Enter),
         WinitKey::Named(NamedKey::Tab) => Some(HostKey::Tab),
         WinitKey::Named(NamedKey::Backspace) => Some(HostKey::Backspace),

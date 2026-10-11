@@ -1062,6 +1062,9 @@ fn blank_snapshot() -> InputSnapshot {
         typed_text: String::new(),
         gamepads: Vec::new(),
         menu_commands: Vec::new(),
+        control_text: String::new(),
+        dropped_files: Vec::new(),
+        file_drag_over: false,
     }
 }
 
