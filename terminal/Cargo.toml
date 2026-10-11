@@ -1,0 +1,10 @@
+[package]
+name = "loadngo-terminal"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "A terminal for loadngo apps: escape-sequence parser, screen with scrollback, key encoding and a pseudo-terminal for the shell."
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

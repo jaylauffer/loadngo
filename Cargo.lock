@@ -1588,6 +1588,7 @@ dependencies = [
  "loadngo-host-core",
  "loadngo-host-desktop",
  "loadngo-persistence",
+ "loadngo-terminal",
  "serde",
  "serde_json",
  "tempfile",
@@ -1838,6 +1839,13 @@ dependencies = [
 
 [[package]]
 name = "loadngo-system-stats"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "loadngo-terminal"
 version = "0.1.0"
 dependencies = [
  "libc",
