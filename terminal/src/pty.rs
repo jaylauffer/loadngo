@@ -252,7 +252,8 @@ mod unix {
                     &mut slave,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
-                    &mut size,
+                    // `*mut` on macOS, `*const` on Linux.
+                    std::ptr::addr_of_mut!(size),
                 )
             };
             if opened != 0 {

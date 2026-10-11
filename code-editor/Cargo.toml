@@ -15,6 +15,7 @@ blake3.workspace = true
 loadngo-host-core = { path = "../host-core" }
 loadngo-host-desktop = { path = "../host-desktop" }
 loadngo-persistence = { path = "../persistence" }
+loadngo-terminal = { path = "../terminal" }
 serde.workspace = true
 serde_json.workspace = true
 ui-core = { path = "../ui-core" }

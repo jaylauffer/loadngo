@@ -14,8 +14,10 @@ pub mod lsp;
 pub mod rust_lexer;
 pub mod search;
 pub mod session;
+pub mod terminal_panel;
 pub mod text_file;
 pub mod theme;
 
 pub use editor::{Editor, EditorHost, FrameOutcome};
 pub use fs_ops::{perform, IoRequest, IoResponse};
+pub use terminal_panel::TerminalRequest;

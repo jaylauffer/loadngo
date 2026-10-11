@@ -7,9 +7,10 @@ use std::time::Instant;
 use loadngo_code_editor::cargo_check::{self, Cancel, CheckOutcome};
 use loadngo_code_editor::lsp::{transport::find_program, LspProcess};
 use loadngo_code_editor::search::{self, SearchOutcome};
-use loadngo_code_editor::{perform, Editor, EditorHost, IoRequest, IoResponse};
+use loadngo_code_editor::{perform, Editor, EditorHost, IoRequest, IoResponse, TerminalRequest};
 use loadngo_host_core::{FrameDemand, WindowDescriptor};
 use loadngo_host_desktop::Offloaded;
+use loadngo_terminal::{Pty, PtyConfig};
 
 const APP_ID: &str = "loadngo-code-editor";
 /// File jobs on the offload workers at once; the rest wait their turn.
@@ -24,6 +25,9 @@ Usage: code_editor [FOLDER]
                          when the editor last closed, or else the current
                          directory.
   -h, --help   optional  Print this help.
+
+The View menu and the Terminal button open shells in a panel below the
+editor (macOS and Linux).
 
 Everything is in the File and Edit menus (the system menu bar on macOS, a
 menu bar in the window elsewhere) and on the toolbar. Keys: Cmd-S saves the
@@ -135,6 +139,10 @@ async fn run(folder: Option<PathBuf>) {
     let mut server: Option<LspProcess> = None;
     let waker = loadngo_host_desktop::frame_waker();
     let trace = std::env::var_os("CODE_EDITOR_TRACE").is_some();
+    // The terminals' programs, by the editor's terminal id; their output
+    // wakes the frame. Dropping one hangs up on its program.
+    let mut terminals: Vec<(u64, Pty)> = Vec::new();
+    let mut terminal_output = Vec::new();
 
     loop {
         let frame = loadngo_host_desktop::capture_frame();
@@ -193,6 +201,17 @@ async fn run(folder: Option<PathBuf>) {
                 server = None;
             }
         }
+
+        terminals.retain_mut(|(id, pty)| {
+            let closed = pty.drain_into(&mut terminal_output);
+            if !terminal_output.is_empty() {
+                editor.terminal_output(*id, &terminal_output);
+            }
+            if closed {
+                editor.terminal_ended(*id, exit_reason(pty.exit_status()));
+            }
+            !closed
+        });
 
         let outcome = editor.frame(
             &frame.input,
@@ -261,6 +280,43 @@ async fn run(folder: Option<PathBuf>) {
             }
         }
 
+        for request in editor.take_terminal_requests() {
+            let pty = |id: u64| {
+                terminals
+                    .iter()
+                    .find(|(open, _)| *open == id)
+                    .map(|(_, pty)| pty)
+            };
+            match request {
+                TerminalRequest::Start {
+                    id,
+                    cwd,
+                    cols,
+                    rows,
+                } => {
+                    let wake = waker.clone();
+                    let config = PtyConfig::login_shell(cwd, cols, rows);
+                    match Pty::spawn(&config, move || wake.wake()) {
+                        Ok(pty) => terminals.push((id, pty)),
+                        Err(error) => {
+                            editor.terminal_ended(id, format!("The shell could not start: {error}"))
+                        }
+                    }
+                }
+                TerminalRequest::Write { id, bytes } => {
+                    if let Some(pty) = pty(id) {
+                        pty.write(bytes);
+                    }
+                }
+                TerminalRequest::Resize { id, cols, rows } => {
+                    if let Some(pty) = pty(id) {
+                        pty.resize(cols, rows);
+                    }
+                }
+                TerminalRequest::Close { id } => terminals.retain(|(open, _)| *open != id),
+            }
+        }
+
         waiting.extend(editor.take_requests());
         while in_flight.len() < MAX_IN_FLIGHT {
             let Some(request) = waiting.pop_front() else {
@@ -300,6 +356,15 @@ async fn run(folder: Option<PathBuf>) {
             None => FrameDemand::idle(),
         };
         loadngo_host_desktop::next_frame(demand).await;
+    }
+}
+
+/// Why a terminal's program ended, for its tab.
+fn exit_reason(status: Option<std::process::ExitStatus>) -> String {
+    match status.and_then(|status| status.code()) {
+        Some(0) => "The shell exited".to_string(),
+        Some(code) => format!("The shell exited with status {code}"),
+        None => "The shell ended".to_string(),
     }
 }
 

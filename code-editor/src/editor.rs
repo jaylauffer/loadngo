@@ -24,6 +24,7 @@ use crate::highlight::Highlighter;
 use crate::lsp::{CompletionItem, LspEvent, LspSession, Position, TextEdit};
 use crate::search::{SearchMatch, SearchOutcome};
 use crate::session::{self, Backup, Session, SessionTab};
+use crate::terminal_panel::{TerminalPanel, TerminalRequest};
 use crate::text_file::LineEnding;
 use crate::theme;
 
@@ -133,6 +134,7 @@ enum Focus {
     Find,
     Goto,
     Search,
+    Terminal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,6 +152,8 @@ enum Command {
     FindInFiles,
     RunSearch,
     ToggleSplit,
+    ToggleTerminal,
+    NewTerminal,
     NewFile,
     NewFolder,
     RenameFile,
@@ -181,8 +185,10 @@ enum Command {
 
 impl Command {
     /// The commands a menu item can send.
-    const IN_MENUS: [Command; 25] = [
+    const IN_MENUS: [Command; 27] = [
         Command::ToggleSplit,
+        Command::ToggleTerminal,
+        Command::NewTerminal,
         Command::FindInFiles,
         Command::NewFile,
         Command::NewFolder,
@@ -258,6 +264,7 @@ struct Layout {
     status_check: Option<Rect>,
     /// The pane without focus, when split.
     other_pane: Option<Rect>,
+    terminal: Option<Rect>,
 }
 
 /// A `cargo check` the app should run (see `cargo_check::run`), replacing
@@ -384,6 +391,8 @@ pub struct Editor {
     item_drag: Option<ItemDrag>,
     /// Files from the file manager are being dragged over the window.
     file_drag_over: bool,
+    terminal: TerminalPanel,
+    terminal_open: bool,
 }
 
 /// What a press can drag.
@@ -578,6 +587,8 @@ impl Editor {
             previous_active: None,
             item_drag: None,
             file_drag_over: false,
+            terminal: TerminalPanel::default(),
+            terminal_open: false,
         };
         if let Some(root) = &root {
             editor.open_folder(root.clone());
@@ -639,6 +650,7 @@ impl Editor {
     fn caret_blinking(&self, now: Instant) -> bool {
         self.window_focused
             && now.duration_since(self.last_input) < BLINK_FOR
+            && self.focus != Focus::Terminal
             && (self.focus != Focus::Editor || self.active_buffer().is_some_and(|b| b.loaded))
     }
 
@@ -1135,6 +1147,9 @@ impl Editor {
             }
             if !input.typed_text.is_empty() {
                 self.route_text(&input.typed_text);
+            }
+            if self.focus == Focus::Terminal && !input.control_text.is_empty() {
+                self.terminal.text(&input.control_text);
             }
         }
 
@@ -1683,6 +1698,32 @@ impl Editor {
             other: current.unwrap_or(split.other),
             focused_right: !split.focused_right,
         });
+    }
+
+    // ----- terminal -----
+
+    fn new_terminal(&mut self) {
+        let cwd = self
+            .tree
+            .as_ref()
+            .map(|tree| tree.root().to_path_buf())
+            .unwrap_or_else(|| self.fallback_root.clone());
+        self.terminal.open(cwd, shell_name());
+    }
+
+    /// What the app should do with the terminals' programs.
+    pub fn take_terminal_requests(&mut self) -> Vec<TerminalRequest> {
+        self.terminal.take_requests()
+    }
+
+    /// Output from terminal `id`'s program.
+    pub fn terminal_output(&mut self, id: u64, bytes: &[u8]) {
+        self.terminal.output(id, bytes);
+    }
+
+    /// Terminal `id`'s program ended (or never started).
+    pub fn terminal_ended(&mut self, id: u64, reason: String) {
+        self.terminal.ended(id, reason);
     }
 
     // ----- find in files -----
@@ -2434,6 +2475,7 @@ impl Editor {
         let active_dirty = self.active_buffer().is_some_and(Buffer::dirty);
         let has_file = self.active_buffer().is_some_and(|buffer| buffer.loaded);
         let editing = self.focused_area_ref().is_some() && self.folder_dialog.is_none();
+        let in_terminal = self.focus == Focus::Terminal && self.terminal_open;
         let item = |command: Command, title: &str| MenuItem::command(command.menu_command(), title);
         let mut file = vec![
             item(Command::NewFile, "New File…")
@@ -2475,13 +2517,13 @@ impl Editor {
                 .enabled(editing),
             item(Command::Copy, "Copy")
                 .with_shortcut(Shortcut::primary('c'))
-                .enabled(editing),
+                .enabled(editing || in_terminal),
             item(Command::Paste, "Paste")
                 .with_shortcut(Shortcut::primary('v'))
-                .enabled(editing),
+                .enabled(editing || in_terminal),
             item(Command::SelectAll, "Select All")
                 .with_shortcut(Shortcut::primary('a'))
-                .enabled(editing),
+                .enabled(editing || in_terminal),
             MenuItem::Separator,
             item(Command::Find, "Find…")
                 .with_shortcut(Shortcut::primary('f'))
@@ -2497,15 +2539,27 @@ impl Editor {
                 Menu::new("Edit", edit),
                 Menu::new(
                     "View",
-                    vec![item(
-                        Command::ToggleSplit,
-                        if self.split.is_some() {
-                            "Unsplit Editor"
-                        } else {
-                            "Split Editor"
-                        },
-                    )
-                    .enabled(self.active.is_some())],
+                    vec![
+                        item(
+                            Command::ToggleSplit,
+                            if self.split.is_some() {
+                                "Unsplit Editor"
+                            } else {
+                                "Split Editor"
+                            },
+                        )
+                        .enabled(self.active.is_some()),
+                        MenuItem::Separator,
+                        item(
+                            Command::ToggleTerminal,
+                            if self.terminal_open {
+                                "Hide Terminal"
+                            } else {
+                                "Show Terminal"
+                            },
+                        ),
+                        item(Command::NewTerminal, "New Terminal"),
+                    ],
                 ),
                 Menu::new(
                     "Navigate",
@@ -2823,6 +2877,7 @@ impl Editor {
             (Command::Find, "Find"),
             (Command::GoToLine, "Go to Line"),
             (Command::Check, "Check"),
+            (Command::ToggleTerminal, "Terminal"),
             (Command::Refresh, "Refresh Folder"),
         ] {
             let button_width = host.measure(text, theme::UI_FONT) + 24.0;
@@ -2861,7 +2916,19 @@ impl Editor {
             layout.bar = Some(bar);
         }
         let mut bottom = layout.status.y;
-        if self.problems_open || self.search_open {
+        if self.terminal_open {
+            let height = ((bottom - y) * 0.42).max(160.0).min((bottom - y) * 0.8);
+            bottom -= height;
+            let panel = Rect {
+                x: right_x,
+                y: bottom,
+                width: right_width,
+                height,
+            };
+            layout.terminal = Some(panel);
+            self.terminal
+                .layout(panel, &|text: &str, size: u16| host.measure(text, size));
+        } else if self.problems_open || self.search_open {
             let height = if self.search_open {
                 (PROBLEMS_HEIGHT + 60.0).min((bottom - y) * 0.6)
             } else {
@@ -3104,6 +3171,9 @@ impl Editor {
             self.track_hover(point, input.mouse_down || input.mouse_pressed);
         }
         if moved || input.mouse_down {
+            if input.mouse_down {
+                self.terminal.dragged(point);
+            }
             if let Some(tree) = &mut self.tree {
                 tree.pointer_moved(point);
             }
@@ -3134,6 +3204,7 @@ impl Editor {
                 state,
             };
             self.drop_text_in_other_pane(point);
+            self.terminal.released();
             if let Some(buffer) = self.active_buffer_mut() {
                 let _ = buffer.area.handle_event(released.clone());
             }
@@ -3605,6 +3676,23 @@ impl Editor {
             self.search_open = false;
             return;
         }
+        if self
+            .layout
+            .terminal
+            .is_some_and(|rect| rect.contains(point))
+        {
+            let root = self.tree.as_ref().map(|tree| tree.root().to_path_buf());
+            let fallback = self.fallback_root.clone();
+            let cwd = move || {
+                (
+                    root.clone().unwrap_or_else(|| fallback.clone()),
+                    shell_name(),
+                )
+            };
+            self.terminal.pressed(point, &cwd);
+            self.set_focus(Focus::Terminal);
+            return;
+        }
         if let Some(panel) = self.layout.search.filter(|rect| rect.contains(point)) {
             self.search_panel_pressed(point, panel, state, host);
             return;
@@ -3717,6 +3805,15 @@ impl Editor {
     fn wheel(&mut self, point: Point, input: &InputSnapshot) {
         if self
             .layout
+            .terminal
+            .is_some_and(|panel| panel.contains(point))
+        {
+            self.terminal
+                .wheel(input.mouse_wheel_y, input.mouse_wheel_precise);
+            return;
+        }
+        if self
+            .layout
             .search
             .is_some_and(|panel| panel.contains(point))
         {
@@ -3790,6 +3887,20 @@ impl Editor {
         modifiers: Modifiers,
         host: &dyn EditorHost,
     ) {
+        if self.focus == Focus::Terminal {
+            // Ctrl and a letter is a control character for the program, not
+            // a drawn menu's shortcut; Ctrl-Shift-C and -V copy and paste.
+            if modifiers.ctrl && modifiers.shift && !modifiers.meta {
+                match key {
+                    loadngo_host_core::HostKey::C => return self.run(Command::Copy, host),
+                    loadngo_host_core::HostKey::V => return self.run(Command::Paste, host),
+                    _ => {}
+                }
+            }
+            if self.terminal.key(key, modifiers) || (modifiers.ctrl && !modifiers.meta) {
+                return;
+            }
+        }
         let Some(key) = key.ui_key() else {
             return;
         };
@@ -3854,6 +3965,7 @@ impl Editor {
                     let _ = search.field.handle_event(event);
                 }
             }
+            Focus::Terminal => {}
         }
     }
 
@@ -3866,6 +3978,7 @@ impl Editor {
             Focus::Find => self.find.as_ref().map(|find| &find.field.area),
             Focus::Goto => self.goto.as_ref().map(|goto| &goto.area),
             Focus::Search => self.search.as_ref().map(|search| &search.field.area),
+            Focus::Terminal => None,
         }
     }
 
@@ -3878,6 +3991,7 @@ impl Editor {
             Focus::Find => self.find.as_mut().map(|find| &mut find.field.area),
             Focus::Goto => self.goto.as_mut().map(|goto| &mut goto.area),
             Focus::Search => self.search.as_mut().map(|search| &mut search.field.area),
+            Focus::Terminal => None,
         }
     }
 
@@ -3906,6 +4020,7 @@ impl Editor {
                 }
             }
             Focus::Find | Focus::Goto | Focus::Search => self.route_text(&text),
+            Focus::Terminal => self.terminal.paste(&text),
         }
     }
 
@@ -3937,6 +4052,7 @@ impl Editor {
                     let _ = search.field.handle_event(event);
                 }
             }
+            Focus::Terminal => self.terminal.text(text),
         }
     }
 
@@ -3977,6 +4093,7 @@ impl Editor {
             Command::ToggleProblems => {
                 self.problems_open = !self.problems_open;
                 self.search_open = false;
+                self.terminal_open = false;
                 self.problems_scroll = 0;
             }
             Command::CloseTab => {
@@ -4016,6 +4133,7 @@ impl Editor {
                 self.quit_now();
             }
             Command::QuitCancel => self.quit_prompt = false,
+            Command::SelectAll if self.focus == Focus::Terminal => self.terminal.select_all(),
             Command::Undo | Command::Redo | Command::SelectAll => {
                 if let Some(area) = self.focused_area() {
                     match command {
@@ -4028,6 +4146,31 @@ impl Editor {
                         _ => area.select_all(),
                     }
                 }
+            }
+            Command::Cut | Command::Copy if self.focus == Focus::Terminal => {
+                if let Some(text) = self.terminal.copy() {
+                    host.write_clipboard(&text);
+                }
+            }
+            Command::ToggleTerminal => {
+                self.terminal_open = !self.terminal_open;
+                if self.terminal_open {
+                    self.problems_open = false;
+                    self.search_open = false;
+                    if self.terminal.is_empty() {
+                        self.new_terminal();
+                    }
+                    self.set_focus(Focus::Terminal);
+                } else if self.focus == Focus::Terminal {
+                    self.set_focus(Focus::Editor);
+                }
+            }
+            Command::NewTerminal => {
+                self.terminal_open = true;
+                self.problems_open = false;
+                self.search_open = false;
+                self.new_terminal();
+                self.set_focus(Focus::Terminal);
             }
             Command::Cut | Command::Copy => self.copy(command == Command::Cut, host),
             Command::Paste => {
@@ -4153,6 +4296,7 @@ impl Editor {
                 }
                 search.field.select_all();
                 self.search_open = true;
+                self.terminal_open = false;
                 self.problems_open = false;
                 self.set_focus(Focus::Search);
             }
@@ -4327,6 +4471,10 @@ impl Editor {
         }
         if let Some(panel) = layout.search {
             self.paint_search(scene, panel, &layout);
+        }
+        if layout.terminal.is_some() {
+            self.terminal
+                .paint(scene, self.focus == Focus::Terminal && self.window_focused);
         }
         self.paint_status(scene, &layout);
         self.paint_drags(scene, &layout);
@@ -4919,6 +5067,17 @@ impl Editor {
             HorizontalAlign::Left,
         );
     }
+}
+
+/// The user's shell's name, for a terminal tab.
+fn shell_name() -> String {
+    std::env::var_os("SHELL")
+        .and_then(|shell| {
+            std::path::Path::new(&shell)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "sh".to_string())
 }
 
 fn level_color(level: Level) -> ui_core::Color {
@@ -6720,5 +6879,62 @@ mod tests {
         assert_eq!(rig.editor.buffers[a].area.text(), "alpha \n");
         assert_eq!(rig.editor.buffers[b].area.text(), "gammabeta\n");
         assert_eq!(rig.active().title, "b.rs", "focus follows the text");
+    }
+
+    // ----- terminal -----
+
+    fn writes(rig: &mut Rig) -> Vec<Vec<u8>> {
+        rig.editor
+            .take_terminal_requests()
+            .into_iter()
+            .filter_map(|request| match request {
+                TerminalRequest::Write { bytes, .. } => Some(bytes),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_terminal_takes_typing_and_control_keys_while_focused() {
+        let dir = workspace(&[("a.rs", "fn a() {}\n")]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.editor.open_file(dir.path().join("a.rs"));
+        rig.settle();
+        rig.outcome(menu_input(Command::ToggleTerminal));
+        let requests = rig.editor.take_terminal_requests();
+        assert!(
+            matches!(&requests[..], [TerminalRequest::Start { cwd, .. }] if cwd == dir.path()),
+            "{requests:?}"
+        );
+        assert!(rig.editor.layout.terminal.is_some());
+        rig.type_text("ls");
+        rig.frame(InputSnapshot {
+            control_text: "\u{3}".to_string(),
+            key_events: vec![HostKeyEvent {
+                key: HostKey::C,
+                modifiers: Modifiers {
+                    ctrl: true,
+                    ..Modifiers::default()
+                },
+            }],
+            ..InputSnapshot::default()
+        });
+        rig.key(HostKey::Escape, Modifiers::default());
+        assert_eq!(
+            writes(&mut rig),
+            [b"ls".to_vec(), b"\x03".to_vec(), b"\x1b".to_vec()]
+        );
+        assert_eq!(
+            rig.active().area.text(),
+            "fn a() {}\n",
+            "the file is untouched"
+        );
+
+        // A click in the editor gives it the keys back.
+        let editor = center(rig.editor.layout.editor);
+        rig.click(editor);
+        rig.type_text("x");
+        assert!(writes(&mut rig).is_empty());
+        assert!(rig.active().area.text().contains('x'));
     }
 }

@@ -236,6 +236,57 @@ servers.
 `CODE_EDITOR_STATE_DIR` puts a run's session and backups in another folder
 (test runs must not share the everyday ones).
 
+**M6, drag and drop and a terminal.** Jay, 2026-10-11.
+
+Drag and drop (every host reports files dropped from the file manager:
+`InputSnapshot::dropped_files`, with `file_drag_over` while they hover):
+
+- Files from Finder dropped on the tree are copied into the folder under
+  the pointer (a file's row means its folder; folders copy whole; nothing
+  is replaced). Dropped anywhere else, files open in tabs and a folder
+  opens as the workspace. On Linux and Windows winit reports no position
+  during a drag, so the drop lands where the pointer last was.
+- Tree entries drag into folders to move them; open tabs follow and
+  rust-analyzer is told, as for Rename. A folder never moves inside
+  itself. A press on the tree acts on release, so a folder dragged away
+  does not also open or close.
+- Tabs drag along the tab row to reorder, onto the other pane to show
+  there, or onto the right half of an unsplit editor to split it.
+- Selected text drags to move it, or copies with Option held, as one undo
+  step; into the other pane it moves between files. This is in
+  `TextAreaModel`, so every loadngo text area has it.
+
+The terminal: View > Show Terminal, New Terminal, or the Terminal button.
+Each tab runs the login shell (`$SHELL -l`) in the open folder on a
+pseudo-terminal, from the new `loadngo-terminal` crate: an xterm-style
+escape parser and screen (colors, cursor movement, scroll regions, the
+alternate screen for `less`, `vim` and `top`, line drawing, bracketed
+paste, replies to cursor-position and color questions), 5,000 lines of
+scrollback, and the shell run through `openpty`. A click on the panel
+gives it the keys: text, Ctrl-letter control characters, arrows and the
+like go to the shell, Cmd-Left/Right/Backspace go to the line's start or
+end or delete it, Option-Left/Right move by word. Cmd-C and Cmd-V copy
+the mouse selection and paste (bracketed when the program asks).
+Shift-PageUp/PageDown and the wheel scroll back; on a full-screen
+program's screen the wheel sends arrow keys. Closing a tab hangs up on
+its shell.
+
+Each cell has the same width, as programs that draw tables need, but the
+glyphs are the editor's own proportional font, centered in their cells:
+loadngo text has no per-run font choice, and adding one would touch every
+renderer. A monospace font for the terminal is the next step if the
+proportional glyphs read badly.
+
+Two threads serve each terminal, like rust-analyzer's: a reader blocked in
+`read` and a writer, so a large paste never blocks a frame. Output waits
+in a buffer the frame swaps out, up to 4 MiB, then the reader waits;
+output wakes an idle frame through `frame_waker()`, so an idle terminal
+costs no frames. Not done: Windows (ConPTY; `Pty::spawn` reports it
+unavailable), mouse reporting to programs, reflowing lines on resize, and
+combining accents (dropped). On Linux and Windows, where the menu bar is
+drawn and Ctrl is the shortcut key, Ctrl and a letter goes to the shell
+while it has the keys, and Ctrl-Shift-C and -V copy and paste.
+
 Later, as needed: replace in files, a symbol outline, running and
 debugging.
 
