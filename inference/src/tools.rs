@@ -202,12 +202,14 @@ pub(crate) fn usize_arg(args: &Value, key: &str, default: usize) -> usize {
 /// deny list: key and credential stores (`~/.ssh`, `~/.gnupg`, `~/.loadngo/keys`,
 /// `~/.aws`, `~/.config/gh`, `~/Library/Keychains`) and files that look like private keys
 /// (`*.key`, `*.pem`, `id_*`, `.env`). Symlinks are resolved before the check, so a link
-/// cannot reach a denied location.
+/// cannot reach a denied location. [`FsTools::confined`] allows only the workspace.
 pub struct FsTools {
     base: PathBuf,
     /// `base` with symlinks resolved, for showing found paths relative to it.
     real_base: PathBuf,
     denied_dirs: Vec<PathBuf>,
+    /// Refuse everything outside `real_base`.
+    confined: bool,
 }
 
 impl FsTools {
@@ -233,6 +235,16 @@ impl FsTools {
             real_base: base.canonicalize().unwrap_or_else(|_| base.clone()),
             base,
             denied_dirs,
+            confined: false,
+        }
+    }
+
+    /// Tools that read only inside `base`: for running a model on a task in a copy of
+    /// the workspace, where reading the real one would show it the answer.
+    pub fn confined(base: impl Into<PathBuf>, home: Option<&Path>) -> Self {
+        Self {
+            confined: true,
+            ..Self::new(base, home)
         }
     }
 
@@ -264,6 +276,13 @@ impl FsTools {
     }
 
     fn check(&self, real: &Path) -> Result<(), String> {
+        if self.confined && !real.starts_with(&self.real_base) {
+            return Err(format!(
+                "{} is outside the workspace {}; reads are confined to it",
+                real.display(),
+                self.real_base.display()
+            ));
+        }
         if self.denied_dirs.iter().any(|d| real.starts_with(d)) {
             return Err(format!(
                 "{} is in a key/credential store; not readable",
@@ -711,6 +730,40 @@ mod tests {
             tools.push(tool);
         }
         tools
+    }
+
+    /// Confined tools read inside the workspace and nothing outside it, by absolute
+    /// path, `~`, `..` or a symlink.
+    #[cfg(unix)]
+    #[test]
+    fn confined_reads_stay_in_the_workspace() {
+        let outside = scratch("confined-outside");
+        let dir = scratch("confined");
+        std::os::unix::fs::symlink(&outside, dir.join("link")).unwrap();
+        let mut tools = Toolbox::default();
+        for tool in FsTools::confined(&dir, Some(&dir.join("home"))).into_tools() {
+            tools.push(tool);
+        }
+        assert!(tools.call("fs_read", r#"{"path": "src/lib.rs"}"#).is_ok());
+        let absolute = outside.join("src/lib.rs").display().to_string();
+        for path in [
+            absolute.as_str(),
+            "../loadngo-tools-x/src/lib.rs",
+            "link/src/lib.rs",
+            "~/",
+        ] {
+            let read = tools.call("fs_read", &serde_json::json!({ "path": path }).to_string());
+            let listed = tools.call("fs_list", &serde_json::json!({ "path": path }).to_string());
+            assert!(
+                read.is_err() && listed.is_err(),
+                "{path}: {read:?} {listed:?}"
+            );
+        }
+        // A search from the workspace does not follow the link out.
+        let found = tools.call("fs_grep", r#"{"pattern": "needle"}"#).unwrap();
+        assert!(!found.contains("link/"), "{found}");
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&outside);
     }
 
     #[test]

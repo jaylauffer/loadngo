@@ -11,7 +11,7 @@ use loadngo_gpt_oss::{chat::Harmony, tokenizer::Tokenizer};
 use loadngo_inference::agent::{
     self,
     transcript::{Tee, Transcript},
-    workspace::{Workspace, WorkspaceOptions},
+    workspace::{Isolation, Workspace, WorkspaceOptions},
     Agent, Backend, Ended, Event, Observer, TurnEnd,
 };
 use loadngo_inference::system_one::LabelModel;
@@ -207,16 +207,23 @@ pub fn chat<'t>(
                     .join(".loadngo/gpt-oss/memory.jsonl")
             })
         });
-        let workspace = Workspace::new(&WorkspaceOptions {
-            base,
-            agent: AGENT.into(),
-            today: agent::clock::now().date,
-            edit: o.edit,
-            memory,
-            web: o.web,
-            cas_roots: o.cas_roots.clone(),
-            cas_key: o.cas_key.clone(),
-        })
+        let isolation = Isolation {
+            confine_reads: o.confine,
+            archives: o.cas,
+        };
+        let workspace = Workspace::with(
+            &WorkspaceOptions {
+                base,
+                agent: AGENT.into(),
+                today: agent::clock::now().date,
+                edit: o.edit,
+                memory,
+                web: o.web,
+                cas_roots: o.cas_roots.clone(),
+                cas_key: o.cas_key.clone(),
+            },
+            isolation,
+        )
         .unwrap_or_else(|e| fail(&e));
         for line in &workspace.described {
             eprintln!("{line}");

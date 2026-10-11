@@ -38,6 +38,25 @@ pub struct WorkspaceOptions {
     pub cas_key: Option<PathBuf>,
 }
 
+/// Limits for running a model on a task in a copy of the workspace, where the real
+/// workspace and the archives could hold the answer.
+#[derive(Clone, Copy, Debug)]
+pub struct Isolation {
+    /// Read only inside the workspace ([`FsTools::confined`]).
+    pub confine_reads: bool,
+    /// The Archive CAS tools.
+    pub archives: bool,
+}
+
+impl Default for Isolation {
+    fn default() -> Self {
+        Self {
+            confine_reads: false,
+            archives: true,
+        }
+    }
+}
+
 /// The tools, the editing session, and the standing instructions.
 pub struct Workspace {
     pub tools: Toolbox,
@@ -52,41 +71,70 @@ impl Workspace {
     /// # Errors
     /// When the workspace does not exist or the CAS key cannot be read.
     pub fn new(o: &WorkspaceOptions) -> Result<Self, String> {
+        Self::with(o, Isolation::default())
+    }
+
+    /// [`Workspace::new`] within `isolation`.
+    ///
+    /// # Errors
+    /// As [`Workspace::new`].
+    pub fn with(o: &WorkspaceOptions, isolation: Isolation) -> Result<Self, String> {
         let mut tools = Toolbox::default();
         let mut described = Vec::new();
         let base = &o.base;
         let home = std::env::var_os("HOME").map(PathBuf::from);
+        let a = isolation.archives;
         let mut instructions = format!(
             "You are a local assistant on Jay's Mac mini, working in his workspace at {}: his \
-             projects (each a repository), his archives and your notes. Relative paths start \
-             there.\n\n\
+             projects (each a repository), {}your notes. Relative paths start there.\n\n\
              How to work:\n\
              - Look things up instead of guessing. Prefer what is on this machine: the workspace \
-             (fs_find, fs_grep, fs_read), the archives (cas_archives, cas_grep, cas_read), your \
-             notes (memory_search) and the conversation itself. Use web_search and web_fetch only \
-             for what cannot be here (outside facts, recent events, other people's \
-             documentation), or when Jay asks for the web.\n\
-             - For an unfamiliar name, check workspace contents, archive contents and notes before \
-             concluding local information is missing or going to the web. cas_archives lists \
-             archive names; pass one exact name to each search, never an empty archive. cas_find \
-             searches file paths ONLY, not contents; use **/*NAME* for filenames at any depth \
-             (* alone does not cross directories). To find references inside files, use cas_grep \
-             in each relevant archive, then cas_read matching files. A zero-match filename search \
-             says nothing about file contents.\n\
+             (fs_find, fs_grep, fs_read), {}your notes (memory_search) and the conversation \
+             itself. Use web_search and web_fetch only for what cannot be here (outside facts, \
+             recent events, other people's documentation), or when Jay asks for the web.\n\
+             - For an unfamiliar name, check workspace contents, {}notes before concluding local \
+             information is missing or going to the web. {}\n\
              - Claim only searches and checks that actually ran, using the recorded tool \
-             evidence. Earlier assistant answers are not evidence. Name the archive, pattern and \
-             scope searched. Report limits, skipped files and errors; an incomplete search cannot \
+             evidence. Earlier assistant answers are not evidence. Name the {}pattern and scope \
+             searched. Report limits, skipped files and errors; an incomplete search cannot \
              prove absence. Never claim variants, notes, other archives or tools were checked \
              unless they were.\n\
              - When you summarise or review work, state what the documents and code say, with \
              the numbers they give; do not rate work above what the evidence shows.\n",
-            base.display()
+            base.display(),
+            if a { "his archives and " } else { "and " },
+            if a {
+                "the archives (cas_archives, cas_grep, cas_read), "
+            } else {
+                ""
+            },
+            if a { "archive contents and " } else { "and " },
+            if a {
+                "cas_archives lists archive names; pass one exact name to each search, never an \
+                 empty archive. cas_find searches file paths ONLY, not contents; use **/*NAME* \
+                 for filenames at any depth (* alone does not cross directories). To find \
+                 references inside files, use cas_grep in each relevant archive, then cas_read \
+                 matching files. A zero-match filename search says nothing about file contents."
+            } else {
+                "fs_find matches file names only; fs_grep searches file contents."
+            },
+            if a { "archive, " } else { "" },
         );
         described.push(format!(
-            "file tools: local drive, read-only, relative to {}",
+            "file tools: {}, read-only, relative to {}",
+            if isolation.confine_reads {
+                "the workspace only"
+            } else {
+                "local drive"
+            },
             base.display()
         ));
-        for tool in FsTools::new(base, home.as_deref()).into_tools() {
+        let fs = if isolation.confine_reads {
+            FsTools::confined(base, home.as_deref())
+        } else {
+            FsTools::new(base, home.as_deref())
+        };
+        for tool in fs.into_tools() {
             tools.push(tool);
         }
         let edits = if o.edit {
@@ -123,26 +171,30 @@ impl Workspace {
         instructions
             .push_str("- Answer briefly and concretely, and name the files you read or changed.");
 
-        let key = match &o.cas_key {
-            Some(path) => Some(
-                data::archive_cas_sign::read_public_key(path)
-                    .map_err(|e| format!("CAS key {}: {e:#}", path.display()))?,
-            ),
-            None => data::archive_cas_sign::default_trusted_key().ok().flatten(),
-        };
-        let archives = Archives::new(o.cas_roots.clone(), key);
-        let roots = archives.roots();
-        described.push(format!(
-            "archive tools: {} Archive CAS root(s) attached ({})",
-            roots.len(),
-            roots
-                .iter()
-                .map(|r| r.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-        for tool in cas_tools(archives) {
-            tools.push(tool);
+        if isolation.archives {
+            let key = match &o.cas_key {
+                Some(path) => Some(
+                    data::archive_cas_sign::read_public_key(path)
+                        .map_err(|e| format!("CAS key {}: {e:#}", path.display()))?,
+                ),
+                None => data::archive_cas_sign::default_trusted_key().ok().flatten(),
+            };
+            let archives = Archives::new(o.cas_roots.clone(), key);
+            let roots = archives.roots();
+            described.push(format!(
+                "archive tools: {} Archive CAS root(s) attached ({})",
+                roots.len(),
+                roots
+                    .iter()
+                    .map(|r| r.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            for tool in cas_tools(archives) {
+                tools.push(tool);
+            }
+        } else {
+            described.push("archive tools: off".into());
         }
 
         if let Some(path) = &o.memory {
@@ -294,4 +346,50 @@ pub fn hand_off(
         .into_iter()
         .flat_map(|(area, files)| files.into_iter().map(move |f| (area.clone(), f)))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An isolated workspace offers no archive tools and does not mention them, and
+    /// says its reads stay in the workspace.
+    #[test]
+    fn isolation_leaves_out_the_archives() {
+        let base = std::env::temp_dir().join(format!("loadngo-isolated-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let options = WorkspaceOptions {
+            base: base.clone(),
+            agent: "test".into(),
+            today: "2026-10-12".into(),
+            edit: true,
+            memory: None,
+            web: false,
+            cas_roots: Vec::new(),
+            cas_key: None,
+        };
+        let open = Workspace::new(&options).unwrap();
+        assert!(open.tools.names().iter().any(|n| n.starts_with("cas_")));
+        let isolated = Workspace::with(
+            &options,
+            Isolation {
+                confine_reads: true,
+                archives: false,
+            },
+        )
+        .unwrap();
+        assert!(!isolated.tools.names().iter().any(|n| n.starts_with("cas_")));
+        assert!(
+            !isolated.instructions.contains("cas_"),
+            "{}",
+            isolated.instructions
+        );
+        assert!(!isolated.instructions.contains("archives ("));
+        assert!(isolated.tools.names().contains(&"text_edit"));
+        assert!(isolated
+            .described
+            .iter()
+            .any(|d| d.contains("the workspace only")));
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

@@ -260,6 +260,11 @@ The chat has loadngo's tools (`loadngo-inference`), as Kimi has them:
 - editing and checking (since 2026-10-04, below): `text_read`, `text_edit`,
   `text_write`, `cargo`, `git`.
 
+For a task run in a copy of the workspace (the coding-agent task set, `~/pudding/agent-tasks`,
+2026-10-12), `--confine` keeps the file tools inside `--base` and `--no-cas` leaves out the
+archive tools and their instructions: the real workspace and the archives' snapshots could
+hold the answer (`agent::workspace::Isolation`).
+
 Kimi's own editing, terminal and board tools are in kimi-k3-in-rust (Apache 2.0). The
 loadngo editing tools are separate, written fresh.
 

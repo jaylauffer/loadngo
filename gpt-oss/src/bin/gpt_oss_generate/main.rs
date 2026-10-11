@@ -81,6 +81,10 @@ Options:
   --no-web         (optional)  without web_search and web_fetch
   --no-memory      (optional)  without the memory tools
   --no-jev         (optional)  without Jev's checkpoints and web gate
+  --no-cas         (optional)  without the Archive CAS tools
+  --confine        (optional)  the file tools read only inside --base (for a task run in
+                               a copy of the workspace, where the real one and the
+                               archives could hold the answer: use with --no-cas)
   --turn-minutes N (optional)  pause a turn after N minutes (default: no limit)
   --turn-tokens N  (optional)  pause a turn after N generated tokens (default: no limit)
   --eval FILE      (optional)  score the orchestration cases in FILE (loadngo
@@ -122,6 +126,8 @@ pub struct Options {
     web: bool,
     notes: bool,
     jev: bool,
+    cas: bool,
+    confine: bool,
     budget: loadngo_inference::agent::Budget,
     resume: Option<String>,
     eval: Option<PathBuf>,
@@ -153,6 +159,8 @@ fn options() -> Options {
         web: true,
         notes: true,
         jev: true,
+        cas: true,
+        confine: false,
         budget: loadngo_inference::agent::Budget::default(),
         resume: None,
         eval: None,
@@ -190,6 +198,8 @@ fn options() -> Options {
             "--no-web" => o.web = false,
             "--no-memory" => o.notes = false,
             "--no-jev" => o.jev = false,
+            "--no-cas" => o.cas = false,
+            "--confine" => o.confine = true,
             "--turn-minutes" => {
                 let minutes = number(value("a number"), "--turn-minutes");
                 o.budget.time =
