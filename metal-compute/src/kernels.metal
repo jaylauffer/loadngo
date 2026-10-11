@@ -734,6 +734,9 @@ struct RecurrenceArgs {
     uint heads;
     uint dk;
     uint dv;
+    // alpha holds one decay per head and step ([t][heads]) instead of one per key
+    // channel ([t][heads][dk]).
+    uint alpha_per_head;
 };
 
 constant constexpr uint RECURRENCE_HALF = 64;
@@ -771,7 +774,7 @@ kernel void delta_rule_recurrence(
         for (uint i = tid; i < a.dk; i += threads) {
             sk[i] = k[at * a.dk + i];
             sq[i] = q[at * a.dk + i];
-            sa[i] = alpha[at * a.dk + i];
+            sa[i] = a.alpha_per_head != 0 ? alpha[at] : alpha[at * a.dk + i];
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
         float u = 0.0f;
@@ -1057,6 +1060,18 @@ kernel void sigmoid_in_place(
 }
 
 // g = silu(g) * u in place, silu(x) = x * sigmoid(x), over n elements.
+// v = v * sigmoid(gate) over n elements: an output gate.
+kernel void sigmoid_gate(
+    device float *v [[buffer(0)]],
+    device const float *gate [[buffer(1)]],
+    constant DecayArgs &a [[buffer(2)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid < a.n) {
+        v[gid] = v[gid] * (1.0f / (1.0f + exp(-gate[gid])));
+    }
+}
+
 kernel void silu_mul(
     device float *g [[buffer(0)]],
     device const float *u [[buffer(1)]],
@@ -1643,13 +1658,15 @@ kernel void add_rows(
     }
 }
 
-// Rotary position embedding by halves, in place: x is [rows][heads][dim]; table holds,
-// per row, dim / 2 pairs (cos, sin). Element i of each head's first half turns with
-// element i of its second half by that pair.
+// Rotary position embedding by halves, in place, on the first `rotary` dimensions of
+// each head: x is [rows][heads][dim]; table holds, per row, rotary / 2 pairs (cos, sin).
+// Element i of the rotated part's first half turns with element i of its second half by
+// that pair; dimensions from `rotary` on are left alone.
 struct RotateArgs {
     uint rows;
     uint heads;
     uint dim;
+    uint rotary;
 };
 
 kernel void rotate_halves(
@@ -1658,7 +1675,7 @@ kernel void rotate_halves(
     constant RotateArgs &a [[buffer(2)]],
     uint gid [[thread_position_in_grid]])
 {
-    const uint half_dim = a.dim / 2;
+    const uint half_dim = a.rotary / 2;
     if (gid < a.rows * a.heads * half_dim) {
         const uint i = gid % half_dim;
         const uint row_head = gid / half_dim;

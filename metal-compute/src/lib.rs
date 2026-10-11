@@ -18,9 +18,11 @@
 //!   window, with keys and values in a ring of rows, and optionally a learned sink
 //!   logit per head.
 //! - Glue between products: norms, row copies and adds, rotary by halves from a cos/sin
-//!   table, gpt-oss's clamped SwiGLU.
+//!   table (on all of each head, or its first dimensions), a sigmoid output gate,
+//!   gpt-oss's clamped SwiGLU.
 //! - `delta_rule_recurrence`: the delta-rule linear-attention recurrence with a decay per
-//!   key channel (Kimi Delta Attention), steps in order, state updated in place.
+//!   key channel (Kimi Delta Attention) or per head (Gated DeltaNet), steps in order,
+//!   state updated in place.
 //!
 //! No model architecture belongs in this crate.
 #![deny(unsafe_code)]

@@ -166,6 +166,7 @@ impl Gpu {
             decay: pipeline("softplus_decay")?,
             sigmoid: pipeline("sigmoid_in_place")?,
             silu_mul: pipeline("silu_mul")?,
+            sigmoid_gate: pipeline("sigmoid_gate")?,
             rmsnorm: pipeline("rmsnorm_rows")?,
             copy_rows: pipeline("copy_rows")?,
             add_rows: pipeline("add_rows")?,
@@ -649,6 +650,7 @@ struct RecurrenceArgs {
     heads: u32,
     dk: u32,
     dv: u32,
+    alpha_per_head: u32,
 }
 
 /// The shape of one [`Batch::delta_rule_recurrence`] dispatch.
@@ -672,6 +674,7 @@ struct Glue {
     decay: Pipeline,
     sigmoid: Pipeline,
     silu_mul: Pipeline,
+    sigmoid_gate: Pipeline,
     rmsnorm: Pipeline,
     copy_rows: Pipeline,
     add_rows: Pipeline,
@@ -680,7 +683,7 @@ struct Glue {
 }
 
 impl Glue {
-    fn all(&self) -> [&Pipeline; 12] {
+    fn all(&self) -> [&Pipeline; 13] {
         [
             &self.conv,
             &self.conv_history,
@@ -689,6 +692,7 @@ impl Glue {
             &self.decay,
             &self.sigmoid,
             &self.silu_mul,
+            &self.sigmoid_gate,
             &self.rmsnorm,
             &self.copy_rows,
             &self.add_rows,
@@ -792,6 +796,7 @@ struct RotateArgs {
     rows: u32,
     heads: u32,
     dim: u32,
+    rotary: u32,
 }
 
 #[repr(C)]
@@ -1458,13 +1463,36 @@ impl Batch<'_> {
     /// `[t][heads][dk]`, `v` and `out` `[t][heads][dv]`, `beta` `[t][heads]`, `state`
     /// `[heads][dk][dv]`, read and then updated in place; all `f32`. Needs `dk` even,
     /// `dk <= 128` and `dv <= 128`.
-    #[allow(clippy::too_many_arguments)]
     pub fn delta_rule_recurrence(
+        &mut self,
+        inputs: (Slice, Slice, Slice, Slice, Slice),
+        state: Slice,
+        out: Slice,
+        shape: RecurrenceShape,
+    ) -> Result<(), Error> {
+        self.recurrence(inputs, state, out, shape, false)
+    }
+
+    /// [`Self::delta_rule_recurrence`] with one decay per head and step: `alpha` is
+    /// `[t][heads]`, and every key channel of a head's state decays by it (Gated
+    /// DeltaNet).
+    pub fn delta_rule_recurrence_head_decay(
+        &mut self,
+        inputs: (Slice, Slice, Slice, Slice, Slice),
+        state: Slice,
+        out: Slice,
+        shape: RecurrenceShape,
+    ) -> Result<(), Error> {
+        self.recurrence(inputs, state, out, shape, true)
+    }
+
+    fn recurrence(
         &mut self,
         (q, k, v, alpha, beta): (Slice, Slice, Slice, Slice, Slice),
         state: Slice,
         out: Slice,
         shape: RecurrenceShape,
+        per_head: bool,
     ) -> Result<(), Error> {
         let RecurrenceShape { t, heads, dk, dv } = shape;
         if t == 0 || heads == 0 || dk == 0 || dk % 2 != 0 || dk > 128 || dv == 0 || dv > 128 {
@@ -1480,13 +1508,14 @@ impl Batch<'_> {
             heads: narrow(heads)?,
             dk: narrow(dk)?,
             dv: narrow(dv)?,
+            alpha_per_head: u32::from(per_head),
         };
         narrow(t * heads * dk.max(dv))?;
         for (what, slice, floats) in [
             ("q", &q, t * heads * dk),
             ("k", &k, t * heads * dk),
             ("v", &v, t * heads * dv),
-            ("alpha", &alpha, t * heads * dk),
+            ("alpha", &alpha, t * heads * if per_head { 1 } else { dk }),
             ("beta", &beta, t * heads),
             ("state", &state, heads * dk * dv),
             ("out", &out, t * heads * dv),
@@ -1678,6 +1707,24 @@ impl Batch<'_> {
         self.check_output(&g, &[&u])?;
         let pipeline = self.gpu.glue.silu_mul.clone();
         self.encode(&pipeline, &[g, u], &args, n.div_ceil(THREADS_PER_GROUP));
+        Ok(())
+    }
+
+    /// `v = v * sigmoid(gate)` in place over `n` elements: an output gate.
+    pub fn sigmoid_gate(&mut self, v: Slice, gate: Slice, n: usize) -> Result<(), Error> {
+        if n == 0 {
+            return Err(Error::Dispatch("empty sigmoid_gate".into()));
+        }
+        let args = DecayArgs {
+            n: narrow(n)?,
+            width: 1,
+            d: 1,
+        };
+        self.check("v", &v, n * 4, 4)?;
+        self.check("gate", &gate, n * 4, 4)?;
+        self.check_output(&v, &[&gate])?;
+        let pipeline = self.gpu.glue.sigmoid_gate.clone();
+        self.encode(&pipeline, &[v, gate], &args, n.div_ceil(THREADS_PER_GROUP));
         Ok(())
     }
 
@@ -1873,22 +1920,36 @@ impl Batch<'_> {
         rows: usize,
         (heads, dim): (usize, usize),
     ) -> Result<(), Error> {
-        if rows == 0 || heads == 0 || dim == 0 || !dim.is_multiple_of(2) {
+        self.rotate_halves_partial(x, table, rows, (heads, dim, dim))
+    }
+
+    /// [`Self::rotate_halves`] on the first `rotary` dimensions of each head only (partial
+    /// rotary embedding): `table` holds per row `rotary / 2` pairs, and element `i` of
+    /// that part's first half turns with element `i` of its second.
+    pub fn rotate_halves_partial(
+        &mut self,
+        x: Slice,
+        table: Slice,
+        rows: usize,
+        (heads, dim, rotary): (usize, usize, usize),
+    ) -> Result<(), Error> {
+        if rows == 0 || heads == 0 || rotary == 0 || rotary > dim || !rotary.is_multiple_of(2) {
             return Err(Error::Dispatch(format!(
-                "unsupported rotation: {rows} rows of {heads} x {dim}"
+                "unsupported rotation: {rows} rows of {heads} x {dim}, {rotary} rotated"
             )));
         }
         let args = RotateArgs {
             rows: narrow(rows)?,
             heads: narrow(heads)?,
             dim: narrow(dim)?,
+            rotary: narrow(rotary)?,
         };
         narrow(rows * heads * dim)?;
         self.check("x", &x, rows * heads * dim * 4, 4)?;
-        self.check("table", &table, rows * dim * 4, 8)?;
+        self.check("table", &table, rows * rotary * 4, 8)?;
         self.check_output(&x, &[&table])?;
         let pipeline = self.gpu.glue.rotate_halves.clone();
-        let groups = (rows * heads * dim / 2).div_ceil(THREADS_PER_GROUP);
+        let groups = (rows * heads * rotary / 2).div_ceil(THREADS_PER_GROUP);
         self.encode(&pipeline, &[x, table], &args, groups);
         Ok(())
     }

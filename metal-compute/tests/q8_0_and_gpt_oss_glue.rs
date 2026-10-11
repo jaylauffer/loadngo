@@ -480,3 +480,67 @@ fn routing_picks_runs_and_combines_experts_on_the_gpu() {
         );
     }
 }
+
+/// Partial rotation turns only the first `rotary` dimensions of each head, by halves of
+/// that part, and leaves the rest; the sigmoid gate multiplies by `sigmoid(gate)`.
+#[test]
+fn partial_rotation_and_the_sigmoid_gate_are_as_defined() {
+    let gpu = Gpu::new().unwrap();
+    let proactor = new_platform_proactor().unwrap();
+    let (rows, heads, dim, rotary) = (5, 3, 256, 64);
+    let x = values(11, rows * heads * dim);
+    let table: Vec<f32> = (0..rows * rotary / 2)
+        .flat_map(|i| {
+            let angle = i as f64 * 0.53;
+            [angle.cos() as f32, angle.sin() as f32]
+        })
+        .collect();
+    let n = 1000;
+    let v = values(12, n);
+    let gate: Vec<f32> = values(13, n).iter().map(|g| g * 20.0).collect();
+    let buffers = vec![
+        upload(&gpu, &x),
+        upload(&gpu, &table),
+        upload(&gpu, &v),
+        upload(&gpu, &gate),
+    ];
+    let mut batch = gpu.batch(buffers, Dispatch::Serial).unwrap();
+    let f = |b: usize, n: usize| Slice::new(b, 0, n * 4);
+    // Odd and too-wide rotary parts are refused.
+    for bad in [63, 258] {
+        assert!(batch
+            .rotate_halves_partial(f(0, x.len()), f(1, table.len()), rows, (heads, dim, bad))
+            .is_err());
+    }
+    batch
+        .rotate_halves_partial(f(0, x.len()), f(1, table.len()), rows, (heads, dim, rotary))
+        .unwrap();
+    batch.sigmoid_gate(f(2, n), f(3, n), n).unwrap();
+    let done = run(&proactor, batch);
+    done.gpu_time.unwrap();
+
+    let half = rotary / 2;
+    let rotated = done.buffers[0].as_f32();
+    for r in 0..rows {
+        for hd in 0..heads {
+            let base = (r * heads + hd) * dim;
+            for i in 0..half {
+                let (c, s) = (
+                    f64::from(table[(r * half + i) * 2]),
+                    f64::from(table[(r * half + i) * 2 + 1]),
+                );
+                let (a, b) = (f64::from(x[base + i]), f64::from(x[base + i + half]));
+                assert!((f64::from(rotated[base + i]) - (a * c - b * s)).abs() < 1e-6);
+                assert!((f64::from(rotated[base + i + half]) - (b * c + a * s)).abs() < 1e-6);
+            }
+            for i in rotary..dim {
+                assert_eq!(rotated[base + i], x[base + i], "row {r} head {hd} dim {i}");
+            }
+        }
+    }
+    let gated = done.buffers[2].as_f32();
+    for i in 0..n {
+        let want = f64::from(v[i]) / (1.0 + (-f64::from(gate[i])).exp());
+        assert!((f64::from(gated[i]) - want).abs() < 1e-6, "{i}");
+    }
+}

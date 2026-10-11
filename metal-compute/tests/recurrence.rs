@@ -276,3 +276,76 @@ fn rejects_unsupported_shapes_and_state_overlapping_an_input() {
         .delta_rule_recurrence(inputs, at(16, 4), at(32, 2), shape)
         .is_ok());
 }
+
+/// One decay per head and step (Gated DeltaNet): the same as a per-channel decay with
+/// that value in every channel of the head.
+#[test]
+fn a_decay_per_head_equals_it_broadcast_over_the_channels() {
+    let gpu = Gpu::new().unwrap();
+    let proactor = new_platform_proactor().unwrap();
+    let s = RecurrenceShape {
+        t: 37,
+        heads: 4,
+        dk: 128,
+        dv: 128,
+    };
+    let mut x = inputs(70, s);
+    let per_head: Vec<f32> = values(71, s.t * s.heads)
+        .iter()
+        .map(|v| 0.75 + 0.25 * v)
+        .collect();
+    x.alpha = per_head
+        .iter()
+        .flat_map(|&a| std::iter::repeat_n(a, s.dk))
+        .collect();
+    let start: Vec<f32> = values(72, s.heads * s.dk * s.dv)
+        .iter()
+        .map(|v| 0.1 * v)
+        .collect();
+    let mut want_state: Vec<f64> = start.iter().map(|&v| f64::from(v)).collect();
+    let want = reference(&x, &mut want_state, s);
+
+    let mut buffers: Vec<Buffer> = [&x.q, &x.k, &x.v, &per_head, &x.beta]
+        .iter()
+        .map(|p| upload(&gpu, p))
+        .collect();
+    buffers.push(upload(&gpu, &start));
+    buffers.push(gpu.buffer(s.t * s.heads * s.dv * 4).unwrap());
+    let slice = |i: usize, floats: usize| Slice::new(i, 0, floats * 4);
+    let mut batch = gpu.batch(buffers, Dispatch::Serial).unwrap();
+    // A per-channel-sized alpha is the wrong shape for a per-head decay.
+    assert!(batch
+        .delta_rule_recurrence_head_decay(
+            (
+                slice(0, x.q.len()),
+                slice(1, x.k.len()),
+                slice(2, x.v.len()),
+                slice(3, x.alpha.len()),
+                slice(4, x.beta.len()),
+            ),
+            slice(5, start.len()),
+            slice(6, s.t * s.heads * s.dv),
+            s,
+        )
+        .is_err());
+    batch
+        .delta_rule_recurrence_head_decay(
+            (
+                slice(0, x.q.len()),
+                slice(1, x.k.len()),
+                slice(2, x.v.len()),
+                slice(3, per_head.len()),
+                slice(4, x.beta.len()),
+            ),
+            slice(5, start.len()),
+            slice(6, s.t * s.heads * s.dv),
+            s,
+        )
+        .unwrap();
+    let done = run(&proactor, batch);
+    done.gpu_time.unwrap();
+    let out_error = max_error(&done.buffers[6].as_f32()[..want.len()], &want);
+    let state_error = max_error(&done.buffers[5].as_f32()[..start.len()], &want_state);
+    assert!(out_error < 1e-4, "output error {out_error:e}");
+    assert!(state_error < 1e-4, "state error {state_error:e}");
+}
