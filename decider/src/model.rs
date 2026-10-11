@@ -56,54 +56,73 @@ pub enum LoadError {
     Tensor(String, String),
 }
 
-/// A row-major `rows x cols` matrix.
-struct Linear {
-    w: Vec<f32>,
-    rows: usize,
-    cols: usize,
+/// A row-major `rows x cols` matrix, and the adapter's low-rank update when it is kept
+/// apart from the weights instead of merged into them.
+pub(crate) struct Linear {
+    pub(crate) w: Vec<f32>,
+    pub(crate) rows: usize,
+    pub(crate) cols: usize,
+    pub(crate) lora: Option<Lora>,
+}
+
+/// `scale * B A`, unmerged: `a` is `r x cols`, `b` is `rows x r`.
+pub(crate) struct Lora {
+    pub(crate) a: Vec<f32>,
+    pub(crate) b: Vec<f32>,
+    pub(crate) r: usize,
+    pub(crate) scale: f32,
 }
 
 impl Linear {
     fn apply(&self, x: &[f32], t: usize) -> Vec<f32> {
-        matmul(x, t, &self.w, self.rows, self.cols)
+        let mut y = matmul(x, t, &self.w, self.rows, self.cols);
+        if let Some(l) = &self.lora {
+            let ax = matmul(x, t, &l.a, l.r, self.cols);
+            let bax = matmul(&ax, t, &l.b, self.rows, l.r);
+            for (y, d) in y.iter_mut().zip(&bax) {
+                *y += l.scale * d;
+            }
+        }
+        y
     }
 }
 
-struct DeltaNet {
-    qkv: Linear,
-    z: Linear,
-    b: Linear,
-    a: Linear,
+pub(crate) struct DeltaNet {
+    pub(crate) qkv: Linear,
+    pub(crate) z: Linear,
+    pub(crate) b: Linear,
+    pub(crate) a: Linear,
     /// `channels x kernel`.
-    conv: Vec<f32>,
-    /// `-exp(A_log)` per value head.
-    decay_rate: Vec<f32>,
-    dt_bias: Vec<f32>,
-    norm: Vec<f32>,
-    out: Linear,
+    pub(crate) conv: Vec<f32>,
+    /// `A_log` per value head, as loaded (rounded to bfloat16 with `bf16`); the decay
+    /// rate is `-exp(A_log)`.
+    pub(crate) a_log: Vec<f32>,
+    pub(crate) dt_bias: Vec<f32>,
+    pub(crate) norm: Vec<f32>,
+    pub(crate) out: Linear,
 }
 
-struct Attention {
-    q: Linear,
-    k: Linear,
-    v: Linear,
-    o: Linear,
-    q_norm: Vec<f32>,
-    k_norm: Vec<f32>,
+pub(crate) struct Attention {
+    pub(crate) q: Linear,
+    pub(crate) k: Linear,
+    pub(crate) v: Linear,
+    pub(crate) o: Linear,
+    pub(crate) q_norm: Vec<f32>,
+    pub(crate) k_norm: Vec<f32>,
 }
 
-enum Mixer {
+pub(crate) enum Mixer {
     Delta(DeltaNet),
     Attention(Attention),
 }
 
-struct Layer {
-    input_norm: Vec<f32>,
-    post_norm: Vec<f32>,
-    mixer: Mixer,
-    gate: Linear,
-    up: Linear,
-    down: Linear,
+pub(crate) struct Layer {
+    pub(crate) input_norm: Vec<f32>,
+    pub(crate) post_norm: Vec<f32>,
+    pub(crate) mixer: Mixer,
+    pub(crate) gate: Linear,
+    pub(crate) up: Linear,
+    pub(crate) down: Linear,
 }
 
 /// The token embedding, kept in its file encoding and widened a row at a time.
@@ -152,16 +171,19 @@ impl Session {
 pub struct Model {
     pub config: TorsoConfig,
     embed: Embedding,
-    layers: Vec<Layer>,
-    norm: Vec<f32>,
+    pub(crate) layers: Vec<Layer>,
+    pub(crate) norm: Vec<f32>,
     /// RoPE inverse frequencies, as transformers computes them in `f32`.
-    inv_freq: Vec<f32>,
+    pub(crate) inv_freq: Vec<f32>,
 }
 
-/// A LoRA adapter to merge while loading: its directory and `alpha / r`.
+/// A LoRA adapter to apply: its directory, `alpha / r`, and whether to merge it into the
+/// weights while loading or keep it apart (as the GPU path does, whose weights stay
+/// bfloat16: merged there, the adapter's update would be rounded with them).
 pub struct Adapter<'a> {
     pub dir: &'a Path,
     pub scale: f32,
+    pub merge: bool,
 }
 
 pub(crate) struct Weights {
@@ -251,7 +273,7 @@ impl Model {
             "model."
         };
         let lora = adapter
-            .map(|a| Weights::open(a.dir).map(|w| (w, a.scale)))
+            .map(|a| Weights::open(a.dir).map(|w| (w, a.scale, a.merge)))
             .transpose()?;
         let c = &config;
         let embed_name = format!("{prefix}embed_tokens.weight");
@@ -279,17 +301,27 @@ impl Model {
             let linear =
                 |name: &str, rows: usize, cols: usize, w: Vec<f32>| -> Result<Linear, LoadError> {
                     let mut w = w;
-                    if let Some((lora, scale)) = &lora {
-                        merge_lora(
-                            &mut w,
-                            rows,
-                            cols,
-                            lora,
-                            *scale,
-                            &format!("base_model.model.layers.{i}.{name}"),
-                        )?;
+                    let mut kept = None;
+                    if let Some((lora, scale, merge)) = &lora {
+                        let module = format!("base_model.model.layers.{i}.{name}");
+                        let (a, b, r) = read_lora(lora, rows, cols, &module)?;
+                        if *merge {
+                            merge_lora(&mut w, cols, (&a, &b, r), *scale);
+                        } else {
+                            kept = Some(Lora {
+                                a,
+                                b,
+                                r,
+                                scale: *scale,
+                            });
+                        }
                     }
-                    Ok(Linear { w, rows, cols })
+                    Ok(Linear {
+                        w,
+                        rows,
+                        cols,
+                        lora: kept,
+                    })
                 };
             let (h, f) = (c.hidden, c.intermediate);
             let mut shared = weights.read(&[
@@ -335,7 +367,7 @@ impl Model {
                         b: linear("linear_attn.in_proj_b", c.value_heads, h, b_w)?,
                         a: linear("linear_attn.in_proj_a", c.value_heads, h, a_w)?,
                         conv,
-                        decay_rate: a_log.iter().map(|v| -v.exp()).collect(),
+                        a_log,
                         dt_bias,
                         norm,
                         out: linear("linear_attn.out_proj", h, vd, out)?,
@@ -479,7 +511,7 @@ impl Model {
         x
     }
 
-    fn embedding(&self, id: u32) -> Vec<f32> {
+    pub(crate) fn embedding(&self, id: u32) -> Vec<f32> {
         let e = &self.embed;
         let size = e.dtype.size_bytes();
         let row = id as usize * e.hidden * size;
@@ -563,7 +595,8 @@ impl Model {
                         for x in &mut q {
                             *x *= q_scale;
                         }
-                        let g = d.decay_rate[head] * softplus(a[p * vh + head] + d.dt_bias[head]);
+                        let rate = -d.a_log[head].exp();
+                        let g = rate * softplus(a[p * vh + head] + d.dt_bias[head]);
                         let decay = g.exp();
                         let beta = sigmoid(b[p * vh + head]);
                         for x in s.iter_mut() {
@@ -703,21 +736,24 @@ fn l2_normalize(x: &mut [f32]) {
     }
 }
 
-/// `w += scale * B A`, from the adapter's `lora_A` (`r x cols`) and `lora_B` (`rows x r`).
-fn merge_lora(
-    w: &mut [f32],
+/// The adapter's `lora_A` (`r x cols`) and `lora_B` (`rows x r`) for `module`, and `r`.
+fn read_lora(
+    lora: &Weights,
     rows: usize,
     cols: usize,
-    lora: &Weights,
-    scale: f32,
     module: &str,
-) -> Result<(), LoadError> {
+) -> Result<(Vec<f32>, Vec<f32>, usize), LoadError> {
     let a_name = format!("{module}.lora_A.weight");
     let b_name = format!("{module}.lora_B.weight");
     let r = usize::try_from(lora.info(&a_name)?.shape.first().copied().unwrap_or(0)).unwrap_or(0);
     let mut ab = lora.read(&[(&a_name, r * cols), (&b_name, rows * r)])?;
     let b = ab.pop().expect("two");
     let a = ab.pop().expect("two");
+    Ok((a, b, r))
+}
+
+/// `w += scale * B A`.
+fn merge_lora(w: &mut [f32], cols: usize, (a, b, r): (&[f32], &[f32], usize), scale: f32) {
     par_chunks(w, cols, |row, w| {
         for k in 0..r {
             let coefficient = scale * b[row * r + k];
@@ -726,5 +762,4 @@ fn merge_lora(
             }
         }
     });
-    Ok(())
 }

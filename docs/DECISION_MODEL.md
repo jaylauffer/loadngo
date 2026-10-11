@@ -1,8 +1,10 @@
 # Decision model: Strands Decider in loadngo
 
-Status, 2026-10-10: the `loadngo-decider` crate answers System One requests on the CPU with
-the published Strands Decider checkpoint, and its answers match the reference
-implementation to 4.6e-5. A GPU path is next.
+Status, 2026-10-12: the `loadngo-decider` crate answers System One requests with the
+published Strands Decider checkpoint on Apple GPUs (`decide` uses the GPU by default on
+macOS) or on the CPU. On the CPU its answers match the reference implementation to 4.6e-5;
+on the GPU to 1.4e-4, with a 200-token report answered in 0.45 s (CPU 7.3 s, reference
+engine on MLX 0.4 s).
 
 ## What it is and why
 
@@ -53,8 +55,10 @@ only).
   `loadngo_inference::system_one::Decide`, which the agent loop's Jev checks
   (`agent::jev`) and the evaluation (`agent::eval`) now take. A chat model takes part through
   `LetterReadout`, which reads its option letters as before.
+- `decider/src/gpu.rs` (macOS): the torso on `loadngo-metal-compute` (below).
 - `decide` (`cargo run --release -p loadngo-decider --features cli --bin decide`): a request
-  on stdin, answers on stdout; `--eval FILE` scores the orchestration cases.
+  on stdin, answers on stdout; `--eval FILE` scores the orchestration cases; `--device cpu`
+  runs the reference path.
 
 ## How it is checked
 
@@ -94,29 +98,66 @@ The tests catch these mutations:
   - `Request::from_text` therefore keeps the document's order for questions and options;
     `from_json` cannot.
 
-## Cost on the CPU (Mac mini, M4 Pro)
+## The GPU path
 
-| | |
-|---|---|
-| Load (files in the page cache) | 2 s; 8.5 GB resident (the torso widened to `f32`) |
-| README request (3 questions, 25-token state) | 4.2 s |
-| A 200-token report, 2 questions | 7.3 s |
-| A 1,700-token state, 2 questions | 36 s |
+`decider/src/gpu.rs`, on `loadngo-metal-compute`; the CPU path is its reference.
 
-The reference engine on MLX takes 0.4 s per report. The CPU path is the reference that the
-GPU path will be checked against, not the way to serve it.
+- **Weights.** Copied once into GPU memory as bfloat16, exactly as the base model's files
+  hold them.
+- **The adapter is kept apart.** Merged into bfloat16 weights, its small update would be
+  rounded with them; the reference's MLX path merges and differs by up to 0.014.
+  - Projections that read the same input share one product of their stacked `A`s, padded
+    with zero rows to a multiple of 64.
+  - Each `scale * B` is padded with zero columns to match.
+  - So both run on the matrix units. With a product per `A` and per `B` at their own
+    narrow shapes, the adapter took half of a 1,024-position read (2.29 s; 1.25 s
+    stacked).
+- **Passes.** Reads go in passes of up to 512 positions, one submission for all 24 layers,
+  each finishing as a completion on a loadngo proactor.
+- **Sessions.** A session's carried state (each DeltaNet layer's convolution history and
+  recurrent state, each attention layer's keys and values for the 4,096-token window) is one
+  buffer of about 120 MB. Reading each question from a copy of the state's session is a copy
+  in shared memory. The decider keeps two sessions between requests.
+- **New kernels** in `loadngo-metal-compute`:
+  - `delta_rule_recurrence_head_decay` (Qwen's decay is per head, Kimi's per key channel);
+  - `rotate_halves_partial` (RoPE on the first quarter of each head);
+  - `sigmoid_gate` (attention's output gate).
+
+  Each is tested against its definition in `f64`. The pointer head stays on the CPU: it
+  reads a few rows.
+
+### How it is checked (`decider/tests/gpu.rs`, ignored: needs the checkpoint)
+
+| Test | Against | Result (2026-10-12) |
+|---|---|---|
+| `answers_match_the_reference_engine` | the end-to-end fixture (reference engine, CPU, `f32`) | largest probability difference 1.4e-4 |
+| `hidden_states_match_the_cpu_across_passes_and_session_copies` | this crate's CPU path, 1,683 positions over four passes, the last 40 read from a copied session | largest relative (L2) difference per position 3.4e-4; bound 2e-3 |
+| the orchestration eval, 127 cases (`decide --eval`) | the reference engine on MLX, same questions (`eval/results-strands-decider-split.json`) | same state class in 127 of 127; class probabilities within 0.009 |
+
+The hidden-state test catches these mutations: no attention output gate; the convolution
+history not moved on; a session copy without its key/value caches; the adapter's `B` at
+the wrong columns. The eval's attention figure is not comparable with that run: the Python
+scorer asked it as a `noul`, the Rust eval asks yes/no in two orders.
+
+## Cost (Mac mini, M4 Pro)
+
+| | CPU (`f32`) | GPU |
+|---|---:|---:|
+| Load (files in the page cache) | 2 s; 8.5 GB resident | 2.2 s; peak 11 GB while loading (the weights pass through `f32` on the way in) |
+| README request (3 questions, 25-token state) | 4.2 s | 0.42 s |
+| A 200-token report, 2 questions | 7.3 s | 0.45 s |
+| A 1,700-token state, 2 questions | 36 s | 2.5 s |
+| The orchestration eval, 127 cases | | 168 s (median 1.2 s per case) |
+
+- The GPU products run at about 2.5 TFLOP/s: 1,024 positions in about 1.1 s without the
+  adapter, which is the tiled bfloat16 kernel's speed.
+- The reference engine on MLX takes 0.4 s per report and 53 s for the eval.
+- The eval asks each case twice (options in both orders), each time reading the state again;
+  one request with all four questions would read it once.
 
 ## Next
 
-1. **GPU path** on `loadngo-metal-compute`.
-   - Most kernels exist from Kimi Linear's KDA work: `gemm_bf16` for the projections,
-     `delta_rule_recurrence` (a per-channel decay; Qwen's is per head, so it is broadcast),
-     `causal_conv_silu`, `l2norm_rows`, `rmsnorm_gated_rows`, `attention_grouped`.
-   - New: partial RoPE, attention's output gate, and the pointer head.
-   - The adapter merges into bfloat16 weights there; the reference's MLX path does the same
-     and differs by up to 0.014.
-   - Checked against this crate on the end-to-end requests.
-2. **Weights from the CAS by hash**, as `network::model_service` serves gpt-oss, instead of
-   the Hugging Face cache.
-3. **The node hosts it** (`LOADNGO_NODE.md`). The agent loop's Jev checks then ask it, in
+1. **Weights from the CAS by hash**, as `network::model_service` serves gpt-oss, instead of
+   the Hugging Face cache; loaded as bfloat16 bytes, not through `f32`.
+2. **The node hosts it** (`LOADNGO_NODE.md`). The agent loop's Jev checks then ask it, in
    shadow first, until labels from Jay show the confidence holds.

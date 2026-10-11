@@ -1,13 +1,14 @@
-//! `decide`: Strands Decider answering System One requests on this machine's CPU.
+//! `decide`: Strands Decider answering System One requests on this machine's GPU (macOS)
+//! or CPU.
 
 use std::{io::Read, path::PathBuf, time::Instant};
 
-use loadngo_decider::Decider;
+use loadngo_decider::{Decider, Device};
 use loadngo_inference::system_one::{response_json, Request};
 
 const USAGE: &str = "\
 decide: answer typed System One questions with Strands Decider (Qwen3.5-2B and a
-pointer head), on the CPU, with nothing generated.
+pointer head), on the GPU (macOS) or the CPU, with nothing generated.
 
 Reads a request from stdin and prints the answers:
 
@@ -21,6 +22,8 @@ Options (all optional):
                      StrandsAgents/strands-decider-2B-hobson-v21 at 2b52a623
   --base DIR         its base model, Qwen3.5-2B-Base (config.json, safetensors); default:
                      the Hugging Face cache's Qwen/Qwen3.5-2B-Base at b1485b2f
+  --device gpu|cpu   where the model runs; default: gpu on macOS, cpu elsewhere. The
+                     CPU path (f32) is the reference the GPU path is checked against.
   --eval FILE        instead of a request, score the orchestration cases in FILE
                      (loadngo_inference::agent::eval): report to stderr, JSON to stdout
   -h, --help         this text
@@ -50,6 +53,11 @@ fn main() {
     let mut checkpoint = None;
     let mut base = None;
     let mut eval = None;
+    let mut device = if cfg!(target_os = "macos") {
+        Device::Gpu
+    } else {
+        Device::Cpu
+    };
     while let Some(arg) = args.next() {
         let mut value = || {
             args.next()
@@ -64,6 +72,13 @@ fn main() {
             "--checkpoint" => checkpoint = Some(value()),
             "--base" => base = Some(value()),
             "--eval" => eval = Some(value()),
+            "--device" => {
+                device = match args.next().as_deref() {
+                    Some("gpu") => Device::Gpu,
+                    Some("cpu") => Device::Cpu,
+                    _ => fail("--device takes gpu or cpu"),
+                }
+            }
             other => fail(&format!("unknown option {other}")),
         }
     }
@@ -80,8 +95,13 @@ fn main() {
         )
     });
     let started = Instant::now();
-    let mut decider = Decider::load(&checkpoint, &base).unwrap_or_else(|e| fail(&e.to_string()));
-    eprintln!("decide: loaded in {:.1}s", started.elapsed().as_secs_f64());
+    let mut decider =
+        Decider::load_on(&checkpoint, &base, device).unwrap_or_else(|e| fail(&e.to_string()));
+    eprintln!(
+        "decide: loaded on {} in {:.1}s",
+        decider.device(),
+        started.elapsed().as_secs_f64()
+    );
     if let Some(path) = eval {
         evaluate(&mut decider, &path);
         return;

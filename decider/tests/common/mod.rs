@@ -79,3 +79,28 @@ pub fn request(case: &Value) -> (String, Vec<(String, Question)>) {
         .collect();
     (text(&r["state"]), questions)
 }
+
+/// The reference engine's probabilities for question `id` of a fixture case, labelled as
+/// [`request`] labels the options: a noul's `true`; a score's levels by number.
+pub fn expected(case: &Value, id: &str, question: &Question) -> Vec<(String, f32)> {
+    let want = &case["answers"][id];
+    match want["type"].as_str().unwrap() {
+        #[allow(clippy::cast_possible_truncation)]
+        "noul" => vec![("true".into(), want["noul"].as_f64().unwrap() as f32)],
+        _ => want["probabilities"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| {
+                let label = match question {
+                    Question::Score { criteria, .. } => {
+                        criteria[k.parse::<usize>().unwrap()].0.clone()
+                    }
+                    _ => k.clone(),
+                };
+                #[allow(clippy::cast_possible_truncation)]
+                (label, v.as_f64().unwrap() as f32)
+            })
+            .collect(),
+    }
+}

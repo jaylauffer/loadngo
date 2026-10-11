@@ -30,7 +30,6 @@ fn every_answer_matches_the_reference_engine() {
             .unwrap();
         for ((id, question), (got_id, got)) in questions.iter().zip(&answers) {
             assert_eq!(id, got_id);
-            let want = &case["answers"][id];
             let p = |label: &str| {
                 got.probabilities
                     .iter()
@@ -38,27 +37,7 @@ fn every_answer_matches_the_reference_engine() {
                     .unwrap()
                     .1
             };
-            let expected: Vec<(String, f32)> = match want["type"].as_str().unwrap() {
-                #[allow(clippy::cast_possible_truncation)]
-                "noul" => vec![("true".into(), want["noul"].as_f64().unwrap() as f32)],
-                _ => want["probabilities"]
-                    .as_object()
-                    .unwrap()
-                    .iter()
-                    .map(|(k, v)| {
-                        // A score's levels are numbered; ours keep the request's labels in order.
-                        let label = match question {
-                            loadngo_inference::system_one::Question::Score { criteria, .. } => {
-                                criteria[k.parse::<usize>().unwrap()].0.clone()
-                            }
-                            _ => k.clone(),
-                        };
-                        #[allow(clippy::cast_possible_truncation)]
-                        (label, v.as_f64().unwrap() as f32)
-                    })
-                    .collect(),
-            };
-            for (label, want) in expected {
+            for (label, want) in common::expected(case, id, question) {
                 let error = (p(&label) - want).abs();
                 if std::env::var_os("DECIDER_E2E_VERBOSE").is_some() {
                     eprintln!(

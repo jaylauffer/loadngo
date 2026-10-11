@@ -1618,6 +1618,7 @@ version = "0.1.0"
 dependencies = [
  "icu_normalizer",
  "loadngo-inference",
+ "loadngo-metal-compute",
  "loadngo-proactor",
  "loadngo-weights",
  "serde_json",

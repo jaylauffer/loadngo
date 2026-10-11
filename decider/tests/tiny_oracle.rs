@@ -29,11 +29,16 @@ fn fixture() -> (std::path::PathBuf, Value, Vec<f32>) {
 }
 
 fn load(dir: &Path) -> Model {
+    load_adapter(dir, true)
+}
+
+fn load_adapter(dir: &Path, merge: bool) -> Model {
     Model::load(
         dir,
         Some(Adapter {
             dir: &dir.join("lora"),
             scale: 8.0 / 4.0,
+            merge,
         }),
         false,
     )
@@ -64,6 +69,16 @@ fn every_position_matches_transformers() {
     let got = model.forward(&mut model.session(), &ids(&oracle));
     let error = worst(&got, &want);
     eprintln!("largest hidden-state error over 70 positions: {error:e}");
+    assert!(error < TOLERANCE, "max error {error}");
+}
+
+/// The adapter kept apart (as the GPU path keeps it) gives the same states as merged.
+#[test]
+fn an_unmerged_adapter_matches_transformers_too() {
+    let (dir, oracle, want) = fixture();
+    let model = load_adapter(&dir, false);
+    let got = model.forward(&mut model.session(), &ids(&oracle));
+    let error = worst(&got, &want);
     assert!(error < TOLERANCE, "max error {error}");
 }
 

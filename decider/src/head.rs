@@ -70,6 +70,12 @@ impl Head {
             .collect()
     }
 
+    /// Width of the hidden states it reads.
+    #[must_use]
+    pub fn hidden(&self) -> usize {
+        self.hidden
+    }
+
     /// Each option's score, before temperature.
     #[must_use]
     pub fn logits(&self, answer: &[f32], options: &[&[f32]]) -> Vec<f32> {
