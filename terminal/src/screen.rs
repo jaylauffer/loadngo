@@ -4,8 +4,8 @@
 //! It implements what shells, `cargo`, `git`, `less`, `vim`, `top` and the
 //! like use: cursor movement, erasing, insert and delete, scroll regions,
 //! the alternate screen, 16, 256 and 24-bit colors, line drawing, bracketed
-//! paste and the replies programs ask for (cursor position, device
-//! attributes, colors). Not implemented: mouse reporting, double-width
+//! paste, mouse reporting and the replies programs ask for (cursor
+//! position, device attributes, colors). Not implemented: double-width
 //! lines, reflow on resize, and combining characters (they are dropped).
 
 use std::collections::VecDeque;
@@ -136,6 +136,36 @@ enum Charset {
     Graphics,
 }
 
+/// Which pointer events a program asked to be told about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MouseTracking {
+    #[default]
+    Off,
+    /// Presses only, without modifiers (mode 9, X10).
+    Press,
+    /// Presses, releases and the wheel (mode 1000).
+    Click,
+    /// Clicks, and movement while a button is held (mode 1002).
+    Drag,
+    /// Clicks and all movement (mode 1003).
+    Motion,
+}
+
+/// How mouse reports are written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MouseEncoding {
+    /// `ESC [ M` and three bytes; positions past column or row 223 cannot
+    /// be reported.
+    #[default]
+    Legacy,
+    /// As `Legacy`, positions as UTF-8 characters (mode 1005).
+    Utf8,
+    /// `ESC [ < button ; col ; row M` or `m` for a release (mode 1006).
+    Sgr,
+    /// `ESC [ button ; col ; row M` (mode 1015).
+    Urxvt,
+}
+
 /// Modes a program can switch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Modes {
@@ -145,6 +175,10 @@ pub struct Modes {
     pub show_cursor: bool,
     /// Pasted text is wrapped in `ESC [200~` ... `ESC [201~`.
     pub bracketed_paste: bool,
+    /// Mouse reporting; programs turn it off when they leave the
+    /// alternate screen, and leaving it turns it off for those that do not.
+    pub mouse: MouseTracking,
+    pub mouse_encoding: MouseEncoding,
     insert: bool,
     origin: bool,
 }
@@ -156,6 +190,8 @@ impl Default for Modes {
             autowrap: true,
             show_cursor: true,
             bracketed_paste: false,
+            mouse: MouseTracking::Off,
+            mouse_encoding: MouseEncoding::Legacy,
             insert: false,
             origin: false,
         }
@@ -570,6 +606,10 @@ impl Terminal {
             if save_cursor {
                 self.restore_cursor();
             }
+            // A program that ended without turning reporting off would
+            // otherwise leave the shell receiving clicks as typed text.
+            self.modes.mouse = MouseTracking::Off;
+            self.modes.mouse_encoding = MouseEncoding::Legacy;
         }
         self.scroll_top = 0;
         self.scroll_bottom = self.rows - 1;
@@ -626,6 +666,31 @@ impl Terminal {
                 }
                 (true, 1049) => self.set_alternate(on, true),
                 (true, 2004) => self.modes.bracketed_paste = on,
+                (true, 9 | 1000 | 1002 | 1003) => {
+                    let tracking = match mode {
+                        9 => MouseTracking::Press,
+                        1000 => MouseTracking::Click,
+                        1002 => MouseTracking::Drag,
+                        _ => MouseTracking::Motion,
+                    };
+                    if on {
+                        self.modes.mouse = tracking;
+                    } else if self.modes.mouse == tracking {
+                        self.modes.mouse = MouseTracking::Off;
+                    }
+                }
+                (true, 1005 | 1006 | 1015) => {
+                    let encoding = match mode {
+                        1005 => MouseEncoding::Utf8,
+                        1006 => MouseEncoding::Sgr,
+                        _ => MouseEncoding::Urxvt,
+                    };
+                    if on {
+                        self.modes.mouse_encoding = encoding;
+                    } else if self.modes.mouse_encoding == encoding {
+                        self.modes.mouse_encoding = MouseEncoding::Legacy;
+                    }
+                }
                 _ => {}
             }
         }
@@ -940,8 +1005,12 @@ impl Perform for Terminal {
             (None, [], 's') => self.save_cursor(),
             (None, [], 'u') => self.restore_cursor(),
             (None, [b'!'], 'p') => {
-                // Soft reset.
-                self.modes = Modes::default();
+                // Soft reset; as in xterm, mouse reporting stays.
+                self.modes = Modes {
+                    mouse: self.modes.mouse,
+                    mouse_encoding: self.modes.mouse_encoding,
+                    ..Modes::default()
+                };
                 self.cursor.style = Style::default();
                 self.scroll_top = 0;
                 self.scroll_bottom = self.rows - 1;
@@ -1170,6 +1239,46 @@ mod tests {
         assert_eq!(cells[1].style.bg, Color::Rgb(1, 2, 3));
         assert_eq!(cells[2].style.fg, Color::Rgb(4, 5, 6));
         assert_eq!(cells[3].style, Style::default());
+    }
+
+    #[test]
+    fn programs_switch_mouse_reporting_on_and_off() {
+        let mut term = Terminal::new(10, 3);
+        assert_eq!(term.modes.mouse, MouseTracking::Off);
+        term.feed(b"\x1b[?1000h\x1b[?1006h");
+        assert_eq!(term.modes.mouse, MouseTracking::Click);
+        assert_eq!(term.modes.mouse_encoding, MouseEncoding::Sgr);
+        term.feed(b"\x1b[?1002h");
+        assert_eq!(term.modes.mouse, MouseTracking::Drag);
+        // Turning off a mode that is not the current one changes nothing.
+        term.feed(b"\x1b[?1000l\x1b[?1015l");
+        assert_eq!(term.modes.mouse, MouseTracking::Drag);
+        assert_eq!(term.modes.mouse_encoding, MouseEncoding::Sgr);
+        term.feed(b"\x1b[!p");
+        assert_eq!(term.modes.mouse, MouseTracking::Drag, "soft reset keeps it");
+        term.feed(b"\x1b[?1002l\x1b[?1006l");
+        assert_eq!(term.modes.mouse, MouseTracking::Off);
+        assert_eq!(term.modes.mouse_encoding, MouseEncoding::Legacy);
+        term.feed(b"\x1b[?1003;1005h");
+        assert_eq!(term.modes.mouse, MouseTracking::Motion);
+        assert_eq!(term.modes.mouse_encoding, MouseEncoding::Utf8);
+        term.feed(b"\x1bc");
+        assert_eq!(term.modes.mouse, MouseTracking::Off, "full reset");
+        assert_eq!(term.modes.mouse_encoding, MouseEncoding::Legacy);
+    }
+
+    #[test]
+    fn leaving_the_alternate_screen_ends_mouse_reporting() {
+        let mut term = Terminal::new(10, 3);
+        term.feed(b"\x1b[?1049h\x1b[?1003h\x1b[?1006h");
+        assert_eq!(term.modes.mouse, MouseTracking::Motion);
+        term.feed(b"\x1b[?1049l");
+        assert_eq!(term.modes.mouse, MouseTracking::Off);
+        assert_eq!(term.modes.mouse_encoding, MouseEncoding::Legacy);
+        // A program on the normal screen keeps it (fzf --height).
+        term.feed(b"\x1b[?1000h");
+        term.feed(b"\x1b[?1049l");
+        assert_eq!(term.modes.mouse, MouseTracking::Click);
     }
 
     #[test]

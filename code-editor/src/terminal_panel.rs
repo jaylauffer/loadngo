@@ -6,16 +6,22 @@
 //! [`TerminalPanel::output`]. Every cell sits on a grid of equal widths, as
 //! programs that draw tables and full screens need, while each glyph is the
 //! editor's own font, centered in its cell.
+//!
+//! The pointer selects and the wheel scrolls back, unless the program
+//! asked for pointer events (`vim` with `mouse=a`, `htop`, `tmux`): then
+//! clicks, drags and the wheel over the screen go to it, and holding Shift
+//! selects and scrolls back as before.
 
 use std::path::PathBuf;
 
 use loadngo_terminal::{
-    encode_key, encode_paste, Cell, Color as TermColor, Key as TermKey, Modifiers as TermModifiers,
-    Terminal, BOLD, DIM, HIDDEN, INVERSE, STRIKE, UNDERLINE,
+    encode_key, encode_mouse, encode_paste, Cell, Color as TermColor, Key as TermKey,
+    Modifiers as TermModifiers, MouseAction, MouseButton, MouseEvent, MouseTracking, Terminal,
+    BOLD, DIM, HIDDEN, INVERSE, STRIKE, UNDERLINE,
 };
 use ui_core::{
-    Color, HorizontalAlign, PaintOp, Point, Rect, TextLayoutMode, TextOverflow, TextStyle,
-    VerticalAlign,
+    Color, HorizontalAlign, PaintOp, Point, PointerButton, Rect, TextLayoutMode, TextOverflow,
+    TextStyle, VerticalAlign,
 };
 
 use crate::draw;
@@ -148,6 +154,12 @@ pub struct TerminalPanel {
     size: (usize, usize),
     /// The pointer is pressed in the body, selecting.
     selecting: bool,
+    /// The button pressed in the body and reported to the program; its
+    /// drags and release are reported too.
+    reporting: Option<MouseButton>,
+    /// The screen cell of the last report, so movement within a cell
+    /// sends nothing.
+    reported_cell: Option<(usize, usize)>,
 }
 
 impl TerminalPanel {
@@ -388,11 +400,7 @@ impl TerminalPanel {
         let mut bytes = Vec::new();
         encode_key(
             key,
-            TermModifiers {
-                shift: modifiers.shift,
-                alt: modifiers.alt,
-                ctrl: modifiers.ctrl,
-            },
+            term_modifiers(modifiers),
             tab.term.modes.app_cursor,
             &mut bytes,
         );
@@ -426,9 +434,72 @@ impl TerminalPanel {
         ))
     }
 
+    /// Whether pointer events over the screen go to the program: it asked
+    /// for them, the view is at the bottom, and Shift is not held.
+    fn program_has_mouse(&self, modifiers: ui_core::Modifiers) -> bool {
+        self.tabs.get(self.active).is_some_and(|tab| {
+            tab.exited.is_none()
+                && tab.scroll == 0
+                && tab.term.modes.mouse != MouseTracking::Off
+                && !modifiers.shift
+        })
+    }
+
+    /// The screen cell (column, row) under `point`, clamped to the screen.
+    fn screen_cell(&self, point: Point) -> (usize, usize) {
+        let body = self.layout.body;
+        let (cols, rows) = self
+            .tabs
+            .get(self.active)
+            .map_or((1, 1), |tab| (tab.term.cols(), tab.term.rows()));
+        let col = ((point.x - body.x - PADDING) / self.cell.0.max(1.0)).max(0.0) as usize;
+        let row = ((point.y - body.y - PADDING) / self.cell.1.max(1.0)).max(0.0) as usize;
+        (col.min(cols - 1), row.min(rows - 1))
+    }
+
+    /// Sends the program a pointer event, if it asked for this kind.
+    fn report(
+        &mut self,
+        action: MouseAction,
+        button: MouseButton,
+        point: Point,
+        modifiers: ui_core::Modifiers,
+    ) -> bool {
+        let (col, row) = self.screen_cell(point);
+        let Some(tab) = self.tabs.get(self.active) else {
+            return false;
+        };
+        if tab.exited.is_some() {
+            return false;
+        }
+        let event = MouseEvent {
+            action,
+            button,
+            col,
+            row,
+            modifiers: term_modifiers(modifiers),
+        };
+        let mut bytes = Vec::new();
+        let modes = tab.term.modes;
+        if !encode_mouse(event, modes.mouse, modes.mouse_encoding, &mut bytes) {
+            return false;
+        }
+        self.reported_cell = Some((col, row));
+        self.outbox
+            .push(TerminalRequest::Write { id: tab.id, bytes });
+        true
+    }
+
     /// A press in the panel; true when it took the press. Clicking the body
-    /// focuses the terminal and starts a selection.
-    pub fn pressed(&mut self, point: Point, cwd: &dyn Fn() -> (PathBuf, String)) -> bool {
+    /// focuses the terminal and starts a selection, or goes to a program
+    /// that asked for pointer events.
+    pub fn pressed(
+        &mut self,
+        point: Point,
+        button: PointerButton,
+        modifiers: ui_core::Modifiers,
+        cwd: &dyn Fn() -> (PathBuf, String),
+    ) -> bool {
         if !self.layout.header.contains(point) && !self.layout.body.contains(point) {
             return false;
         }
@@ -450,7 +521,22 @@ impl TerminalPanel {
             }
             return true;
         }
-        if self.layout.body.contains(point) {
+        if !self.layout.body.contains(point) {
+            return true;
+        }
+        if self.program_has_mouse(modifiers) {
+            let button = match button {
+                PointerButton::Primary => MouseButton::Left,
+                PointerButton::Secondary => MouseButton::Right,
+                PointerButton::Middle => MouseButton::Middle,
+            };
+            if let Some(tab) = self.tabs.get_mut(self.active) {
+                tab.selection = None;
+            }
+            if self.report(MouseAction::Press, button, point, modifiers) {
+                self.reporting = Some(button);
+            }
+        } else if button == PointerButton::Primary {
             if let Some(cell) = self.cell_at(point) {
                 if let Some(tab) = self.tabs.get_mut(self.active) {
                     tab.selection = Some((cell, cell));
@@ -461,28 +547,52 @@ impl TerminalPanel {
         true
     }
 
-    pub fn dragged(&mut self, point: Point) {
-        if !self.selecting {
-            return;
-        }
-        let Some(cell) = self.cell_at(point) else {
-            return;
-        };
-        if let Some(tab) = self.tabs.get_mut(self.active) {
-            if let Some((start, _)) = tab.selection {
-                tab.selection = Some((start, cell));
+    /// The pointer moved, with a button held (`button_down`) or not.
+    pub fn moved(&mut self, point: Point, button_down: bool, modifiers: ui_core::Modifiers) {
+        if self.selecting {
+            let Some(cell) = self.cell_at(point) else {
+                return;
+            };
+            if let Some(tab) = self.tabs.get_mut(self.active) {
+                if let Some((start, _)) = tab.selection {
+                    tab.selection = Some((start, cell));
+                }
             }
+            return;
+        }
+        let button = match self.reporting {
+            Some(button) => button,
+            // A press that began elsewhere.
+            None if button_down => return,
+            None if self.layout.body.contains(point) && self.program_has_mouse(modifiers) => {
+                MouseButton::None
+            }
+            None => return,
+        };
+        if self.reported_cell != Some(self.screen_cell(point)) {
+            self.report(MouseAction::Motion, button, point, modifiers);
         }
     }
 
-    pub fn released(&mut self) {
+    pub fn released(&mut self, point: Point, modifiers: ui_core::Modifiers) {
         self.selecting = false;
+        if let Some(button) = self.reporting.take() {
+            self.report(MouseAction::Release, button, point, modifiers);
+        }
     }
 
-    /// The wheel over the panel: scrolls back through the output, or on a
+    /// The wheel over the panel: goes to a program that asked for pointer
+    /// events, otherwise scrolls back through the output, or on a
     /// full-screen program's alternate screen sends it arrow keys.
-    pub fn wheel(&mut self, delta_y: f32, precise: bool) {
+    pub fn wheel(
+        &mut self,
+        point: Point,
+        delta_y: f32,
+        precise: bool,
+        modifiers: ui_core::Modifiers,
+    ) {
         let row_height = self.cell.1.max(1.0);
+        let to_program = self.layout.body.contains(point) && self.program_has_mouse(modifiers);
         let Some(tab) = self.tabs.get_mut(self.active) else {
             return;
         };
@@ -494,6 +604,17 @@ impl TerminalPanel {
         let lines = tab.wheel_rest.trunc();
         tab.wheel_rest -= lines;
         if lines == 0.0 {
+            return;
+        }
+        if to_program {
+            let button = if lines > 0.0 {
+                MouseButton::WheelUp
+            } else {
+                MouseButton::WheelDown
+            };
+            for _ in 0..(lines.abs() as usize).min(50) {
+                self.report(MouseAction::Press, button, point, modifiers);
+            }
             return;
         }
         if tab.term.alternate_screen() {
@@ -746,6 +867,14 @@ const PALETTE: [(u8, u8, u8); 16] = [
     (0xe6, 0xe9, 0xef),
 ];
 
+fn term_modifiers(modifiers: ui_core::Modifiers) -> TermModifiers {
+    TermModifiers {
+        shift: modifiers.shift,
+        alt: modifiers.alt,
+        ctrl: modifiers.ctrl,
+    }
+}
+
 fn indexed(index: u8) -> Color {
     let (r, g, b) = match index {
         0..=15 => PALETTE[usize::from(index)],
@@ -861,13 +990,113 @@ mod tests {
         );
     }
 
+    fn written(panel: &mut TerminalPanel) -> Vec<String> {
+        panel
+            .take_requests()
+            .into_iter()
+            .filter_map(|request| match request {
+                TerminalRequest::Write { bytes, .. } => Some(String::from_utf8(bytes).unwrap()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The point at the middle of a screen cell.
+    fn at(panel: &TerminalPanel, col: usize, row: usize) -> Point {
+        let body = panel.layout.body;
+        Point {
+            x: body.x + PADDING + (col as f32 + 0.5) * panel.cell.0,
+            y: body.y + PADDING + (row as f32 + 0.5) * panel.cell.1,
+        }
+    }
+
+    fn no_cwd() -> (PathBuf, String) {
+        unreachable!()
+    }
+
+    #[test]
+    fn clicks_drags_and_the_wheel_go_to_a_program_that_asks() {
+        let mut panel = panel();
+        panel.take_requests();
+        let none = ui_core::Modifiers::default();
+        panel.output(0, b"\x1b[?1049h\x1b[?1002h\x1b[?1006h");
+        let primary = PointerButton::Primary;
+        assert!(panel.pressed(at(&panel, 2, 1), primary, none, &no_cwd));
+        // Movement inside the cell sends nothing; into the next cell, a drag.
+        let mut inside = at(&panel, 2, 1);
+        inside.x += 1.0;
+        panel.moved(inside, true, none);
+        panel.moved(at(&panel, 3, 1), true, none);
+        // Released outside the panel, the position is clamped to the screen.
+        panel.released(
+            Point {
+                x: -50.0,
+                y: 10_000.0,
+            },
+            none,
+        );
+        let rows = panel.tabs[0].term.rows();
+        assert_eq!(
+            written(&mut panel),
+            [
+                "\x1b[<0;3;2M".to_string(),
+                "\x1b[<32;4;2M".to_string(),
+                format!("\x1b[<0;1;{rows}m"),
+            ]
+        );
+        assert_eq!(panel.tabs[0].selection, None);
+
+        let ctrl = ui_core::Modifiers { ctrl: true, ..none };
+        panel.pressed(at(&panel, 0, 0), PointerButton::Secondary, ctrl, &no_cwd);
+        panel.released(at(&panel, 0, 0), ctrl);
+        panel.wheel(at(&panel, 5, 5), 2.0, false, none);
+        let mut wheel = vec!["\x1b[<18;1;1M".to_string(), "\x1b[<18;1;1m".to_string()];
+        wheel.extend(std::iter::repeat_n("\x1b[<64;6;6M".to_string(), 6));
+        assert_eq!(written(&mut panel), wheel);
+        // Without a button, movement is not reported in mode 1002.
+        panel.moved(at(&panel, 7, 7), false, none);
+        assert!(written(&mut panel).is_empty());
+        panel.output(0, b"\x1b[?1003h");
+        panel.moved(at(&panel, 8, 7), false, none);
+        assert_eq!(written(&mut panel), ["\x1b[<35;9;8M"]);
+    }
+
+    #[test]
+    fn shift_selects_and_a_program_that_did_not_ask_gets_no_clicks() {
+        let mut panel = panel();
+        panel.take_requests();
+        let none = ui_core::Modifiers::default();
+        let shift = ui_core::Modifiers {
+            shift: true,
+            ..none
+        };
+        let primary = PointerButton::Primary;
+        for (setup, modifiers) in [(&b""[..], none), (&b"\x1b[?1000h"[..], shift)] {
+            panel.output(0, setup);
+            panel.pressed(at(&panel, 1, 0), primary, modifiers, &no_cwd);
+            panel.moved(at(&panel, 4, 0), true, modifiers);
+            panel.released(at(&panel, 4, 0), modifiers);
+            assert!(written(&mut panel).is_empty(), "{modifiers:?}");
+            let selection = panel.tabs[0].ordered_selection().unwrap();
+            assert_eq!((selection.0 .1, selection.1 .1), (1, 4));
+            panel.tabs[0].selection = None;
+        }
+        // A program that ended without turning reporting off: its exit
+        // from the alternate screen turns it off.
+        panel.output(0, b"\x1b[?1049h\x1b[?1000h\x1b[?1049l");
+        panel.pressed(at(&panel, 1, 0), primary, none, &no_cwd);
+        panel.released(at(&panel, 1, 0), none);
+        assert!(written(&mut panel).is_empty());
+    }
+
     #[test]
     fn selections_copy_lines_and_the_wheel_scrolls_back() {
         let mut panel = panel();
         for line in 0..100 {
             panel.output(0, format!("line {line}\r\n").as_bytes());
         }
-        panel.wheel(2.0, false);
+        let over = Point { x: 100.0, y: 100.0 };
+        panel.wheel(over, 2.0, false, Default::default());
         let tab = &panel.tabs[0];
         assert_eq!(tab.scroll, 6);
         let first = tab.first_line();

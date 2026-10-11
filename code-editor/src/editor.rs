@@ -3171,9 +3171,8 @@ impl Editor {
             self.track_hover(point, input.mouse_down || input.mouse_pressed);
         }
         if moved || input.mouse_down {
-            if input.mouse_down {
-                self.terminal.dragged(point);
-            }
+            self.terminal
+                .moved(point, input.mouse_down, input.modifiers);
             if let Some(tree) = &mut self.tree {
                 tree.pointer_moved(point);
             }
@@ -3196,7 +3195,7 @@ impl Editor {
             }
         }
         if input.mouse_pressed {
-            self.pointer_pressed(point, state, host);
+            self.pointer_pressed(point, input.mouse_button, state, host);
         }
         if input.mouse_released {
             let released = UiEvent::PointerReleased {
@@ -3204,7 +3203,7 @@ impl Editor {
                 state,
             };
             self.drop_text_in_other_pane(point);
-            self.terminal.released();
+            self.terminal.released(point, input.modifiers);
             if let Some(buffer) = self.active_buffer_mut() {
                 let _ = buffer.area.handle_event(released.clone());
             }
@@ -3638,7 +3637,13 @@ impl Editor {
         consumed
     }
 
-    fn pointer_pressed(&mut self, point: Point, state: PointerState, host: &dyn EditorHost) {
+    fn pointer_pressed(
+        &mut self,
+        point: Point,
+        button: PointerButton,
+        state: PointerState,
+        host: &dyn EditorHost,
+    ) {
         if let Some(popup) = &self.completion {
             let row = popup
                 .rows
@@ -3689,7 +3694,7 @@ impl Editor {
                     shell_name(),
                 )
             };
-            self.terminal.pressed(point, &cwd);
+            self.terminal.pressed(point, button, state.modifiers, &cwd);
             self.set_focus(Focus::Terminal);
             return;
         }
@@ -3808,8 +3813,12 @@ impl Editor {
             .terminal
             .is_some_and(|panel| panel.contains(point))
         {
-            self.terminal
-                .wheel(input.mouse_wheel_y, input.mouse_wheel_precise);
+            self.terminal.wheel(
+                point,
+                input.mouse_wheel_y,
+                input.mouse_wheel_precise,
+                input.modifiers,
+            );
             return;
         }
         if self

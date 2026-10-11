@@ -271,6 +271,18 @@ Shift-PageUp/PageDown and the wheel scroll back; on a full-screen
 program's screen the wheel sends arrow keys. Closing a tab hangs up on
 its shell.
 
+Programs that ask for the mouse (`vim` with `mouse=a`, `htop`, `tmux`,
+`mc`) get it: clicks with the left, right and middle buttons, drags,
+movement and the wheel, with Shift, Option and Ctrl, in each tracking
+mode (9, 1000, 1002, 1003) and report format (xterm's bytes, UTF-8, SGR
+1006, urxvt 1015) a program can choose. Holding Shift selects text and
+scrolls back as before, as in xterm. A program that leaves the alternate
+screen without turning reporting off has it turned off, so a crashed
+program does not leave the shell receiving clicks as typed text. For
+this the hosts now say which button a press was
+(`InputSnapshot::mouse_button`; before, macOS reported every button as
+the primary one and Linux and Windows reported only the primary one).
+
 Each cell has the same width, as programs that draw tables need, but the
 glyphs are the editor's own proportional font, centered in their cells:
 loadngo text has no per-run font choice, and adding one would touch every
@@ -282,7 +294,7 @@ Two threads serve each terminal, like rust-analyzer's: a reader blocked in
 in a buffer the frame swaps out, up to 4 MiB, then the reader waits;
 output wakes an idle frame through `frame_waker()`, so an idle terminal
 costs no frames. Not done: Windows (ConPTY; `Pty::spawn` reports it
-unavailable), mouse reporting to programs, reflowing lines on resize, and
+unavailable), reflowing lines on resize, and
 combining accents (dropped). On Linux and Windows, where the menu bar is
 drawn and Ctrl is the shortcut key, Ctrl and a letter goes to the shell
 while it has the keys, and Ctrl-Shift-C and -V copy and paste.
