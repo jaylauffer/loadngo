@@ -6947,4 +6947,38 @@ mod tests {
         assert!(writes(&mut rig).is_empty());
         assert!(rig.active().area.text().contains('x'));
     }
+
+    #[test]
+    fn a_program_that_asks_gets_clicks_with_their_button() {
+        let dir = workspace(&[("a.rs", "fn a() {}\n")]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.settle();
+        rig.outcome(menu_input(Command::ToggleTerminal));
+        rig.editor.take_terminal_requests();
+        rig.editor.terminal_output(0, b"\x1b[?1000h\x1b[?1006h");
+        let panel = rig.editor.layout.terminal.expect("terminal open");
+        let point = Point {
+            x: panel.x + 40.0,
+            y: panel.y + panel.height - 40.0,
+        };
+        for (pressed, released) in [(true, false), (false, true)] {
+            rig.frame(InputSnapshot {
+                mouse_x: point.x,
+                mouse_y: point.y,
+                mouse_pressed: pressed,
+                mouse_down: pressed,
+                mouse_released: released,
+                mouse_button: PointerButton::Secondary,
+                ..InputSnapshot::default()
+            });
+        }
+        let reports: Vec<String> = writes(&mut rig)
+            .into_iter()
+            .map(|bytes| String::from_utf8(bytes).unwrap())
+            .collect();
+        assert_eq!(reports.len(), 2, "{reports:?}");
+        assert!(reports[0].starts_with("\x1b[<2;") && reports[0].ends_with('M'));
+        assert!(reports[1].starts_with("\x1b[<2;") && reports[1].ends_with('m'));
+        assert!(rig.editor.focus == Focus::Terminal);
+    }
 }
