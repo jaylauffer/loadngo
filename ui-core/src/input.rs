@@ -10,8 +10,9 @@ pub enum PointerSource {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum PointerButton {
+    #[default]
     Primary,
     Secondary,
     Middle,

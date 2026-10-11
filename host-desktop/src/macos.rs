@@ -180,6 +180,7 @@ impl Default for InputState {
                 mouse_pressed: false,
                 mouse_down: false,
                 mouse_released: false,
+                mouse_button: ui_core::PointerButton::Primary,
                 touches: [None; 8],
                 escape_pressed: false,
                 space_pressed: false,
@@ -2002,6 +2003,23 @@ fn drain_proactor() {
     with_mac_proactor(HostProactor::drain_ready);
 }
 
+/// The button of a mouse-down or mouse-up event; `None` for back, forward
+/// and other extra buttons.
+fn event_button(event: *mut AnyObject, event_type: u64) -> Option<ui_core::PointerButton> {
+    match event_type {
+        NSEVENT_TYPE_LEFT_MOUSE_DOWN | NSEVENT_TYPE_LEFT_MOUSE_UP => {
+            Some(ui_core::PointerButton::Primary)
+        }
+        NSEVENT_TYPE_RIGHT_MOUSE_DOWN | NSEVENT_TYPE_RIGHT_MOUSE_UP => {
+            Some(ui_core::PointerButton::Secondary)
+        }
+        _ => {
+            let number: isize = unsafe { msg_send![event, buttonNumber] };
+            (number == 2).then_some(ui_core::PointerButton::Middle)
+        }
+    }
+}
+
 fn handle_event(event: *mut AnyObject) {
     let event_type: u64 = unsafe { msg_send![event, type] };
     if event_type == 15 {
@@ -2022,7 +2040,11 @@ fn handle_event(event: *mut AnyObject) {
             NSEVENT_TYPE_LEFT_MOUSE_DOWN
             | NSEVENT_TYPE_RIGHT_MOUSE_DOWN
             | NSEVENT_TYPE_OTHER_MOUSE_DOWN => {
+                let Some(button) = event_button(event, event_type) else {
+                    return;
+                };
                 let (x, y, inside) = event_point_in_view(&state.view, event);
+                state.input.snapshot.mouse_button = button;
                 state.input.snapshot.modifiers = modifiers;
                 state.input.snapshot.mouse_x = x;
                 state.input.snapshot.mouse_y = y;
@@ -2034,7 +2056,11 @@ fn handle_event(event: *mut AnyObject) {
             NSEVENT_TYPE_LEFT_MOUSE_UP
             | NSEVENT_TYPE_RIGHT_MOUSE_UP
             | NSEVENT_TYPE_OTHER_MOUSE_UP => {
+                let Some(button) = event_button(event, event_type) else {
+                    return;
+                };
                 let (x, y, inside) = event_point_in_view(&state.view, event);
+                state.input.snapshot.mouse_button = button;
                 state.input.snapshot.modifiers = modifiers;
                 state.input.snapshot.mouse_x = x;
                 state.input.snapshot.mouse_y = y;

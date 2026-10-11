@@ -1048,6 +1048,7 @@ fn blank_snapshot() -> InputSnapshot {
         mouse_pressed: false,
         mouse_down: false,
         mouse_released: false,
+        mouse_button: ui_core::PointerButton::Primary,
         touches: [None; 8],
         escape_pressed: false,
         space_pressed: false,

@@ -549,6 +549,10 @@ pub struct InputSnapshot {
     pub mouse_pressed: bool,
     pub mouse_down: bool,
     pub mouse_released: bool,
+    /// The button of the latest press or release. Back and forward buttons
+    /// are not reported.
+    #[serde(default)]
+    pub mouse_button: PointerButton,
     pub touches: [Option<TouchPoint>; 8],
     pub escape_pressed: bool,
     pub space_pressed: bool,
@@ -675,13 +679,13 @@ impl InputSnapshot {
         events.push(UiEvent::PointerMoved(pointer));
         if self.mouse_pressed {
             events.push(UiEvent::PointerPressed {
-                button: PointerButton::Primary,
+                button: self.mouse_button,
                 state: pointer,
             });
         }
         if self.mouse_released {
             events.push(UiEvent::PointerReleased {
-                button: PointerButton::Primary,
+                button: self.mouse_button,
                 state: pointer,
             });
         }

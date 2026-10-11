@@ -218,6 +218,7 @@ impl PendingInput {
             mouse_pressed: self.mouse_pressed,
             mouse_down: self.mouse_down,
             mouse_released: self.mouse_released,
+            mouse_button: ui_core::PointerButton::Primary,
             touches: self.touches,
             escape_pressed: self.escape_pressed,
             space_pressed: self.space_pressed,

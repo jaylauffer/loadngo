@@ -147,6 +147,7 @@ struct PendingInput {
     mouse_pressed: bool,
     mouse_down: bool,
     mouse_released: bool,
+    mouse_button: ui_core::PointerButton,
     escape_pressed: bool,
     space_pressed: bool,
     space_down: bool,
@@ -173,6 +174,7 @@ impl Default for PendingInput {
             mouse_pressed: false,
             mouse_down: false,
             mouse_released: false,
+            mouse_button: ui_core::PointerButton::Primary,
             escape_pressed: false,
             space_pressed: false,
             space_down: false,
@@ -202,6 +204,7 @@ impl PendingInput {
             mouse_pressed: self.mouse_pressed,
             mouse_down: self.mouse_down,
             mouse_released: self.mouse_released,
+            mouse_button: self.mouse_button,
             touches: [None; 8],
             escape_pressed: self.escape_pressed,
             space_pressed: self.space_pressed,
@@ -1235,8 +1238,15 @@ impl ApplicationHandler<WindowsUserEvent> for WindowsApp {
                 button,
                 ..
             } => {
-                if button == MouseButton::Left {
+                let button = match button {
+                    MouseButton::Left => Some(ui_core::PointerButton::Primary),
+                    MouseButton::Right => Some(ui_core::PointerButton::Secondary),
+                    MouseButton::Middle => Some(ui_core::PointerButton::Middle),
+                    _ => None,
+                };
+                if let Some(button) = button {
                     let mut state = lock_state();
+                    state.pending_input.mouse_button = button;
                     match button_state {
                         ElementState::Pressed => {
                             state.pending_input.mouse_pressed = true;
