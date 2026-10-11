@@ -4696,6 +4696,7 @@ impl Editor {
                     },
                     self.tree.is_some() && self.check_running.is_none(),
                 ),
+                Command::ToggleTerminal => ("Terminal", true),
                 Command::Refresh => ("Refresh Folder", self.tree.is_some()),
                 _ => continue,
             };
