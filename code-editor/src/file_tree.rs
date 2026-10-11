@@ -45,6 +45,8 @@ pub struct FileTree {
     pub bounds: Rect,
     pub scroll_y: f32,
     pub selected: Option<PathBuf>,
+    /// The folder something dragged would land in, highlighted.
+    pub drop_target: Option<PathBuf>,
     hover_row: Option<usize>,
 }
 
@@ -68,6 +70,7 @@ impl FileTree {
             bounds: Rect::default(),
             scroll_y: 0.0,
             selected: None,
+            drop_target: None,
             hover_row: None,
         }
     }
@@ -206,6 +209,26 @@ impl FileTree {
         (index < self.rows().len()).then_some(index)
     }
 
+    /// The entry under `point`, if any.
+    pub fn entry_at(&mut self, point: Point) -> Option<TreeRow> {
+        let index = self.row_at(point)?;
+        Some(self.rows()[index].clone())
+    }
+
+    /// The folder a drop at `point` lands in: a folder's row means that
+    /// folder, a file's row the folder holding it, anywhere else in the
+    /// tree the root.
+    pub fn drop_dir_at(&mut self, point: Point) -> PathBuf {
+        match self.entry_at(point) {
+            Some(row) if row.is_dir => row.path,
+            Some(row) => row
+                .path
+                .parent()
+                .map_or_else(|| self.root.clone(), Path::to_path_buf),
+            None => self.root.clone(),
+        }
+    }
+
     /// Hover tracking; true when the hovered row changed.
     pub fn pointer_moved(&mut self, point: Point) -> bool {
         let hover = self.row_at(point);
@@ -241,6 +264,10 @@ impl FileTree {
         let scroll_y = self.scroll_y;
         let hover_row = self.hover_row;
         let selected = self.selected.clone();
+        let drop_target = self.drop_target.clone();
+        if drop_target.as_deref() == Some(self.root.as_path()) {
+            draw::outline(scene, bounds, theme::ACCENT);
+        }
         let rows = self.rows();
         if rows.is_empty() {
             draw::label(
@@ -266,7 +293,10 @@ impl FileTree {
                 width: bounds.width,
                 height: row_height,
             };
-            if selected.as_ref() == Some(&row.path) {
+            if drop_target.as_ref() == Some(&row.path) {
+                draw::fill(scene, draw::intersect(rect, bounds), theme::SELECTED);
+                draw::outline(scene, draw::intersect(rect, bounds), theme::ACCENT);
+            } else if selected.as_ref() == Some(&row.path) {
                 draw::fill(scene, draw::intersect(rect, bounds), theme::SELECTED);
             } else if hover_row == Some(index) {
                 draw::fill(scene, draw::intersect(rect, bounds), theme::HOVER);

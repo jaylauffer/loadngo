@@ -25,6 +25,19 @@ pub fn intersect(a: Rect, b: Rect) -> Rect {
     }
 }
 
+/// A one-point frame just inside `rect`.
+pub fn outline(scene: &mut Vec<PaintOp>, rect: Rect, color: Color) {
+    scene.push(PaintOp::StrokeRect {
+        rect: Rect {
+            x: rect.x + 0.5,
+            y: rect.y + 0.5,
+            width: (rect.width - 1.0).max(0.0),
+            height: (rect.height - 1.0).max(0.0),
+        },
+        color,
+    });
+}
+
 pub fn hline(scene: &mut Vec<PaintOp>, x: f32, y: f32, width: f32, color: Color) {
     scene.push(PaintOp::Line {
         from: Point { x, y },

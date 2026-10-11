@@ -95,6 +95,8 @@ pub struct TextAreaModel {
     pub show_caret: bool,
     pub hover: bool,
     pub drag_selecting: bool,
+    /// A press inside the selection, possibly dragging it somewhere.
+    pub text_drag: Option<TextDrag>,
     pub horizontal_drag: Option<ScrollbarDragState>,
     pub vertical_drag: Option<ScrollbarDragState>,
     pub caret_visibility_pending: bool,
@@ -124,6 +126,35 @@ pub struct TextAreaModel {
     /// The first line changed since [`TextAreaModel::take_changed_from_line`]
     /// was last called; `Some(0)` for a new document.
     changed_from_line: Option<usize>,
+}
+
+/// Moving the selection with the pointer. A press inside the selection is
+/// a click until the pointer moves; then it drags the text, which lands
+/// where the pointer is released, moved, or copied with Option (Alt) held.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextDrag {
+    pub origin: Point,
+    /// The pointer has moved far enough to be dragging.
+    pub moving: bool,
+    /// Where the text would land, as a character index.
+    pub drop_at: usize,
+    /// Copy rather than move.
+    pub copy: bool,
+}
+
+/// How far the pointer moves before a press inside the selection drags it.
+const TEXT_DRAG_THRESHOLD: f32 = 4.0;
+
+/// How an edit joins the undo history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Join {
+    /// Its own step.
+    NewStep,
+    /// The open step, when the edit touches what it changed (typing).
+    Touching,
+    /// The newest step, wherever the edit lands (the second piece of a
+    /// move).
+    SameStep,
 }
 
 /// The run of edits the document's open undo group is collecting.
@@ -203,6 +234,7 @@ impl TextAreaModel {
             show_caret: true,
             hover: false,
             drag_selecting: false,
+            text_drag: None,
             horizontal_drag: None,
             vertical_drag: None,
             caret_visibility_pending: true,
@@ -434,6 +466,51 @@ impl TextAreaModel {
         self.replace_selection(text);
         self.preferred_x = None;
         self.request_caret_visibility();
+    }
+
+    /// Moves the selected text to character `at` (copies it with `copy`) as
+    /// one undo step, and selects it there. A move onto the selection itself
+    /// does nothing. Returns whether the text changed.
+    pub fn drop_selection_at(&mut self, at: usize, copy: bool) -> bool {
+        let Some((start, end)) = self.selection_range() else {
+            return false;
+        };
+        let at = at.min(self.char_len());
+        if !copy && (start..=end).contains(&at) {
+            return false;
+        }
+        let text = self.slice_chars(start, end);
+        let len = end - start;
+        self.end_edit_run();
+        let landed = if copy {
+            self.replace_char_range_with(at, at, &text, Join::NewStep);
+            at
+        } else {
+            self.replace_char_range_with(start, end, "", Join::NewStep);
+            let at = if at > end { at - len } else { at };
+            self.replace_char_range_with(at, at, &text, Join::SameStep);
+            at
+        };
+        self.selection_anchor = landed;
+        self.selection_head = landed + len;
+        self.preferred_x = None;
+        self.request_caret_visibility();
+        true
+    }
+
+    /// Where a text drag would drop, on screen: the line's rectangle and x,
+    /// when that place is laid out.
+    fn drop_marker(&self, at: usize) -> Option<(Rect, f32)> {
+        let line = self
+            .layout_cache
+            .lines
+            .iter()
+            .find(|line| line.source_start <= at && at <= line.source_end)?;
+        let local = (at - line.source_start).min(line.char_offsets.len().saturating_sub(1));
+        Some((
+            line.rect,
+            line.rect.x + line.char_offsets[local] - self.scroll_x,
+        ))
     }
 
     pub fn relayout<F>(&mut self, mut measure_width: F)
@@ -787,6 +864,23 @@ impl TextAreaModel {
                     response.request_focus = false;
                     return response;
                 }
+                if let Some(mut drag) = self.text_drag {
+                    let dx = state.position.x - drag.origin.x;
+                    let dy = state.position.y - drag.origin.y;
+                    if !drag.moving
+                        && dx * dx + dy * dy >= TEXT_DRAG_THRESHOLD * TEXT_DRAG_THRESHOLD
+                    {
+                        drag.moving = true;
+                    }
+                    if drag.moving {
+                        drag.drop_at = self.hit_test(state.position);
+                        drag.copy = state.modifiers.alt;
+                    }
+                    self.text_drag = Some(drag);
+                    let mut response = WidgetResponse::redraw_consumed();
+                    response.request_focus = false;
+                    return response;
+                }
                 let hover = self.bounds.contains(state.position);
                 let mut response = WidgetResponse::default();
                 if hover != self.hover {
@@ -875,6 +969,24 @@ impl TextAreaModel {
                 }
                 let caret = self.hit_test(state.position);
                 self.focused = true;
+                if !state.modifiers.shift {
+                    if let Some((start, end)) = self.selection_range() {
+                        if start < caret && caret < end {
+                            self.text_drag = Some(TextDrag {
+                                origin: state.position,
+                                moving: false,
+                                drop_at: caret,
+                                copy: state.modifiers.alt,
+                            });
+                            return WidgetResponse {
+                                request_redraw: true,
+                                request_focus: true,
+                                input_consumed: true,
+                                action: None,
+                            };
+                        }
+                    }
+                }
                 self.drag_selecting = true;
                 if state.modifiers.shift {
                     self.selection_head = caret;
@@ -893,8 +1005,17 @@ impl TextAreaModel {
             }
             UiEvent::PointerReleased {
                 button: PointerButton::Primary,
-                ..
+                state,
             } => {
+                if let Some(drag) = self.text_drag.take() {
+                    if !drag.moving {
+                        // A click inside the selection: the caret goes there.
+                        self.set_caret(drag.drop_at);
+                    } else if self.bounds.contains(state.position) {
+                        self.drop_selection_at(drag.drop_at, drag.copy);
+                    }
+                    return WidgetResponse::redraw_consumed();
+                }
                 let h = self.horizontal_drag.take().is_some();
                 let v = self.vertical_drag.take().is_some();
                 if h || v {
@@ -912,6 +1033,7 @@ impl TextAreaModel {
                     self.focused = focused;
                     if !focused {
                         self.drag_selecting = false;
+                        self.text_drag = None;
                     }
                     return WidgetResponse::redraw();
                 }
@@ -1112,6 +1234,19 @@ impl TextAreaModel {
                         color: self.caret_color,
                     });
                 }
+            }
+        }
+        if let Some(drag) = self.text_drag.filter(|drag| drag.moving) {
+            if let Some((line, x)) = self.drop_marker(drag.drop_at) {
+                scene.push(PaintOp::FillRect {
+                    rect: Rect {
+                        x: x - 1.0,
+                        y: line.y,
+                        width: 2.0,
+                        height: line.height,
+                    },
+                    color: self.caret_color,
+                });
             }
         }
         self.vertical_scrollbar.paint_indicator(
@@ -1316,7 +1451,7 @@ impl TextAreaModel {
         }
         let remove_start = self.selection_head - 1;
         self.join_edit_run(EditRun::Deleting);
-        self.replace_char_range_with(remove_start, self.selection_head, "", true);
+        self.replace_char_range_with(remove_start, self.selection_head, "", Join::Touching);
         self.selection_anchor = remove_start;
         self.selection_head = remove_start;
         self.preferred_x = None;
@@ -1336,7 +1471,7 @@ impl TextAreaModel {
         }
         let remove_end = self.selection_head + 1;
         self.join_edit_run(EditRun::Deleting);
-        self.replace_char_range_with(self.selection_head, remove_end, "", true);
+        self.replace_char_range_with(self.selection_head, remove_end, "", Join::Touching);
         self.preferred_x = None;
         self.request_caret_visibility();
         true
@@ -1354,10 +1489,10 @@ impl TextAreaModel {
     }
 
     fn replace_char_range(&mut self, start: usize, end: usize, replacement: &str) {
-        self.replace_char_range_with(start, end, replacement, false);
+        self.replace_char_range_with(start, end, replacement, Join::NewStep);
     }
 
-    fn replace_char_range_with(&mut self, start: usize, end: usize, replacement: &str, join: bool) {
+    fn replace_char_range_with(&mut self, start: usize, end: usize, replacement: &str, join: Join) {
         self.ensure_line_index();
         let dirty_line = self.line_index_for_char(start);
         let old_suffix_start = self
@@ -1370,11 +1505,14 @@ impl TextAreaModel {
                 .map_or(dirty_line, |line| line.min(dirty_line)),
         );
         self.update_line_starts_for_replace(start, end, replacement);
-        if join {
-            self.document
-                .replace_char_range_joining(start, end, replacement);
-        } else {
-            self.document.replace_char_range(start, end, replacement);
+        match join {
+            Join::Touching => self
+                .document
+                .replace_char_range_joining(start, end, replacement),
+            Join::NewStep => self.document.replace_char_range(start, end, replacement),
+            Join::SameStep => self
+                .document
+                .replace_char_range_in_step(start, end, replacement),
         }
         // The laid-out lines after an edit can be reused, shifted, only when
         // it is the one edit since the last layout. A second one (a rename's
@@ -1794,7 +1932,7 @@ impl TextAreaModel {
             in_space: ends_in_space,
         });
         let at = self.selection_head;
-        self.replace_char_range_with(at, at, text, true);
+        self.replace_char_range_with(at, at, text, Join::Touching);
         let next = at + text.chars().count();
         self.selection_anchor = next;
         self.selection_head = next;
@@ -2272,6 +2410,80 @@ mod tests {
 
         assert!(text_op.0.x < content.x);
         assert_eq!(text_op.1, Some(content));
+    }
+
+    fn point_at_char(area: &TextAreaModel, index: usize) -> Point {
+        let line = &area.layout_cache.lines[0];
+        Point {
+            x: line.rect.x + line.char_offsets[index] - area.scroll_x + 0.5,
+            y: line.rect.y + line.rect.height / 2.0,
+        }
+    }
+
+    /// "alpha beta gamma" with "beta" selected, laid out.
+    fn area_with_beta_selected() -> TextAreaModel {
+        let mut area = TextAreaModel::new(
+            "alpha beta gamma",
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 80.0,
+            },
+        );
+        area.focused = true;
+        area.select_range(6, 10);
+        area.relayout(measure_width);
+        area
+    }
+
+    fn drag(area: &mut TextAreaModel, from: usize, to: usize, alt: bool) {
+        let modifiers = crate::Modifiers {
+            alt,
+            ..Default::default()
+        };
+        let start = point_at_char(area, from);
+        let end = point_at_char(area, to);
+        let _ = area.handle_event(UiEvent::PointerPressed {
+            button: PointerButton::Primary,
+            state: PointerState::mouse(start, modifiers),
+        });
+        let _ = area.handle_event(UiEvent::PointerMoved(PointerState::mouse(end, modifiers)));
+        let _ = area.handle_event(UiEvent::PointerReleased {
+            button: PointerButton::Primary,
+            state: PointerState::mouse(end, modifiers),
+        });
+    }
+
+    #[test]
+    fn dragging_the_selection_moves_it_as_one_undo_step() {
+        let mut area = area_with_beta_selected();
+        drag(&mut area, 8, 16, false);
+        assert_eq!(area.text(), "alpha  gammabeta");
+        assert_eq!(area.selection_range(), Some((12, 16)));
+        assert!(area.undo());
+        assert_eq!(area.text(), "alpha beta gamma");
+    }
+
+    #[test]
+    fn dragging_with_option_copies_and_dropping_on_itself_does_nothing() {
+        let mut area = area_with_beta_selected();
+        drag(&mut area, 8, 0, true);
+        assert_eq!(area.text(), "betaalpha beta gamma");
+        assert_eq!(area.selection_range(), Some((0, 4)));
+
+        let mut area = area_with_beta_selected();
+        drag(&mut area, 7, 9, false);
+        assert_eq!(area.text(), "alpha beta gamma");
+    }
+
+    #[test]
+    fn a_click_inside_the_selection_puts_the_caret_there() {
+        let mut area = area_with_beta_selected();
+        drag(&mut area, 8, 8, false);
+        assert_eq!(area.text(), "alpha beta gamma");
+        assert_eq!(area.selection_range(), None);
+        assert_eq!(area.caret(), 8);
     }
 
     #[test]

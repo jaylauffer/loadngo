@@ -380,6 +380,41 @@ pub struct Editor {
     split: Option<Split>,
     /// The buffer active before the current one, for a new split.
     previous_active: Option<u64>,
+    /// A press on a tree entry or a tab, which a move turns into a drag.
+    item_drag: Option<ItemDrag>,
+    /// Files from the file manager are being dragged over the window.
+    file_drag_over: bool,
+}
+
+/// What a press can drag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DragItem {
+    /// A file or folder in the tree.
+    Entry(PathBuf),
+    /// A tab, by buffer id.
+    Tab(u64),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ItemDrag {
+    item: DragItem,
+    origin: Point,
+    /// The pointer has moved far enough to be dragging.
+    moving: bool,
+}
+
+/// How far the pointer moves before a press drags.
+const DRAG_THRESHOLD: f32 = 4.0;
+
+/// Where a dragged tab would go.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TabDrop {
+    /// Into the tab row, before this tab index (the end when past them).
+    Row(usize),
+    /// Shown in the focused pane, or the other pane.
+    Pane { other: bool },
+    /// Split the editor, the tab showing on the right.
+    SplitRight,
 }
 
 /// Two panes side by side: the focused one shows the active buffer, the
@@ -541,6 +576,8 @@ impl Editor {
             next_search_id: 1,
             split: None,
             previous_active: None,
+            item_drag: None,
+            file_drag_over: false,
         };
         if let Some(root) = &root {
             editor.open_folder(root.clone());
@@ -1074,7 +1111,10 @@ impl Editor {
             || !input.key_events.is_empty()
             || !input.typed_text.is_empty()
             || input.mouse_wheel_y != 0.0
-            || input.mouse_wheel_x != 0.0;
+            || input.mouse_wheel_x != 0.0
+            || !input.control_text.is_empty()
+            || !input.dropped_files.is_empty()
+            || input.file_drag_over != self.file_drag_over;
         if had_input {
             self.last_input = now;
             self.blink_origin = now;
@@ -1088,6 +1128,7 @@ impl Editor {
         if self.folder_dialog.is_some() {
             self.route_dialog(input, now);
         } else {
+            self.route_file_drops(input);
             self.route_pointer(input, host);
             for event in &input.key_events {
                 self.route_key(event.key, event.modifiers, host);
@@ -1959,6 +2000,7 @@ impl Editor {
                 FileOp::Trash(path) => {
                     format!("Could not move {} to the Trash", self.shown_path(path))
                 }
+                FileOp::Copy { from, .. } => format!("Could not copy {}", self.shown_path(from)),
             };
             self.set_status(format!("{what}: {error}"), StatusKind::Error);
             return;
@@ -1980,6 +2022,14 @@ impl Editor {
                 }
             }
             FileOp::Rename { from, to } => self.renamed(&from, &to),
+            FileOp::Copy { to, .. } => {
+                if let Some(tree) = &mut self.tree {
+                    tree.reveal(&to);
+                    tree.selected = Some(to.clone());
+                }
+                let shown = self.shown_path(&to);
+                self.set_status(format!("Copied to {shown}."), StatusKind::Info);
+            }
             FileOp::Trash(path) => {
                 let shown = self.shown_path(&path);
                 while let Some(index) = self.buffers.iter().position(|b| b.path.starts_with(&path))
@@ -2032,7 +2082,12 @@ impl Editor {
             tree.reveal(to);
         }
         let shown = self.shown_path(to);
-        self.set_status(format!("Renamed to {shown}."), StatusKind::Info);
+        let verb = if from.parent() == to.parent() {
+            "Renamed"
+        } else {
+            "Moved"
+        };
+        self.set_status(format!("{verb} to {shown}."), StatusKind::Info);
         self.backup_due = Some(self.frame_time);
     }
 
@@ -3041,6 +3096,9 @@ impl Editor {
         }
         let moved = point != self.pointer;
         self.pointer = point;
+        if self.route_item_drag(input, point) {
+            return;
+        }
         let state = PointerState::mouse(point, input.modifiers);
         if moved || input.mouse_pressed || input.mouse_wheel_y != 0.0 {
             self.track_hover(point, input.mouse_down || input.mouse_pressed);
@@ -3054,6 +3112,7 @@ impl Editor {
                 let area = &mut buffer.area;
                 if editor_rect.contains(point)
                     || area.drag_selecting
+                    || area.text_drag.is_some()
                     || area.horizontal_drag.is_some()
                     || area.vertical_drag.is_some()
                 {
@@ -3074,6 +3133,7 @@ impl Editor {
                 button: PointerButton::Primary,
                 state,
             };
+            self.drop_text_in_other_pane(point);
             if let Some(buffer) = self.active_buffer_mut() {
                 let _ = buffer.area.handle_event(released.clone());
             }
@@ -3084,6 +3144,366 @@ impl Editor {
         if input.mouse_wheel_y != 0.0 || input.mouse_wheel_x != 0.0 {
             self.wheel(point, input);
         }
+    }
+
+    // ----- drag and drop -----
+
+    /// Files dropped from the file manager: onto the tree they are copied
+    /// into the folder under the pointer; anywhere else a folder opens as
+    /// the workspace and files open in tabs.
+    fn route_file_drops(&mut self, input: &InputSnapshot) {
+        let point = Point {
+            x: input.mouse_x,
+            y: input.mouse_y,
+        };
+        self.file_drag_over = input.file_drag_over;
+        let over_tree = self.layout.tree.contains(point);
+        if let Some(tree) = &mut self.tree {
+            tree.drop_target = (input.file_drag_over && over_tree).then(|| tree.drop_dir_at(point));
+        }
+        if input.dropped_files.is_empty() {
+            return;
+        }
+        if over_tree {
+            let Some(dir) = self.tree.as_mut().map(|tree| tree.drop_dir_at(point)) else {
+                return;
+            };
+            for from in &input.dropped_files {
+                let Some(name) = from.file_name() else {
+                    continue;
+                };
+                self.outbox.push(IoRequest::FileOp(FileOp::Copy {
+                    from: from.clone(),
+                    to: dir.join(name),
+                }));
+            }
+            return;
+        }
+        let mut folder = None;
+        for path in &input.dropped_files {
+            if path.is_dir() {
+                folder.get_or_insert_with(|| path.clone());
+            } else {
+                self.open_file(path.clone());
+            }
+        }
+        if let Some(folder) = folder {
+            self.open_folder(folder);
+        }
+    }
+
+    /// Tree entries and tabs being pressed or dragged; true when the
+    /// pointer input went to the drag.
+    fn route_item_drag(&mut self, input: &InputSnapshot, point: Point) -> bool {
+        let Some(drag) = &mut self.item_drag else {
+            return false;
+        };
+        if !drag.moving && input.mouse_down {
+            let dx = point.x - drag.origin.x;
+            let dy = point.y - drag.origin.y;
+            drag.moving = dx * dx + dy * dy >= DRAG_THRESHOLD * DRAG_THRESHOLD;
+        }
+        let moving = drag.moving;
+        let item = drag.item.clone();
+        if moving {
+            let over_tree = self.layout.tree.contains(point);
+            if let Some(tree) = &mut self.tree {
+                tree.drop_target = (matches!(item, DragItem::Entry(_)) && over_tree)
+                    .then(|| tree.drop_dir_at(point));
+            }
+        }
+        if !input.mouse_released {
+            return moving;
+        }
+        self.item_drag = None;
+        if let Some(tree) = &mut self.tree {
+            tree.drop_target = None;
+        }
+        match (item, moving) {
+            (DragItem::Entry(path), true) => self.drop_entry(path, point),
+            (DragItem::Entry(_), false) => {
+                let action = self.tree.as_mut().and_then(|tree| tree.click(point));
+                match action {
+                    Some(TreeAction::Open(path)) => self.open_file(path),
+                    Some(TreeAction::List(dir)) => self.outbox.push(IoRequest::ListDir { dir }),
+                    None => {}
+                }
+                self.touch_session();
+            }
+            (DragItem::Tab(id), true) => {
+                if let Some(target) = self.tab_drop_at(point) {
+                    self.drop_tab(id, target);
+                }
+            }
+            (DragItem::Tab(_), false) => {}
+        }
+        true
+    }
+
+    /// A tree entry dropped at `point`: into a folder of the tree it moves
+    /// (open tabs follow); onto the editor a file opens.
+    fn drop_entry(&mut self, from: PathBuf, point: Point) {
+        if self.layout.tree.contains(point) {
+            let Some(dir) = self.tree.as_mut().map(|tree| tree.drop_dir_at(point)) else {
+                return;
+            };
+            let Some(name) = from.file_name() else {
+                return;
+            };
+            if from.parent() == Some(dir.as_path()) {
+                return;
+            }
+            if dir.starts_with(&from) {
+                self.set_status("A folder cannot go inside itself.", StatusKind::Error);
+                return;
+            }
+            let to = dir.join(name);
+            self.outbox
+                .push(IoRequest::FileOp(FileOp::Rename { from, to }));
+            return;
+        }
+        let over_editor = self.layout.editor.contains(point)
+            || self
+                .layout
+                .other_pane
+                .is_some_and(|pane| pane.contains(point));
+        if over_editor && !self.tree_is_dir(&from) {
+            self.open_file(from);
+        }
+    }
+
+    /// Where a tab dropped at `point` would go, if anywhere.
+    fn tab_drop_at(&self, point: Point) -> Option<TabDrop> {
+        if self.layout.tabs.contains(point) {
+            let index = self
+                .layout
+                .tab_slots
+                .iter()
+                .position(|slot| point.x < slot.rect.x + slot.rect.width / 2.0)
+                .unwrap_or(self.layout.tab_slots.len());
+            return Some(TabDrop::Row(index));
+        }
+        if self
+            .layout
+            .other_pane
+            .is_some_and(|pane| pane.contains(point))
+        {
+            return Some(TabDrop::Pane { other: true });
+        }
+        let editor = self.layout.editor;
+        if !editor.contains(point) {
+            return None;
+        }
+        if self.split.is_some() {
+            return Some(TabDrop::Pane { other: false });
+        }
+        (point.x > editor.x + editor.width / 2.0 && self.buffers.len() > 1)
+            .then_some(TabDrop::SplitRight)
+    }
+
+    fn drop_tab(&mut self, id: u64, target: TabDrop) {
+        let Some(index) = self.buffer_index(id) else {
+            return;
+        };
+        match target {
+            TabDrop::Row(before) => {
+                let active = self.active_buffer().map(|buffer| buffer.id);
+                let buffer = self.buffers.remove(index);
+                let before = if before > index { before - 1 } else { before };
+                self.buffers.insert(before.min(self.buffers.len()), buffer);
+                self.active = active.and_then(|id| self.buffer_index(id));
+                self.touch_session();
+            }
+            TabDrop::Pane { other: false } => {
+                let Some(split) = self.split else {
+                    return;
+                };
+                let current = self.active_buffer().map(|buffer| buffer.id);
+                self.activate(index);
+                if split.other == id {
+                    // It came from the other pane, which takes this pane's.
+                    if let Some(current) = current {
+                        self.split = Some(Split {
+                            other: current,
+                            ..split
+                        });
+                    }
+                }
+                self.repair_split();
+            }
+            TabDrop::Pane { other: true } => {
+                let Some(split) = self.split else {
+                    return;
+                };
+                if self.active_buffer().map(|buffer| buffer.id) == Some(id) {
+                    // It leaves the focused pane, which takes the other's.
+                    if let Some(other) = self.buffer_index(split.other) {
+                        self.activate(other);
+                    }
+                }
+                self.split = Some(Split { other: id, ..split });
+                self.repair_split();
+            }
+            TabDrop::SplitRight => {
+                if self.active_buffer().map(|buffer| buffer.id) == Some(id) {
+                    let replacement = self
+                        .previous_active
+                        .filter(|other| *other != id)
+                        .and_then(|other| self.buffer_index(other))
+                        .or_else(|| self.buffers.iter().position(|buffer| buffer.id != id));
+                    let Some(replacement) = replacement else {
+                        return;
+                    };
+                    self.activate(replacement);
+                }
+                self.split = Some(Split {
+                    other: id,
+                    focused_right: false,
+                });
+                self.repair_split();
+            }
+        }
+    }
+
+    /// Selected text dragged from the focused pane and released over the
+    /// other pane lands there: moved, or copied with Option held.
+    fn drop_text_in_other_pane(&mut self, point: Point) {
+        if !self
+            .layout
+            .other_pane
+            .is_some_and(|pane| pane.contains(point))
+        {
+            return;
+        }
+        let Some(other) = self.split.and_then(|split| self.buffer_index(split.other)) else {
+            return;
+        };
+        let Some(active) = self.active.filter(|active| *active != other) else {
+            return;
+        };
+        let source = &mut self.buffers[active].area;
+        let Some(drag) = source.text_drag.filter(|drag| drag.moving) else {
+            return;
+        };
+        source.text_drag = None;
+        let Some((start, end)) = source.selection_range() else {
+            return;
+        };
+        let text = source
+            .text()
+            .chars()
+            .skip(start)
+            .take(end - start)
+            .collect::<String>();
+        if !self.buffers[other].loaded {
+            return;
+        }
+        let target = &mut self.buffers[other].area;
+        let at = target.char_at_point(point).unwrap_or(target.caret());
+        target.replace_range(at, at, &text);
+        target.select_range(at, at + (end - start));
+        if !drag.copy {
+            self.buffers[active].area.replace_range(start, end, "");
+        }
+        self.switch_pane();
+        self.set_focus(Focus::Editor);
+    }
+
+    fn paint_drags(&self, scene: &mut Vec<PaintOp>, layout: &Layout) {
+        if self.file_drag_over {
+            let over_editor = layout.editor.contains(self.pointer)
+                || layout
+                    .other_pane
+                    .is_some_and(|pane| pane.contains(self.pointer));
+            if over_editor {
+                let whole = layout.other_pane.map_or(layout.editor, |pane| {
+                    let x = layout.editor.x.min(pane.x);
+                    Rect {
+                        x,
+                        width: layout.editor.right().max(pane.right()) - x,
+                        ..layout.editor
+                    }
+                });
+                draw::outline(scene, whole, theme::ACCENT);
+            }
+        }
+        let Some(drag) = self.item_drag.as_ref().filter(|drag| drag.moving) else {
+            return;
+        };
+        let name = match &drag.item {
+            DragItem::Entry(path) => path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            DragItem::Tab(id) => self
+                .buffer_index(*id)
+                .map(|index| self.buffers[index].title.clone())
+                .unwrap_or_default(),
+        };
+        if let DragItem::Tab(_) = drag.item {
+            match self.tab_drop_at(self.pointer) {
+                Some(TabDrop::Row(before)) => {
+                    let x = layout.tab_slots.get(before).map_or_else(
+                        || {
+                            layout
+                                .tab_slots
+                                .last()
+                                .map_or(layout.tabs.x, |slot| slot.rect.right())
+                        },
+                        |slot| slot.rect.x,
+                    );
+                    draw::fill(
+                        scene,
+                        Rect {
+                            x: x - 1.0,
+                            y: layout.tabs.y,
+                            width: 2.0,
+                            height: theme::TAB_HEIGHT,
+                        },
+                        theme::ACCENT,
+                    );
+                }
+                Some(TabDrop::Pane { other }) => {
+                    let pane = if other {
+                        layout.other_pane.unwrap_or(layout.editor)
+                    } else {
+                        layout.editor
+                    };
+                    draw::outline(scene, pane, theme::ACCENT);
+                }
+                Some(TabDrop::SplitRight) => {
+                    let editor = layout.editor;
+                    let half = Rect {
+                        x: editor.x + editor.width / 2.0,
+                        width: editor.width / 2.0,
+                        ..editor
+                    };
+                    draw::fill(scene, half, theme::SELECTION_FILL);
+                    draw::outline(scene, half, theme::ACCENT);
+                }
+                None => {}
+            }
+        }
+        let ghost = Rect {
+            x: self.pointer.x + 12.0,
+            y: self.pointer.y + 8.0,
+            width: 220.0,
+            height: 24.0,
+        };
+        draw::fill(scene, ghost, theme::BUTTON_HOVER);
+        draw::outline(scene, ghost, theme::BORDER);
+        draw::label(
+            scene,
+            &name,
+            Rect {
+                x: ghost.x + 8.0,
+                width: ghost.width - 16.0,
+                ..ghost
+            },
+            theme::TEXT,
+            theme::UI_FONT,
+            HorizontalAlign::Left,
+        );
     }
 
     fn bar_fields(&mut self) -> Vec<&mut TextFieldModel> {
@@ -3209,17 +3629,24 @@ impl Editor {
                 self.request_close(index);
             } else {
                 self.activate(index);
+                self.item_drag = Some(ItemDrag {
+                    item: DragItem::Tab(self.buffers[index].id),
+                    origin: point,
+                    moving: false,
+                });
             }
             return;
         }
         if self.layout.tree.contains(point) {
-            let action = self.tree.as_mut().and_then(|tree| tree.click(point));
-            match action {
-                Some(TreeAction::Open(path)) => self.open_file(path),
-                Some(TreeAction::List(dir)) => self.outbox.push(IoRequest::ListDir { dir }),
-                None => {}
+            // The click acts on release, so a folder dragged elsewhere does
+            // not also open or close.
+            if let Some(row) = self.tree.as_mut().and_then(|tree| tree.entry_at(point)) {
+                self.item_drag = Some(ItemDrag {
+                    item: DragItem::Entry(row.path),
+                    origin: point,
+                    moving: false,
+                });
             }
-            self.touch_session();
             return;
         }
         let pressed = UiEvent::PointerPressed {
@@ -3902,6 +4329,7 @@ impl Editor {
             self.paint_search(scene, panel, &layout);
         }
         self.paint_status(scene, &layout);
+        self.paint_drags(scene, &layout);
         if let Some(menu) = &self.drawn_menu {
             menu.paint(scene);
         }
@@ -6055,5 +6483,242 @@ mod tests {
         let split = rig.editor.split.expect("still split");
         let other = rig.editor.buffer_index(split.other).unwrap();
         assert_ne!(Some(other), rig.editor.active, "two different files");
+    }
+
+    // ----- drag and drop -----
+
+    fn row_point(rig: &mut Rig, path: &Path) -> Point {
+        let tree = rig.editor.tree.as_mut().unwrap();
+        let bounds = tree.bounds;
+        let scroll = tree.scroll_y;
+        let index = tree
+            .rows()
+            .iter()
+            .position(|row| row.path == path)
+            .unwrap_or_else(|| panic!("{} is in the tree", path.display()));
+        Point {
+            x: bounds.x + 60.0,
+            y: bounds.y + (index as f32 + 0.5) * theme::TREE_ROW_HEIGHT - scroll,
+        }
+    }
+
+    fn drag_pointer(rig: &mut Rig, from: Point, to: Point, modifiers: Modifiers) {
+        rig.frame(InputSnapshot {
+            mouse_x: from.x,
+            mouse_y: from.y,
+            mouse_pressed: true,
+            mouse_down: true,
+            modifiers,
+            ..InputSnapshot::default()
+        });
+        for step in 1..=3 {
+            let t = step as f32 / 3.0;
+            rig.frame(InputSnapshot {
+                mouse_x: from.x + (to.x - from.x) * t,
+                mouse_y: from.y + (to.y - from.y) * t,
+                mouse_down: true,
+                modifiers,
+                ..InputSnapshot::default()
+            });
+        }
+        rig.frame(InputSnapshot {
+            mouse_x: to.x,
+            mouse_y: to.y,
+            mouse_released: true,
+            modifiers,
+            ..InputSnapshot::default()
+        });
+        rig.settle();
+    }
+
+    fn tab_titles(rig: &Rig) -> Vec<String> {
+        rig.editor
+            .buffers
+            .iter()
+            .map(|buffer| buffer.title.clone())
+            .collect()
+    }
+
+    fn center(rect: Rect) -> Point {
+        Point {
+            x: rect.x + rect.width / 2.0,
+            y: rect.y + rect.height / 2.0,
+        }
+    }
+
+    #[test]
+    fn a_tree_entry_dragged_onto_a_folder_moves_and_its_tab_follows() {
+        let dir = workspace(&[("src/a.rs", "fn a() {}\n"), ("docs/notes.md", "")]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        let from = dir.path().join("src/a.rs");
+        rig.editor.tree.as_mut().unwrap().reveal(&from);
+        rig.settle();
+        // A press and release without moving is a click: the file opens.
+        let point = row_point(&mut rig, &from);
+        drag_pointer(&mut rig, point, point, Modifiers::default());
+        assert_eq!(rig.active().path, from);
+
+        let to_folder = row_point(&mut rig, &dir.path().join("docs"));
+        drag_pointer(&mut rig, point, to_folder, Modifiers::default());
+        let moved = dir.path().join("docs/a.rs");
+        assert!(moved.is_file() && !from.exists());
+        assert_eq!(rig.active().path, moved, "the tab follows");
+        assert!(rig.status().starts_with("Moved"), "{}", rig.status());
+
+        // A folder never goes inside itself.
+        let docs = row_point(&mut rig, &dir.path().join("docs"));
+        rig.editor.tree.as_mut().unwrap().reveal(&moved);
+        rig.settle();
+        let inside = row_point(&mut rig, &moved);
+        drag_pointer(&mut rig, docs, inside, Modifiers::default());
+        assert!(rig.status().contains("inside itself"), "{}", rig.status());
+        assert!(dir.path().join("docs").is_dir());
+    }
+
+    #[test]
+    fn tabs_drag_to_reorder_and_between_panes() {
+        let dir = workspace(&[("a.rs", ""), ("b.rs", ""), ("c.rs", "")]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        for name in ["a.rs", "b.rs", "c.rs"] {
+            rig.editor.open_file(dir.path().join(name));
+        }
+        rig.settle();
+        let c = rig.editor.layout.tab_slots[2].rect;
+        let a = rig.editor.layout.tab_slots[0].rect;
+        drag_pointer(
+            &mut rig,
+            center(c),
+            Point {
+                x: a.x + 4.0,
+                y: a.y + 8.0,
+            },
+            Modifiers::default(),
+        );
+        assert_eq!(tab_titles(&rig), ["c.rs", "a.rs", "b.rs"]);
+        assert_eq!(rig.active().title, "c.rs", "the dragged tab stays active");
+
+        // Unsplit, a tab dropped on the editor's right half splits it.
+        let b = rig.editor.layout.tab_slots[2].rect;
+        let editor = rig.editor.layout.editor;
+        let right = Point {
+            x: editor.x + editor.width * 0.8,
+            y: editor.y + 100.0,
+        };
+        drag_pointer(&mut rig, center(b), right, Modifiers::default());
+        let split = rig.editor.split.expect("split");
+        let b_id = rig.editor.buffers[2].id;
+        assert_eq!(split.other, b_id, "b.rs on the right");
+        assert_ne!(rig.active().title, "b.rs");
+
+        // The focused pane's tab dropped on the other pane swaps the two.
+        let active_title = rig.active().title.clone();
+        let active_slot = rig
+            .editor
+            .buffers
+            .iter()
+            .position(|buffer| buffer.title == active_title)
+            .unwrap();
+        let slot = rig.editor.layout.tab_slots[active_slot].rect;
+        let other = rig.editor.layout.other_pane.unwrap();
+        drag_pointer(&mut rig, center(slot), center(other), Modifiers::default());
+        let split = rig.editor.split.expect("still split");
+        let other_title = rig.editor.buffers[rig.editor.buffer_index(split.other).unwrap()]
+            .title
+            .clone();
+        assert_eq!(other_title, active_title);
+        assert_eq!(rig.active().title, "b.rs");
+    }
+
+    #[test]
+    fn files_dropped_from_the_file_manager_open_or_copy_into_the_tree() {
+        let dir = workspace(&[("src/lib.rs", "")]);
+        let outside = workspace(&[("note.txt", "hello"), ("kit/x.rs", "x")]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        let editor = center(rig.editor.layout.editor);
+        rig.frame(InputSnapshot {
+            mouse_x: editor.x,
+            mouse_y: editor.y,
+            dropped_files: vec![outside.path().join("note.txt")],
+            ..InputSnapshot::default()
+        });
+        rig.settle();
+        assert_eq!(rig.active().path, outside.path().join("note.txt"));
+
+        let src = row_point(&mut rig, &dir.path().join("src"));
+        rig.frame(InputSnapshot {
+            mouse_x: src.x,
+            mouse_y: src.y,
+            file_drag_over: true,
+            ..InputSnapshot::default()
+        });
+        assert_eq!(
+            rig.editor.tree.as_ref().unwrap().drop_target,
+            Some(dir.path().join("src"))
+        );
+        rig.frame(InputSnapshot {
+            mouse_x: src.x,
+            mouse_y: src.y,
+            dropped_files: vec![outside.path().join("kit"), outside.path().join("note.txt")],
+            ..InputSnapshot::default()
+        });
+        rig.settle();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("src/kit/x.rs")).unwrap(),
+            "x"
+        );
+        assert!(dir.path().join("src/note.txt").is_file());
+        assert!(
+            outside.path().join("note.txt").is_file(),
+            "copied, not moved"
+        );
+        assert_eq!(rig.editor.tree.as_ref().unwrap().drop_target, None);
+    }
+
+    #[test]
+    fn selected_text_dragged_to_the_other_pane_moves_there() {
+        let dir = workspace(&[("a.rs", "alpha beta\n"), ("b.rs", "gamma\n")]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.editor.open_file(dir.path().join("b.rs"));
+        rig.editor.open_file(dir.path().join("a.rs"));
+        rig.settle();
+        rig.outcome(menu_input(Command::ToggleSplit));
+        rig.settle();
+        assert_eq!(rig.active().title, "a.rs");
+        let index = rig.editor.active.unwrap();
+        rig.editor.buffers[index].area.select_range(6, 10);
+        rig.settle();
+        let area = &rig.editor.buffers[index].area;
+        let line = &area.layout_cache.lines[0];
+        let from = Point {
+            x: line.rect.x + line.char_offsets[8] - area.scroll_x,
+            y: line.rect.y + line.rect.height / 2.0,
+        };
+        let other = rig.editor.layout.other_pane.unwrap();
+        // Past the end of the other file's first line.
+        let to = Point {
+            x: other.x + other.width * 0.6,
+            y: other.y + 10.0,
+        };
+        drag_pointer(&mut rig, from, to, Modifiers::default());
+        let a = rig
+            .editor
+            .buffer_index(
+                rig.editor
+                    .buffers
+                    .iter()
+                    .find(|b| b.title == "a.rs")
+                    .unwrap()
+                    .id,
+            )
+            .unwrap();
+        let b = rig
+            .editor
+            .buffers
+            .iter()
+            .position(|b| b.title == "b.rs")
+            .unwrap();
+        assert_eq!(rig.editor.buffers[a].area.text(), "alpha \n");
+        assert_eq!(rig.editor.buffers[b].area.text(), "gammabeta\n");
+        assert_eq!(rig.active().title, "b.rs", "focus follows the text");
     }
 }

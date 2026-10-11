@@ -131,6 +131,32 @@ impl TextDocument {
         self.group_open = true;
     }
 
+    /// As [`TextDocument::replace_char_range`], but adds the edit to the
+    /// newest undo step wherever it lands, so an edit made of separate
+    /// pieces (moving text: a deletion here, an insertion there) undoes in
+    /// one step. Start such an edit with `replace_char_range` and continue
+    /// it with this. Undo then puts the caret where the first piece ended,
+    /// redo after this piece.
+    pub fn replace_char_range_in_step(&mut self, start: usize, end: usize, replacement: &str) {
+        if self.undo_stack.is_empty() {
+            self.replace_char_range(start, end, replacement);
+            return;
+        }
+        self.apply_replacement(start, end, replacement, false);
+        // `apply_replacement` pushed a step of its own: fold it into the
+        // one before, which keeps that step's before-state.
+        if let Some(piece) = self.undo_stack.pop() {
+            if let Some(entry) = self.undo_stack.last_mut() {
+                entry.start = entry.start.min(piece.start);
+                entry.after_end = piece.after_end;
+                entry.after_pieces = piece.after_pieces;
+                entry.after_len_chars = piece.after_len_chars;
+                entry.after_revision = piece.after_revision;
+            }
+        }
+        self.group_open = false;
+    }
+
     /// Ends the open undo group, so the next joining edit starts a new step.
     pub fn seal_history(&mut self) {
         self.group_open = false;

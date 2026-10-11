@@ -83,6 +83,11 @@ pub enum FileOp {
     },
     /// To the system Trash, so it can be got back.
     Trash(PathBuf),
+    /// A file or a whole folder; never replaces what is at `to`.
+    Copy {
+        from: PathBuf,
+        to: PathBuf,
+    },
 }
 
 /// What came back.
@@ -230,13 +235,44 @@ fn file_op(op: &FileOp) -> Result<(), String> {
             if exists(to) {
                 return Err(format!("{} already exists", to.display()));
             }
+            if to.starts_with(from) {
+                return Err("a folder cannot go inside itself".to_string());
+            }
             if let Some(parent) = to.parent() {
                 fs::create_dir_all(parent).map_err(|error| error.to_string())?;
             }
             fs::rename(from, to).map_err(|error| error.to_string())
         }
         FileOp::Trash(path) => loadngo_host_desktop::move_to_trash(path),
+        FileOp::Copy { from, to } => {
+            if exists(to) {
+                return Err(format!("{} already exists", to.display()));
+            }
+            if to.starts_with(from) {
+                return Err("a folder cannot go inside itself".to_string());
+            }
+            copy_tree(from, to).map_err(|error| error.to_string())
+        }
     }
+}
+
+/// Copies a file, or a folder with everything in it. Symbolic links are
+/// copied as links on Unix and followed elsewhere.
+fn copy_tree(from: &Path, to: &Path) -> io::Result<()> {
+    let kind = fs::symlink_metadata(from)?.file_type();
+    #[cfg(unix)]
+    if kind.is_symlink() {
+        return std::os::unix::fs::symlink(fs::read_link(from)?, to);
+    }
+    if kind.is_dir() {
+        fs::create_dir(to)?;
+        for entry in fs::read_dir(from)? {
+            let entry = entry?;
+            copy_tree(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        return Ok(());
+    }
+    fs::copy(from, to).map(drop)
 }
 
 /// Directory names the tree never shows: build output and repository
@@ -407,5 +443,34 @@ mod tests {
             "x",
             "nothing moved"
         );
+    }
+
+    #[test]
+    fn copies_folders_whole_and_never_into_themselves() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("src");
+        fs::create_dir_all(from.join("inner")).unwrap();
+        fs::write(from.join("inner/a.rs"), "a").unwrap();
+        let to = dir.path().join("copy");
+        let copy = FileOp::Copy {
+            from: from.clone(),
+            to: to.clone(),
+        };
+        assert_eq!(file_op(&copy), Ok(()));
+        assert_eq!(fs::read_to_string(to.join("inner/a.rs")).unwrap(), "a");
+        assert!(file_op(&copy).is_err(), "never replaces");
+        for op in [
+            FileOp::Copy {
+                from: from.clone(),
+                to: from.join("inner/src"),
+            },
+            FileOp::Rename {
+                from: from.clone(),
+                to: from.join("inner/src"),
+            },
+        ] {
+            assert!(file_op(&op).is_err());
+        }
+        assert!(from.join("inner/a.rs").exists());
     }
 }
