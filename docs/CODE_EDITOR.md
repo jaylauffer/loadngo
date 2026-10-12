@@ -299,6 +299,33 @@ combining accents (dropped). On Linux and Windows, where the menu bar is
 drawn and Ctrl is the shortcut key, Ctrl and a letter goes to the shell
 while it has the keys, and Ctrl-Shift-C and -V copy and paste.
 
+**A blank page to start from.** Jay, 2026-10-12: rather than a line saying
+"open a file", the editor gives a page to write in.
+
+- **When it appears.** On a first launch, or with no tab to restore, the
+  editor opens "Untitled 1": an empty text page with the caret in it. Closing
+  the last tab opens a fresh one. File > New Page (Cmd-N) and the toolbar's
+  New Page button add more; each takes the lowest free number. New File in
+  Folder… keeps creating a named file in the tree's folder.
+- **Opening a file** closes any page nobody has typed in. A page with text
+  stays.
+- **Saving.** Cmd-S on a page asks where, with loadngo's save dialog (which
+  asks before replacing a file). The dialog starts in the folder the last
+  page was saved to, else the open folder. The page then becomes that file:
+  its title, highlighting and rust-analyzer follow the name. Save All and
+  quitting ask for each unsaved page in turn; cancelling one stops the rest
+  and the quit. A name already open in another tab is refused.
+- **Nothing is lost.** Unsaved pages are backed up like files and come back
+  after a restart with their number and caret. The session keeps the last
+  save folder too. Sessions written before pages existed still read.
+- **Pages skip file checks.** A page is never stat'ed for changes on disk,
+  never checked by `cargo check` on its own, and never selected in the tree.
+
+Tested in `editor::tests` (107 tests), including a restart with an unsaved
+page and a quit that waits for a page's name. Two mutations are caught: no
+page after closing the last tab, and the save folder not kept. Checked once
+in a release build with its own state folder, without input.
+
 Later, as needed: replace in files, a symbol outline, running and
 debugging.
 

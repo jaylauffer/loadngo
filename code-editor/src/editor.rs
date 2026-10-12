@@ -49,8 +49,15 @@ const INDENT: &str = "    ";
 
 struct Buffer {
     id: u64,
+    /// The file. For a page not yet saved, a name that is never a real path
+    /// ("Untitled 1"): it keys the page's backup and session tab, and every
+    /// file operation checks [`Buffer::untitled`] first.
     path: PathBuf,
     title: String,
+    /// A page not yet saved to a file, by its number ("Untitled 1").
+    untitled: Option<u32>,
+    /// A page given its file: the tree lists the file once it is written.
+    newly_named: bool,
     area: TextAreaModel,
     /// False until the file's contents arrive.
     loaded: bool,
@@ -86,6 +93,8 @@ impl Buffer {
             id,
             path,
             title,
+            untitled: None,
+            newly_named: false,
             area: code_area(""),
             loaded: false,
             saved_revision: 0,
@@ -103,8 +112,27 @@ impl Buffer {
         }
     }
 
+    /// A blank page, "Untitled `number`": loaded at once, with nothing on
+    /// disk until it is saved.
+    fn untitled(id: u64, number: u32) -> Self {
+        let name = untitled_name(number);
+        let mut buffer = Self::new(id, PathBuf::from(&name));
+        buffer.title = name;
+        buffer.untitled = Some(number);
+        buffer.highlighter = None;
+        buffer.loaded = true;
+        buffer.saved_revision = buffer.area.revision();
+        buffer.seen_revision = buffer.saved_revision;
+        buffer
+    }
+
     fn dirty(&self) -> bool {
         self.loaded && self.area.revision() != self.saved_revision
+    }
+
+    /// A blank page nobody has typed into: opening a file replaces it.
+    fn untouched_page(&self) -> bool {
+        self.untitled.is_some() && !self.dirty() && self.area.document.len_chars() == 0
     }
 
     /// Replaces the whole text as one undoable edit, keeping the caret near
@@ -126,6 +154,18 @@ impl Buffer {
         }
         self.area.set_caret(caret);
     }
+}
+
+fn untitled_name(number: u32) -> String {
+    format!("Untitled {number}")
+}
+
+/// What the file dialog is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DialogFor {
+    OpenFolder,
+    /// Naming the file a page (by buffer id) is saved to.
+    SaveAs(u64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,6 +194,7 @@ enum Command {
     ToggleSplit,
     ToggleTerminal,
     NewTerminal,
+    NewPage,
     NewFile,
     NewFolder,
     RenameFile,
@@ -185,7 +226,8 @@ enum Command {
 
 impl Command {
     /// The commands a menu item can send.
-    const IN_MENUS: [Command; 27] = [
+    const IN_MENUS: [Command; 28] = [
+        Command::NewPage,
         Command::ToggleSplit,
         Command::ToggleTerminal,
         Command::NewTerminal,
@@ -337,7 +379,13 @@ pub struct Editor {
     /// The menus as last given to the system menu bar.
     published_menu: Option<MenuBar>,
     native_menu: bool,
-    folder_dialog: Option<FileDialogModel>,
+    dialog: Option<FileDialogModel>,
+    dialog_for: DialogFor,
+    /// Where the last page was saved: the next save starts there.
+    last_save_dir: Option<PathBuf>,
+    /// Pages (by buffer id) still to be named and saved, one dialog at a time
+    /// (Save All, quitting).
+    save_queue: Vec<u64>,
     dialog_clock: Instant,
     dialog_animating: bool,
     quit_prompt: bool,
@@ -549,7 +597,10 @@ impl Editor {
             drawn_menu: Some(MenuBarModel::default()),
             published_menu: None,
             native_menu: false,
-            folder_dialog: None,
+            dialog: None,
+            dialog_for: DialogFor::OpenFolder,
+            last_save_dir: None,
+            save_queue: Vec::new(),
             dialog_clock: now,
             dialog_animating: false,
             quit_prompt: false,
@@ -603,8 +654,9 @@ impl Editor {
             None if root.is_none() => {
                 let fallback = editor.fallback_root.clone();
                 editor.open_folder(fallback);
+                editor.ensure_page();
             }
-            None => {}
+            None => editor.ensure_page(),
         }
         editor
     }
@@ -683,7 +735,11 @@ impl Editor {
 
     /// Opens `path` in a tab (or switches to its tab).
     pub fn open_file(&mut self, path: PathBuf) {
-        if let Some(index) = self.buffers.iter().position(|buffer| buffer.path == path) {
+        if let Some(index) = self
+            .buffers
+            .iter()
+            .position(|buffer| buffer.untitled.is_none() && buffer.path == path)
+        {
             self.activate(index);
             return;
         }
@@ -691,7 +747,13 @@ impl Editor {
         self.next_id += 1;
         self.buffers.push(Buffer::new(id, path.clone()));
         self.outbox.push(IoRequest::ReadFile { path });
-        self.activate(self.buffers.len() - 1);
+        // A blank page nobody typed in gives way to the file.
+        while let Some(index) = self.buffers.iter().position(Buffer::untouched_page) {
+            self.close(index);
+        }
+        if let Some(index) = self.buffer_index(id) {
+            self.activate(index);
+        }
     }
 
     fn activate(&mut self, index: usize) {
@@ -704,11 +766,14 @@ impl Editor {
         }
         self.active = Some(index);
         self.focus = Focus::Editor;
-        let path = self.buffers[index].path.clone();
+        let path = self.buffers[index]
+            .untitled
+            .is_none()
+            .then(|| self.buffers[index].path.clone());
         let area = &mut self.buffers[index].area;
         let _ = area.handle_event(UiEvent::FocusChanged(true));
         if let Some(tree) = &mut self.tree {
-            tree.selected = Some(path);
+            tree.selected = path;
         }
         self.touch_session();
     }
@@ -754,6 +819,7 @@ impl Editor {
             self.activate(active);
         }
         self.repair_split();
+        self.ensure_page();
         self.touch_session();
     }
 
@@ -780,6 +846,15 @@ impl Editor {
     }
 
     fn save(&mut self, index: usize) {
+        if self.buffers[index].untitled.is_some() {
+            let id = self.buffers[index].id;
+            if self.dialog.is_none() {
+                self.show_save_dialog(id);
+            } else if !self.save_queue.contains(&id) {
+                self.save_queue.push(id);
+            }
+            return;
+        }
         let buffer = &mut self.buffers[index];
         if !buffer.loaded || buffer.saving.is_some() {
             return;
@@ -801,8 +876,43 @@ impl Editor {
         if dirty.is_empty() {
             self.set_status("Nothing to save.", StatusKind::Info);
         }
+        // Files are written at once; pages wait for their names, one dialog
+        // after another.
+        for &index in &dirty {
+            if self.buffers[index].untitled.is_none() {
+                self.save(index);
+            }
+        }
         for index in dirty {
-            self.save(index);
+            let id = self.buffers[index].id;
+            if self.buffers[index].untitled.is_some() && !self.save_queue.contains(&id) {
+                self.save_queue.push(id);
+            }
+        }
+        self.next_in_save_queue();
+    }
+
+    /// A new blank page in a tab of its own.
+    fn new_page(&mut self) {
+        let number = (1..)
+            .find(|n| {
+                !self
+                    .buffers
+                    .iter()
+                    .any(|buffer| buffer.untitled == Some(*n))
+            })
+            .expect("a free number");
+        let id = self.next_id;
+        self.next_id += 1;
+        self.buffers.push(Buffer::untitled(id, number));
+        self.activate(self.buffers.len() - 1);
+    }
+
+    /// With no tab open (a first launch, or the last tab closed), a blank page
+    /// to start writing in.
+    fn ensure_page(&mut self) {
+        if self.buffers.is_empty() && !self.awaiting_session && !self.quitting {
+            self.new_page();
         }
     }
 
@@ -931,6 +1041,12 @@ impl Editor {
                 buffer.saved_revision = revision;
                 buffer.disk = Some(stamp);
                 buffer.conflict = false;
+                if std::mem::take(&mut buffer.newly_named) {
+                    if let Some(tree) = &mut self.tree {
+                        tree.refresh();
+                    }
+                }
+                let buffer = &mut self.buffers[index];
                 let title = buffer.title.clone();
                 let close = buffer.close_after_save && !buffer.dirty();
                 if buffer.has_backup_file && !buffer.dirty() {
@@ -1017,6 +1133,9 @@ impl Editor {
         };
         if buffer.loaded {
             Self::restore_backup(buffer, &backup.text);
+            if let Some(caret) = buffer.restore_caret.take() {
+                buffer.area.set_caret(caret);
+            }
         } else {
             buffer.pending_backup = Some(backup.text);
         }
@@ -1037,10 +1156,15 @@ impl Editor {
                 let fallback = self.fallback_root.clone();
                 self.open_folder(fallback);
             }
+            self.ensure_page();
             return;
         };
+        self.last_save_dir = session.last_save_dir.clone();
         match &self.tree {
-            Some(tree) if tree.root() != session.root => return,
+            Some(tree) if tree.root() != session.root => {
+                self.ensure_page();
+                return;
+            }
             Some(_) => {}
             None => self.open_folder(session.root.clone()),
         }
@@ -1051,9 +1175,21 @@ impl Editor {
         }
         let state_dir = self.state_dir.clone();
         for tab in &session.tabs {
-            self.open_file(tab.path.clone());
-            if let Some(buffer) = self.buffers.last_mut() {
-                buffer.restore_caret = Some(tab.caret);
+            match tab.untitled {
+                Some(number) => {
+                    let id = self.next_id;
+                    self.next_id += 1;
+                    let mut page = Buffer::untitled(id, number);
+                    // Its text comes with its backup; the caret goes back then.
+                    page.restore_caret = Some(tab.caret);
+                    self.buffers.push(page);
+                }
+                None => {
+                    self.open_file(tab.path.clone());
+                    if let Some(buffer) = self.buffers.last_mut() {
+                        buffer.restore_caret = Some(tab.caret);
+                    }
+                }
             }
             if let Some(state_dir) = &state_dir {
                 self.outbox.push(IoRequest::ReadState {
@@ -1064,10 +1200,12 @@ impl Editor {
         self.restore_active = session
             .active
             .and_then(|index| session.tabs.get(index))
+            .filter(|tab| tab.untitled.is_none())
             .map(|tab| tab.path.clone());
         if let Some(index) = session.active.filter(|&index| index < self.buffers.len()) {
             self.activate(index);
         }
+        self.ensure_page();
     }
 
     fn apply_stats(&mut self, stamps: Vec<(PathBuf, Option<DiskStamp>)>) {
@@ -1137,7 +1275,7 @@ impl Editor {
                 self.run(command, host);
             }
         }
-        if self.folder_dialog.is_some() {
+        if self.dialog.is_some() {
             self.route_dialog(input, now);
         } else {
             self.route_file_drops(input);
@@ -2474,13 +2612,12 @@ impl Editor {
         let any_dirty = self.buffers.iter().any(Buffer::dirty);
         let active_dirty = self.active_buffer().is_some_and(Buffer::dirty);
         let has_file = self.active_buffer().is_some_and(|buffer| buffer.loaded);
-        let editing = self.focused_area_ref().is_some() && self.folder_dialog.is_none();
+        let editing = self.focused_area_ref().is_some() && self.dialog.is_none();
         let in_terminal = self.focus == Focus::Terminal && self.terminal_open;
         let item = |command: Command, title: &str| MenuItem::command(command.menu_command(), title);
         let mut file = vec![
-            item(Command::NewFile, "New File…")
-                .with_shortcut(Shortcut::primary('n'))
-                .enabled(self.tree.is_some()),
+            item(Command::NewPage, "New Page").with_shortcut(Shortcut::primary('n')),
+            item(Command::NewFile, "New File in Folder…").enabled(self.tree.is_some()),
             item(Command::NewFolder, "New Folder…").enabled(self.tree.is_some()),
             item(Command::RenameFile, "Rename…").enabled(self.file_target().is_some()),
             item(Command::TrashFile, "Move to Trash").enabled(self.file_target().is_some()),
@@ -2603,10 +2740,10 @@ impl Editor {
         }
     }
 
-    /// Input while the Open Folder dialog is up: all of it goes to the
-    /// dialog.
+    /// Input while a file dialog (Open Folder, or saving a page) is up: all
+    /// of it goes to the dialog.
     fn route_dialog(&mut self, input: &InputSnapshot, now: Instant) {
-        let Some(dialog) = &mut self.folder_dialog else {
+        let Some(dialog) = &mut self.dialog else {
             return;
         };
         let delta = now.duration_since(self.dialog_clock).as_secs_f32();
@@ -2655,18 +2792,124 @@ impl Editor {
                 break;
             }
         }
-        match outcome {
-            Some(FileDialogOutcome::Confirmed(folder)) => {
-                self.folder_dialog = None;
-                self.dialog_animating = false;
+        let Some(outcome) = outcome else {
+            return;
+        };
+        self.dialog = None;
+        self.dialog_animating = false;
+        match (self.dialog_for, outcome) {
+            (DialogFor::OpenFolder, FileDialogOutcome::Confirmed(folder)) => {
                 self.set_status(format!("Opened {}.", folder.display()), StatusKind::Info);
                 self.open_folder(folder);
             }
-            Some(FileDialogOutcome::Cancelled) => {
-                self.folder_dialog = None;
-                self.dialog_animating = false;
+            (DialogFor::SaveAs(id), FileDialogOutcome::Confirmed(path)) => {
+                self.save_page_as(id, path);
+                self.next_in_save_queue();
             }
-            None => {}
+            (DialogFor::SaveAs(id), FileDialogOutcome::Cancelled) => {
+                // Not saving one page stops what was waiting on it: the rest
+                // of Save All, a quit, closing its tab.
+                self.save_queue.clear();
+                self.quit_after_save = false;
+                if let Some(index) = self.buffer_index(id) {
+                    self.buffers[index].close_after_save = false;
+                    let title = self.buffers[index].title.clone();
+                    self.set_status(format!("{title} was not saved."), StatusKind::Info);
+                }
+            }
+            (DialogFor::OpenFolder, FileDialogOutcome::Cancelled) => {}
+        }
+    }
+
+    /// Asks where to save the page `id`, starting in the folder the last page
+    /// was saved to, else the open folder, else home.
+    fn show_save_dialog(&mut self, id: u64) {
+        let Some(index) = self.buffer_index(id) else {
+            return;
+        };
+        self.activate(index);
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let start = self
+            .last_save_dir
+            .clone()
+            .or_else(|| self.tree.as_ref().map(|tree| tree.root().to_path_buf()))
+            .or_else(|| home.clone())
+            .unwrap_or_else(|| PathBuf::from("/"));
+        let title = format!("Save {}", self.buffers[index].title);
+        let suggested = self.buffers[index].title.clone();
+        let mut dialog =
+            FileDialogModel::save(title, start, &suggested, None, Box::new(StdDirectorySource));
+        let mut places = Vec::new();
+        if let Some(home) = home {
+            places.push(FileDialogPlace::new("Home", home));
+        }
+        if let Some(tree) = &self.tree {
+            places.push(FileDialogPlace::new("This folder", tree.root()));
+        }
+        dialog.set_places(places);
+        self.dialog = Some(dialog);
+        self.dialog_for = DialogFor::SaveAs(id);
+        self.dialog_animating = false;
+    }
+
+    /// The page `id` becomes the file at `path` (the dialog has already
+    /// confirmed replacing one that exists) and is written there.
+    fn save_page_as(&mut self, id: u64, path: PathBuf) {
+        let Some(index) = self.buffer_index(id) else {
+            return;
+        };
+        if self.buffers.iter().any(|buffer| buffer.path == path) {
+            self.save_queue.clear();
+            self.quit_after_save = false;
+            self.buffers[index].close_after_save = false;
+            self.set_status(
+                format!(
+                    "{} is open in another tab; close it first, or save under another name.",
+                    path.display()
+                ),
+                StatusKind::Warning,
+            );
+            return;
+        }
+        // The page's backup was kept under its old name.
+        if self.buffers[index].has_backup_file {
+            if let Some(state_dir) = &self.state_dir {
+                self.outbox.push(IoRequest::RemoveState {
+                    path: session::backup_path(state_dir, &self.buffers[index].path),
+                });
+            }
+            self.buffers[index].has_backup_file = false;
+            self.buffers[index].backup_revision = None;
+            self.backup_due = Some(self.frame_time + BACKUP_DELAY);
+        }
+        self.last_save_dir = path.parent().map(Path::to_path_buf);
+        let buffer = &mut self.buffers[index];
+        buffer.title = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+        buffer.highlighter = Highlighter::for_path(&path);
+        buffer.untitled = None;
+        buffer.newly_named = true;
+        buffer.disk = None;
+        buffer.path = path.clone();
+        if let Some(tree) = &mut self.tree {
+            tree.selected = Some(path);
+        }
+        self.touch_session();
+        self.save(index);
+    }
+
+    /// Opens the save dialog for the next page waiting in the queue.
+    fn next_in_save_queue(&mut self) {
+        while self.dialog.is_none() && !self.save_queue.is_empty() {
+            let id = self.save_queue.remove(0);
+            if self
+                .buffer_index(id)
+                .is_some_and(|index| self.buffers[index].untitled.is_some())
+            {
+                self.show_save_dialog(id);
+            }
         }
     }
 
@@ -2688,7 +2931,8 @@ impl Editor {
             places.push(FileDialogPlace::new("This folder", tree.root()));
         }
         dialog.set_places(places);
-        self.folder_dialog = Some(dialog);
+        self.dialog = Some(dialog);
+        self.dialog_for = DialogFor::OpenFolder;
         self.dialog_animating = false;
     }
 
@@ -2729,7 +2973,7 @@ impl Editor {
         let paths: Vec<PathBuf> = self
             .buffers
             .iter()
-            .filter(|buffer| buffer.loaded)
+            .filter(|buffer| buffer.loaded && buffer.untitled.is_none())
             .map(|buffer| buffer.path.clone())
             .collect();
         if !paths.is_empty() {
@@ -2820,10 +3064,12 @@ impl Editor {
                     } else {
                         buffer.restore_caret.unwrap_or(0)
                     },
+                    untitled: buffer.untitled,
                 })
                 .collect(),
             active: self.active,
             expanded: tree.expanded_dirs(),
+            last_save_dir: self.last_save_dir.clone(),
         })
     }
 
@@ -2842,7 +3088,7 @@ impl Editor {
         } else {
             0.0
         };
-        if let Some(dialog) = &mut self.folder_dialog {
+        if let Some(dialog) = &mut self.dialog {
             let dialog_width = (width - 80.0).clamp(320.0, 760.0);
             let dialog_height = (height - 120.0).clamp(240.0, 520.0);
             dialog.set_bounds(Rect {
@@ -2871,6 +3117,7 @@ impl Editor {
         let mut x = 8.0;
         for (command, text) in [
             (Command::OpenFolder, "Open Folder…"),
+            (Command::NewPage, "New Page"),
             (Command::NewFile, "New File"),
             (Command::Save, "Save"),
             (Command::SaveAll, "Save All"),
@@ -4068,6 +4315,7 @@ impl Editor {
     fn run(&mut self, command: Command, host: &dyn EditorHost) {
         match command {
             Command::OpenFolder => self.show_folder_dialog(),
+            Command::NewPage => self.new_page(),
             Command::GoToDefinition => {
                 if let Some(buffer) = self.active_buffer() {
                     let caret = buffer.area.caret();
@@ -4089,6 +4337,7 @@ impl Editor {
             Command::Check => {
                 let file = self
                     .active_buffer()
+                    .filter(|buffer| buffer.untitled.is_none())
                     .map(|buffer| buffer.path.clone())
                     .or_else(|| {
                         self.tree
@@ -4490,7 +4739,7 @@ impl Editor {
         if let Some(menu) = &self.drawn_menu {
             menu.paint(scene);
         }
-        if let Some(dialog) = &self.folder_dialog {
+        if let Some(dialog) = &self.dialog {
             FileDialogModel::paint_scrim(
                 Rect {
                     x: 0.0,
@@ -4692,6 +4941,7 @@ impl Editor {
         for (command, rect) in &layout.buttons {
             let (text, enabled) = match command {
                 Command::OpenFolder => ("Open Folder…", true),
+                Command::NewPage => ("New Page", true),
                 Command::NewFile => ("New File", self.tree.is_some()),
                 Command::Save => ("Save", active_dirty),
                 Command::SaveAll => ("Save All", any_dirty),
@@ -5237,7 +5487,7 @@ mod tests {
     use loadngo_host_core::{HostKey, HostKeyEvent};
     use std::cell::RefCell;
     use std::fs;
-    use ui_core::{MenuBar, MenuItem};
+    use ui_core::{FileDialogMode, MenuBar, MenuItem};
 
     struct FakeHost {
         clipboard: RefCell<Option<String>>,
@@ -5336,6 +5586,11 @@ mod tests {
             self.editor.active_buffer().expect("a tab is open")
         }
 
+        /// What the editor shows with no file open: one empty, unsaved page.
+        fn only_a_blank_page(&self) -> bool {
+            self.editor.buffers.len() == 1 && self.editor.buffers[0].untouched_page()
+        }
+
         fn status(&self) -> String {
             self.editor
                 .status
@@ -5375,6 +5630,220 @@ mod tests {
             fs::write(path, text).unwrap();
         }
         dir
+    }
+
+    fn same_dir(a: &Path, b: &Path) -> bool {
+        fs::canonicalize(a).unwrap() == fs::canonicalize(b).unwrap()
+    }
+
+    /// Saves the active page through its dialog as `name`.
+    fn save_page_as(rig: &mut Rig, name: &str) {
+        rig.key(HostKey::S, cmd());
+        assert!(rig.editor.dialog.is_some(), "Save asks where");
+        rig.type_text(name);
+        rig.key(HostKey::Enter, Modifiers::default());
+        rig.settle();
+    }
+
+    #[test]
+    fn a_first_launch_opens_a_blank_page_to_type_in() {
+        let dir = workspace(&[("a.rs", "fn a() {}\n")]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        assert!(rig.only_a_blank_page());
+        assert_eq!(rig.active().title, "Untitled 1");
+        assert_eq!(rig.editor.focus, Focus::Editor);
+        rig.type_text("first words");
+        assert_eq!(rig.active().area.text(), "first words");
+        assert!(rig.active().dirty());
+        // Nothing reached the disk, and the folder is as it was.
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn closing_the_last_tab_leaves_a_blank_page() {
+        let dir = workspace(&[("a.rs", "abc")]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.editor.open_file(dir.path().join("a.rs"));
+        rig.settle();
+        assert_eq!(
+            rig.editor.buffers.len(),
+            1,
+            "the file replaced the untouched page"
+        );
+        rig.key(HostKey::W, cmd());
+        assert!(rig.only_a_blank_page());
+        // Closing that page brings a fresh one.
+        rig.key(HostKey::W, cmd());
+        assert!(rig.only_a_blank_page());
+    }
+
+    #[test]
+    fn opening_a_file_keeps_a_page_that_has_text() {
+        let dir = workspace(&[("a.rs", "abc")]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.type_text("keep me");
+        rig.editor.open_file(dir.path().join("a.rs"));
+        rig.settle();
+        assert_eq!(rig.editor.buffers.len(), 2);
+        assert_eq!(rig.editor.buffers[0].area.text(), "keep me");
+        assert_eq!(rig.active().title, "a.rs");
+    }
+
+    #[test]
+    fn saving_a_page_asks_where_and_it_becomes_that_file() {
+        let dir = workspace(&[("notes/old.txt", "")]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.type_text("fn main() {}\n");
+        rig.key(HostKey::S, cmd());
+        let dialog = rig.editor.dialog.as_ref().expect("Save asks where");
+        assert_eq!(dialog.mode(), FileDialogMode::Save);
+        assert!(
+            same_dir(dialog.directory(), dir.path()),
+            "starts in the open folder"
+        );
+        assert_eq!(dialog.name_text(), "Untitled 1");
+        rig.type_text("main.rs");
+        rig.key(HostKey::Enter, Modifiers::default());
+        rig.settle();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("main.rs")).unwrap(),
+            "fn main() {}\n"
+        );
+        let page = rig.active();
+        assert_eq!(page.title, "main.rs");
+        assert_eq!(page.untitled, None);
+        assert!(!page.dirty());
+        assert!(
+            page.highlighter.is_some(),
+            "a .rs file is highlighted once named"
+        );
+        assert_eq!(rig.status(), "Saved main.rs.");
+
+        // The next page's dialog starts where this one was saved.
+        rig.key(HostKey::N, cmd());
+        assert_eq!(rig.active().title, "Untitled 1");
+        rig.type_text("x");
+        rig.key(HostKey::S, cmd());
+        let dialog = rig.editor.dialog.as_ref().unwrap();
+        assert!(same_dir(dialog.directory(), dir.path()));
+        rig.key(HostKey::Escape, Modifiers::default());
+        assert!(rig.editor.dialog.is_none());
+        assert!(rig.active().dirty(), "cancelled: still an unsaved page");
+        assert_eq!(rig.status(), "Untitled 1 was not saved.");
+    }
+
+    #[test]
+    fn cmd_n_numbers_new_pages() {
+        let dir = workspace(&[]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.type_text("one");
+        rig.key(HostKey::N, cmd());
+        assert_eq!(rig.active().title, "Untitled 2");
+        assert_eq!(rig.editor.buffers.len(), 2);
+    }
+
+    #[test]
+    fn a_name_open_in_another_tab_is_refused() {
+        let dir = workspace(&[("a.rs", "abc")]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.type_text("page");
+        rig.editor.open_file(dir.path().join("a.rs"));
+        rig.settle();
+        let page = rig
+            .editor
+            .buffers
+            .iter()
+            .position(|b| b.untitled.is_some())
+            .unwrap();
+        rig.editor.activate(page);
+        rig.settle();
+        rig.key(HostKey::S, cmd());
+        rig.type_text("a.rs");
+        rig.key(HostKey::Enter, Modifiers::default());
+        // The dialog asks to replace the file on disk first.
+        if rig.editor.dialog.is_some() {
+            rig.key(HostKey::Enter, Modifiers::default());
+        }
+        rig.settle();
+        assert_eq!(fs::read_to_string(dir.path().join("a.rs")).unwrap(), "abc");
+        assert!(
+            rig.status().contains("is open in another tab"),
+            "{}",
+            rig.status()
+        );
+        assert!(rig
+            .editor
+            .buffers
+            .iter()
+            .any(|b| b.untitled.is_some() && b.dirty()));
+    }
+
+    #[test]
+    fn an_unsaved_page_and_the_save_folder_survive_a_restart() {
+        let dir = workspace(&[]);
+        let state = tempfile::tempdir().unwrap();
+        let mut rig = Rig::new(
+            Some(state.path().to_path_buf()),
+            Some(dir.path().to_path_buf()),
+        );
+        fs::create_dir(dir.path().join("out")).unwrap();
+        rig.type_text("saved");
+        save_page_as(&mut rig, "out/first.txt");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("out/first.txt")).unwrap(),
+            "saved"
+        );
+        rig.key(HostKey::N, cmd());
+        rig.type_text("draft text");
+        rig.later(5);
+
+        let mut rig = Rig::new(
+            Some(state.path().to_path_buf()),
+            Some(dir.path().to_path_buf()),
+        );
+        let page = rig
+            .editor
+            .buffers
+            .iter()
+            .find(|b| b.untitled.is_some())
+            .expect("the page came back");
+        assert_eq!(page.area.text(), "draft text");
+        assert!(page.dirty(), "still unsaved");
+        assert_eq!(page.area.caret(), "draft text".chars().count());
+        rig.editor.activate(
+            rig.editor
+                .buffers
+                .iter()
+                .position(|b| b.untitled.is_some())
+                .unwrap(),
+        );
+        rig.settle();
+        rig.key(HostKey::S, cmd());
+        let dialog = rig.editor.dialog.as_ref().unwrap();
+        assert!(
+            same_dir(dialog.directory(), &dir.path().join("out")),
+            "the last save folder"
+        );
+    }
+
+    #[test]
+    fn quitting_with_an_unsaved_page_asks_for_its_name_then_quits() {
+        let dir = workspace(&[]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.type_text("before quitting");
+        rig.editor.run(Command::Quit, &rig.host);
+        assert!(rig.editor.quit_prompt);
+        rig.editor.run(Command::QuitSaveAll, &rig.host);
+        assert!(rig.editor.dialog.is_some(), "the page needs a name first");
+        assert!(!rig.editor.quitting);
+        rig.type_text("kept.txt");
+        rig.key(HostKey::Enter, Modifiers::default());
+        rig.settle();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("kept.txt")).unwrap(),
+            "before quitting"
+        );
+        assert!(rig.editor.quitting);
     }
 
     #[test]
@@ -5457,7 +5926,7 @@ mod tests {
         assert_eq!(rig.editor.buffers.len(), 1, "a prompt, not a close");
         assert!(rig.editor.close_prompt.is_some());
         rig.click(rig.bar_button(Command::PromptSave));
-        assert!(rig.editor.buffers.is_empty());
+        assert!(rig.only_a_blank_page());
         assert_eq!(fs::read_to_string(dir.path().join("a.rs")).unwrap(), "xabc");
     }
 
@@ -5476,7 +5945,7 @@ mod tests {
         rig.editor.request_close(index);
         rig.settle();
         rig.click(rig.bar_button(Command::PromptDiscard));
-        assert!(rig.editor.buffers.is_empty());
+        assert!(rig.only_a_blank_page());
         assert_eq!(fs::read_to_string(dir.path().join("a.rs")).unwrap(), "abc");
     }
 
@@ -5553,7 +6022,7 @@ mod tests {
         let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
         rig.editor.open_file(dir.path().join("x.bin"));
         rig.settle();
-        assert!(rig.editor.buffers.is_empty());
+        assert!(rig.only_a_blank_page());
         assert_eq!(rig.status(), "x.bin was not opened: a binary file.");
     }
 
@@ -5838,11 +6307,11 @@ mod tests {
         let root = dir.path().canonicalize().unwrap();
         let mut rig = Rig::new(None, Some(root.join("one")));
         rig.outcome(menu_input(Command::OpenFolder));
-        assert!(rig.editor.folder_dialog.is_some());
+        assert!(rig.editor.dialog.is_some());
         // Typing a path in the dialog and pressing Enter chooses it.
         rig.type_text(&root.join("two").display().to_string());
         rig.key(HostKey::Enter, Modifiers::default());
-        assert!(rig.editor.folder_dialog.is_none());
+        assert!(rig.editor.dialog.is_none());
         rig.settle();
         let tree = rig.editor.tree.as_mut().unwrap();
         assert_eq!(tree.root(), root.join("two"));
@@ -5851,12 +6320,12 @@ mod tests {
     }
 
     #[test]
-    fn escape_closes_the_folder_dialog() {
+    fn escape_closes_the_dialog() {
         let dir = workspace(&[("a.rs", "a")]);
         let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
         rig.outcome(menu_input(Command::OpenFolder));
         rig.key(HostKey::Escape, Modifiers::default());
-        assert!(rig.editor.folder_dialog.is_none());
+        assert!(rig.editor.dialog.is_none());
         assert_eq!(rig.editor.tree.as_ref().unwrap().root(), dir.path());
     }
 
@@ -5873,9 +6342,9 @@ mod tests {
         let file_title = Point { x: 20.0, y: 10.0 };
         rig.click(file_title);
         assert!(rig.editor.drawn_menu.as_ref().unwrap().is_open());
-        // Down to "Save" (past the four file commands, Open Folder… and
-        // Refresh Folder; separators are skipped) and Enter.
-        for _ in 0..7 {
+        // Down to "Save" (past New Page, the four file commands, Open Folder…
+        // and Refresh Folder; separators are skipped) and Enter.
+        for _ in 0..8 {
             rig.key(HostKey::Down, Modifiers::default());
         }
         rig.key(HostKey::Enter, Modifiers::default());
@@ -6553,7 +7022,7 @@ mod tests {
             },
             rig.now,
         );
-        assert!(rig.editor.buffers.is_empty(), "its tab closed");
+        assert!(rig.only_a_blank_page(), "its tab closed");
         assert!(rig.status().starts_with("Moved a.rs to the Trash"));
     }
 
