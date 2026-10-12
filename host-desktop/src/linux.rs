@@ -1288,6 +1288,11 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
         // timer, `resumed`, or an explicit `wake_host()` call) observes the
         // latest state; only `pending_redraw` is set so the compositor can
         // repaint promptly without forcing an extra logical frame.
+        //
+        // A redraw is the host presenting what the runtime already drew, not
+        // something the runtime is waiting for: waking on it made every idle
+        // app draw again after each present, at the display's rate.
+        let wakes_idle_runtime = !matches!(event, WindowEvent::RedrawRequested);
         match event {
             WindowEvent::CloseRequested => {
                 trace_linux("window_event CloseRequested");
@@ -1417,8 +1422,11 @@ impl ApplicationHandler<LinuxUserEvent> for LinuxApp {
             _ => {}
         }
         // Covers every arm above rather than each one individually: any
-        // window event may be the thing an idle runtime is waiting for.
-        wake_if_idle();
+        // window event but a redraw may be the thing an idle runtime is
+        // waiting for.
+        if wakes_idle_runtime {
+            wake_if_idle();
+        }
         self.request_redraw_if_needed();
     }
 
