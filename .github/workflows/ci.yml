@@ -17,9 +17,9 @@ name: CI
 # macOS/iOS-only; DX12 and the win32 GUI are Windows-only. gui and gui-win32 do
 # not compile against the current `windows` crate (imports that crate no
 # longer exports, and a `gui_win32::` path inside gui-win32's own sources), a
-# repair of their own; `task` depends on `gui`, and `--exclude` only drops a
-# crate from the lint list, not from the build of a crate that depends on it,
-# so it is out on Windows too. proactor-harness is dev-only criterion/loom
+# repair of their own. (`task` depended on `gui` until 2026-10-13, when its
+# Win32 port gave way to the one ui-core front end; it builds on Windows
+# now.) proactor-harness is dev-only criterion/loom
 # tooling, out everywhere for build time; run its benches and loom tests by
 # hand (proactor-harness/README.md).
 
@@ -66,7 +66,7 @@ jobs:
             excludes: --exclude loadngo-gfx-dx12 --exclude gui-win32 --exclude proactor-harness
           # DX12 is in: the only host that can build it.
           - os: windows-latest
-            excludes: --exclude loadngo-gfx-metal --exclude gui --exclude gui-win32 --exclude task --exclude proactor-harness
+            excludes: --exclude loadngo-gfx-metal --exclude gui --exclude gui-win32 --exclude proactor-harness
     steps:
       - name: Allow long paths in git
         if: runner.os == 'Windows'

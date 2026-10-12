@@ -12,18 +12,8 @@ loadngo-host-desktop = { path = "../host-desktop" }
 loadngo-persistence = { path = "../persistence" }
 serde_json.workspace = true
 ui-core = { path = "../ui-core" }
-tracing.workspace = true
-tracing-subscriber.workspace = true
-tracing-appender = "0.2"
-windows.workspace = true
-windows-core.workspace = true
 data = { path = "../data" }
-network = { path = "../network" }
-gui = { path = "../gui" }
 chrono.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
-
-[build-dependencies]
-embed-resource = "2.4"
