@@ -14,17 +14,15 @@
 //! - [`IdlePolicy`] decides, on the game thread, when the output should close
 //!   and when the game must come back to close it. Pure logic, so it is
 //!   tested without a device.
-//! - [`OutputSwitch`] carries the decision to one thread that does the actual
-//!   open, start, stop or close, because those block: on the Mac mini a
-//!   reopen took 8-11 ms and a close about 40 ms, either of which would cost
-//!   the game a frame. The thread sleeps on a channel and wakes only when
-//!   asked, so it costs nothing while idle. It is not the host's offload pool
-//!   because that wakes the app for every result, and because these backends
-//!   also run with no host at all (`audio_harness`, tests).
+//! - [`OutputSwitch`] carries the decision to loadngo's offload pool, which
+//!   does the actual open, start, stop or close, because those block: on the
+//!   Mac mini a reopen took 8-11 ms and a close about 40 ms, either of which
+//!   would cost the game a frame. Requests are serialized, so two pool
+//!   workers never switch the device at once, and needs no running host
+//!   (`audio_harness` and the tests have none).
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 /// How long the output stays open with nothing playing. Matches Android's
@@ -115,49 +113,61 @@ pub(crate) fn sooner(a: Option<Duration>, b: Option<Duration>) -> Option<Duratio
     }
 }
 
-/// One thread that brings the output to the most recently requested state.
+/// Brings the output to the most recently requested state on the offload
+/// pool.
 ///
-/// Requests are latest-wins: a close followed at once by an open leaves the
-/// output open, and the thread never replays a stale request, because it
-/// reads the desired state when it wakes rather than a queue of commands.
+/// Requests are latest-wins and serialized: at most one pool job switches
+/// the device at a time, and it keeps going until the state it applied is
+/// still the one wanted, so a close followed at once by an open leaves the
+/// output open and nothing stale is replayed.
+#[derive(Clone)]
 pub(crate) struct OutputSwitch {
-    desired: Arc<AtomicBool>,
-    wake: SyncSender<()>,
+    shared: Arc<SwitchShared>,
+}
+
+struct SwitchShared {
+    desired: AtomicBool,
+    /// A job is queued or running and will look at `desired` again.
+    busy: AtomicBool,
+    apply: Mutex<Box<dyn FnMut(bool) + Send>>,
 }
 
 impl OutputSwitch {
-    /// Starts the thread. `apply(open)` runs on it for each change and must
-    /// tolerate being asked for the state it is already in.
-    pub(crate) fn spawn(
-        name: &str,
-        open: bool,
-        mut apply: impl FnMut(bool) + Send + 'static,
-    ) -> std::io::Result<Self> {
-        let desired = Arc::new(AtomicBool::new(open));
-        // One slot: a pending wake already means "look again", so a second
-        // one carries nothing new.
-        let (wake, wakes) = sync_channel::<()>(1);
-        let thread_desired = Arc::clone(&desired);
-        std::thread::Builder::new()
-            .name(name.to_string())
-            .spawn(move || {
-                // Ends when the switch is dropped and the sender goes away.
-                while wakes.recv().is_ok() {
-                    apply(thread_desired.load(Ordering::Acquire));
-                }
-            })?;
-        Ok(Self { desired, wake })
+    /// `apply(open)` runs on the pool for each change and must tolerate
+    /// being asked for the state it is already in.
+    pub(crate) fn new(open: bool, apply: impl FnMut(bool) + Send + 'static) -> Self {
+        Self {
+            shared: Arc::new(SwitchShared {
+                desired: AtomicBool::new(open),
+                busy: AtomicBool::new(false),
+                apply: Mutex::new(Box::new(apply)),
+            }),
+        }
     }
 
     pub(crate) fn request(&self, open: bool) {
-        self.desired.store(open, Ordering::Release);
-        match self.wake.try_send(()) {
-            // Full: a wake is already pending and will read `desired`.
-            Ok(()) | Err(TrySendError::Full(())) => {}
-            Err(TrySendError::Disconnected(())) => {
-                eprintln!("[loadngo/audio] output thread has stopped; output state not changed");
-            }
+        self.shared.desired.store(open, Ordering::Release);
+        if self.shared.busy.swap(true, Ordering::AcqRel) {
+            // The job in flight reads `desired` again before it finishes.
+            return;
         }
+        let shared = Arc::clone(&self.shared);
+        crate::offload::run_detached(move || loop {
+            let wanted = shared.desired.load(Ordering::Acquire);
+            {
+                let mut apply = shared.apply.lock().unwrap_or_else(PoisonError::into_inner);
+                (*apply)(wanted);
+            }
+            shared.busy.store(false, Ordering::Release);
+            // A request after `wanted` was read either found `busy` set and
+            // left it to this job, or cleared it and started its own job;
+            // claiming `busy` again tells the two apart.
+            if shared.desired.load(Ordering::Acquire) == wanted
+                || shared.busy.swap(true, Ordering::AcqRel)
+            {
+                break;
+            }
+        });
     }
 }
 
@@ -265,26 +275,48 @@ mod tests {
     #[test]
     fn the_switch_applies_the_latest_request() {
         let (applied, seen) = channel();
-        let switch = OutputSwitch::spawn("test-audio-output", true, move |open| {
+        let switch = OutputSwitch::new(true, move |open| {
             let _ = applied.send(open);
-        })
-        .expect("spawn");
+        });
         switch.request(false);
         assert_eq!(
             seen.recv_timeout(Duration::from_secs(5)),
             Ok(false),
-            "a close reaches the thread"
+            "a close reaches the pool"
         );
         switch.request(true);
         assert_eq!(seen.recv_timeout(Duration::from_secs(5)), Ok(true));
-        // Two requests before the thread wakes: whatever it applies last is
-        // the latest one.
-        switch.request(false);
-        switch.request(true);
+        // A burst of requests: whatever is applied last is the latest one.
+        for _ in 0..50 {
+            switch.request(false);
+            switch.request(true);
+        }
         let mut last = None;
         while let Ok(open) = seen.recv_timeout(Duration::from_millis(500)) {
             last = Some(open);
         }
         assert_eq!(last, Some(true));
+    }
+
+    #[test]
+    fn the_switch_never_applies_twice_at_once() {
+        use std::sync::atomic::AtomicUsize;
+        let inside = Arc::new(AtomicUsize::new(0));
+        let overlap = Arc::new(AtomicBool::new(false));
+        let (done, finished) = channel();
+        let (inside_job, overlap_job) = (Arc::clone(&inside), Arc::clone(&overlap));
+        let switch = OutputSwitch::new(true, move |open| {
+            if inside_job.fetch_add(1, Ordering::SeqCst) != 0 {
+                overlap_job.store(true, Ordering::SeqCst);
+            }
+            std::thread::sleep(Duration::from_millis(2));
+            inside_job.fetch_sub(1, Ordering::SeqCst);
+            let _ = done.send(open);
+        });
+        for index in 0..40 {
+            switch.request(index % 2 == 0);
+        }
+        while finished.recv_timeout(Duration::from_millis(500)).is_ok() {}
+        assert!(!overlap.load(Ordering::SeqCst), "two switches overlapped");
     }
 }

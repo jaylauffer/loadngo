@@ -6,24 +6,33 @@
 //! Music streams and effects don't, because the assets differ by three
 //! orders of magnitude: the games' music runs 5-10 minutes (`flutterrung.ogg`
 //! is 603 s, about 212 MB once decoded to `f32`), which no phone should hold
-//! in memory, while their effects are 20 clips of at most 17 KB. So music is
-//! decoded incrementally on a worker thread and effects are decoded once and
-//! kept.
+//! in memory, while their effects are 20 clips of at most 17 KB.
+//!
+//! The game thread never waits on audio (`docs/GAME_AUDIO_RUNTIME.md`):
+//!
+//! - The unit is created, started and stopped on loadngo's offload pool
+//!   (`audio_output_idle.rs`), and stops after three silent seconds.
+//! - Effects and voice lines are decoded on the pool, once, into a shared
+//!   cache. An effect played before its clip is ready is dropped and
+//!   counted, never decoded inline; a voice line starts when its decode
+//!   finishes.
+//! - Music is decoded a little ahead on the pool (`audio_stream.rs`), topped
+//!   up from the music controller's `update`, so no track owns a thread.
 //!
 //! Everything arrives as a real file path. `ios.rs` sets `SNG_ASSETS_ROOT` to
-//! the bundle's `assets/`, and both games use it, so -- exactly as on Android
+//! the bundle's `assets/`, and the games use it, so -- exactly as on Android
 //! -- `preload_embedded` has nothing to do here and says so.
 //!
 //! The unit runs at 48 kHz stereo. Every effect and one of the three music
-//! tracks is already 48 kHz; the two 44.1 kHz tracks are converted on the
-//! decoder thread, so the render callback never resamples.
+//! tracks is already 48 kHz; the others are converted as they are decoded,
+//! so the render callback never resamples.
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
 use std::fs::File;
 use std::io::BufReader;
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use coreaudio_sys::{
@@ -35,22 +44,17 @@ use coreaudio_sys::{
     AudioStreamBasicDescription, AudioTimeStamp, AudioUnit, AudioUnitInitialize,
     AudioUnitRenderActionFlags, AudioUnitSetProperty, OSStatus,
 };
-use lewton::inside_ogg::OggStreamReader;
 
 use super::mobile_mix::{
     decode_clip_file, stereo_volume, ActiveVoice, CachedClip, Voices, OUTPUT_SAMPLE_RATE,
 };
 use super::output_idle::{sooner, IdlePolicy, OutputSwitch};
+use super::stream::{ChunkConsumer, DecodeAhead, Opener, Pop, ReadSeek, TICK};
 use super::{SfxPlayRequest, SfxSettings, SfxVoiceId};
 
-/// The rate the unit runs at. Chosen because 21 of the 23 shipped assets are
-/// already 48 kHz, so only the two 44.1 kHz music tracks need converting.
 const OUTPUT_CHANNELS: u32 = 2;
-/// Frames per chunk handed from the decoder thread to the mixer. At 48 kHz
-/// this is ~85 ms, so eight queued chunks give the decoder about two thirds
-/// of a second of slack against a scheduling hiccup.
-const MUSIC_CHUNK_FRAMES: usize = 4_096;
-const MUSIC_CHUNK_QUEUE: usize = 8;
+/// The mixer id of the voice line; effect voices start at 1.
+const VOICE_LINE_ID: u64 = 0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MusicCueMode {
@@ -58,101 +62,58 @@ pub enum MusicCueMode {
     Loop,
 }
 
-// ---------------------------------------------------------------- decoding
+// ------------------------------------------------------------------ clips
 
-/// Interleaved stereo `f32` at [`OUTPUT_SAMPLE_RATE`].
-type Chunk = Vec<f32>;
-
-/// Decodes `path`, converting to stereo and to the output rate, and sends it
-/// on in chunks. Returns when the track ends or the receiver goes away.
-fn stream_track(path: &str, tx: &SyncSender<Chunk>) -> Result<(), String> {
-    let file = File::open(path).map_err(|err| format!("Missing music {path}: {err}"))?;
-    let mut reader = OggStreamReader::new(BufReader::new(file))
-        .map_err(|err| format!("Failed to read music {path}: {err}"))?;
-    let source_rate = f64::from(reader.ident_hdr.audio_sample_rate);
-    let source_channels = usize::from(reader.ident_hdr.audio_channels).max(1);
-    let ratio = source_rate / OUTPUT_SAMPLE_RATE;
-
-    // Linear interpolation is enough here: this only ever runs at 44100/48000
-    // (a ratio of 0.919), on music, off the audio thread. It is deliberately
-    // not `audio-io`'s `DriftResampler`, which exists to track two live clocks
-    // against each other and would be the wrong tool for a fixed ratio.
-    let mut pending: Vec<f32> = Vec::new();
-    let mut position = 0.0f64;
-    let mut chunk: Chunk = Vec::with_capacity(MUSIC_CHUNK_FRAMES * 2);
-
-    loop {
-        let packet = reader
-            .read_dec_packet_itl()
-            .map_err(|err| format!("Failed to decode music {path}: {err}"))?;
-        let Some(packet) = packet else {
-            break;
-        };
-        // Interleaved i16 -> interleaved stereo f32, mono duplicated.
-        for frame in packet.chunks(source_channels) {
-            let left = f32::from(frame[0]) / 32_768.0;
-            let right = if source_channels > 1 {
-                f32::from(frame[1]) / 32_768.0
-            } else {
-                left
-            };
-            pending.push(left);
-            pending.push(right);
-        }
-
-        let frames_available = pending.len() / 2;
-        while (position.floor() as usize) + 1 < frames_available {
-            let index = position.floor() as usize;
-            let fraction = (position - position.floor()) as f32;
-            for channel in 0..2 {
-                let a = pending[index * 2 + channel];
-                let b = pending[(index + 1) * 2 + channel];
-                chunk.push(a + (b - a) * fraction);
-            }
-            position += ratio;
-            if chunk.len() >= MUSIC_CHUNK_FRAMES * 2 {
-                if send_chunk(tx, std::mem::take(&mut chunk)).is_err() {
-                    return Ok(());
-                }
-                chunk = Vec::with_capacity(MUSIC_CHUNK_FRAMES * 2);
-            }
-        }
-
-        // Keep only the tail the interpolator still needs.
-        let consumed = position.floor() as usize;
-        if consumed > 0 {
-            pending.drain(..consumed * 2);
-            position -= consumed as f64;
-        }
-    }
-
-    if !chunk.is_empty() {
-        let _ = send_chunk(tx, chunk);
-    }
-    Ok(())
+#[derive(Clone)]
+enum ClipState {
+    Loading,
+    Ready(CachedClip),
+    Failed(String),
 }
 
-/// Blocking-ish send that gives up if the mixer stopped listening. The queue
-/// is bounded so a decoder can never outrun playback into unbounded memory.
-fn send_chunk(tx: &SyncSender<Chunk>, chunk: Chunk) -> Result<(), ()> {
-    let mut chunk = chunk;
-    loop {
-        match tx.try_send(chunk) {
-            Ok(()) => return Ok(()),
-            Err(TrySendError::Full(returned)) => {
-                chunk = returned;
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Err(TrySendError::Disconnected(_)) => return Err(()),
+/// Every effect clip, by path.
+static CLIPS: OnceLock<Mutex<HashMap<String, ClipState>>> = OnceLock::new();
+
+fn clips() -> &'static Mutex<HashMap<String, ClipState>> {
+    CLIPS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Starts decoding `path` on the pool, unless it is already loaded or
+/// loading. Returns at once.
+fn request_clip(path: &str) {
+    {
+        let mut cache = clips().lock().unwrap_or_else(PoisonError::into_inner);
+        if cache.contains_key(path) {
+            return;
         }
+        cache.insert(path.to_string(), ClipState::Loading);
     }
+    let path = path.to_string();
+    crate::offload::run_detached(move || {
+        let state = match decode_clip_file(&path) {
+            Ok(clip) => ClipState::Ready(clip),
+            Err(error) => ClipState::Failed(error),
+        };
+        clips()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(path, state);
+    });
+}
+
+fn path_opener(path: &str) -> Opener {
+    let path = path.to_string();
+    Arc::new(move || {
+        let file = File::open(&path).map_err(|err| format!("Missing music {path}: {err}"))?;
+        Ok(Box::new(BufReader::new(file)) as Box<dyn ReadSeek>)
+    })
 }
 
 // ------------------------------------------------------------------ mixing
 
 struct MusicPlayback {
-    chunks: Receiver<Chunk>,
-    pending: VecDeque<f32>,
+    chunks: ChunkConsumer,
+    ahead: DecodeAhead,
     finished: bool,
 }
 
@@ -180,16 +141,7 @@ impl MixerState {
         let Some(music) = self.music.as_mut() else {
             return;
         };
-        while music.pending.len() < out.len() {
-            match music.chunks.try_recv() {
-                Ok(chunk) => music.pending.extend(chunk),
-                Err(_) => break,
-            }
-        }
-        if music.pending.is_empty() {
-            // The decoder thread ends by dropping its sender, so an empty
-            // queue plus a dead channel is a finished track, not a stall.
-            music.finished = music.chunks.try_recv().is_err() && music.pending.is_empty();
+        if music.finished {
             return;
         }
         // First-order low shelf: add a lowpassed copy back in. Android gets
@@ -202,18 +154,23 @@ impl MixerState {
         // that at 48 kHz is `1 - exp(-2*PI*180/48000)`; the 0.15 used here
         // first was about six times too wide, lifting everything up past a
         // kilohertz instead of bass. Its `MUSIC_BASS_POST_GAIN` of 0.9 is
-        // applied to the music bus whether or not any boost is mixed in
-        // (both branches of `append_music_source` end in `.amplify`), so it
-        // is unconditional here too -- without it this backend ran the music
-        // bus about a decibel hot relative to effects.
+        // applied to the music bus whether or not any boost is mixed in, so
+        // it is unconditional here too -- without it this backend ran the
+        // music bus about a decibel hot relative to effects.
         const BASS_ONE_POLE: f32 = 0.0234;
         const MUSIC_POST_GAIN: f32 = 0.9;
 
         let volume = self.music_volume;
         let boost = self.bass_boost;
         for (index, sample) in out.iter_mut().enumerate() {
-            let Some(value) = music.pending.pop_front() else {
-                break;
+            let value = match music.chunks.pop() {
+                Pop::Sample(value) => value,
+                // Not decoded yet: silence for the rest of this buffer.
+                Pop::Empty => break,
+                Pop::Ended => {
+                    music.finished = true;
+                    break;
+                }
             };
             let channel = index % 2;
             let low = self.bass_state[channel] + BASS_ONE_POLE * (value - self.bass_state[channel]);
@@ -240,127 +197,23 @@ struct Output {
     unit: AudioUnit,
 }
 
-// SAFETY: the unit is created and first started on the thread that first
-// asks for audio; after that only the output thread (`apply_output`) stops
-// and restarts it, one call at a time. The render callback reaches the mixer
-// through an `Arc`, not through this handle.
+// SAFETY: the unit is created, started and stopped only by `apply_output`,
+// which the output switch runs one call at a time on the offload pool. The
+// render callback reaches the mixer through an `Arc`, not through this
+// handle.
 unsafe impl Send for Output {}
 unsafe impl Sync for Output {}
 
 static MIXER: OnceLock<Arc<Mutex<MixerState>>> = OnceLock::new();
+/// The unit, once created; `None` inside if RemoteIO would not start, which
+/// is remembered rather than retried.
 static OUTPUT: OnceLock<Option<Output>> = OnceLock::new();
-/// When the unit stops after a silent stretch, and the thread that stops
-/// and restarts it (see `audio_output_idle.rs`). The first start leaves it
-/// running.
-static IDLE: Mutex<IdleState> = Mutex::new(IdleState {
-    policy: IdlePolicy::new(true),
-    switch: None,
-});
-
-struct IdleState {
-    policy: IdlePolicy,
-    /// Started the first time the unit stops.
-    switch: Option<OutputSwitch>,
-}
-
-impl IdleState {
-    fn request(&mut self, running: bool) {
-        if self.switch.is_none() {
-            let mut started = true;
-            let switch = OutputSwitch::spawn("loadngo-ios-audio-output", true, move |run| {
-                apply_output(run, &mut started);
-            });
-            match switch {
-                Ok(switch) => self.switch = Some(switch),
-                Err(error) => {
-                    // Without the thread the unit simply keeps running, as
-                    // it always did.
-                    eprintln!("[loadngo/ios] audio output thread failed to start: {error}");
-                    self.policy = IdlePolicy::new(true);
-                    return;
-                }
-            }
-        }
-        if let Some(switch) = &self.switch {
-            switch.request(running);
-        }
-    }
-}
-
-/// Runs on the output thread: stops or restarts the unit. `started` is the
-/// thread's own record of what it last did, so a repeated request is a
-/// no-op rather than a second start.
-fn apply_output(run: bool, started: &mut bool) {
-    let Some(Some(output)) = OUTPUT.get() else {
-        return;
-    };
-    if run == *started {
-        return;
-    }
-    // SAFETY: a unit `start_unit` created and initialized; only this thread
-    // starts or stops it once it exists.
-    if run {
-        if unsafe { AudioOutputUnitStart(output.unit) } == 0 {
-            *started = true;
-        } else {
-            eprintln!(
-                "[loadngo/ios] audio output failed to restart; will try again on the next sound"
-            );
-            if let Ok(mut idle) = IDLE.lock() {
-                idle.policy.open_failed();
-            }
-            // Nothing will play what was queued, and a voice that never
-            // finishes would keep its controller asking for frames.
-            if let Ok(mut state) = mixer().lock() {
-                state.voices.list.clear();
-                state.music = None;
-            }
-        }
-    } else {
-        let _ = unsafe { AudioOutputUnitStop(output.unit) };
-        *started = false;
-    }
-}
-
-/// Something is about to play: restart the unit if it stopped. Returns at
-/// once; the restart happens on the output thread.
-fn wake_output() {
-    if let Ok(mut idle) = IDLE.lock() {
-        if idle.policy.wake() {
-            idle.request(true);
-        }
-    }
-}
-
-fn output_running() -> bool {
-    matches!(OUTPUT.get(), Some(Some(_)))
-}
-
-/// Stops the unit once the mixer has been silent for `IDLE_STOP`. Called
-/// from the controllers' `update`, on the game thread; cheap.
-fn maintain_output() {
-    if !output_running() {
-        return;
-    }
-    let quiet = mixer().lock().is_ok_and(|state| state.is_quiet());
-    if let Ok(mut idle) = IDLE.lock() {
-        if idle.policy.observe(quiet, Instant::now()) {
-            idle.request(false);
-        }
-    }
-}
-
-/// When the game must call `update` again for the unit to stop, folded into
-/// every controller's `frame_demand`.
-fn output_demand() -> Option<Duration> {
-    if !output_running() {
-        return None;
-    }
-    let quiet = mixer().lock().is_ok_and(|state| state.is_quiet());
-    IDLE.lock()
-        .ok()
-        .and_then(|idle| idle.policy.demand(quiet, Instant::now()))
-}
+/// When the unit runs and stops (see `audio_output_idle.rs`). It starts
+/// stopped and starts on the first sound.
+static IDLE: Mutex<IdlePolicy> = Mutex::new(IdlePolicy::new(false));
+static SWITCH: OnceLock<OutputSwitch> = OnceLock::new();
+/// RemoteIO could not be created: every controller is silent from here on.
+static UNAVAILABLE: AtomicBool = AtomicBool::new(false);
 
 fn mixer() -> &'static Arc<Mutex<MixerState>> {
     MIXER.get_or_init(|| {
@@ -371,24 +224,100 @@ fn mixer() -> &'static Arc<Mutex<MixerState>> {
     })
 }
 
-/// Creates and starts the audio unit the first time anything asks for
-/// audio, and restarts it if it stopped after a silent stretch. A failure
-/// to create it is remembered, not retried: if RemoteIO won't start, it won't
-/// start later either, and every controller degrades to silence rather than
-/// erroring.
-fn ensure_output() -> bool {
-    let exists = OUTPUT
-        .get_or_init(|| {
-            configure_audio_session();
-            // SAFETY: every pointer below is a live local, and the callback
-            // outlives the unit because the mixer is a `'static` `OnceLock`.
-            unsafe { start_unit() }.ok()
-        })
-        .is_some();
-    if exists {
-        wake_output();
+fn switch() -> &'static OutputSwitch {
+    SWITCH.get_or_init(|| {
+        let mut started = false;
+        OutputSwitch::new(false, move |run| apply_output(run, &mut started))
+    })
+}
+
+/// Runs on the offload pool: creates the unit the first time, then starts
+/// or stops it. `started` is the switch's own record of what it last did,
+/// so a repeated request is a no-op rather than a second start.
+fn apply_output(run: bool, started: &mut bool) {
+    let created = OUTPUT.get().is_some();
+    let output = OUTPUT.get_or_init(|| {
+        configure_audio_session();
+        // SAFETY: every pointer below is a live local, and the callback
+        // outlives the unit because the mixer is a `'static` `OnceLock`.
+        unsafe { start_unit() }.ok()
+    });
+    let Some(output) = output else {
+        if !UNAVAILABLE.swap(true, Ordering::AcqRel) {
+            eprintln!("[loadngo/ios] RemoteIO would not start; audio is silent");
+        }
+        silence_queued();
+        return;
+    };
+    if !created {
+        // `start_unit` starts it.
+        *started = true;
     }
-    exists
+    if run == *started {
+        return;
+    }
+    // SAFETY: a unit `start_unit` created and initialized; only this function
+    // starts or stops it, one call at a time.
+    if run {
+        if unsafe { AudioOutputUnitStart(output.unit) } == 0 {
+            *started = true;
+        } else {
+            eprintln!(
+                "[loadngo/ios] audio output failed to restart; will try again on the next sound"
+            );
+            IDLE.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .open_failed();
+            silence_queued();
+        }
+    } else {
+        let _ = unsafe { AudioOutputUnitStop(output.unit) };
+        *started = false;
+    }
+}
+
+/// Nothing will play what was queued, and a voice that never finishes would
+/// keep its controller asking for frames.
+fn silence_queued() {
+    if let Ok(mut state) = mixer().lock() {
+        state.voices.list.clear();
+        state.music = None;
+    }
+}
+
+/// Something is about to play: start the unit if it is stopped. Returns at
+/// once; the start happens on the pool. False if RemoteIO is unavailable.
+fn wake_output() -> bool {
+    if UNAVAILABLE.load(Ordering::Acquire) {
+        return false;
+    }
+    let starting = IDLE.lock().unwrap_or_else(PoisonError::into_inner).wake();
+    if starting {
+        switch().request(true);
+    }
+    true
+}
+
+/// Stops the unit once the mixer has been silent for `IDLE_STOP`. Called
+/// from the controllers' `update`, on the game thread; cheap.
+fn maintain_output() {
+    let quiet = mixer().lock().is_ok_and(|state| state.is_quiet());
+    let stopping = IDLE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .observe(quiet, Instant::now());
+    if stopping {
+        switch().request(false);
+    }
+}
+
+/// When the game must call `update` again for the unit to stop, folded into
+/// every controller's `frame_demand`.
+fn output_demand() -> Option<Duration> {
+    let quiet = mixer().lock().is_ok_and(|state| state.is_quiet());
+    IDLE.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .demand(quiet, Instant::now())
 }
 
 unsafe fn start_unit() -> Result<Output, ()> {
@@ -572,35 +501,22 @@ impl MusicController {
         } else {
             path.trim().to_string()
         };
-        if !ensure_output() {
+        if !wake_output() {
             return Err("iOS audio output unavailable".to_string());
         }
-        let (tx, rx) = sync_channel::<Chunk>(MUSIC_CHUNK_QUEUE);
-        let thread_path = selected.clone();
-        let looping = looped;
-        std::thread::Builder::new()
-            .name("loadngo-ios-music".to_string())
-            .spawn(move || loop {
-                if let Err(error) = stream_track(&thread_path, &tx) {
-                    // Nobody awaits this thread, so a failure it keeps to
-                    // itself is indistinguishable from silence at the
-                    // speaker -- `play_track_path` has already returned `Ok`
-                    // by the time the file is even opened.
-                    eprintln!("[loadngo/ios] music decode failed: {error}");
-                    break;
-                }
-                if !looping {
-                    break;
-                }
-            })
-            .map_err(|err| format!("Failed to start music decoder: {err}"))?;
-
+        let (ahead, chunks) = DecodeAhead::start(
+            path_opener(&selected),
+            looped,
+            OUTPUT_SAMPLE_RATE,
+            selected.clone(),
+        );
         if let Ok(mut state) = mixer().lock() {
             state.music = Some(MusicPlayback {
-                chunks: rx,
-                pending: VecDeque::new(),
+                chunks,
+                ahead,
                 finished: false,
             });
+            // A new track plays: any pause is over.
             state.music_volume = self.mix_volume;
             state.bass_boost = self.bass_boost;
         }
@@ -631,23 +547,26 @@ impl MusicController {
     /// Exists so desktop callers need no `cfg` at the call site.
     pub fn preload_embedded(&mut self, _key: &str, _ogg_bytes: &'static [u8]) {}
 
-    /// Advances the playlist when a track runs out. This is the only place
-    /// that can notice: the decoder thread signals the end by dropping its
-    /// sender, which the mixer sees as a finished stream.
+    /// Tops up the decode-ahead, advances the playlist when a track runs
+    /// out, and lets the output stop once everything is silent. Must be
+    /// called every frame while music plays: the decode-ahead depends on it,
+    /// and [`Self::frame_demand`] asks for frames often enough.
     pub fn update(&mut self, dt: f32) {
         self.advance_playlist(dt);
         maintain_output();
     }
 
     fn advance_playlist(&mut self, _dt: f32) {
-        if self.paused || !self.playlist_active || self.playlist_tracks.is_empty() {
-            return;
-        }
-        let finished = mixer()
-            .lock()
-            .ok()
-            .is_some_and(|state| state.music.as_ref().is_none_or(|music| music.finished));
-        if !finished {
+        let finished = {
+            let Ok(state) = mixer().lock() else {
+                return;
+            };
+            if let Some(music) = &state.music {
+                music.ahead.tick();
+            }
+            state.music.as_ref().is_none_or(|music| music.finished)
+        };
+        if self.paused || !self.playlist_active || self.playlist_tracks.is_empty() || !finished {
             return;
         }
         self.playlist_index = (self.playlist_index + 1) % self.playlist_tracks.len();
@@ -690,47 +609,78 @@ impl MusicController {
         self.active_track.as_deref()
     }
 
+    /// Every [`TICK`] while a track plays, so its queue is topped up and its
+    /// end noticed; then once more when the output can stop.
     pub fn frame_demand(&self) -> Option<Duration> {
-        sooner(
-            (self.active_track.is_some() && self.playlist_active)
-                .then_some(Duration::from_millis(100)),
-            output_demand(),
-        )
+        let playing = mixer()
+            .lock()
+            .is_ok_and(|state| state.music.as_ref().is_some_and(|music| !music.finished));
+        sooner(playing.then_some(TICK), output_demand())
     }
 }
 
 pub struct VoiceController {
     enabled: bool,
     volume: f32,
+    /// The generation of a voice line still decoding on the pool, 0 if none.
+    /// The decode job starts the line only if it is still the one wanted.
+    pending: Arc<AtomicU64>,
+    generation: u64,
 }
 
 impl VoiceController {
     pub fn new(enabled: bool, volume: f32) -> Self {
-        Self { enabled, volume }
+        Self {
+            enabled,
+            volume,
+            pending: Arc::new(AtomicU64::new(0)),
+            generation: 0,
+        }
     }
 
-    /// Single-voice playback shares the effect path: these are short spoken
-    /// cues, not streams, so there is no reason for a second mechanism.
+    /// Decodes `path` on the pool and plays it when ready, replacing any
+    /// line playing now. Single-voice playback shares the effect mixer:
+    /// these are short spoken cues, not streams. Returns at once.
     pub fn play_path(&mut self, path: &str) -> Result<(), String> {
         if !self.enabled {
             return Ok(());
         }
-        if !ensure_output() {
+        if !wake_output() {
             return Err("iOS audio output unavailable".to_string());
         }
-        let clip = decode_clip_file(path)?;
-        if let Ok(mut state) = mixer().lock() {
-            state.voices.list.push((
-                0,
-                ActiveVoice {
-                    samples: clip.samples,
-                    cursor: 0,
-                    left: self.volume,
-                    right: self.volume,
-                    looped: false,
-                },
-            ));
-        }
+        self.stop();
+        self.generation = self.generation.wrapping_add(1).max(1);
+        let generation = self.generation;
+        self.pending.store(generation, Ordering::Release);
+        let pending = Arc::clone(&self.pending);
+        let volume = self.volume;
+        let path = path.to_string();
+        crate::offload::run_detached(move || {
+            let decoded = decode_clip_file(&path);
+            if pending
+                .compare_exchange(generation, 0, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                return;
+            }
+            match decoded {
+                Ok(clip) => {
+                    if let Ok(mut state) = mixer().lock() {
+                        state.voices.list.push((
+                            VOICE_LINE_ID,
+                            ActiveVoice {
+                                samples: clip.samples,
+                                cursor: 0,
+                                left: volume,
+                                right: volume,
+                                looped: false,
+                            },
+                        ));
+                    }
+                }
+                Err(error) => eprintln!("[loadngo/ios] voice {path}: {error}"),
+            }
+        });
         Ok(())
     }
 
@@ -740,19 +690,25 @@ impl VoiceController {
 
     pub fn set_enabled(&mut self, enabled: bool) -> bool {
         self.enabled = enabled;
+        if !enabled {
+            self.stop();
+        }
         self.enabled
     }
 
+    /// True while the line decodes or plays.
     pub fn is_playing(&self) -> bool {
-        mixer()
-            .lock()
-            .ok()
-            .is_some_and(|state| state.voices.contains(0))
+        self.pending.load(Ordering::Acquire) != 0
+            || mixer()
+                .lock()
+                .ok()
+                .is_some_and(|state| state.voices.contains(VOICE_LINE_ID))
     }
 
     pub fn stop(&mut self) {
+        self.pending.store(0, Ordering::Release);
         if let Ok(mut state) = mixer().lock() {
-            state.voices.remove(0);
+            state.voices.remove(VOICE_LINE_ID);
         }
     }
 
@@ -762,9 +718,7 @@ impl VoiceController {
 
     pub fn frame_demand(&self) -> Option<Duration> {
         sooner(
-            self.enabled
-                .then(|| self.is_playing().then_some(Duration::from_millis(100)))
-                .flatten(),
+            (self.enabled && self.is_playing()).then_some(Duration::from_millis(100)),
             output_demand(),
         )
     }
@@ -772,20 +726,21 @@ impl VoiceController {
 
 pub struct SfxController {
     settings: SfxSettings,
-    clips: HashMap<String, CachedClip>,
     voices: HashMap<SfxVoiceId, u8>,
     order: VecDeque<SfxVoiceId>,
     next_voice_id: u64,
+    /// Plays dropped because their clip had not finished decoding.
+    not_ready: u64,
 }
 
 impl SfxController {
     pub fn new(settings: SfxSettings) -> Self {
         Self {
             settings: settings.normalized(),
-            clips: HashMap::new(),
             voices: HashMap::new(),
             order: VecDeque::new(),
             next_voice_id: 1,
+            not_ready: 0,
         }
     }
 
@@ -800,16 +755,19 @@ impl SfxController {
         Ok(())
     }
 
-    /// Decodes `path` now so its first `play` does not. Still on the calling
-    /// thread for the moment; moving it onto the proactor is step 5 of
-    /// `docs/GAME_AUDIO_RUNTIME.md`.
+    /// Starts decoding `path` on the pool so its first `play` finds it
+    /// ready. Returns at once.
     pub fn preload_path(&mut self, path: &str) -> Result<(), String> {
         if path.is_empty() {
             return Err("SFX path must not be empty".to_string());
         }
-        self.load_clip(path).map(|_| ())
+        request_clip(path);
+        Ok(())
     }
 
+    /// Admits a voice and returns; never decodes. A clip that is not ready
+    /// yet is started loading and this play is dropped (`Ok(None)`), as on
+    /// Android: preload clips at startup so that never happens in play.
     pub fn play(&mut self, request: SfxPlayRequest<'_>) -> Result<Option<SfxVoiceId>, String> {
         let request = request.normalized();
         if request.path.is_empty() {
@@ -821,7 +779,25 @@ impl SfxController {
         if (request.playback_rate - 1.0).abs() > 0.001 {
             return Err("iOS SFX playback-rate control is not implemented".to_string());
         }
-        if !ensure_output() {
+        let state = clips()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(request.path)
+            .cloned();
+        let clip = match state {
+            Some(ClipState::Ready(clip)) => clip,
+            Some(ClipState::Failed(error)) => return Err(error),
+            Some(ClipState::Loading) => {
+                self.not_ready += 1;
+                return Ok(None);
+            }
+            None => {
+                self.not_ready += 1;
+                request_clip(request.path);
+                return Ok(None);
+            }
+        };
+        if !wake_output() {
             return Ok(None);
         }
 
@@ -829,7 +805,6 @@ impl SfxController {
         if !self.make_voice_capacity(request.priority) {
             return Ok(None);
         }
-        let clip = self.load_clip(request.path)?;
         let (left, right) = stereo_volume(request.volume * self.settings.mix_volume, request.pan);
         let id = self.allocate_voice_id();
         let Ok(mut state) = mixer().lock() else {
@@ -869,7 +844,8 @@ impl SfxController {
         self.order.clear();
     }
 
-    /// Reclaims voices the mixer has finished with. The mixer drops a voice
+    /// Reclaims voices the mixer has finished with, and lets the output stop
+    /// once everything has been silent for a while. The mixer drops a voice
     /// when its clip runs out, so "still in the mixer" is the liveness test.
     pub fn update(&mut self) {
         if let Ok(state) = mixer().lock() {
@@ -899,6 +875,11 @@ impl SfxController {
         self.voices.len()
     }
 
+    /// Plays dropped so far because their clip was still decoding.
+    pub fn not_ready_count(&self) -> u64 {
+        self.not_ready
+    }
+
     pub fn is_playing(&self, voice: SfxVoiceId) -> bool {
         mixer()
             .lock()
@@ -911,15 +892,6 @@ impl SfxController {
             (!self.voices.is_empty()).then_some(Duration::from_millis(100)),
             output_demand(),
         )
-    }
-
-    fn load_clip(&mut self, path: &str) -> Result<CachedClip, String> {
-        if let Some(clip) = self.clips.get(path) {
-            return Ok(clip.clone());
-        }
-        let clip = decode_clip_file(path)?;
-        self.clips.insert(path.to_string(), clip.clone());
-        Ok(clip)
     }
 
     fn make_voice_capacity(&mut self, incoming_priority: u8) -> bool {
@@ -942,6 +914,7 @@ impl SfxController {
 
     fn allocate_voice_id(&mut self) -> SfxVoiceId {
         let id = SfxVoiceId(self.next_voice_id);
+        // Never 0: that is the voice line's id.
         self.next_voice_id = self.next_voice_id.wrapping_add(1).max(1);
         id
     }

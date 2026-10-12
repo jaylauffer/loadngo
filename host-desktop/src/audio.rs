@@ -101,13 +101,14 @@ mod mobile_mix;
 
 /// Closing the output after a silent stretch, for iOS and desktop (Android
 /// has its own).
-#[cfg(any(
-    target_os = "ios",
-    all(not(target_os = "android"), not(target_os = "netbsd")),
-    all(test, not(target_os = "netbsd"))
-))]
+#[cfg(all(not(target_os = "android"), not(target_os = "netbsd")))]
 #[path = "audio_output_idle.rs"]
 mod output_idle;
+
+/// Music decode-ahead on the offload pool, for iOS and desktop.
+#[cfg(all(not(target_os = "android"), not(target_os = "netbsd")))]
+#[path = "audio_stream.rs"]
+mod stream;
 
 #[cfg(target_os = "android")]
 mod imp {
@@ -990,6 +991,8 @@ mod imp {
         idle_since: Option<Instant>,
         output_running: bool,
         timing: SfxTiming,
+        /// Plays dropped because their clip was still loading, since start.
+        not_ready_total: u64,
     }
 
     /// Opt-in (`LOADNGO_FRAME_METRICS`): wall time the calling thread spends
@@ -1066,6 +1069,7 @@ mod imp {
                 idle_since: None,
                 output_running: false,
                 timing: SfxTiming::new(),
+                not_ready_total: 0,
             }
         }
 
@@ -1126,6 +1130,7 @@ mod imp {
             let Some(clip) = clip else {
                 // Never decode inline: start the load and drop this one.
                 self.timing.not_ready += 1;
+                self.not_ready_total += 1;
                 self.preload_path(request.path)?;
                 return Ok(None);
             };
@@ -1231,6 +1236,11 @@ mod imp {
 
         pub fn active_voice_count(&self) -> usize {
             self.voices.len()
+        }
+
+        /// Plays dropped so far because their clip was still loading.
+        pub fn not_ready_count(&self) -> u64 {
+            self.not_ready_total
         }
 
         pub fn is_playing(&self, voice: SfxVoiceId) -> bool {
@@ -1480,6 +1490,10 @@ mod imp {
         }
 
         pub fn active_voice_count(&self) -> usize {
+            0
+        }
+
+        pub fn not_ready_count(&self) -> u64 {
             0
         }
 

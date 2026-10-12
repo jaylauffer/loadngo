@@ -39,7 +39,16 @@ mixer.set_bus_muted(AudioBus::Voice, true);
 
 // Reach the underlying controllers for everything that isn't volume:
 mixer.music().fade_to_path("bgm/theme.ogg", 1.5)?;
+
+// Every frame, including on menus: music is decoded ahead from `update`,
+// and the output closes after three silent seconds from `update` too.
+mixer.music().update(dt);
 mixer.sfx().update();
+// Then wake no later than the soonest audio demand.
+let audio_demand = [mixer.music().frame_demand(), mixer.sfx().frame_demand()]
+    .into_iter()
+    .flatten()
+    .min();
 
 save_audio_preferences(prefs_path, &mixer.preferences())?;
 # Ok::<(), String>(())
@@ -58,7 +67,10 @@ preference.
 `SfxController` is intended for shots, impacts, warnings, pickups, UI feedback,
 and other short or overlapping sounds. It provides:
 
-- decoded-clip caching (decoded once, kept)
+- decoded-clip caching: each clip is decoded once, off the game thread, and
+  kept. Preload every clip at startup (`preload_embedded` or
+  `preload_path`): a `play` of a clip still decoding is dropped and counted
+  (`not_ready_count`), never decoded on the game thread
 - overlapping one-shot and looped voices
 - bounded global polyphony with priority-aware shedding
 - per-play volume, stereo pan, playback rate, and priority

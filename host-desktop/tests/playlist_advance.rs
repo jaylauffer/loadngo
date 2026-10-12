@@ -10,12 +10,10 @@
 //! very guard this is meant to exercise.
 //!
 //! `#[ignore]`d: it opens the default output device, so it is meaningless on
-//! a machine without one. Run it explicitly, under either backend:
+//! a machine without one. Run it explicitly:
 //!
 //! ```bash
 //! cargo test -p loadngo-host-desktop --test playlist_advance -- --ignored --nocapture
-//! cargo test -p loadngo-host-desktop --test playlist_advance \
-//!     --features native-desktop-audio -- --ignored --nocapture
 //! ```
 
 use std::path::PathBuf;

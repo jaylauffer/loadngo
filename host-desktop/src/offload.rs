@@ -143,6 +143,27 @@ pub(crate) fn completion_via<T: Send + 'static>(
 pub(crate) use pool::offload_through;
 #[cfg(target_os = "macos")]
 pub(crate) use pool::offload_through_with_wake;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "android",
+    target_os = "windows"
+))]
+pub(crate) use pool::run_detached;
+
+/// Hosts without the pool run the job where it was asked for.
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "android",
+    target_os = "windows"
+)))]
+#[allow(dead_code)]
+pub(crate) fn run_detached(job: impl FnOnce() + Send + 'static) {
+    job();
+}
 
 #[cfg(any(
     target_os = "macos",
@@ -203,6 +224,23 @@ mod pool {
                 return;
             };
             job();
+        }
+    }
+
+    /// Runs `job` on the pool with nothing delivered back: for host-internal
+    /// work that leaves its result in shared state itself (the audio
+    /// backends' device switching and decoding). Needs no running host, and
+    /// wakes no frame. If no worker could be started the job runs here, so
+    /// it is never lost.
+    pub(crate) fn run_detached(job: impl FnOnce() + Send + 'static) {
+        let job: Job = Box::new(job);
+        match pool() {
+            Some(pool) => {
+                if let Err(mpsc::SendError(job)) = pool.sender.send(job) {
+                    job();
+                }
+            }
+            None => job(),
         }
     }
 

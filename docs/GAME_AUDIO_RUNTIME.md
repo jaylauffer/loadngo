@@ -77,8 +77,42 @@ from a dedicated thread that sleeps in 10 ms steps while its queue is full.
 | Host | Effects | Music | Against the contract |
 | --- | --- | --- | --- |
 | Android | AAudio mixer since step 2; clips read through the proactor | one `MediaPlayer` per track | effects meet 1-3 and 6 (measured below); music (4) and thermal (5) open |
-| iOS | RemoteIO mixer, clips cached; unit stops after 3 s of silence | `lewton` on a dedicated thread, 10 ms sleeps for backpressure | 3 holds, and the output closes when quiet; first play decodes on the game thread (2); music thread sleeps (4); no thermal budget (5) |
-| Desktop | loadngo mixer on `loadngo-audio-io` (rodio removed 2026-10-13); output closes after 3 s of silence | decoder thread per track | output closes when quiet; not yet assessed otherwise |
+| iOS | RemoteIO mixer; clips decoded on the offload pool; unit created, started and stopped on the pool, stops after 3 s of silence | decode-ahead jobs on the offload pool, scheduled from `update` | 1-3 and 4 hold (2026-10-13; built, not yet run on a device); no thermal budget (5) |
+| Desktop | loadngo mixer on `loadngo-audio-io` (rodio removed 2026-10-13); clips decoded on the offload pool; output opened and closed on the pool, closes after 3 s of silence | decode-ahead jobs on the offload pool, scheduled from `update` | 1-4 hold, measured on the Mac mini (below); no thermal budget (5) |
+
+### Where the work runs (iOS and desktop, 2026-10-13)
+
+On macOS, Linux, Windows and iOS the host proactor dispatches on the main
+thread, the same thread as the game, so blocking work handed to it directly
+would cost frames. The audio backends therefore put every blocking or CPU
+step on loadngo's offload pool (`host-desktop/src/offload.rs`, two workers,
+the same pool `offload()` gives apps), as fire-and-forget jobs that leave
+their result in the mixer's shared state:
+
+| Work | Where |
+| --- | --- |
+| Device open, start, stop, close | pool, one switch at a time (`OutputSwitch`) |
+| Effect and voice-line decode | pool, once per clip, into a shared cache |
+| Music decode | pool, a job whenever a track's queue (~2 s) drops below ~1.4 s (`audio_stream.rs`) |
+| Admitting a voice, starting a track, volume | game thread, bounded and allocation-free |
+| Mixing | the platform's audio callback; never blocks, never allocates |
+
+Nothing owns a thread or sleeps any more: the per-track decoder threads with
+their 10 ms backpressure sleeps are gone, and so is the output thread added
+earlier the same day. A game must call the music controller's `update` every
+frame while music plays (the decode-ahead is scheduled from it) and follow
+`frame_demand`, which asks for a frame every 250 ms while a track plays.
+Clips keep their recorded rate and tracks the rate they were decoded at; the
+desktop mixer resamples to the device, so the device can open late or reopen
+at another rate. An effect played before its clip is decoded is dropped and
+counted (`SfxController::not_ready_count`), never decoded inline.
+
+Measured on the Mac mini with a C920 microphone: a 4 s, 44.1 kHz, 1 kHz tone
+played as music was continuous at +20 dB over the noise floor for its whole
+length, with nothing at 918.75 Hz (where it would land unresampled); a 44.1
+kHz effect played on time at +17-25 dB; `play_track_path` returned in 0.003
+ms and `play` in 0.002 ms; the playlist test advanced at 3.09 s and 6.11 s on
+3 s tracks. Evidence: `~/pudding/reviews/2026-10-13-audio-idle-close/`.
 
 ### Closing the output when quiet
 
@@ -90,12 +124,12 @@ backend now closes its output after `IDLE_STOP` (3 s) with nothing to play,
 and reopens it when something plays:
 
 - **Android** (since step 2): stops the AAudio stream on the proactor thread.
-- **iOS and native desktop** (2026-10-13): `host-desktop/src/audio_output_idle.rs`.
+- **iOS and desktop** (2026-10-13): `host-desktop/src/audio_output_idle.rs`.
   The game thread decides (`IdlePolicy`, from each controller's `update`);
-  one parked thread per process does the blocking open/close
-  (`OutputSwitch`), because on the Mac mini a reopen took 8-11 ms and a close
-  about 40 ms. Each controller's `frame_demand` includes the close deadline,
-  so an idle game is woken once, at the deadline, and then idles.
+  the offload pool does the blocking open/close (`OutputSwitch`), because on
+  the Mac mini a reopen took 8-11 ms and a close about 40 ms. Each
+  controller's `frame_demand` includes the close deadline, so an idle game is
+  woken once, at the deadline, and then idles.
 - rodio could not pause or reopen its stream without rebuilding every sink,
   which is one reason it was removed (2026-10-13).
 
@@ -104,8 +138,7 @@ returned in 0.013 ms; the reopened tone reached the C920 microphone (1 kHz,
 15-18 dB over the noise floor, the same as a tone on the already-open
 output); `sng-mahjong` on its title menu went back to 0.0% CPU and zero idle
 wakeups. Three CoreAudio threads (`caulk.messenger` x2, `AudioSession -
-RootQueue`) and the switch thread stay parked after a close, so the process
-has 9 threads rather than 5, at no CPU. Evidence:
+RootQueue`) stay parked after a close, at no CPU. Evidence:
 `~/pudding/reviews/2026-10-13-audio-idle-close/`. iOS is type-checked and
 linted only; not yet measured on a device.
 
@@ -146,11 +179,13 @@ Each step ships on its own, keeps every host building, and names its gate.
    (API 30+) feeding the shared governor through the host; the table above
    applied to the effect voices. Gate: governor tests with `FakeProvider`, and
    a device run reporting the provider's real state.
-5. **iOS to the same contract**: effects decoded through the proactor before
-   first play, music decode-ahead off the sleeping thread, the thermal budget
-   from the existing `NativeProvider`.
-6. **Desktop to the same contract.** The default flip happened first: loadngo's
-   mixer is the only desktop backend since 2026-10-13.
+5. **iOS to the same contract**: effects decoded on the offload pool before
+   first play and music decode-ahead off the sleeping thread are done
+   (2026-10-13, not yet run on a device); the thermal budget from the existing
+   `NativeProvider` remains.
+6. **Desktop to the same contract.** loadngo's mixer is the only desktop
+   backend, with effects, music and the device on the offload pool
+   (2026-10-13); the thermal budget remains.
 
 Games need one change, once: declare their effect set at startup so step 2's
 preload has something to read. `sng-roguelite`'s `sound_spec` table already

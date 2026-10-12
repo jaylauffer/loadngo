@@ -4,50 +4,58 @@
 //! replaced rodio; on macOS it had been checked against rodio first, trace for
 //! trace and acoustically (`docs/AUDIO_BACKENDS.md`).
 //!
-//! The shape follows the iOS backend -- music streamed from a worker thread,
-//! effects decoded once and kept -- because the asset sizes force it: the
-//! games' music runs 5-10 minutes (~212 MB decoded to `f32`) while their
-//! effects are twenty clips of at most 17 KB.
+//! The game thread never waits on audio (`docs/GAME_AUDIO_RUNTIME.md`):
 //!
-//! Desktop needs three things iOS does not, all of which the games rely on:
-//! several tracks decoding at once so one can fade out under another, a
-//! cue/resume state machine so a one-off cue returns to the playlist, and
-//! playback from `&'static [u8]` for callers that embed their audio.
+//! - The device is opened and closed on loadngo's offload pool
+//!   (`audio_output_idle.rs`), and closes after three silent seconds.
+//! - Effects and voice lines are decoded on the pool, once, into a shared
+//!   cache. An effect played before its clip is ready is dropped and
+//!   counted, never decoded inline; a voice line starts when its decode
+//!   finishes.
+//! - Music is decoded a little ahead on the pool (`audio_stream.rs`), topped
+//!   up from the music controller's `update`, so no track owns a thread.
+//!
+//! Clips keep the sample rate they were recorded at, and each track keeps the
+//! rate it was decoded at; the mixer resamples whatever differs from the
+//! device. That is what lets the device open late, close, and reopen on
+//! another device at another rate without anything being decoded again.
+//!
+//! Desktop needs three things the mobile backends do not, all of which the
+//! games rely on: several tracks playing at once so one can fade out under
+//! another, a cue/resume state machine so a one-off cue returns to the
+//! playlist, and playback from `&'static [u8]` for callers that embed their
+//! audio.
 
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
-use std::io::{BufReader, Cursor, Read, Seek};
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TryRecvError, TrySendError};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::io::{BufReader, Cursor};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use lewton::inside_ogg::OggStreamReader;
 use loadngo_audio_io::{open_output_stream, OutputStream};
 
 use super::output_idle::{sooner, IdlePolicy, OutputSwitch};
+use super::stream::{ChunkConsumer, DecodeAhead, Opener, Pop, ReadSeek, TICK};
 use super::{finite_clamped, oldest_evictable_voice, SfxPlayRequest, SfxSettings, SfxVoiceId};
 
-/// Matches the rodio backend's constants so the two sound alike. The shelf is
-/// applied to the summed music bus rather than per source: rodio mixed a
-/// low-passed clone into every track, and its own comment records that doing
-/// so cost per-sample lock contention on the audio thread and was a plausible
-/// cause of periodic static. One filter over the mix is cheaper and audibly
-/// equivalent at these settings.
+/// The music bus's bass shelf and post-gain, kept from the rodio backend this
+/// replaced so the games sound as they did. The shelf is applied to the
+/// summed music bus rather than per source: rodio mixed a low-passed clone
+/// into every track, and its own comment recorded that doing so cost
+/// per-sample lock contention on the audio thread. One filter over the mix is
+/// cheaper and audibly equivalent at these settings.
 const MUSIC_BASS_CUTOFF_HZ: f32 = 180.0;
 const MUSIC_BASS_POST_GAIN: f32 = 0.9;
-/// Frames per chunk from a decoder thread. ~85 ms at 48 kHz, and eight queued
-/// chunks give a decoder two thirds of a second of slack against a stall.
-const MUSIC_CHUNK_FRAMES: usize = 4_096;
-const MUSIC_CHUNK_QUEUE: usize = 8;
 /// A track that reports "finished" the instant it starts must not spin the
 /// playlist. Mirrors the Android backend's identical guard.
 const PLAYLIST_ADVANCE_DEBOUNCE: Duration = Duration::from_secs(2);
-/// How often the host is asked to wake while music simply plays. Matches the
-/// rodio backend's constant of the same name: `frame_demand` paces the host,
-/// so a smaller value here would wake it needlessly often for the entire
-/// length of every track.
-const MUSIC_IDLE_POLL_INTERVAL: Duration = Duration::from_millis(1000);
+/// The rate music decodes at before the device has reported its own.
+const FALLBACK_RATE: u32 = 48_000;
+/// Voice-line ids live in the top half of the id space so they never collide
+/// with effect voices in the shared mixer.
+const VOICE_LINE_ID_BIT: u64 = 1 << 63;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MusicCueMode {
@@ -55,16 +63,11 @@ pub enum MusicCueMode {
     Loop,
 }
 
-// ---------------------------------------------------------------- decoding
+// ---------------------------------------------------------------- sources
 
-/// Interleaved stereo `f32` at the output device's rate.
-type Chunk = Vec<f32>;
-
-trait ReadSeek: Read + Seek + Send {}
-impl<T: Read + Seek + Send> ReadSeek for T {}
-
-/// Where a track's bytes come from. Desktop supports both, unlike the mobile
-/// backends: those have a packaging story that always yields a real path.
+/// Where a track's or clip's bytes come from. Desktop supports both, unlike
+/// the mobile backends: those have a packaging story that always yields a
+/// real path.
 #[derive(Clone)]
 enum TrackSource {
     Path(String),
@@ -82,103 +85,28 @@ impl TrackSource {
             Self::Embedded(bytes) => Ok(Box::new(Cursor::new(*bytes))),
         }
     }
-}
 
-/// Decodes to interleaved stereo at `output_rate`, sending chunks until the
-/// track ends or the receiver goes away.
-fn stream_track(
-    source: &TrackSource,
-    output_rate: f64,
-    tx: &SyncSender<Chunk>,
-) -> Result<(), String> {
-    let mut reader = OggStreamReader::new(source.open()?)
-        .map_err(|err| format!("Failed to read audio: {err}"))?;
-    let source_rate = f64::from(reader.ident_hdr.audio_sample_rate);
-    let channels = usize::from(reader.ident_hdr.audio_channels).max(1);
-    let ratio = source_rate / output_rate;
-
-    let mut pending: Vec<f32> = Vec::new();
-    let mut position = 0.0f64;
-    let mut chunk: Chunk = Vec::with_capacity(MUSIC_CHUNK_FRAMES * 2);
-
-    loop {
-        let packet = reader
-            .read_dec_packet_itl()
-            .map_err(|err| format!("Failed to decode audio: {err}"))?;
-        let Some(packet) = packet else { break };
-        for frame in packet.chunks(channels) {
-            let left = f32::from(frame[0]) / 32_768.0;
-            let right = if channels > 1 {
-                f32::from(frame[1]) / 32_768.0
-            } else {
-                left
-            };
-            pending.push(left);
-            pending.push(right);
-        }
-
-        let available = pending.len() / 2;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        while (position.floor() as usize) + 1 < available {
-            let index = position.floor() as usize;
-            let fraction = (position - position.floor()) as f32;
-            for channel in 0..2 {
-                let a = pending[index * 2 + channel];
-                let b = pending[(index + 1) * 2 + channel];
-                chunk.push(a + (b - a) * fraction);
-            }
-            position += ratio;
-            if chunk.len() >= MUSIC_CHUNK_FRAMES * 2 {
-                if send_chunk(tx, std::mem::take(&mut chunk)).is_err() {
-                    return Ok(());
-                }
-                chunk = Vec::with_capacity(MUSIC_CHUNK_FRAMES * 2);
-            }
-        }
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let consumed = position.floor() as usize;
-        if consumed > 0 {
-            pending.drain(..consumed * 2);
-            #[allow(clippy::cast_precision_loss)]
-            let consumed_f = consumed as f64;
-            position -= consumed_f;
-        }
-    }
-
-    if !chunk.is_empty() {
-        let _ = send_chunk(tx, chunk);
-    }
-    Ok(())
-}
-
-fn send_chunk(tx: &SyncSender<Chunk>, chunk: Chunk) -> Result<(), ()> {
-    let mut chunk = chunk;
-    loop {
-        match tx.try_send(chunk) {
-            Ok(()) => return Ok(()),
-            Err(TrySendError::Full(returned)) => {
-                chunk = returned;
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Err(TrySendError::Disconnected(_)) => return Err(()),
-        }
+    fn opener(&self) -> Opener {
+        let source = self.clone();
+        Arc::new(move || source.open())
     }
 }
 
+// ------------------------------------------------------------------ clips
+
+/// A whole effect or voice line, decoded once and kept: interleaved stereo
+/// at the rate it was recorded at.
 #[derive(Clone)]
 struct CachedClip {
     samples: Arc<Vec<f32>>,
-    /// The rate `samples` were decoded at: the device's rate at the time.
-    /// The output can close and reopen on a device running at another rate
-    /// (headphones plugged in while it was closed), so the mixer corrects
-    /// for the difference rather than the cache being thrown away.
     rate: f64,
 }
 
-fn decode_clip(source: &TrackSource, output_rate: f64) -> Result<CachedClip, String> {
+/// Decodes a whole clip. Runs on the offload pool.
+fn decode_clip(source: &TrackSource) -> Result<CachedClip, String> {
     let mut reader = OggStreamReader::new(source.open()?)
         .map_err(|err| format!("Failed to read clip: {err}"))?;
-    let source_rate = f64::from(reader.ident_hdr.audio_sample_rate);
+    let rate = f64::from(reader.ident_hdr.audio_sample_rate);
     let channels = usize::from(reader.ident_hdr.audio_channels).max(1);
     let mut interleaved: Vec<f32> = Vec::new();
     while let Some(packet) = reader
@@ -199,46 +127,66 @@ fn decode_clip(source: &TrackSource, output_rate: f64) -> Result<CachedClip, Str
     if interleaved.is_empty() {
         return Err("clip contains no audio samples".to_string());
     }
-    let samples = if (source_rate - output_rate).abs() < f64::EPSILON {
-        interleaved
-    } else {
-        resample(&interleaved, source_rate / output_rate)
-    };
     Ok(CachedClip {
-        samples: Arc::new(samples),
-        rate: output_rate,
+        samples: Arc::new(interleaved),
+        rate,
     })
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn resample(input: &[f32], ratio: f64) -> Vec<f32> {
-    let frames = input.len() / 2;
-    if frames < 2 {
-        return input.to_vec();
-    }
-    let mut out = Vec::with_capacity(input.len());
-    let mut position = 0.0f64;
-    while (position.floor() as usize) + 1 < frames {
-        let index = position.floor() as usize;
-        let fraction = (position - position.floor()) as f32;
-        for channel in 0..2 {
-            let a = input[index * 2 + channel];
-            let b = input[(index + 1) * 2 + channel];
-            out.push(a + (b - a) * fraction);
+#[derive(Clone)]
+enum ClipState {
+    Loading,
+    Ready(CachedClip),
+    Failed(String),
+}
+
+/// Every effect clip, by the key `play` names it with.
+static CLIPS: OnceLock<Mutex<HashMap<String, ClipState>>> = OnceLock::new();
+
+fn clips() -> &'static Mutex<HashMap<String, ClipState>> {
+    CLIPS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Starts decoding `source` on the pool under `key`, unless it is already
+/// loaded or loading. Returns at once.
+fn request_clip(key: &str, source: TrackSource) {
+    {
+        let mut cache = clips().lock().unwrap_or_else(PoisonError::into_inner);
+        if cache.contains_key(key) {
+            return;
         }
-        position += ratio;
+        cache.insert(key.to_string(), ClipState::Loading);
     }
-    out
+    let key = key.to_string();
+    crate::offload::run_detached(move || {
+        let state = match decode_clip(&source) {
+            Ok(clip) => ClipState::Ready(clip),
+            Err(error) => ClipState::Failed(format!("{key}: {error}")),
+        };
+        clips()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key, state);
+    });
 }
 
 // ------------------------------------------------------------------ mixing
 
-/// One decoding track. Several exist at once so a cue can fade in while the
+/// One playing track. Several exist at once so a cue can fade in while the
 /// previous track fades out -- the capability the mobile backends lack.
 struct MusicTrack {
     key: String,
-    chunks: Receiver<Chunk>,
-    pending: VecDeque<f32>,
+    chunks: ChunkConsumer,
+    /// Keeps the queue topped up; `None` only in tests, which fill the queue
+    /// by hand.
+    ahead: Option<DecodeAhead>,
+    /// The rate the track decodes at.
+    rate: f64,
+    /// Linear interpolation state, used only when `rate` differs from the
+    /// device's: the read position between the two frames either side.
+    frac: f64,
+    previous: [f32; 2],
+    next: [f32; 2],
     /// Ramped on the game thread by `update`, read by the audio thread.
     current_volume: f32,
     target_volume: f32,
@@ -246,16 +194,80 @@ struct MusicTrack {
     finished: bool,
 }
 
+impl MusicTrack {
+    fn new(key: String, chunks: ChunkConsumer, ahead: Option<DecodeAhead>, rate: f64) -> Self {
+        Self {
+            key,
+            chunks,
+            ahead,
+            rate,
+            frac: 1.0,
+            previous: [0.0; 2],
+            next: [0.0; 2],
+            current_volume: 0.0,
+            target_volume: 1.0,
+            playing: true,
+            finished: false,
+        }
+    }
+
+    /// Not finished and either still decoding or still meant to be heard.
+    fn is_sounding(&self) -> bool {
+        !self.finished
+            && (self.target_volume > 0.0
+                || self.ahead.as_ref().is_some_and(DecodeAhead::is_decoding))
+    }
+
+    /// The next stereo frame; `None` if nothing is queued (silence) or the
+    /// track has ended (and `finished` is now set).
+    fn pop_frame(&mut self) -> Option<[f32; 2]> {
+        let left = match self.chunks.pop() {
+            Pop::Sample(sample) => sample,
+            Pop::Empty => return None,
+            Pop::Ended => {
+                self.finished = true;
+                return None;
+            }
+        };
+        match self.chunks.pop() {
+            Pop::Sample(right) => Some([left, right]),
+            Pop::Empty | Pop::Ended => Some([left, left]),
+        }
+    }
+
+    /// The next output frame at `device_rate`.
+    fn frame_at(&mut self, device_rate: f64) -> Option<[f32; 2]> {
+        let step = if device_rate > 0.0 {
+            self.rate / device_rate
+        } else {
+            1.0
+        };
+        if (step - 1.0).abs() < 1e-9 {
+            return self.pop_frame();
+        }
+        while self.frac >= 1.0 {
+            let next = self.pop_frame()?;
+            self.previous = self.next;
+            self.next = next;
+            self.frac -= 1.0;
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let fraction = self.frac as f32;
+        self.frac += step;
+        Some([
+            self.previous[0] + (self.next[0] - self.previous[0]) * fraction,
+            self.previous[1] + (self.next[1] - self.previous[1]) * fraction,
+        ])
+    }
+}
+
 struct ActiveVoice {
     samples: Arc<Vec<f32>>,
     /// Fractional *frame* position rather than a sample index, so playback
-    /// rate can be honoured the way rodio's `sink.set_speed` does. Ignoring
-    /// the rate silently -- as this backend first did -- is worse than the
-    /// mobile backends refusing it, because rodio supports it on the very
-    /// same platform.
+    /// rate is honoured (rodio's `sink.set_speed` did; the games use it).
     position: f64,
     rate: f64,
-    /// The rate `samples` are at; see [`CachedClip::rate`].
+    /// The rate `samples` were recorded at; see [`CachedClip::rate`].
     source_rate: f64,
     left: f32,
     right: f32,
@@ -267,8 +279,8 @@ struct MixerState {
     tracks: Vec<MusicTrack>,
     music_mix_volume: f32,
     /// Music-only pause, and deliberately not a zeroed volume: muting would
-    /// leave the decoders running, so a resume would land further into the
-    /// track and a long pause could advance the playlist entirely.
+    /// keep the queue draining, so a resume would land further into the track
+    /// and a long pause could advance the playlist entirely.
     paused: bool,
     bass_boost: f32,
     bass_state: [f32; 2],
@@ -300,59 +312,37 @@ impl MixerState {
 
     fn mix_music(&mut self, out: &mut [f32], channels: usize) {
         if self.paused {
-            // Return *without* draining `pending`: the bounded chunk queue
-            // then fills, the decoder blocks in `send_chunk`, and the track
-            // holds its position. That is what makes this a pause rather
-            // than a mute. Effects still play; this pauses music only.
+            // Return *without* reading the queue: it fills, the decoder
+            // stops topping it up, and the track holds its position. That is
+            // what makes this a pause rather than a mute. Effects still play;
+            // this pauses music only.
             return;
         }
+        let stride = channels.max(1);
         let mix = self.music_mix_volume;
         let boost = self.bass_boost;
         let coefficient = self.bass_coefficient;
+        let device_rate = self.device_rate;
         for track in &mut self.tracks {
-            // Why the fill loop stopped is the whole question: a decoder that
-            // has not refilled yet looks identical to one that has ended
-            // unless `Empty` and `Disconnected` are told apart. Conflating
-            // them made every track report "finished" the moment its queue ran
-            // dry, which cycled the playlist every couple of seconds.
-            //
-            // Recording it here also avoids a second `try_recv` after the
-            // loop: that probe discarded the chunk whenever it happened to
-            // succeed, losing ~85 ms of audio each time it raced a refill.
-            let mut disconnected = false;
-            while track.pending.len() < out.len() {
-                match track.chunks.try_recv() {
-                    Ok(chunk) => track.pending.extend(chunk),
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        disconnected = true;
-                        break;
-                    }
-                }
-            }
-            if track.pending.is_empty() {
-                // The decoder signals the end by dropping its sender, so an
-                // empty queue *and* a closed channel is a finished track --
-                // not a decoder that merely fell behind.
-                track.finished = disconnected;
-                continue;
-            }
-            if !track.playing || track.current_volume <= 0.0 {
+            if track.finished || !track.playing || track.current_volume <= 0.0 {
                 continue;
             }
             let volume = track.current_volume * mix;
-            for sample in out.iter_mut() {
-                let Some(value) = track.pending.pop_front() else {
+            for frame in out.chunks_mut(stride) {
+                let Some([left, right]) = track.frame_at(device_rate) else {
                     break;
                 };
-                *sample += value * volume;
+                frame[0] += left * volume;
+                if let Some(second) = frame.get_mut(1) {
+                    *second += right * volume;
+                }
             }
         }
 
-        // One shelf over the summed bus, then the post-gain rodio applies
-        // unconditionally to music.
+        // One shelf over the summed bus, then the post-gain the rodio
+        // backend applied unconditionally to music.
         for (index, sample) in out.iter_mut().enumerate() {
-            let channel = index % channels.max(1) % 2;
+            let channel = index % stride % 2;
             let low = self.bass_state[channel] + coefficient * (*sample - self.bass_state[channel]);
             self.bass_state[channel] = low;
             *sample = (*sample + low * boost) * MUSIC_BASS_POST_GAIN;
@@ -417,47 +407,14 @@ fn stereo_volume(volume: f32, pan: f32) -> (f32, f32) {
 /// which it is in no position to know.
 static STREAM: Mutex<Option<OutputStream>> = Mutex::new(None);
 static MIXER: OnceLock<Arc<Mutex<MixerState>>> = OnceLock::new();
-/// Whether a device could be opened at all: its first rate, or `None` if it
-/// could not be (or `LOADNGO_DISABLE_AUDIO` is set). Decided once, by the
-/// first open, which runs on the calling thread as it always has.
-static OUTPUT: OnceLock<Option<u32>> = OnceLock::new();
-static BACKEND_FAILURE: OnceLock<String> = OnceLock::new();
-/// The device's rate now, which new clips and tracks decode to. It changes
-/// only when the output reopens on a device running at another rate.
+/// The device's rate, once it has opened; 0 before that.
 static DEVICE_RATE: AtomicU32 = AtomicU32::new(0);
-/// When the output closes after a silent stretch, and the thread that
-/// opens and closes it (see `audio_output_idle.rs`). The first open leaves
-/// it open.
-static IDLE: Mutex<IdleState> = Mutex::new(IdleState {
-    policy: IdlePolicy::new(true),
-    switch: None,
-});
-
-struct IdleState {
-    policy: IdlePolicy,
-    /// Started the first time the output closes.
-    switch: Option<OutputSwitch>,
-}
-
-impl IdleState {
-    fn request(&mut self, open: bool) {
-        if self.switch.is_none() {
-            match OutputSwitch::spawn("loadngo-desktop-audio-output", true, apply_output) {
-                Ok(switch) => self.switch = Some(switch),
-                Err(error) => {
-                    // Without the thread the output simply stays as it is:
-                    // open, which is how this backend always ran.
-                    eprintln!("[loadngo/desktop] audio output thread failed to start: {error}");
-                    self.policy = IdlePolicy::new(true);
-                    return;
-                }
-            }
-        }
-        if let Some(switch) = &self.switch {
-            switch.request(open);
-        }
-    }
-}
+/// When the output opens and closes (see `audio_output_idle.rs`). It starts
+/// closed and opens on the first sound.
+static IDLE: Mutex<IdlePolicy> = Mutex::new(IdlePolicy::new(false));
+static SWITCH: OnceLock<OutputSwitch> = OnceLock::new();
+/// A failed open is reported once, not on every sound that retries it.
+static OPEN_FAILURE_REPORTED: AtomicBool = AtomicBool::new(false);
 
 fn mixer() -> &'static Arc<Mutex<MixerState>> {
     MIXER.get_or_init(|| {
@@ -468,8 +425,24 @@ fn mixer() -> &'static Arc<Mutex<MixerState>> {
     })
 }
 
+fn switch() -> &'static OutputSwitch {
+    SWITCH.get_or_init(|| OutputSwitch::new(false, apply_output))
+}
+
+/// `LOADNGO_DISABLE_AUDIO` turns playback off entirely: it is how a headless
+/// or shared machine runs these apps at all.
+fn audio_disabled() -> bool {
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        matches!(
+            std::env::var("LOADNGO_DISABLE_AUDIO").ok().as_deref(),
+            Some("1" | "true" | "TRUE" | "yes" | "YES")
+        )
+    })
+}
+
 /// Opens the default device with the mixer as its callback, and records the
-/// rate it runs at.
+/// rate it runs at. Runs on the offload pool.
 fn open_stream() -> Result<OutputStream, String> {
     let shared = Arc::clone(mixer());
     let stream = open_output_stream(None, None, move |out, channels| {
@@ -491,86 +464,9 @@ fn open_stream() -> Result<OutputStream, String> {
     Ok(stream)
 }
 
-/// Opens the device the first time. A failure is remembered rather than
-/// retried, and `LOADNGO_DISABLE_AUDIO` short-circuits it entirely -- both
-/// behaviours the rodio backend had, and both load-bearing: the env switch is
-/// how a headless or shared machine runs these apps at all.
-fn output() -> Option<u32> {
-    *OUTPUT.get_or_init(|| {
-        if matches!(
-            std::env::var("LOADNGO_DISABLE_AUDIO").ok().as_deref(),
-            Some("1" | "true" | "TRUE" | "yes" | "YES")
-        ) {
-            let _ = BACKEND_FAILURE.set("Audio disabled by LOADNGO_DISABLE_AUDIO".to_string());
-            return None;
-        }
-        match open_stream() {
-            Ok(stream) => {
-                let sample_rate_hz = stream.sample_rate_hz();
-                if let Ok(mut held) = STREAM.lock() {
-                    *held = Some(stream);
-                }
-                Some(sample_rate_hz)
-            }
-            Err(detail) => {
-                eprintln!("{detail}");
-                let _ = BACKEND_FAILURE.set(detail);
-                None
-            }
-        }
-    })
-}
-
-/// True once a device has opened at least once; asks nothing of it.
-fn output_exists() -> bool {
-    matches!(OUTPUT.get(), Some(Some(_)))
-}
-
-/// Something is about to play: reopen the output if it closed. Returns at
-/// once; the open happens on the output thread, and what was queued starts
-/// as soon as the device does (8-11 ms on the Mac mini).
-fn wake_output() {
-    if !output_exists() {
-        return;
-    }
-    if let Ok(mut idle) = IDLE.lock() {
-        if idle.policy.wake() {
-            idle.request(true);
-        }
-    }
-}
-
-/// Closes the output once the mixer has been silent for `IDLE_STOP`. Called
-/// from every controller's `update`, on the game thread; cheap.
-fn maintain_output() {
-    if !output_exists() {
-        return;
-    }
-    let quiet = mixer().lock().is_ok_and(|state| state.is_quiet());
-    if let Ok(mut idle) = IDLE.lock() {
-        if idle.policy.observe(quiet, Instant::now()) {
-            idle.request(false);
-        }
-    }
-}
-
-/// When the game must call `update` again for the output to close, folded
-/// into every controller's `frame_demand`.
-fn output_demand() -> Option<Duration> {
-    if !output_exists() {
-        return None;
-    }
-    let quiet = mixer().lock().is_ok_and(|state| state.is_quiet());
-    IDLE.lock()
-        .ok()
-        .and_then(|idle| idle.policy.demand(quiet, Instant::now()))
-}
-
-/// Runs on the output thread: brings the device to `open`.
+/// Runs on the offload pool: brings the device to `open`.
 fn apply_output(open: bool) {
-    let Ok(mut held) = STREAM.lock() else {
-        return;
-    };
+    let mut held = STREAM.lock().unwrap_or_else(PoisonError::into_inner);
     if !open {
         // Dropping the stream stops the device; about 40 ms on the Mac mini,
         // which is why this is not on the game thread.
@@ -584,10 +480,12 @@ fn apply_output(open: bool) {
         Ok(stream) => *held = Some(stream),
         Err(detail) => {
             drop(held);
-            eprintln!("[loadngo/desktop] {detail}; will try again on the next sound");
-            if let Ok(mut idle) = IDLE.lock() {
-                idle.policy.open_failed();
+            if !OPEN_FAILURE_REPORTED.swap(true, Ordering::AcqRel) {
+                eprintln!("[loadngo/desktop] {detail}; will try again on the next sound");
             }
+            IDLE.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .open_failed();
             // Nothing will play what was queued, and a voice that never
             // finishes would keep its controller asking for frames.
             if let Ok(mut state) = mixer().lock() {
@@ -598,6 +496,47 @@ fn apply_output(open: bool) {
     }
 }
 
+/// Something is about to play: open the output if it is closed. Returns at
+/// once; the open happens on the pool, and what was queued starts as soon as
+/// the device does (8-11 ms on the Mac mini, about 80 ms the first time).
+fn wake_output() {
+    if audio_disabled() {
+        return;
+    }
+    let opening = IDLE.lock().unwrap_or_else(PoisonError::into_inner).wake();
+    if opening {
+        switch().request(true);
+    }
+}
+
+/// Closes the output once the mixer has been silent for `IDLE_STOP`. Called
+/// from every controller's `update`, on the game thread; cheap.
+fn maintain_output() {
+    if audio_disabled() {
+        return;
+    }
+    let quiet = mixer().lock().is_ok_and(|state| state.is_quiet());
+    let closing = IDLE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .observe(quiet, Instant::now());
+    if closing {
+        switch().request(false);
+    }
+}
+
+/// When the game must call `update` again for the output to close, folded
+/// into every controller's `frame_demand`.
+fn output_demand() -> Option<Duration> {
+    if audio_disabled() {
+        return None;
+    }
+    let quiet = mixer().lock().is_ok_and(|state| state.is_quiet());
+    IDLE.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .demand(quiet, Instant::now())
+}
+
 /// One-pole coefficient for [`MUSIC_BASS_CUTOFF_HZ`] at `sample_rate_hz`.
 fn one_pole_coefficient(sample_rate_hz: u32) -> f32 {
     #[allow(clippy::cast_precision_loss)]
@@ -605,14 +544,11 @@ fn one_pole_coefficient(sample_rate_hz: u32) -> f32 {
     1.0 - (-std::f32::consts::TAU * MUSIC_BASS_CUTOFF_HZ / rate).exp()
 }
 
-/// The rate new clips and tracks decode to: the device's current rate.
-fn output_rate() -> f64 {
-    match output() {
-        None => 48_000.0,
-        Some(first) => match DEVICE_RATE.load(Ordering::Acquire) {
-            0 => f64::from(first),
-            now => f64::from(now),
-        },
+/// The rate a new music track decodes at: the device's, once it is known.
+fn music_rate() -> f64 {
+    match DEVICE_RATE.load(Ordering::Acquire) {
+        0 => f64::from(FALLBACK_RATE),
+        rate => f64::from(rate),
     }
 }
 
@@ -666,11 +602,8 @@ impl MusicController {
         } else {
             path.trim().to_string()
         };
-        if output().is_none() {
-            return Err(BACKEND_FAILURE
-                .get()
-                .cloned()
-                .unwrap_or_else(|| "Audio output unavailable".to_string()));
+        if audio_disabled() {
+            return Err("Audio disabled by LOADNGO_DISABLE_AUDIO".to_string());
         }
         wake_output();
         self.fade_duration = fade.max(0.05);
@@ -680,32 +613,8 @@ impl MusicController {
             .get(&selected)
             .cloned()
             .unwrap_or_else(|| TrackSource::Path(selected.clone()));
-        let rate = output_rate();
-        let (tx, rx) = sync_channel::<Chunk>(MUSIC_CHUNK_QUEUE);
-        let thread_source = source.clone();
-        let thread_key = selected.clone();
-        std::thread::Builder::new()
-            .name("loadngo-desktop-music".to_string())
-            .spawn(move || loop {
-                match stream_track(&thread_source, rate, &tx) {
-                    Ok(()) => {
-                        if !looped {
-                            break;
-                        }
-                    }
-                    Err(error) => {
-                        // Nothing awaits this thread, and `play_track_path`
-                        // returned `Ok` before the file was even opened, so
-                        // an unreported failure here is indistinguishable
-                        // from silence.
-                        eprintln!(
-                            "[loadngo/desktop] music decode failed for {thread_key}: {error}"
-                        );
-                        break;
-                    }
-                }
-            })
-            .map_err(|err| format!("Failed to start music decoder: {err}"))?;
+        let rate = music_rate();
+        let (ahead, chunks) = DecodeAhead::start(source.opener(), looped, rate, selected.clone());
 
         if let Ok(mut state) = mixer().lock() {
             // Everything already playing fades out; the new track fades in.
@@ -713,15 +622,9 @@ impl MusicController {
                 track.target_volume = 0.0;
             }
             state.tracks.retain(|track| track.current_volume > 0.001);
-            state.tracks.push(MusicTrack {
-                key: selected.clone(),
-                chunks: rx,
-                pending: VecDeque::new(),
-                current_volume: 0.0,
-                target_volume: 1.0,
-                playing: true,
-                finished: false,
-            });
+            state
+                .tracks
+                .push(MusicTrack::new(selected.clone(), chunks, Some(ahead), rate));
             state.music_mix_volume = self.mix_volume;
             state.paused = false;
             state.bass_boost = self.bass_boost;
@@ -756,20 +659,29 @@ impl MusicController {
             .insert(key.to_string(), TrackSource::Embedded(ogg_bytes));
     }
 
+    /// Ramps fades, tops up each track's decode-ahead, advances the
+    /// playlist, and lets the output close once everything is silent. Must be
+    /// called every frame while music plays: the decode-ahead depends on it,
+    /// and [`Self::frame_demand`] asks for frames often enough.
     pub fn update(&mut self, dt: f32) {
         self.update_tracks(dt);
         maintain_output();
     }
 
     fn update_tracks(&mut self, dt: f32) {
-        if self.paused {
-            return;
-        }
         let fade = self.fade_duration.max(0.001);
         let finished = {
             let Ok(mut state) = mixer().lock() else {
                 return;
             };
+            for track in &state.tracks {
+                if let Some(ahead) = &track.ahead {
+                    ahead.tick();
+                }
+            }
+            if self.paused {
+                return;
+            }
             for track in &mut state.tracks {
                 let difference = track.target_volume - track.current_volume;
                 if difference.abs() <= 0.001 {
@@ -780,7 +692,7 @@ impl MusicController {
                 }
                 track.current_volume = track.current_volume.clamp(0.0, 1.0);
             }
-            // Retire tracks that faded out, and any that ran dry.
+            // Retire tracks that faded out.
             state
                 .tracks
                 .retain(|track| !(track.target_volume <= 0.0 && track.current_volume <= 0.001));
@@ -878,21 +790,24 @@ impl MusicController {
         self.active_track.as_deref()
     }
 
+    /// Every 16 ms while a fade ramps; every [`TICK`] while any track is
+    /// still decoding or meant to be heard, so its queue is topped up and its
+    /// end noticed; then once more when the output can close.
     #[must_use]
     pub fn frame_demand(&self) -> Option<Duration> {
-        let fading = mixer().lock().is_ok_and(|state| {
-            state
+        let (fading, sounding) = mixer().lock().map_or((false, false), |state| {
+            let fading = state
                 .tracks
                 .iter()
-                .any(|track| (track.current_volume - track.target_volume).abs() > 0.001)
+                .any(|track| (track.current_volume - track.target_volume).abs() > 0.001);
+            let sounding = state.tracks.iter().any(MusicTrack::is_sounding);
+            (fading, sounding)
         });
         if fading {
             return Some(Duration::from_millis(16));
         }
-        if self.active_track.is_some()
-            && (self.playlist_mode_active || self.resume_playlist_after_cue)
-        {
-            return Some(MUSIC_IDLE_POLL_INTERVAL);
+        if sounding {
+            return Some(TICK);
         }
         output_demand()
     }
@@ -902,6 +817,9 @@ pub struct VoiceController {
     enabled: bool,
     volume: f32,
     voice: Option<u64>,
+    /// The id of a voice line still decoding on the pool, 0 if none. The
+    /// decode job starts the line only if it is still the one wanted.
+    pending: Arc<AtomicU64>,
     next_id: u64,
 }
 
@@ -911,37 +829,54 @@ impl VoiceController {
             enabled,
             volume: finite_clamped(volume, 0.0, 2.0, 1.0),
             voice: None,
+            pending: Arc::new(AtomicU64::new(0)),
             next_id: 1,
         }
     }
 
+    /// Decodes `path` on the pool and plays it when ready, replacing any
+    /// line playing now. Returns at once.
     pub fn play_path(&mut self, path: &str) -> Result<(), String> {
-        if !self.enabled {
-            return Ok(());
-        }
-        if output().is_none() {
+        if !self.enabled || audio_disabled() {
             return Ok(());
         }
         self.stop();
-        let clip = decode_clip(&TrackSource::Path(path.to_string()), output_rate())
-            .map_err(|error| format!("{path}: {error}"))?;
         wake_output();
         let id = self.allocate();
-        if let Ok(mut state) = mixer().lock() {
-            state.voices.push((
-                id,
-                ActiveVoice {
-                    samples: clip.samples,
-                    position: 0.0,
-                    rate: 1.0,
-                    source_rate: clip.rate,
-                    left: self.volume,
-                    right: self.volume,
-                    looped: false,
-                },
-            ));
-        }
         self.voice = Some(id);
+        self.pending.store(id, Ordering::Release);
+        let pending = Arc::clone(&self.pending);
+        let volume = self.volume;
+        let path = path.to_string();
+        crate::offload::run_detached(move || {
+            let decoded = decode_clip(&TrackSource::Path(path.clone()));
+            // Still wanted? A stop or a newer line clears or replaces `pending`.
+            if pending
+                .compare_exchange(id, 0, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                return;
+            }
+            match decoded {
+                Ok(clip) => {
+                    if let Ok(mut state) = mixer().lock() {
+                        state.voices.push((
+                            id,
+                            ActiveVoice {
+                                samples: clip.samples,
+                                position: 0.0,
+                                rate: 1.0,
+                                source_rate: clip.rate,
+                                left: volume,
+                                right: volume,
+                                looped: false,
+                            },
+                        ));
+                    }
+                }
+                Err(error) => eprintln!("[loadngo/desktop] voice {path}: {error}"),
+            }
+        });
         Ok(())
     }
 
@@ -957,16 +892,21 @@ impl VoiceController {
         self.enabled
     }
 
+    /// True while the line decodes or plays.
     #[must_use]
     pub fn is_playing(&self) -> bool {
         let Some(id) = self.voice else { return false };
-        mixer()
-            .lock()
-            .is_ok_and(|state| state.voices.iter().any(|(voice, _)| *voice == id))
+        self.pending.load(Ordering::Acquire) == id
+            || mixer()
+                .lock()
+                .is_ok_and(|state| state.voices.iter().any(|(voice, _)| *voice == id))
     }
 
     pub fn stop(&mut self) {
         let Some(id) = self.voice.take() else { return };
+        let _ = self
+            .pending
+            .compare_exchange(id, 0, Ordering::AcqRel, Ordering::Acquire);
         if let Ok(mut state) = mixer().lock() {
             state.voices.retain(|(voice, _)| *voice != id);
         }
@@ -986,74 +926,85 @@ impl VoiceController {
     }
 
     fn allocate(&mut self) -> u64 {
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1).max(1);
+        let id = self.next_id | VOICE_LINE_ID_BIT;
+        self.next_id = self.next_id.wrapping_add(1).max(1) & !VOICE_LINE_ID_BIT;
         id
     }
 }
 
 pub struct SfxController {
     settings: SfxSettings,
-    clips: HashMap<String, CachedClip>,
-    embedded: HashMap<String, &'static [u8]>,
     voices: HashMap<SfxVoiceId, u8>,
     order: VecDeque<SfxVoiceId>,
     next_voice_id: u64,
+    /// Plays dropped because their clip had not finished decoding.
+    not_ready: u64,
 }
 
 impl SfxController {
     pub fn new(settings: SfxSettings) -> Self {
         Self {
             settings: settings.normalized(),
-            clips: HashMap::new(),
-            embedded: HashMap::new(),
             voices: HashMap::new(),
             order: VecDeque::new(),
             next_voice_id: 1,
+            not_ready: 0,
         }
     }
 
-    /// Decodes and caches under `key`, so a later `play` with `path: key`
-    /// hits the cache and never touches the filesystem -- matching the rodio
-    /// backend, whose callers rely on exactly that.
+    /// Starts decoding `ogg_bytes` on the pool under `key`, so a later `play`
+    /// with `path: key` finds it ready. Returns at once.
     pub fn preload_embedded(&mut self, key: &str, ogg_bytes: &'static [u8]) -> Result<(), String> {
-        if self.clips.contains_key(key) {
-            return Ok(());
+        if !audio_disabled() {
+            request_clip(key, TrackSource::Embedded(ogg_bytes));
         }
-        self.embedded.insert(key.to_string(), ogg_bytes);
-        if output().is_none() {
-            // Decode lazily once a device exists rather than failing here:
-            // the rodio path also tolerated a missing backend.
-            return Ok(());
-        }
-        let clip = decode_clip(&TrackSource::Embedded(ogg_bytes), output_rate())
-            .map_err(|error| format!("Failed to decode embedded SFX {key}: {error}"))?;
-        self.clips.insert(key.to_string(), clip);
         Ok(())
     }
 
-    /// Effects here decode on first play or come from `preload_embedded`, so
-    /// there is nothing to start early.
+    /// Starts decoding the file at `path` on the pool. Returns at once.
     pub fn preload_path(&mut self, path: &str) -> Result<(), String> {
         if path.is_empty() {
             return Err("SFX path must not be empty".to_string());
         }
+        if !audio_disabled() {
+            request_clip(path, TrackSource::Path(path.to_string()));
+        }
         Ok(())
     }
 
+    /// Admits a voice and returns; never decodes. A clip that is not ready
+    /// yet is started loading and this play is dropped (`Ok(None)`), as on
+    /// Android: preload clips at startup so that never happens in play.
     pub fn play(&mut self, request: SfxPlayRequest<'_>) -> Result<Option<SfxVoiceId>, String> {
         let request = request.normalized();
         if request.path.is_empty() {
             return Err("SFX path must not be empty".to_string());
         }
-        if !self.settings.enabled || output().is_none() {
+        if !self.settings.enabled || audio_disabled() {
             return Ok(None);
         }
+        let state = clips()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(request.path)
+            .cloned();
+        let clip = match state {
+            Some(ClipState::Ready(clip)) => clip,
+            Some(ClipState::Failed(error)) => return Err(error),
+            Some(ClipState::Loading) => {
+                self.not_ready += 1;
+                return Ok(None);
+            }
+            None => {
+                self.not_ready += 1;
+                request_clip(request.path, TrackSource::Path(request.path.to_string()));
+                return Ok(None);
+            }
+        };
         self.update();
         if !self.make_voice_capacity(request.priority) {
             return Ok(None);
         }
-        let clip = self.load_clip(request.path)?;
         wake_output();
         let (left, right) = stereo_volume(request.volume * self.settings.mix_volume, request.pan);
         let id = self.allocate_voice_id();
@@ -1088,9 +1039,11 @@ impl SfxController {
     }
 
     pub fn stop_all(&mut self) {
-        let ids: Vec<u64> = self.voices.keys().map(|id| id.value()).collect();
         if let Ok(mut state) = mixer().lock() {
-            state.voices.retain(|(id, _)| !ids.contains(id));
+            let ours = &self.voices;
+            state
+                .voices
+                .retain(|(id, _)| !ours.contains_key(&SfxVoiceId(*id)));
         }
         self.voices.clear();
         self.order.clear();
@@ -1128,6 +1081,12 @@ impl SfxController {
         self.voices.len()
     }
 
+    /// Plays dropped so far because their clip was still decoding.
+    #[must_use]
+    pub fn not_ready_count(&self) -> u64 {
+        self.not_ready
+    }
+
     #[must_use]
     pub fn is_playing(&self, voice: SfxVoiceId) -> bool {
         mixer()
@@ -1141,20 +1100,6 @@ impl SfxController {
             (!self.voices.is_empty()).then_some(Duration::from_millis(100)),
             output_demand(),
         )
-    }
-
-    fn load_clip(&mut self, path: &str) -> Result<CachedClip, String> {
-        if let Some(clip) = self.clips.get(path) {
-            return Ok(clip.clone());
-        }
-        let source = self.embedded.get(path).map_or_else(
-            || TrackSource::Path(path.to_string()),
-            |bytes| TrackSource::Embedded(bytes),
-        );
-        let clip =
-            decode_clip(&source, output_rate()).map_err(|error| format!("{path}: {error}"))?;
-        self.clips.insert(path.to_string(), clip.clone());
-        Ok(clip)
     }
 
     fn make_voice_capacity(&mut self, incoming_priority: u8) -> bool {
@@ -1177,89 +1122,118 @@ impl SfxController {
 
     fn allocate_voice_id(&mut self) -> SfxVoiceId {
         let id = SfxVoiceId(self.next_voice_id);
-        self.next_voice_id = self.next_voice_id.wrapping_add(1).max(1);
+        self.next_voice_id = self.next_voice_id.wrapping_add(1).max(1) & !VOICE_LINE_ID_BIT;
         id
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::stream::{chunk_queue, ChunkProducer};
     use super::*;
 
-    /// A track holding `chunk`, with its sender either kept alive (a decoder
+    /// A track holding `samples`, with its producer either kept (a decoder
     /// still running) or dropped (a decoder that finished).
-    fn track(chunk: Vec<f32>, decoder_alive: bool) -> (MusicTrack, Option<SyncSender<Chunk>>) {
-        let (tx, rx) = sync_channel::<Chunk>(4);
-        if !chunk.is_empty() {
-            tx.send(chunk).expect("test channel accepts one chunk");
+    fn track(samples: Vec<f32>, decoder_alive: bool) -> (MusicTrack, Option<ChunkProducer>) {
+        let (producer, consumer, _) = chunk_queue(4);
+        if !samples.is_empty() {
+            assert!(producer.offer(samples).is_ok(), "room for one chunk");
         }
-        let track = MusicTrack {
-            key: "test".to_string(),
-            chunks: rx,
-            pending: VecDeque::new(),
-            current_volume: 1.0,
-            target_volume: 1.0,
-            playing: true,
-            finished: false,
-        };
-        if decoder_alive {
-            (track, Some(tx))
-        } else {
-            (track, None)
-        }
+        let mut track = MusicTrack::new("test".to_string(), consumer, None, 48_000.0);
+        track.current_volume = 1.0;
+        (track, decoder_alive.then_some(producer))
     }
 
     fn mixer_with(tracks: Vec<MusicTrack>) -> MixerState {
         MixerState {
             tracks,
             music_mix_volume: 1.0,
+            device_rate: 48_000.0,
             ..MixerState::default()
         }
     }
 
+    fn voice(samples: Vec<f32>, rate: f64, source_rate: f64) -> ActiveVoice {
+        ActiveVoice {
+            samples: Arc::new(samples),
+            position: 0.0,
+            rate,
+            source_rate,
+            left: 1.0,
+            right: 1.0,
+            looped: false,
+        }
+    }
+
+    /// A left channel that names its frame (0.0, 0.1, 0.2, ...), scaled so
+    /// it survives `fill`'s clamp to +/-1.0.
+    fn marked_frames(count: u8) -> Vec<f32> {
+        (0..count)
+            .flat_map(|frame| [f32::from(frame) * 0.1, 0.0])
+            .collect()
+    }
+
+    fn left_channel(out: &[f32]) -> Vec<f32> {
+        out.chunks(2).map(|frame| frame[0]).collect()
+    }
+
+    fn assert_close(got: &[f32], want: &[f32]) {
+        assert_eq!(got.len(), want.len(), "got {got:?}, expected {want:?}");
+        for (g, w) in got.iter().zip(want) {
+            assert!((g - w).abs() < 1e-5, "got {got:?}, expected {want:?}");
+        }
+    }
+
     /// The regression test for the bug that cycled the playlist every two
-    /// seconds: `try_recv` returning `Err` covers both `Empty` and
-    /// `Disconnected`, so a decoder that simply had not refilled yet was read
-    /// as a track that had ended.
+    /// seconds: an empty queue is a decoder that has not refilled yet, not a
+    /// track that has ended.
     #[test]
     fn a_decoder_that_has_not_refilled_yet_is_not_finished() {
-        let (track, sender) = track(Vec::new(), true);
+        let (track, producer) = track(Vec::new(), true);
         let mut state = mixer_with(vec![track]);
         state.fill(&mut [0.0; 8], 2);
-        assert!(
-            !state.tracks[0].finished,
-            "an empty queue with a live decoder is a decoder falling behind, not a finished track"
-        );
-        drop(sender);
+        assert!(!state.tracks[0].finished);
+        drop(producer);
     }
 
     #[test]
-    fn a_closed_channel_with_nothing_pending_is_finished() {
+    fn a_finished_decoder_with_nothing_queued_is_finished() {
         let (track, _) = track(Vec::new(), false);
         let mut state = mixer_with(vec![track]);
         state.fill(&mut [0.0; 8], 2);
-        assert!(
-            state.tracks[0].finished,
-            "a dropped sender and an empty queue is how a decoder signals the end"
-        );
+        assert!(state.tracks[0].finished);
     }
 
     #[test]
     fn music_is_scaled_by_volume_and_the_unconditional_post_gain() {
-        let (track, sender) = track(vec![0.5; 8], true);
+        let (track, producer) = track(vec![0.5; 8], true);
         let mut state = mixer_with(vec![track]);
         let mut out = vec![0.0; 8];
         state.fill(&mut out, 2);
-        // With no bass boost the shelf contributes nothing, leaving the post
-        // gain rodio also applies to its music bus.
+        // With no bass boost the shelf contributes nothing, leaving the
+        // post-gain.
         let expected = 0.5 * MUSIC_BASS_POST_GAIN;
-        for sample in &out {
-            assert!(
-                (sample - expected).abs() < 1e-6,
-                "expected {expected}, got {sample}"
-            );
-        }
-        drop(sender);
+        assert_close(&out, &[expected; 8]);
+        drop(producer);
+    }
+
+    /// A track decoded at 48 kHz on a 24 kHz device plays every other frame:
+    /// the same pitch in half the frames.
+    #[test]
+    fn music_is_resampled_to_the_device_rate() {
+        let (track, producer) = track(marked_frames(12), true);
+        let mut state = mixer_with(vec![track]);
+        state.device_rate = 24_000.0;
+        let mut out = [0.0; 8];
+        state.fill(&mut out, 2);
+        let heard: Vec<f32> = left_channel(&out)
+            .iter()
+            .map(|sample| sample / MUSIC_BASS_POST_GAIN)
+            .collect();
+        // The interpolator starts one frame behind: 0 (before the first
+        // frame), then frames 1, 3 and 5 of the 48 kHz track.
+        assert_close(&heard, &[0.0, 0.1, 0.3, 0.5]);
+        drop(producer);
     }
 
     #[test]
@@ -1274,41 +1248,26 @@ mod tests {
 
     #[test]
     fn a_one_shot_voice_is_retired_once_it_runs_out() {
-        let mut state = MixerState {
-            music_mix_volume: 1.0,
-            voices: vec![(
-                1,
-                ActiveVoice {
-                    samples: Arc::new(vec![1.0, 1.0, 1.0, 1.0]),
-                    position: 0.0,
-                    rate: 1.0,
-                    source_rate: 48_000.0,
-                    left: 1.0,
-                    right: 1.0,
-                    looped: false,
-                },
-            )],
-            ..MixerState::default()
-        };
+        let mut state = mixer_with(Vec::new());
+        state
+            .voices
+            .push((1, voice(vec![1.0, 1.0, 1.0, 1.0], 1.0, 48_000.0)));
         let mut out = vec![0.0; 8];
         state.fill(&mut out, 2);
         assert!(
             state.voices.is_empty(),
             "a finished one-shot must not linger"
         );
-        assert!(
-            out[0] > 0.0 && out[1] > 0.0,
-            "its samples should have been mixed"
-        );
+        assert!(out[0] > 0.0 && out[1] > 0.0, "its samples were mixed");
     }
 
-    /// Pause must hold the track, not silence it. Muting left the decoders
-    /// running, so a resume landed further into the music and a long enough
+    /// Pause must hold the track, not silence it. Muting kept the queue
+    /// draining, so a resume landed further into the music and a long enough
     /// pause could advance the playlist -- and sng-roguelite pauses on focus
     /// loss, so this is a path players actually take.
     #[test]
     fn pausing_holds_the_track_rather_than_muting_it() {
-        let (track, sender) = track(vec![0.5; 8], true);
+        let (track, producer) = track(vec![0.5; 8], true);
         let mut state = mixer_with(vec![track]);
         state.paused = true;
 
@@ -1316,60 +1275,41 @@ mod tests {
         state.fill(&mut out, 2);
         assert!(
             out.iter().all(|sample| sample.abs() < 1e-6),
-            "paused music must be silent"
-        );
-        assert!(
-            state.tracks[0].pending.is_empty(),
-            "a pause must not consume the queue, or the track advances while stopped"
+            "paused is silent"
         );
 
         state.paused = false;
         state.fill(&mut out, 2);
         let expected = 0.5 * MUSIC_BASS_POST_GAIN;
-        assert!(
-            out.iter().all(|sample| (sample - expected).abs() < 1e-6),
-            "resuming should play the samples the pause held back"
-        );
-        drop(sender);
+        assert_close(&out, &[expected; 8]);
+        drop(producer);
     }
 
     /// Rate is honoured, and by selecting different samples rather than by
-    /// merely not crashing: at 2x a voice should read every other frame.
-    /// A clip decoded for a 48 kHz device must keep its pitch when the
-    /// output reopens on a 24 kHz one: the mixer steps through it twice as
-    /// fast, exactly as if it had been decoded at 24 kHz.
+    /// merely not crashing: at 2x a voice reads every other frame.
     #[test]
-    fn a_clip_keeps_its_pitch_when_the_device_rate_changes() {
-        let samples: Vec<f32> = (0..8u8)
-            .flat_map(|frame| [f32::from(frame) * 0.1, 0.0])
-            .collect();
-        let mut state = MixerState {
-            music_mix_volume: 1.0,
-            device_rate: 24_000.0,
-            voices: vec![(
-                1,
-                ActiveVoice {
-                    samples: Arc::new(samples),
-                    position: 0.0,
-                    rate: 1.0,
-                    source_rate: 48_000.0,
-                    left: 1.0,
-                    right: 1.0,
-                    looped: false,
-                },
-            )],
-            ..MixerState::default()
-        };
+    fn playback_rate_advances_the_voice_faster() {
+        let mut state = mixer_with(Vec::new());
+        state
+            .voices
+            .push((1, voice(marked_frames(8), 2.0, 48_000.0)));
         let mut out = [0.0; 8];
         state.fill(&mut out, 2);
-        let heard: Vec<f32> = out.chunks(2).map(|frame| frame[0]).collect();
-        let expected = [0.0, 0.2, 0.4, 0.6];
-        for (got, want) in heard.iter().zip(expected) {
-            assert!(
-                (got - want).abs() < 1e-6,
-                "got {heard:?}, expected {expected:?}"
-            );
-        }
+        assert_close(&left_channel(&out), &[0.0, 0.2, 0.4, 0.6]);
+    }
+
+    /// A clip recorded at 48 kHz keeps its pitch on a 24 kHz device: the
+    /// mixer steps through it twice as fast.
+    #[test]
+    fn a_clip_keeps_its_pitch_at_any_device_rate() {
+        let mut state = mixer_with(Vec::new());
+        state.device_rate = 24_000.0;
+        state
+            .voices
+            .push((1, voice(marked_frames(8), 1.0, 48_000.0)));
+        let mut out = [0.0; 8];
+        state.fill(&mut out, 2);
+        assert_close(&left_channel(&out), &[0.0, 0.2, 0.4, 0.6]);
     }
 
     #[test]
@@ -1377,7 +1317,7 @@ mod tests {
         let mut state = mixer_with(Vec::new());
         assert!(state.is_quiet(), "nothing at all");
 
-        let (playing, sender) = track(vec![0.1; 8], true);
+        let (playing, producer) = track(vec![0.1; 8], true);
         state.tracks.push(playing);
         assert!(!state.is_quiet(), "a track still playing");
         state.paused = true;
@@ -1389,57 +1329,29 @@ mod tests {
         state.tracks[0].target_volume = 0.0;
         state.tracks[0].current_volume = 0.0;
         assert!(state.is_quiet(), "a track faded out");
-        drop(sender);
+        drop(producer);
 
-        state.voices.push((
-            1,
-            ActiveVoice {
-                samples: Arc::new(vec![0.5; 4]),
-                position: 0.0,
-                rate: 1.0,
-                source_rate: 48_000.0,
-                left: 1.0,
-                right: 1.0,
-                looped: false,
-            },
-        ));
+        state.voices.push((1, voice(vec![0.5; 4], 1.0, 48_000.0)));
         assert!(!state.is_quiet(), "an effect playing");
     }
 
     #[test]
-    fn playback_rate_advances_the_voice_faster() {
-        // Left channel carries a marker identifying the frame, scaled so it
-        // survives `fill`'s clamp to +/-1.0 -- encoding the raw frame index
-        // made 2, 4 and 6 all clamp to 1.0 and hid what was really read.
-        let samples: Vec<f32> = (0..8u8)
-            .flat_map(|frame| [f32::from(frame) * 0.1, 0.0])
-            .collect();
-        let mut state = MixerState {
-            music_mix_volume: 1.0,
-            voices: vec![(
-                1,
-                ActiveVoice {
-                    samples: Arc::new(samples),
-                    position: 0.0,
-                    rate: 2.0,
-                    source_rate: 48_000.0,
-                    left: 1.0,
-                    right: 1.0,
-                    looped: false,
-                },
-            )],
-            ..MixerState::default()
-        };
-        let mut out = [0.0; 8];
-        state.fill(&mut out, 2);
-        // Four output frames at 2x read source frames 0, 2, 4, 6.
-        let heard: Vec<f32> = out.chunks(2).map(|frame| frame[0]).collect();
-        let expected = [0.0, 0.2, 0.4, 0.6];
-        for (got, want) in heard.iter().zip(expected) {
-            assert!(
-                (got - want).abs() < 1e-6,
-                "got {heard:?}, expected {expected:?}"
-            );
+    fn a_clip_decodes_at_its_own_rate() {
+        let bytes: &'static [u8] = include_bytes!("../tests/assets/short-a.ogg");
+        let clip = decode_clip(&TrackSource::Embedded(bytes)).expect("decode");
+        assert!((clip.rate - 44_100.0).abs() < f64::EPSILON);
+        #[allow(clippy::cast_precision_loss)]
+        let seconds = clip.samples.len() as f64 / 2.0 / clip.rate;
+        assert!((seconds - 3.0).abs() < 0.05, "{seconds:.3} s");
+    }
+
+    #[test]
+    fn voice_lines_and_effects_never_share_an_id() {
+        let mut voice_lines = VoiceController::new(true, 1.0);
+        let mut effects = SfxController::new(SfxSettings::default());
+        for _ in 0..4 {
+            assert_ne!(voice_lines.allocate() & VOICE_LINE_ID_BIT, 0);
+            assert_eq!(effects.allocate_voice_id().value() & VOICE_LINE_ID_BIT, 0);
         }
     }
 }
