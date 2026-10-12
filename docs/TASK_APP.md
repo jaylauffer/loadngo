@@ -1,17 +1,17 @@
 # Task app
 
 The Task window: a day plan and a project plan over one plan file. It came
-from the C++ `loadngo-cpp/Task` (Windows) by way of a Rust Win32 port in
-`task/src/` (`task_window.rs`, `day_planner.rs`, `task_list.rs`, ...). Since
-2026-10-13 the same app also runs on macOS and Linux, on `ui-core` and
-`loadngo-host-desktop`.
+from the C++ `loadngo-cpp/Task` (Windows) by way of a Rust Win32 port
+(`task_window.rs`, `day_planner.rs`, `task_list.rs`, ...). On 2026-10-13 it
+was rewritten on `ui-core` and `loadngo-host-desktop`, first for macOS and
+Linux; the same day the Win32 port was removed, so macOS, Linux and Windows
+run one source. The Win32 port is in git history before `c0980d5c`.
 
 ## Running it
 
     cargo run -p task --release
 
-`task --help` describes it. On Windows the binary is still the Win32 port;
-everywhere else it is the new front end.
+`task --help` describes it.
 
 ## Layout of the code
 
@@ -25,8 +25,8 @@ everywhere else it is the new front end.
   - `tree_layout.rs`: the project hierarchy's boxes and lines.
   - `app.rs`: `TaskApp`, the window: layout, input, drag and drop, painting
     to `PaintOp`s, menus.
-- `task/src/main.rs`: on Windows the Win32 port; elsewhere the `desktop`
-  module, which runs `TaskApp` on `loadngo-host-desktop`.
+- `task/src/main.rs`: runs `TaskApp` on `loadngo-host-desktop`, with no
+  platform code of its own.
 
 ## The proactor and idle
 
@@ -43,14 +43,16 @@ two drags with the mouse cost 0.11 s of CPU in all, then nothing.
 ## Files
 
 The plan lives in the app data folder (`~/Library/Application Support/loadngo-task`
-on macOS; `TASK_STATE_DIR` overrides it, for test runs):
+on macOS, `~/.local/share/loadngo-task` on Linux, `%APPDATA%\loadngo-task` on
+Windows; `TASK_STATE_DIR` overrides it, for test runs):
 
 - `user_plan.json`: tasks
 - `user_plan-entries.json`: time entries
 - `config.json`: settings (string values; unknown keys are kept)
 
-These are the Win32 Task's file names and formats (its `taskdata` folder), so
-that folder can be copied here, and a test opens a Windows entries file on
+These are the Win32 Task's file names and formats (it kept them in a
+`taskdata` folder under the folder it was started in), so that folder can be
+copied here, and a test opens a Windows entries file on
 its day. Each file is replaced atomically (`loadngo_persistence::replace_atomically`).
 A plan that cannot be read is left alone: the window opens read-only and saves
 nothing.
