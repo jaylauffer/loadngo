@@ -24,7 +24,7 @@ written in rust for reliability and performance, platform agnostic.
 - `data`: data and CAS-oriented storage primitives.
 - `pq-auth` (`loadngo-pq-auth`): post-quantum signed challenge-token authenticator for operators and nodes.
 - `network`: networking primitives and protocol tests.
-- `task`: app surface for Task planning features.
+- `task`: the Task app, a day plan and project plan; Win32 on Windows, `ui-core`/`host-desktop` elsewhere ([`docs/TASK_APP.md`](docs/TASK_APP.md)).
 - `proactor` (`loadngo-proactor`): async I/O and event processing primitives.
 - `inference` (`loadngo-inference`): bounded local conversation state, cooperative generation and UTF-8 streaming; [scope and limits](docs/LOCAL_INFERENCE.md).
 - `touch` (`loadngo-touch`): touch input handling components.
