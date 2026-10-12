@@ -115,11 +115,19 @@ field. The menus are the macOS menu bar, or drawn in the window elsewhere.
   only logged them).
 - Remembering the window's size and position.
 
-## Not yet checked
+## Checked, and not yet checked
 
-- Linux and Windows desktops have not run the window (Linux: gates on
-  dolores; Windows: CI). On Windows the binary is still the Win32 port; the
-  new front end compiles there too and could replace it.
-- Input was driven on macOS with real events (tab, list and slot clicks,
-  typing, drags into slots and between rows); Cmd-Z, the bin and the
-  hierarchy drags were checked by tests only.
+- macOS (Mac mini): run with real input: tab, list and slot clicks, typing,
+  drags into slots and between rows; idle and active measured (above).
+- Linux (dolores, Wayland, GLES): runs and renders, with the drawn menu bar;
+  idle 0 frames and 0.0% CPU over 10 s, once the host stopped waking idle
+  apps on every redraw (`f6710564`; before it, every idle app on Linux drew
+  at 60 Hz). Not driven with input there beyond a focus change.
+- Windows: not run. The binary there is still the Win32 port, and loadngo CI
+  excludes the `task` crate on Windows, so nothing in CI builds it; a type
+  check from macOS stops in C build scripts (`pqcrypto-internals`, `zstd-sys`).
+  The new front end should build there too and could replace the Win32 one.
+- Cmd-Z, the bin and the hierarchy drags are checked by tests (30, four
+  mutations caught), not by hand.
+
+Evidence: pudding `reviews/2026-10-13-task-macos/`.
