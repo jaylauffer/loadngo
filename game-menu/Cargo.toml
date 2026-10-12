@@ -1,0 +1,10 @@
+[package]
+name = "loadngo-game-menu"
+version = "0.1.0"
+edition = "2021"
+description = "Title menu, sound settings and achievements screens shared by loadngo games"
+
+[dependencies]
+loadngo-host-core = { path = "../host-core" }
+loadngo-touch = { path = "../touch" }
+ui-core = { path = "../ui-core" }

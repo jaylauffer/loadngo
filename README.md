@@ -110,6 +110,7 @@ function rather than in per-backend arms — see
 ## Architecture docs
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): layering and ownership boundaries.
 - [`docs/GAMEPAD_INPUT.md`](docs/GAMEPAD_INPUT.md): platform-agnostic gamepad/controller input design and platform rollout plan.
+- [`docs/GAME_MENU.md`](docs/GAME_MENU.md): shared title menu, sound settings and achievements screens for games (`loadngo-game-menu`).
 - [`docs/INPUT_PHILOSOPHY.md`](docs/INPUT_PHILOSOPHY.md): the values framing (energy as currency of exchange, healthy engagement) behind input-surface design decisions.
 - [`docs/PROACTOR_ENGINE_ADOPTION.md`](docs/PROACTOR_ENGINE_ADOPTION.md): active proactor-first host-runtime adoption and evidence plan.
 - [`docs/RENDERER_ROADMAP.md`](docs/RENDERER_ROADMAP.md): macOS-first renderer ownership plan and multilingual requirements.

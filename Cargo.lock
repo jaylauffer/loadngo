@@ -1626,6 +1626,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "loadngo-game-menu"
+version = "0.1.0"
+dependencies = [
+ "loadngo-host-core",
+ "loadngo-touch",
+ "ui-core",
+]
+
+[[package]]
 name = "loadngo-gfx-dx12"
 version = "0.1.0"
 dependencies = [
