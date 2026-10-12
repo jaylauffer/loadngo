@@ -11,13 +11,11 @@ loadngo-owned platform backends, one platform at a time. CoreAudio (macOS)
 and ALSA (Linux) are in; Windows stays on `cpal` behind the same seam until
 WASAPI lands.
 
-Playback followed capture. iOS is off rodio and cpal entirely (its own
-RemoteIO backend), and desktop has a native path behind the
-`native-desktop-audio` feature, default off until it has been measured
-against rodio on each platform. Android never used cpal at all -- it plays
-through `android.media.MediaPlayer`, which costs the game thread 40-53 ms per
-sound effect; [GAME_AUDIO_RUNTIME.md](GAME_AUDIO_RUNTIME.md) has the
-measurement and the plan to replace it.
+Playback followed capture. iOS has its own RemoteIO backend, Android mixes
+effects in its own AAudio stream ([GAME_AUDIO_RUNTIME.md](GAME_AUDIO_RUNTIME.md)),
+and since 2026-10-13 desktop has one backend, loadngo's own mixer on this
+output seam; rodio was removed that day at Jay's direction, so every game
+on every desktop plays through loadngo.
 
 Linux needs no ALSA crate. The bindings are declared in-tree, so nothing
 depends on `pkg-config` finding a target ALSA install -- which is also what
@@ -228,13 +226,11 @@ dependency builds. All validation GUI sessions were stopped afterward.
 - **No fades and no playback-rate control**, matching Android rather than
   inventing a bar no mobile backend meets.
 
-## Desktop backend (playback, `native-desktop-audio`)
+## Desktop backend (playback)
 
-- **Feature-gated, default off.** Two `mod imp` definitions cannot coexist
-  under one `cfg`, so a feature is what keeps rodio and the native path both
-  compilable and comparable on one machine. macOS and Linux are where audio
-  currently works best; swapping them in one step would leave no way to tell
-  a regression from a change.
+- **The only desktop backend since 2026-10-13.** Until then it sat behind a
+  `native-desktop-audio` feature beside rodio, so the two could be compared
+  on one machine; the comparison on macOS is below.
 - **Richer than the mobile backends**, because the games rely on it: several
   tracks decode at once so one can fade under another, there is a cue/resume
   state machine with a two-second advance debounce, and tracks can play from
@@ -309,7 +305,8 @@ dependency builds. All validation GUI sessions were stopped afterward.
 3. **WASAPI** (Windows) -- when a Windows machine exists; a type check is not
    a gate.
 4. **Playback** -- iOS is done (RemoteIO, verified by ear on both games).
-   Desktop has a native path behind `native-desktop-audio`:
+   Desktop has loadngo's own backend (behind `native-desktop-audio` until
+   2026-10-13, then the only one):
    - **macOS**: trace-identical to rodio through fade-in, cue and resume, and
      acoustically within the measuring instrument's ~0.8 dB repeatability
      across 100 Hz-6 kHz on the same passage.
@@ -332,8 +329,9 @@ dependency builds. All validation GUI sessions were stopped afterward.
      dongle's card profile to analogue duplex would put both halves on one
      machine and make a measured answer possible.
 
-   It stays default-off until that last point is closed. `cpal` leaves the
-   workspace only once the flag flips *and* Windows has a WASAPI backend --
-   `rodio` is still the default desktop path today.
+   It was to stay default-off until that last point closed; Jay made it
+   the only desktop backend on 2026-10-13 instead, so Linux playback is now
+   confirmed by routing on both lab machines but not yet by ear or
+   microphone. `cpal` remains only as the Windows output until WASAPI lands.
 
 Android/iOS capture has no caller; no backend is planned until one exists.

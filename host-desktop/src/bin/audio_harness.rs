@@ -1,21 +1,13 @@
 //! Drives `AudioMixer` end to end so a playback backend can be *heard* and
 //! measured, not merely compiled.
 //!
-//! Both desktop backends implement the same `imp` contract, so this runs
-//! against either and prints which one it was built with:
-//!
 //! ```bash
-//! # rodio (the current default)
 //! cargo run -p loadngo-host-desktop --bin audio_harness
-//! # loadngo's own CoreAudio/ALSA output seam
-//! cargo run -p loadngo-host-desktop --bin audio_harness \
-//!     --features native-desktop-audio
 //! ```
 //!
 //! It exercises the parts that only run when something drives `update(dt)`:
 //! the per-track fade ramp, a one-off cue interrupting the playlist, and the
-//! resume that follows. Those cannot be reached by a unit test and had never
-//! executed at all on the native backend.
+//! resume that follows. Those cannot be reached by a unit test.
 //!
 //! `LOADNGO_DISABLE_AUDIO=1` should produce a clean silent run rather than an
 //! error -- that switch is how headless and shared machines run these apps,
@@ -26,12 +18,6 @@ use std::time::{Duration, Instant};
 
 use loadngo_host_desktop::{
     AudioMixer, AudioMixerConfig, AudioPreferences, MusicCueMode, SfxSettings,
-};
-
-const BACKEND: &str = if cfg!(feature = "native-desktop-audio") {
-    "native (loadngo audio-io output seam)"
-} else {
-    "rodio"
 };
 
 /// Long enough to hear a 2 s fade settle, fire a cue, and watch the playlist
@@ -60,7 +46,6 @@ fn main() {
     let second = asset("flutterrung.ogg");
     let cue = std::env::var("LOADNGO_AUDIO_HARNESS_CUE").unwrap_or_else(|_| second.clone());
 
-    println!("backend: {BACKEND}");
     println!("playlist: {first}");
     println!("          {second}");
     for path in [&first, &second] {

@@ -11,12 +11,12 @@
 //! while its music (constructed second, `open_output_stream` fails) went
 //! silent with a swallowed "no available device" error.
 //!
-//! `AudioMixer` fixes the device race (rodio-backed platforms share one
-//! `OutputStream`/`OutputStreamHandle` via `MusicController::
-//! new_with_handle`/`SfxController::new_with_handle`/
-//! `VoiceController::enable_with_handle`) and gives games one place to
-//! read/write `AudioBus` volumes plus a master volume, instead of each
-//! game recomputing and pushing `set_mix_volume`/`set_volume` by hand.
+//! The device race is gone at the backend now: every backend owns one
+//! process-wide output that all three controllers mix into (rodio, which
+//! needed a shared stream handed around, was removed 2026-10-13).
+//! `AudioMixer` remains the one place games read and write `AudioBus`
+//! volumes plus a master volume, instead of each game recomputing and
+//! pushing `set_mix_volume`/`set_volume` by hand.
 //!
 //! `AudioPreferences` is the persisted half: `save_audio_preferences`/
 //! `load_audio_preferences` round-trip it through `loadngo_persistence`
@@ -166,115 +166,10 @@ pub struct AudioMixer {
     voice: VoiceController,
     music_creative_mix: f32,
     prefs: AudioPreferences,
-    #[cfg(all(
-        not(feature = "native-desktop-audio"),
-        not(target_os = "android"),
-        not(target_os = "netbsd"),
-        not(target_os = "ios")
-    ))]
-    _shared_stream: Option<rodio::OutputStream>,
-    #[cfg(all(
-        not(feature = "native-desktop-audio"),
-        not(target_os = "android"),
-        not(target_os = "netbsd"),
-        not(target_os = "ios")
-    ))]
-    shared_handle: Option<rodio::OutputStreamHandle>,
 }
 
-#[cfg(all(
-    not(feature = "native-desktop-audio"),
-    not(target_os = "android"),
-    not(target_os = "netbsd"),
-    not(target_os = "ios")
-))]
-impl AudioMixer {
-    pub fn new(config: AudioMixerConfig, prefs: AudioPreferences) -> Self {
-        let prefs = prefs.normalized();
-        let mut mixer = match crate::audio::open_output_stream() {
-            Ok((stream, handle)) => {
-                let music = MusicController::new_with_handle(
-                    &handle,
-                    config.boot_music_track,
-                    config.music_playlist,
-                    config.music_cue_mode,
-                    prefs.music_bass_boost,
-                );
-                let sfx = SfxController::new_with_handle(&handle, config.sfx_settings);
-                let mut voice = VoiceController::new(false, 1.0);
-                if prefs.voice_enabled {
-                    voice.enable_with_handle(&handle);
-                }
-                Self {
-                    music,
-                    sfx,
-                    voice,
-                    music_creative_mix: crate::audio::finite_clamped(
-                        config.music_creative_mix,
-                        0.0,
-                        2.0,
-                        1.0,
-                    ),
-                    prefs,
-                    _shared_stream: Some(stream),
-                    shared_handle: Some(handle),
-                }
-            }
-            Err(_) => {
-                // Each controller independently attempts its own open
-                // (matches pre-AudioMixer behavior/log messages) -- this
-                // only matters if the backend is unavailable everywhere,
-                // in which case every attempt fails the same way anyway.
-                let music = MusicController::new(
-                    config.boot_music_track,
-                    config.music_playlist,
-                    config.music_cue_mode,
-                    prefs.music_bass_boost,
-                );
-                let sfx = SfxController::new(config.sfx_settings);
-                let voice = VoiceController::new(prefs.voice_enabled, 1.0);
-                Self {
-                    music,
-                    sfx,
-                    voice,
-                    music_creative_mix: crate::audio::finite_clamped(
-                        config.music_creative_mix,
-                        0.0,
-                        2.0,
-                        1.0,
-                    ),
-                    prefs,
-                    _shared_stream: None,
-                    shared_handle: None,
-                }
-            }
-        };
-        mixer.apply_prefs();
-        mixer
-    }
-
-    fn set_voice_enabled_internal(&mut self, enabled: bool) {
-        if enabled {
-            if let Some(handle) = self.shared_handle.clone() {
-                self.voice.enable_with_handle(&handle);
-                return;
-            }
-        }
-        self.voice.set_enabled(enabled);
-    }
-}
-
-// iOS and the native desktop backend join these two: each owns its own
-// output, so there is no shared rodio `OutputStream` for the mixer to open
-// and hand around. Exhaustive against the gate above -- feature on selects
-// this arm on every target, feature off splits desktop from mobile -- so
-// exactly one `impl` exists in every configuration.
-#[cfg(any(
-    target_os = "android",
-    target_os = "netbsd",
-    target_os = "ios",
-    feature = "native-desktop-audio"
-))]
+// Every backend owns one process-wide output that all three controllers mix
+// into, so there is nothing for the mixer to open and hand around.
 impl AudioMixer {
     pub fn new(config: AudioMixerConfig, prefs: AudioPreferences) -> Self {
         let prefs = prefs.normalized();
@@ -352,9 +247,9 @@ impl AudioMixer {
     }
 
     /// Mutes without losing the bus's stored slider value. Sfx/Voice route
-    /// through the controller's own `set_enabled` (a real teardown on
-    /// rodio, matching what `sng-rusty`'s existing "Enable Voiceover"
-    /// checkbox already does); Music has no such primitive, so muting it
+    /// through the controller's own `set_enabled` (which stops what is
+    /// playing, matching `sng-rusty`'s "Enable Voiceover" checkbox); Music
+    /// has no such primitive, so muting it
     /// is purely `effective volume = 0` in `apply_prefs`.
     pub fn set_bus_muted(&mut self, bus: AudioBus, muted: bool) {
         match bus {

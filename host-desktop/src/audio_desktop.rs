@@ -1,11 +1,8 @@
-//! Desktop audio playback on loadngo's own output seam, without rodio or cpal.
-//!
-//! Selected by the `native-desktop-audio` feature. Off by default: rodio still
-//! works, and these are the platforms where audio currently works *best*, so
-//! the replacement earns its place by measurement before it becomes the
-//! default. Both paths satisfy the same `imp` contract, so they can be
-//! compared on one machine with the Goertzel harness in
-//! `audio-io/tests/hardware_smoke.rs`.
+//! Desktop audio playback (macOS, Linux, Windows) on loadngo's own output
+//! seam, `loadngo-audio-io`: CoreAudio, ALSA, and cpal on Windows until a
+//! WASAPI backend exists. The only desktop backend since 2026-10-13, when it
+//! replaced rodio; on macOS it had been checked against rodio first, trace for
+//! trace and acoustically (`docs/AUDIO_BACKENDS.md`).
 //!
 //! The shape follows the iOS backend -- music streamed from a worker thread,
 //! effects decoded once and kept -- because the asset sizes force it: the

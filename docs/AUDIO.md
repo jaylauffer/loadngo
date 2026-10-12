@@ -58,7 +58,7 @@ preference.
 `SfxController` is intended for shots, impacts, warnings, pickups, UI feedback,
 and other short or overlapping sounds. It provides:
 
-- lazy decoded-clip caching on the rodio-backed host path
+- decoded-clip caching (decoded once, kept)
 - overlapping one-shot and looped voices
 - bounded global polyphony with priority-aware shedding
 - per-play volume, stereo pan, playback rate, and priority
@@ -111,26 +111,14 @@ the music or single-voice controllers.
 
 ## Backend status
 
-- The rodio-backed path lazily decodes and caches clips, supports playback rate,
-  and runs overlapping spatial sinks.
-- **Construct through `AudioMixer`, not the controllers directly, on the
-  rodio-backed path (macOS/Linux/Windows/iOS).** `MusicController::new`,
-  `SfxController::new`, and `VoiceController::set_enabled(true)` each open
-  their own independent `OutputStream` against the OS default output
-  device. On a machine whose ALSA/WASAPI/CoreAudio default can't be opened
-  concurrently by more than one stream, whichever controller constructs
-  first silently wins the device and every later one fails with a "no
-  available device"-shaped error, logged and swallowed
-  (`"Audio backend unavailable (...), running without music."` etc.) --
-  found live via `strace` on a Linux box where SFX played but music never
-  did. `AudioMixer::new` opens one shared stream and threads it to all
-  three via `MusicController::new_with_handle`/`SfxController::
-  new_with_handle`/`VoiceController::enable_with_handle`, avoiding the race
-  entirely. The plain constructors are unchanged (each still opens its own
-  stream) for any caller with a reason not to use `AudioMixer`.
-- Android uses one `MediaPlayer` per active effect, including loops and stereo
-  volume. Playback-rate variation currently returns an explicit unsupported
-  error, and clips are not decoded into the rodio cache.
+- Desktop (macOS, Linux, Windows) and iOS play through loadngo's own
+  backends: one process-wide output that music, effects and voice all mix
+  into, so controllers no longer race for the device. Desktop supports
+  playback rate. `AudioMixer` is still the way to construct them, because it
+  owns the volume buses and saved preferences.
+- Android mixes effects in one AAudio stream (since 2026-10-05; see
+  `GAME_AUDIO_RUNTIME.md`); music still plays through `MediaPlayer`.
+  Playback-rate variation returns an explicit unsupported error there.
 - NetBSD currently exposes the same callable contract as a silent controller;
   it validates non-empty paths but returns no voice.
 

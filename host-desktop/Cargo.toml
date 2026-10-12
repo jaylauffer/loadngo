@@ -6,13 +6,6 @@ authors.workspace = true
 license.workspace = true
 
 [features]
-# Desktop playback on loadngo's own CoreAudio/ALSA output seam instead of
-# rodio/cpal. Off by default on purpose: macOS and Linux are where audio
-# currently works best, so the replacement becomes the default only once it
-# has been measured against the incumbent on real hardware. Both paths
-# implement the same `imp` contract, so enabling this swaps the backend
-# without any caller changing.
-native-desktop-audio = []
 # The read-only Archive CAS browser is a desktop tool, not part of the host.
 # Its dependencies sit behind this feature so the games that depend on this
 # crate never compile the CAS, its signature code, or pqcrypto's C sources.
@@ -61,16 +54,11 @@ tempfile = "3"
 futures = "0.3"
 
 [target.'cfg(all(not(target_os = "android"), not(target_os = "netbsd"), not(target_os = "ios")))'.dependencies]
-# `lewton` + `loadngo-audio-io` are the replacement for rodio/cpal here: the
-# same decoder the Android and iOS backends use, feeding the CoreAudio/ALSA
-# output seam this workspace already owns and hardware-verified. rodio stays
-# alongside them until the replacement is proven on both macOS and Linux --
-# these are the platforms where audio currently works best, and swapping them
-# in one step would open a long window where the only way to find a
-# regression is by ear.
+# Desktop playback: `lewton`, the decoder the Android and iOS backends use,
+# feeding loadngo's own output seam (CoreAudio on macOS, ALSA on Linux, cpal
+# on Windows until WASAPI lands). rodio was removed on 2026-10-13.
 lewton = "0.10"
 loadngo-audio-io = { path = "../audio-io" }
-rodio = { version = "0.17", features = ["vorbis"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 loadngo-gfx-metal = { path = "../gfx-metal" }

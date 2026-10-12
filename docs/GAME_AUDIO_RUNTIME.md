@@ -78,7 +78,7 @@ from a dedicated thread that sleeps in 10 ms steps while its queue is full.
 | --- | --- | --- | --- |
 | Android | AAudio mixer since step 2; clips read through the proactor | one `MediaPlayer` per track | effects meet 1-3 and 6 (measured below); music (4) and thermal (5) open |
 | iOS | RemoteIO mixer, clips cached; unit stops after 3 s of silence | `lewton` on a dedicated thread, 10 ms sleeps for backpressure | 3 holds, and the output closes when quiet; first play decodes on the game thread (2); music thread sleeps (4); no thermal budget (5) |
-| Desktop | `rodio` by default; native mixer behind `native-desktop-audio`, which closes its output after 3 s of silence | same | rodio keeps its output open for the life of the process; otherwise not yet assessed against this contract |
+| Desktop | loadngo mixer on `loadngo-audio-io` (rodio removed 2026-10-13); output closes after 3 s of silence | decoder thread per track | output closes when quiet; not yet assessed otherwise |
 
 ### Closing the output when quiet
 
@@ -96,9 +96,8 @@ and reopens it when something plays:
   (`OutputSwitch`), because on the Mac mini a reopen took 8-11 ms and a close
   about 40 ms. Each controller's `frame_demand` includes the close deadline,
   so an idle game is woken once, at the deadline, and then idles.
-- **rodio** cannot pause or reopen its stream without rebuilding every sink,
-  so it stays open. A game that idles and wants this today opts into
-  `native-desktop-audio` (`sng-mahjong` does, on macOS only).
+- rodio could not pause or reopen its stream without rebuilding every sink,
+  which is one reason it was removed (2026-10-13).
 
 Measured with the native backend on the Mac mini: `play` after a close
 returned in 0.013 ms; the reopened tone reached the C920 microphone (1 kHz,
@@ -150,8 +149,8 @@ Each step ships on its own, keeps every host building, and names its gate.
 5. **iOS to the same contract**: effects decoded through the proactor before
    first play, music decode-ahead off the sleeping thread, the thermal budget
    from the existing `NativeProvider`.
-6. **Desktop native path to the same contract**, then the
-   `native-desktop-audio` default flip already gated in AUDIO_BACKENDS.md.
+6. **Desktop to the same contract.** The default flip happened first: loadngo's
+   mixer is the only desktop backend since 2026-10-13.
 
 Games need one change, once: declare their effect set at startup so step 2's
 preload has something to read. `sng-roguelite`'s `sound_spec` table already

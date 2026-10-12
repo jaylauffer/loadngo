@@ -25,12 +25,6 @@ use loadngo_host_desktop::{
     AudioMixer, AudioMixerConfig, AudioPreferences, MusicCueMode, SfxSettings,
 };
 
-const BACKEND: &str = if cfg!(feature = "native-desktop-audio") {
-    "native"
-} else {
-    "rodio"
-};
-
 /// The fixtures are 3 s; the debounce is 2 s. A change before this could only
 /// come from a spurious "finished", which is the bug this guards against.
 const EARLIEST_HONEST_ADVANCE: f32 = 2.5;
@@ -91,7 +85,7 @@ fn a_finished_track_advances_the_playlist() {
         std::thread::sleep(Duration::from_millis(16));
     }
 
-    println!("backend={BACKEND} changes={changes:?}");
+    println!("changes={changes:?}");
     mixer.music().pause();
 
     let (first_at, first_track) = changes
