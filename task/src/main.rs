@@ -1,6 +1,9 @@
 //! The Task app: `task::TaskApp` on `loadngo-host-desktop`, the same source
 //! on macOS, Linux and Windows.
 
+// A window, not a console program: Windows opens no console beside it.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 fn main() {
     desktop::main();
 }
@@ -50,9 +53,12 @@ Example:
     pub fn main() {
         if let Some(arg) = std::env::args().nth(1) {
             match arg.as_str() {
-                "-h" | "--help" => print!("{HELP}"),
+                "-h" | "--help" => say(HELP, false),
                 other => {
-                    eprintln!("task: unknown argument {other}; see --help");
+                    say(
+                        &format!("task: unknown argument {other}; see --help\n"),
+                        true,
+                    );
                     std::process::exit(2);
                 }
             }
@@ -69,6 +75,58 @@ Example:
             None,
             run(),
         );
+    }
+
+    /// Prints to standard output, or standard error when `error`.
+    fn say(text: &str, error: bool) {
+        use std::io::Write;
+        let mut out = console(error);
+        let _ = out.write_all(text.as_bytes());
+        let _ = out.flush();
+    }
+
+    #[cfg(not(windows))]
+    fn console(error: bool) -> Box<dyn std::io::Write> {
+        if error {
+            Box::new(std::io::stderr())
+        } else {
+            Box::new(std::io::stdout())
+        }
+    }
+
+    /// A Windows GUI program starts with no console. Output redirected to a
+    /// file or pipe arrives as standard handles; otherwise this borrows the
+    /// console `task` was started from, if any.
+    #[cfg(windows)]
+    fn console(error: bool) -> Box<dyn std::io::Write> {
+        use std::os::windows::io::AsRawHandle;
+
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn AttachConsole(process_id: u32) -> i32;
+        }
+        const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+
+        let inherited = if error {
+            std::io::stderr().as_raw_handle()
+        } else {
+            std::io::stdout().as_raw_handle()
+        };
+        if !inherited.is_null() {
+            return if error {
+                Box::new(std::io::stderr())
+            } else {
+                Box::new(std::io::stdout())
+            };
+        }
+        // SAFETY: AttachConsole takes a process id and touches no memory of
+        // ours; failure (no parent console) leaves nothing to write to.
+        if unsafe { AttachConsole(ATTACH_PARENT_PROCESS) } != 0 {
+            if let Ok(file) = std::fs::OpenOptions::new().write(true).open("CONOUT$") {
+                return Box::new(file);
+            }
+        }
+        Box::new(std::io::sink())
     }
 
     struct DesktopHost;
