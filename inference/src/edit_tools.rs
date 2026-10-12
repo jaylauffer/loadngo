@@ -491,6 +491,49 @@ fn without_gutter(text: &str) -> Option<String> {
     )
 }
 
+/// `new_text` written as a numbered listing with diff marks, as models do after a
+/// read (2026-10-12, gpt-oss on 8 of 51 tasks): copied lines keep the gutter
+/// (`  213|}`) and added lines start with `+`, so `text_edit` wrote both into the
+/// file. When some lines have the gutter and every other line but the first (which
+/// is often copied from mid-line) starts with `+` or `-`, this is the text meant:
+/// gutters off, `+` lines without the mark, `-` lines left out. `None` otherwise,
+/// so a `+` in ordinary code is never touched.
+fn without_diff_marks(text: &str) -> Option<String> {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let numbered = |line: &str| without_gutter(line).is_some();
+    if !lines.iter().any(|l| numbered(l)) {
+        return None;
+    }
+    let marked = |line: &str| line.starts_with('+') || line.starts_with('-');
+    let rest = lines
+        .iter()
+        .skip(1)
+        .filter(|l| !numbered(l) && !l.is_empty());
+    let mut any_mark = false;
+    for line in rest {
+        if !marked(line) {
+            return None;
+        }
+        any_mark = true;
+    }
+    if !any_mark {
+        return None;
+    }
+    Some(
+        lines
+            .iter()
+            .enumerate()
+            .filter(|(i, l)| *i == 0 || numbered(l) || !l.starts_with('-'))
+            .map(|(i, l)| match without_gutter(l) {
+                Some(bare) => bare,
+                None if i > 0 => l.strip_prefix('+').unwrap_or(l).to_owned(),
+                None => (*l).to_owned(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
 struct TextRead(Rc<EditSession>);
 struct TextEdit(Rc<EditSession>);
 struct TextWrite(Rc<EditSession>);
@@ -613,8 +656,15 @@ impl Tool for TextEdit {
         if !text.contains(&old) {
             if let Some(bare) = without_gutter(&old) {
                 old = bare;
-                new = without_gutter(&new).unwrap_or(new);
                 note = " (line numbers taken off old_text)".into();
+                if let Some(meant) = without_diff_marks(&new) {
+                    new = meant;
+                    note = " (line numbers taken off old_text; line numbers and `+`/`-` marks \
+                            taken off new_text: give new_text as plain file text)"
+                        .into();
+                } else {
+                    new = without_gutter(&new).unwrap_or(new);
+                }
             }
         }
         if old.is_empty() {
@@ -899,6 +949,39 @@ mod tests {
             .call("text_edit", r#"{"path":"game/src/lib.rs","old_text":"    1|fn a() {\n    2|    one();","new_text":"    1|fn a() {\n    2|    two();"}"#)
             .unwrap();
         assert!(done.contains("line numbers taken off"), "{done}");
+        // A numbered listing with diff marks in new_text (gpt-oss, 2026-10-12): the
+        // marks and numbers come off, and the file gets plain text.
+        let marked = tools
+            .call(
+                "text_edit",
+                r#"{"path":"game/src/lib.rs","old_text":"fn a() {\n    2|    two();","new_text":"fn a() {\n    2|    two();\n+    added();\n-    gone();"}"#,
+            )
+            .unwrap();
+        assert!(marked.contains("`+`/`-` marks"), "{marked}");
+        let now = tools
+            .call("text_read", r#"{"path":"game/src/lib.rs"}"#)
+            .unwrap();
+        assert!(
+            now.contains("|    added();") && !now.contains("+    added") && !now.contains("gone"),
+            "{now}"
+        );
+        // Put the file back for the checks below.
+        tools
+            .call(
+                "text_edit",
+                r#"{"path":"game/src/lib.rs","old_text":"    two();\n    added();","new_text":"    two();"}"#,
+            )
+            .unwrap();
+        assert_eq!(
+            without_diff_marks(
+                "    Ok(())\n  213|}\n  214|\n+fn f() {\n+    1\n+}\n-fn old() {}\n  215|fn g("
+            )
+            .as_deref(),
+            Some("    Ok(())\n}\n\nfn f() {\n    1\n}\nfn g(")
+        );
+        // A `+` in ordinary code, or an unmarked line among numbered ones, is no diff.
+        assert_eq!(without_diff_marks("let a = b\n    + c;"), None);
+        assert_eq!(without_diff_marks("   12|a\nb\n+c"), None);
         // Numbers on some lines only, as a model copies them; `1|2` in code is no gutter.
         assert_eq!(
             without_gutter("    }\n  574|    }\n  575|").as_deref(),

@@ -152,7 +152,10 @@ impl Workspace {
                 o.agent
             ));
             instructions.push_str(
-                "- To change files: find the code (fs_grep searches file contents; fs_find matches \
+                "- When the request names failing tests or a failing build, run them first (cargo \
+                 test with those test names) and read the errors: a name the tests use that exists \
+                 nowhere is one you have to add, so do not search for it again.\n\
+                 - To change files: find the code (fs_grep searches file contents; fs_find matches \
                  file names), text_read it, change it with text_edit (text_write for a new file), \
                  and put new unit tests in the file's existing tests module. Then check: \
                  text_format each Rust file you changed, and run cargo test, clippy and fmt \
