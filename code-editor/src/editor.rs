@@ -156,6 +156,11 @@ impl Buffer {
     }
 }
 
+/// The choices shown with no file open.
+const START_NEW: &str = "Make a new file";
+const START_TREE: &str = "or open a file from the left pane";
+const START_BUTTON_HEIGHT: f32 = 34.0;
+
 fn untitled_name(number: u32) -> String {
     format!("Untitled {number}")
 }
@@ -306,6 +311,8 @@ struct Layout {
     status_check: Option<Rect>,
     /// The pane without focus, when split.
     other_pane: Option<Rect>,
+    /// With no file open, the choice in the editor area: make a new file.
+    start_new: Option<Rect>,
     terminal: Option<Rect>,
 }
 
@@ -654,9 +661,8 @@ impl Editor {
             None if root.is_none() => {
                 let fallback = editor.fallback_root.clone();
                 editor.open_folder(fallback);
-                editor.ensure_page();
             }
-            None => editor.ensure_page(),
+            None => {}
         }
         editor
     }
@@ -819,7 +825,6 @@ impl Editor {
             self.activate(active);
         }
         self.repair_split();
-        self.ensure_page();
         self.touch_session();
     }
 
@@ -892,7 +897,8 @@ impl Editor {
         self.next_in_save_queue();
     }
 
-    /// A new blank page in a tab of its own.
+    /// A new blank page in a tab of its own (Make a new file, New Page): saving
+    /// it asks where.
     fn new_page(&mut self) {
         let number = (1..)
             .find(|n| {
@@ -906,14 +912,6 @@ impl Editor {
         self.next_id += 1;
         self.buffers.push(Buffer::untitled(id, number));
         self.activate(self.buffers.len() - 1);
-    }
-
-    /// With no tab open (a first launch, or the last tab closed), a blank page
-    /// to start writing in.
-    fn ensure_page(&mut self) {
-        if self.buffers.is_empty() && !self.awaiting_session && !self.quitting {
-            self.new_page();
-        }
     }
 
     // ----- results of file work -----
@@ -1156,15 +1154,11 @@ impl Editor {
                 let fallback = self.fallback_root.clone();
                 self.open_folder(fallback);
             }
-            self.ensure_page();
             return;
         };
         self.last_save_dir = session.last_save_dir.clone();
         match &self.tree {
-            Some(tree) if tree.root() != session.root => {
-                self.ensure_page();
-                return;
-            }
+            Some(tree) if tree.root() != session.root => return,
             Some(_) => {}
             None => self.open_folder(session.root.clone()),
         }
@@ -1205,7 +1199,6 @@ impl Editor {
         if let Some(index) = session.active.filter(|&index| index < self.buffers.len()) {
             self.activate(index);
         }
-        self.ensure_page();
     }
 
     fn apply_stats(&mut self, stamps: Vec<(PathBuf, Option<DiskStamp>)>) {
@@ -3273,6 +3266,15 @@ impl Editor {
             search.field.set_bounds(field);
             search.field.relayout(measure);
         }
+        if self.active.is_none() && !self.awaiting_session {
+            let width = host.measure(START_NEW, theme::UI_FONT) + 40.0;
+            layout.start_new = Some(Rect {
+                x: editor_rect.x + ((editor_rect.width - width) / 2.0).max(0.0),
+                y: editor_rect.y + 60.0,
+                width,
+                height: START_BUTTON_HEIGHT,
+            });
+        }
         self.layout = layout;
     }
 
@@ -3917,6 +3919,14 @@ impl Editor {
             .map(|(command, _)| *command);
         if let Some(command) = hit_command {
             self.run(command, host);
+            return;
+        }
+        if self
+            .layout
+            .start_new
+            .is_some_and(|rect| rect.contains(point))
+        {
+            self.new_page();
             return;
         }
         if self
@@ -4715,11 +4725,7 @@ impl Editor {
                 None => buffer.area.paint(scene),
             },
             Some(_) => self.paint_hint(scene, layout.editor, "Loading…"),
-            None => self.paint_hint(
-                scene,
-                layout.editor,
-                "Open a file from the folder on the left.",
-            ),
+            None => self.paint_start(scene, &layout),
         }
         self.paint_marks(scene);
         self.paint_hover(scene, layout.editor);
@@ -4907,6 +4913,35 @@ impl Editor {
                 HorizontalAlign::Left,
             );
         }
+    }
+
+    /// With no file open, the two ways to start: a button that makes a new
+    /// file (a blank page, saved where Jay chooses), and the tree.
+    fn paint_start(&self, scene: &mut Vec<PaintOp>, layout: &Layout) {
+        draw::fill(scene, layout.editor, theme::EDITOR_BACKGROUND);
+        let Some(button) = layout.start_new else {
+            return;
+        };
+        draw::button(
+            scene,
+            button,
+            START_NEW,
+            button.contains(self.pointer),
+            true,
+        );
+        draw::label(
+            scene,
+            START_TREE,
+            Rect {
+                x: layout.editor.x,
+                y: button.bottom() + 14.0,
+                width: layout.editor.width,
+                height: 24.0,
+            },
+            theme::TEXT_DIM,
+            theme::UI_FONT,
+            HorizontalAlign::Center,
+        );
     }
 
     fn paint_hint(&self, scene: &mut Vec<PaintOp>, rect: Rect, text: &str) {
@@ -5586,9 +5621,12 @@ mod tests {
             self.editor.active_buffer().expect("a tab is open")
         }
 
-        /// What the editor shows with no file open: one empty, unsaved page.
-        fn only_a_blank_page(&self) -> bool {
-            self.editor.buffers.len() == 1 && self.editor.buffers[0].untouched_page()
+        /// The "Make a new file" button shown with no file open.
+        fn start_new(&self) -> Option<Point> {
+            self.editor.layout.start_new.map(|rect| Point {
+                x: rect.x + 4.0,
+                y: rect.y + 4.0,
+            })
         }
 
         fn status(&self) -> String {
@@ -5646,41 +5684,43 @@ mod tests {
     }
 
     #[test]
-    fn a_first_launch_opens_a_blank_page_to_type_in() {
+    fn with_no_file_open_the_editor_offers_a_new_file_or_the_tree() {
         let dir = workspace(&[("a.rs", "fn a() {}\n")]);
         let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
-        assert!(rig.only_a_blank_page());
+        assert!(rig.editor.buffers.is_empty(), "no tab is made on its own");
+        let button = rig.start_new().expect("the Make a new file button");
+        rig.click(button);
+        assert_eq!(rig.editor.buffers.len(), 1);
         assert_eq!(rig.active().title, "Untitled 1");
-        assert_eq!(rig.editor.focus, Focus::Editor);
+        assert!(rig.start_new().is_none(), "a file is open now");
         rig.type_text("first words");
         assert_eq!(rig.active().area.text(), "first words");
         assert!(rig.active().dirty());
-        // Nothing reached the disk, and the folder is as it was.
+        // Nothing reached the disk.
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]
-    fn closing_the_last_tab_leaves_a_blank_page() {
+    fn closing_the_last_tab_returns_to_the_choices() {
         let dir = workspace(&[("a.rs", "abc")]);
         let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
         rig.editor.open_file(dir.path().join("a.rs"));
         rig.settle();
-        assert_eq!(
-            rig.editor.buffers.len(),
-            1,
-            "the file replaced the untouched page"
-        );
         rig.key(HostKey::W, cmd());
-        assert!(rig.only_a_blank_page());
-        // Closing that page brings a fresh one.
+        assert!(rig.editor.buffers.is_empty());
+        assert!(rig.start_new().is_some());
+        // A new page closes like any tab, and does not come back.
+        rig.click(rig.start_new().unwrap());
         rig.key(HostKey::W, cmd());
-        assert!(rig.only_a_blank_page());
+        assert!(rig.editor.buffers.is_empty());
+        assert!(rig.start_new().is_some());
     }
 
     #[test]
     fn opening_a_file_keeps_a_page_that_has_text() {
         let dir = workspace(&[("a.rs", "abc")]);
         let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.key(HostKey::N, cmd());
         rig.type_text("keep me");
         rig.editor.open_file(dir.path().join("a.rs"));
         rig.settle();
@@ -5693,6 +5733,7 @@ mod tests {
     fn saving_a_page_asks_where_and_it_becomes_that_file() {
         let dir = workspace(&[("notes/old.txt", "")]);
         let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.key(HostKey::N, cmd());
         rig.type_text("fn main() {}\n");
         rig.key(HostKey::S, cmd());
         let dialog = rig.editor.dialog.as_ref().expect("Save asks where");
@@ -5736,6 +5777,8 @@ mod tests {
     fn cmd_n_numbers_new_pages() {
         let dir = workspace(&[]);
         let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.key(HostKey::N, cmd());
+        assert_eq!(rig.active().title, "Untitled 1");
         rig.type_text("one");
         rig.key(HostKey::N, cmd());
         assert_eq!(rig.active().title, "Untitled 2");
@@ -5746,6 +5789,7 @@ mod tests {
     fn a_name_open_in_another_tab_is_refused() {
         let dir = workspace(&[("a.rs", "abc")]);
         let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.key(HostKey::N, cmd());
         rig.type_text("page");
         rig.editor.open_file(dir.path().join("a.rs"));
         rig.settle();
@@ -5787,6 +5831,7 @@ mod tests {
             Some(dir.path().to_path_buf()),
         );
         fs::create_dir(dir.path().join("out")).unwrap();
+        rig.key(HostKey::N, cmd());
         rig.type_text("saved");
         save_page_as(&mut rig, "out/first.txt");
         assert_eq!(
@@ -5830,6 +5875,7 @@ mod tests {
     fn quitting_with_an_unsaved_page_asks_for_its_name_then_quits() {
         let dir = workspace(&[]);
         let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.key(HostKey::N, cmd());
         rig.type_text("before quitting");
         rig.editor.run(Command::Quit, &rig.host);
         assert!(rig.editor.quit_prompt);
@@ -5926,7 +5972,7 @@ mod tests {
         assert_eq!(rig.editor.buffers.len(), 1, "a prompt, not a close");
         assert!(rig.editor.close_prompt.is_some());
         rig.click(rig.bar_button(Command::PromptSave));
-        assert!(rig.only_a_blank_page());
+        assert!(rig.editor.buffers.is_empty());
         assert_eq!(fs::read_to_string(dir.path().join("a.rs")).unwrap(), "xabc");
     }
 
@@ -5945,7 +5991,7 @@ mod tests {
         rig.editor.request_close(index);
         rig.settle();
         rig.click(rig.bar_button(Command::PromptDiscard));
-        assert!(rig.only_a_blank_page());
+        assert!(rig.editor.buffers.is_empty());
         assert_eq!(fs::read_to_string(dir.path().join("a.rs")).unwrap(), "abc");
     }
 
@@ -6022,7 +6068,7 @@ mod tests {
         let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
         rig.editor.open_file(dir.path().join("x.bin"));
         rig.settle();
-        assert!(rig.only_a_blank_page());
+        assert!(rig.editor.buffers.is_empty());
         assert_eq!(rig.status(), "x.bin was not opened: a binary file.");
     }
 
@@ -7022,7 +7068,7 @@ mod tests {
             },
             rig.now,
         );
-        assert!(rig.only_a_blank_page(), "its tab closed");
+        assert!(rig.editor.buffers.is_empty(), "its tab closed");
         assert!(rig.status().starts_with("Moved a.rs to the Trash"));
     }
 
