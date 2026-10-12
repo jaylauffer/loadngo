@@ -239,6 +239,10 @@ dependency builds. All validation GUI sessions were stopped afterward.
   tracks decode at once so one can fade under another, there is a cue/resume
   state machine with a two-second advance debounce, and tracks can play from
   `&'static [u8]`.
+- **Closes its output when quiet** (2026-10-13): after 3 s with no effect and
+  no unfinished track, the stream is dropped on a dedicated thread and
+  reopened on the next play; rodio cannot do this. Details and measurements in
+  [GAME_AUDIO_RUNTIME.md](GAME_AUDIO_RUNTIME.md#closing-the-output-when-quiet).
 - **`audio_harness`** (`host-desktop/src/bin`) drives `AudioMixer` end to end
   under either backend. The interesting code only runs when something calls
   `update(dt)` -- the fade ramp, a cue interrupting a playlist, the resume

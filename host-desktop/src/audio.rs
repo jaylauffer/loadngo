@@ -99,6 +99,21 @@ fn oldest_evictable_voice(
 #[path = "audio_mobile_mix.rs"]
 mod mobile_mix;
 
+/// Closing the output after a silent stretch, for the backends that own
+/// their output (iOS and the native desktop one; Android has its own). Also
+/// compiled for desktop tests, like `mobile_mix`.
+#[cfg(any(
+    target_os = "ios",
+    all(
+        feature = "native-desktop-audio",
+        not(target_os = "android"),
+        not(target_os = "netbsd")
+    ),
+    all(test, not(target_os = "netbsd"))
+))]
+#[path = "audio_output_idle.rs"]
+mod output_idle;
+
 #[cfg(target_os = "android")]
 mod imp {
     use super::{SfxPlayRequest, SfxSettings, SfxVoiceId};

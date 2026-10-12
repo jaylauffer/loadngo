@@ -77,8 +77,44 @@ from a dedicated thread that sleeps in 10 ms steps while its queue is full.
 | Host | Effects | Music | Against the contract |
 | --- | --- | --- | --- |
 | Android | AAudio mixer since step 2; clips read through the proactor | one `MediaPlayer` per track | effects meet 1-3 and 6 (measured below); music (4) and thermal (5) open |
-| iOS | RemoteIO mixer, clips cached | `lewton` on a dedicated thread, 10 ms sleeps for backpressure | 3 holds; first play decodes on the game thread (2); music thread sleeps (4); no thermal budget (5) |
-| Desktop | `rodio` by default; native mixer behind `native-desktop-audio` | same | not yet assessed against this contract |
+| iOS | RemoteIO mixer, clips cached; unit stops after 3 s of silence | `lewton` on a dedicated thread, 10 ms sleeps for backpressure | 3 holds, and the output closes when quiet; first play decodes on the game thread (2); music thread sleeps (4); no thermal budget (5) |
+| Desktop | `rodio` by default; native mixer behind `native-desktop-audio`, which closes its output after 3 s of silence | same | rodio keeps its output open for the life of the process; otherwise not yet assessed against this contract |
+
+### Closing the output when quiet
+
+An open output costs CPU even when it plays silence: the device calls the
+render callback every few milliseconds. `sng-mahjong` 0.1.2 on its title menu,
+nothing playing, on the Mac mini (2026-10-13): no audio 0.0% CPU; rodio 0.3%
+CPU and four extra threads, for as long as the process lives. So every owned
+backend now closes its output after `IDLE_STOP` (3 s) with nothing to play,
+and reopens it when something plays:
+
+- **Android** (since step 2): stops the AAudio stream on the proactor thread.
+- **iOS and native desktop** (2026-10-13): `host-desktop/src/audio_output_idle.rs`.
+  The game thread decides (`IdlePolicy`, from each controller's `update`);
+  one parked thread per process does the blocking open/close
+  (`OutputSwitch`), because on the Mac mini a reopen took 8-11 ms and a close
+  about 40 ms. Each controller's `frame_demand` includes the close deadline,
+  so an idle game is woken once, at the deadline, and then idles.
+- **rodio** cannot pause or reopen its stream without rebuilding every sink,
+  so it stays open. A game that idles and wants this today opts into
+  `native-desktop-audio` (`sng-mahjong` does, on macOS only).
+
+Measured with the native backend on the Mac mini: `play` after a close
+returned in 0.013 ms; the reopened tone reached the C920 microphone (1 kHz,
+15-18 dB over the noise floor, the same as a tone on the already-open
+output); `sng-mahjong` on its title menu went back to 0.0% CPU and zero idle
+wakeups. Three CoreAudio threads (`caulk.messenger` x2, `AudioSession -
+RootQueue`) and the switch thread stay parked after a close, so the process
+has 9 threads rather than 5, at no CPU. Evidence:
+`~/pudding/reviews/2026-10-13-audio-idle-close/`. iOS is type-checked and
+linted only; not yet measured on a device.
+
+A reopen can land on a device running at another rate (headphones plugged in
+while closed). Cached effects keep their pitch: each voice records the rate
+it was decoded at and the mixer steps through it at `source_rate /
+device_rate`. A track started in the few milliseconds before a reopen
+completes decodes at the old rate; that window is not handled.
 
 ## Steps
 

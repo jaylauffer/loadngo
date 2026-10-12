@@ -24,7 +24,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use coreaudio_sys::{
     kAudioFormatFlagIsFloat, kAudioFormatFlagIsPacked, kAudioFormatLinearPCM,
@@ -40,6 +40,7 @@ use lewton::inside_ogg::OggStreamReader;
 use super::mobile_mix::{
     decode_clip_file, stereo_volume, ActiveVoice, CachedClip, Voices, OUTPUT_SAMPLE_RATE,
 };
+use super::output_idle::{sooner, IdlePolicy, OutputSwitch};
 use super::{SfxPlayRequest, SfxSettings, SfxVoiceId};
 
 /// The rate the unit runs at. Chosen because 21 of the 23 shipped assets are
@@ -224,22 +225,142 @@ impl MixerState {
     fn mix_voices(&mut self, out: &mut [f32]) {
         self.voices.mix(out);
     }
+
+    /// Nothing left to play: no effect, and no music or only a finished
+    /// track. Paused music still plays (at zero volume), so it keeps the
+    /// output running.
+    fn is_quiet(&self) -> bool {
+        self.voices.list.is_empty() && self.music.as_ref().is_none_or(|music| music.finished)
+    }
 }
 
 // ------------------------------------------------------------------ output
 
 struct Output {
-    _unit: AudioUnit,
+    unit: AudioUnit,
 }
 
-// SAFETY: the unit is created once, started once, and never touched again
-// from Rust; the render callback reaches the mixer through an `Arc`, not
-// through this handle.
+// SAFETY: the unit is created and first started on the thread that first
+// asks for audio; after that only the output thread (`apply_output`) stops
+// and restarts it, one call at a time. The render callback reaches the mixer
+// through an `Arc`, not through this handle.
 unsafe impl Send for Output {}
 unsafe impl Sync for Output {}
 
 static MIXER: OnceLock<Arc<Mutex<MixerState>>> = OnceLock::new();
 static OUTPUT: OnceLock<Option<Output>> = OnceLock::new();
+/// When the unit stops after a silent stretch, and the thread that stops
+/// and restarts it (see `audio_output_idle.rs`). The first start leaves it
+/// running.
+static IDLE: Mutex<IdleState> = Mutex::new(IdleState {
+    policy: IdlePolicy::new(true),
+    switch: None,
+});
+
+struct IdleState {
+    policy: IdlePolicy,
+    /// Started the first time the unit stops.
+    switch: Option<OutputSwitch>,
+}
+
+impl IdleState {
+    fn request(&mut self, running: bool) {
+        if self.switch.is_none() {
+            let mut started = true;
+            let switch = OutputSwitch::spawn("loadngo-ios-audio-output", true, move |run| {
+                apply_output(run, &mut started);
+            });
+            match switch {
+                Ok(switch) => self.switch = Some(switch),
+                Err(error) => {
+                    // Without the thread the unit simply keeps running, as
+                    // it always did.
+                    eprintln!("[loadngo/ios] audio output thread failed to start: {error}");
+                    self.policy = IdlePolicy::new(true);
+                    return;
+                }
+            }
+        }
+        if let Some(switch) = &self.switch {
+            switch.request(running);
+        }
+    }
+}
+
+/// Runs on the output thread: stops or restarts the unit. `started` is the
+/// thread's own record of what it last did, so a repeated request is a
+/// no-op rather than a second start.
+fn apply_output(run: bool, started: &mut bool) {
+    let Some(Some(output)) = OUTPUT.get() else {
+        return;
+    };
+    if run == *started {
+        return;
+    }
+    // SAFETY: a unit `start_unit` created and initialized; only this thread
+    // starts or stops it once it exists.
+    if run {
+        if unsafe { AudioOutputUnitStart(output.unit) } == 0 {
+            *started = true;
+        } else {
+            eprintln!(
+                "[loadngo/ios] audio output failed to restart; will try again on the next sound"
+            );
+            if let Ok(mut idle) = IDLE.lock() {
+                idle.policy.open_failed();
+            }
+            // Nothing will play what was queued, and a voice that never
+            // finishes would keep its controller asking for frames.
+            if let Ok(mut state) = mixer().lock() {
+                state.voices.list.clear();
+                state.music = None;
+            }
+        }
+    } else {
+        let _ = unsafe { AudioOutputUnitStop(output.unit) };
+        *started = false;
+    }
+}
+
+/// Something is about to play: restart the unit if it stopped. Returns at
+/// once; the restart happens on the output thread.
+fn wake_output() {
+    if let Ok(mut idle) = IDLE.lock() {
+        if idle.policy.wake() {
+            idle.request(true);
+        }
+    }
+}
+
+fn output_running() -> bool {
+    matches!(OUTPUT.get(), Some(Some(_)))
+}
+
+/// Stops the unit once the mixer has been silent for `IDLE_STOP`. Called
+/// from the controllers' `update`, on the game thread; cheap.
+fn maintain_output() {
+    if !output_running() {
+        return;
+    }
+    let quiet = mixer().lock().is_ok_and(|state| state.is_quiet());
+    if let Ok(mut idle) = IDLE.lock() {
+        if idle.policy.observe(quiet, Instant::now()) {
+            idle.request(false);
+        }
+    }
+}
+
+/// When the game must call `update` again for the unit to stop, folded into
+/// every controller's `frame_demand`.
+fn output_demand() -> Option<Duration> {
+    if !output_running() {
+        return None;
+    }
+    let quiet = mixer().lock().is_ok_and(|state| state.is_quiet());
+    IDLE.lock()
+        .ok()
+        .and_then(|idle| idle.policy.demand(quiet, Instant::now()))
+}
 
 fn mixer() -> &'static Arc<Mutex<MixerState>> {
     MIXER.get_or_init(|| {
@@ -250,18 +371,24 @@ fn mixer() -> &'static Arc<Mutex<MixerState>> {
     })
 }
 
-/// Starts the audio unit the first time anything asks for audio. A failure
-/// is remembered, not retried: if RemoteIO won't start, it won't start later
-/// either, and every controller degrades to silence rather than erroring.
+/// Creates and starts the audio unit the first time anything asks for
+/// audio, and restarts it if it stopped after a silent stretch. A failure
+/// to create it is remembered, not retried: if RemoteIO won't start, it won't
+/// start later either, and every controller degrades to silence rather than
+/// erroring.
 fn ensure_output() -> bool {
-    OUTPUT
+    let exists = OUTPUT
         .get_or_init(|| {
             configure_audio_session();
             // SAFETY: every pointer below is a live local, and the callback
             // outlives the unit because the mixer is a `'static` `OnceLock`.
             unsafe { start_unit() }.ok()
         })
-        .is_some()
+        .is_some();
+    if exists {
+        wake_output();
+    }
+    exists
 }
 
 unsafe fn start_unit() -> Result<Output, ()> {
@@ -325,7 +452,7 @@ unsafe fn start_unit() -> Result<Output, ()> {
         let _ = AudioOutputUnitStop(unit);
         return Err(());
     }
-    Ok(Output { _unit: unit })
+    Ok(Output { unit })
 }
 
 /// iOS plays nothing until the process has an active audio session in a
@@ -507,7 +634,12 @@ impl MusicController {
     /// Advances the playlist when a track runs out. This is the only place
     /// that can notice: the decoder thread signals the end by dropping its
     /// sender, which the mixer sees as a finished stream.
-    pub fn update(&mut self, _dt: f32) {
+    pub fn update(&mut self, dt: f32) {
+        self.advance_playlist(dt);
+        maintain_output();
+    }
+
+    fn advance_playlist(&mut self, _dt: f32) {
         if self.paused || !self.playlist_active || self.playlist_tracks.is_empty() {
             return;
         }
@@ -559,7 +691,11 @@ impl MusicController {
     }
 
     pub fn frame_demand(&self) -> Option<Duration> {
-        (self.active_track.is_some() && self.playlist_active).then_some(Duration::from_millis(100))
+        sooner(
+            (self.active_track.is_some() && self.playlist_active)
+                .then_some(Duration::from_millis(100)),
+            output_demand(),
+        )
     }
 }
 
@@ -625,9 +761,12 @@ impl VoiceController {
     }
 
     pub fn frame_demand(&self) -> Option<Duration> {
-        self.enabled
-            .then(|| self.is_playing().then_some(Duration::from_millis(100)))
-            .flatten()
+        sooner(
+            self.enabled
+                .then(|| self.is_playing().then_some(Duration::from_millis(100)))
+                .flatten(),
+            output_demand(),
+        )
     }
 }
 
@@ -733,12 +872,12 @@ impl SfxController {
     /// Reclaims voices the mixer has finished with. The mixer drops a voice
     /// when its clip runs out, so "still in the mixer" is the liveness test.
     pub fn update(&mut self) {
-        let Ok(state) = mixer().lock() else {
-            return;
-        };
-        self.voices
-            .retain(|id, _| state.voices.contains(id.value()));
-        self.order.retain(|id| state.voices.contains(id.value()));
+        if let Ok(state) = mixer().lock() {
+            self.voices
+                .retain(|id, _| state.voices.contains(id.value()));
+            self.order.retain(|id| state.voices.contains(id.value()));
+        }
+        maintain_output();
     }
 
     pub fn set_mix_volume(&mut self, volume: f32) {
@@ -768,7 +907,10 @@ impl SfxController {
     }
 
     pub fn frame_demand(&self) -> Option<Duration> {
-        (!self.voices.is_empty()).then_some(Duration::from_millis(100))
+        sooner(
+            (!self.voices.is_empty()).then_some(Duration::from_millis(100)),
+            output_demand(),
+        )
     }
 
     fn load_clip(&mut self, path: &str) -> Result<CachedClip, String> {
