@@ -695,6 +695,10 @@ same call three times before trying no arguments.
     you can't run it" is not caught.
   - Each covers the other's misses: a reworded refusal that hands over commands, and a
     refusal with no command in it.
+  - If the model's next reply makes no call, Jay gets the answer the note held back
+    (`Turn::held`, added 2026-10-14). A reply that only answers the note is not better
+    than the answer, and the first live false alarm (below) made it worse. Only this
+    note holds an answer back; the verification and archive notes do not.
 
 ### Evidence
 

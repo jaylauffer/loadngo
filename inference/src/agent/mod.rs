@@ -349,6 +349,10 @@ struct Turn {
     scope_checked: bool,
     /// The note about an answer refusing, or handing Jay, work the tools do was sent.
     tools_checked: bool,
+    /// The answer that note held back. Jay gets it if the model's next reply makes no
+    /// call: a reply to the note that does nothing is no better than the answer, and was
+    /// worse when the note was wrong (gpt-oss, 2026-10-14, `docs/GPT_OSS.md`).
+    held: Option<Read>,
     /// Revisions each file has had in this turn.
     revisions: HashMap<String, Vec<String>>,
     /// Calls that succeeded this turn (the repeat guard).
@@ -651,12 +655,27 @@ impl<'o, T: Template> Agent<'o, T> {
             if self.tools.is_none() {
                 return self.stop("a tool was called, but this chat has no tools", read);
             }
+            // The model acted on the note: what it finds is the answer now.
+            self.turn.held = None;
             return Next::Tools(read.calls);
         }
+        let read = match self.turn.held.take() {
+            Some(first) => {
+                self.note("[check] no tool call after the note: Jay gets the first answer");
+                first
+            }
+            None => read,
+        };
+        let tools_checked = self.turn.tools_checked;
         if let Some(note) = self.before_answer(&read.answer) {
             let room = at.capacity.saturating_sub(at.position);
             match self.template.note(self.turn.ended_by, &note) {
-                Ok(tokens) if tokens.len() + REPLY_RESERVE <= room => return Next::Feed(tokens),
+                Ok(tokens) if tokens.len() + REPLY_RESERVE <= room => {
+                    if self.turn.tools_checked && !tools_checked {
+                        self.turn.held = Some(read);
+                    }
+                    return Next::Feed(tokens);
+                }
                 Ok(_) => self.note("[check] no room left for the check; the answer goes through"),
                 Err(e) => self.note(&format!("[check] cannot write the note: {e}")),
             }
@@ -892,6 +911,8 @@ impl<'o, T: Template> Agent<'o, T> {
     /// the wording), or that says it is in a sandbox or cannot build or run
     /// (`guards::denies_capability`: the wording gpt-oss used). Either check covers the
     /// other's misses. A call that failed counts as called; its error is a fine answer.
+    /// If the model's next reply makes no call, Jay gets the answer the note held back
+    /// (`Turn::held`).
     fn tools_note(&mut self, answer: &str) -> Option<String> {
         let names = self.tools.as_ref().map(Toolbox::names).unwrap_or_default();
         let called = |tool: &str| {
@@ -951,7 +972,8 @@ impl<'o, T: Template> Agent<'o, T> {
              ordinary process on Jay's Mac mini, where Rust, the Android SDK and NDK, adb, \
              Xcode and devicectl are installed. {}.{ran} If Jay asked you to build, test, \
              install or run something, do it with those tools now; if a call fails, answer \
-             with its actual error. If he asked only how to do it, give your answer again.",
+             with its actual error. If he asked only how, or asked something else, reply \
+             without a call and your answer goes to him as it was.",
             tools.join("; ")
         ))
     }

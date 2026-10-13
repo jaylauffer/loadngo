@@ -447,9 +447,9 @@ fn an_answer_saying_it_is_in_a_sandbox_is_sent_back_once_with_what_ran() {
         .borrow()
         .iter()
         .any(|n| n.contains("cannot build or run")));
-    // Once a turn: a second denial in the same turn goes through to Jay.
+    // Once a turn, and with no call after it Jay gets the first answer.
     let end = turn(&mut a, &mut b, "and run it", 100, &NO).unwrap();
-    assert_eq!(end.read.answer, "I am in a sandbox.");
+    assert_eq!(end.read.answer, "I'm in a sandbox, so I cannot run it.");
     assert_eq!(
         b.held_text()
             .matches("Check before your answer reaches Jay")
@@ -522,12 +522,13 @@ fn an_answer_handing_jay_commands_its_tools_run_is_sent_back_once_with_what_ran(
     assert_eq!(*builds.borrow(), 2);
     assert!(!b.held_text().contains("Check before your answer"));
 
-    // A cargo call does not cover a command for the phone; once a turn, the second
-    // answer goes through to Jay. (A finished turn's notes leave the context.)
+    // A cargo call does not cover a command for the phone. The note goes once a turn,
+    // and with no call after it Jay gets the first answer. (A finished turn's notes
+    // leave the context.)
     let end = turn(&mut a, &mut b, "test it and run it", 100, &NO).unwrap();
     assert_eq!(
         end.read.answer,
-        "Start it yourself with `adb shell am start -n a/b`."
+        "Tests pass. Start it yourself with `adb shell am start -n a/b`."
     );
     assert_eq!(*tests.borrow(), 2);
     assert_eq!(
@@ -542,6 +543,69 @@ fn an_answer_handing_jay_commands_its_tools_run_is_sent_back_once_with_what_ran(
     let mut b = Scripted::new(vec![answer("Run `cargo build --release`.")]);
     let end = turn(&mut a, &mut b, "build it", 100, &NO).unwrap();
     assert_eq!(end.read.answer, "Run `cargo build --release`.");
+}
+
+#[test]
+fn an_ignored_refusal_note_leaves_the_first_answer_and_a_call_after_it_carries_on() {
+    // gpt-oss, 2026-10-14: a note sent in error got a reply to the note in place of the
+    // answer to Jay's question.
+    let (cargo, _) = fake("cargo", |_, _| Ok("cargo test succeeded (exit 0)".into()));
+    let (device, builds) = fake("device", |_, _| {
+        Ok("scripts/android_device_build.sh (release, install) in sng-mahjong: succeeded".into())
+    });
+    let (edit, _) = fake("text_edit", |_, _| Ok("edited a.rs".into()));
+    let (mut a, notes) = agent(vec![cargo, device, edit], false);
+    let first = "I can explore the workspace and run `cargo test` on any crate in it.";
+    let mut b = Scripted::new(vec![
+        answer(first),
+        answer("I have no crate to run right now."),
+        answer("I can't build it: run `cargo build --release --target aarch64-linux-android`."),
+        call(r#"device {"action":"android","dir":"sng-mahjong"}"#),
+        answer("Built and installed on the phone."),
+        answer("Run `cargo test` to check it."),
+        call(r#"text_edit {"path":"a.rs"}"#),
+        answer("Fixed a.rs."),
+        answer("Fixed a.rs; I did not run the tests."),
+    ]);
+    // No call after the note: the first answer goes to Jay and into the history.
+    let end = turn(
+        &mut a,
+        &mut b,
+        "are you able to explore your own code?",
+        100,
+        &NO,
+    )
+    .unwrap();
+    assert_eq!(end.read.answer, first);
+    assert_eq!(a.history()[0].answer, first);
+    assert!(b
+        .held_text()
+        .contains("Check before your answer reaches Jay"));
+    assert!(notes
+        .0
+        .borrow()
+        .iter()
+        .any(|n| n.contains("Jay gets the first answer")));
+
+    // A call after the note: its result makes the answer.
+    let end = turn(&mut a, &mut b, "build it for the phone", 100, &NO).unwrap();
+    assert_eq!(end.read.answer, "Built and installed on the phone.");
+    assert_eq!(*builds.borrow(), 1);
+    assert_eq!(
+        notes
+            .0
+            .borrow()
+            .iter()
+            .filter(|n| n.contains("first answer"))
+            .count(),
+        1
+    );
+
+    // Only the refusal note holds an answer back: the verification note later in the
+    // same turn does not, so the reply after it goes to Jay.
+    let end = turn(&mut a, &mut b, "fix a.rs", 100, &NO).unwrap();
+    assert_eq!(end.read.answer, "Fixed a.rs; I did not run the tests.");
+    assert!(b.held_text().contains("Automatic check before your answer"));
 }
 
 #[test]
