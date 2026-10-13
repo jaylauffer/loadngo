@@ -46,7 +46,8 @@ entries it lists:
   one, a merge one per source archive.
 - `records`: the changes that made it from them, each with its kind, the paths
   it named, the actor, the time and the reason: `created`
-  (`archive_cas_add`), `changed` (`archive_cas_exclude`), `moved` (a merge:
+  (`archive_cas_add`), `changed` (`archive_cas_add --replace`,
+  `archive_cas_exclude`), `moved` (a merge:
   each parent's tree under its folder), `deleted` (`archive_cas_remove`, the
   browser's Remove; a directory is one path) and `derived` (zips unpacked into
   folders at the same path).
@@ -90,6 +91,15 @@ the logs any more. The model this follows, shared with Task sync, is
   is named (`target-android-build-std` too). Both are printed as they are
   skipped and counted in the summary. `archive_cas_add` follows the same rules
   inside a folder, but always records a folder named on its command line.
+- `archive_cas_add` refuses a path the archive already has. With `--replace`
+  (2026-10-14), a file whose bytes differ is replaced instead, all in one
+  version: a `changed` record names the replaced files and a `created` record
+  the new paths. A file with the same bytes is left alone, and nothing is
+  removed: a file the archive has and the addition lacks stays
+  (`archive_cas_remove` removes). A file where the archive has a directory, or
+  the reverse, is refused. The replaced bytes stay with the earlier version.
+  The agent board and the Task records are kept this way in
+  `pudding-20260917` (Zhoenus II).
 - A `NotFound` entry returned immediately after directory enumeration is
   recorded as `unreadable` with its failed operation and OS error. Ingestion
   continues so every accessible file is preserved, but the manifest is marked

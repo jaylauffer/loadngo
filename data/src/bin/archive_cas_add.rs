@@ -59,12 +59,24 @@ fn run() -> Result<()> {
         capture(&store, source, &at, true, &mut added, &mut bytes)?;
     }
 
-    let amended = manifest.with_entries_added(added, args.reason, args.actor, unix_now()?)?;
-    let (new_manifest, archive_root) = store.write_manifest(&amended)?;
-    let added_paths = match amended.records.first().map(|record| &record.change) {
-        Some(ArchiveChange::Created { paths }) => paths.as_slice(),
-        _ => &[],
+    let amended = if args.replace {
+        manifest.with_entries_replaced(added, args.reason, args.actor, unix_now()?)?
+    } else {
+        manifest.with_entries_added(added, args.reason, args.actor, unix_now()?)?
     };
+    let (new_manifest, archive_root) = store.write_manifest(&amended)?;
+    let named = |created: bool| -> &[String] {
+        amended
+            .records
+            .iter()
+            .find_map(|record| match (&record.change, created) {
+                (ArchiveChange::Created { paths }, true)
+                | (ArchiveChange::Changed { paths }, false) => Some(paths.as_slice()),
+                _ => None,
+            })
+            .unwrap_or(&[])
+    };
+    let (added_paths, changed_paths) = (named(true), named(false));
 
     println!("Superseded archive root: {}", previous_root.hash);
     println!("New archive manifest: {}", new_manifest.display());
@@ -75,6 +87,12 @@ fn run() -> Result<()> {
     );
     for path in added_paths {
         println!("  + {path}");
+    }
+    if !changed_paths.is_empty() {
+        println!("Entries changed: {}", changed_paths.len());
+        for path in changed_paths {
+            println!("  ~ {path}");
+        }
     }
     println!();
     println!("This manifest is not yet signed. Next steps:");
@@ -88,7 +106,7 @@ fn run() -> Result<()> {
         args.cas_root.display(),
         new_manifest.display()
     );
-    println!("  3. The old version stays as the record of what the archive was; archive_cas_purge frees nothing here, since an addition removes nothing.");
+    println!("  3. The old version stays as the record of what the archive was; a replaced file's old bytes stay with it until a purge retires that version under a signed later one.");
     Ok(())
 }
 
@@ -220,6 +238,7 @@ struct Args {
     under: Option<String>,
     reason: String,
     actor: String,
+    replace: bool,
 }
 
 impl Args {
@@ -231,6 +250,7 @@ impl Args {
         let mut under = None;
         let mut reason = None;
         let mut actor = None;
+        let mut replace = false;
         let mut args = data::cli::read_args(&usage(), true).into_iter();
         while let Some(arg) = args.next() {
             let mut value = || args.next().ok_or_else(|| anyhow!("{arg} requires a value"));
@@ -242,6 +262,7 @@ impl Args {
                 "--under" => under = Some(value()?),
                 "--reason" => reason = Some(value()?),
                 "--actor" => actor = Some(value()?),
+                "--replace" => replace = true,
                 other => return Err(anyhow!("unknown argument: {other}\n{}", usage().hint())),
             }
         }
@@ -264,6 +285,7 @@ impl Args {
             under,
             reason,
             actor,
+            replace,
         })
     }
 }
@@ -305,13 +327,17 @@ fn usage() -> Usage {
             "<who>",
             "non-empty name of the person or agent adding these files",
         ),
+        ArgDoc::switch(
+            "--replace",
+            "replace files already in the archive whose bytes differ, recorded as changed in the same version; files with the same bytes are left alone",
+        ),
     ];
     const EXAMPLES: &[&str] = &[
         "cargo run -p data --bin archive_cas_add -- --cas-root \"/Volumes/Loadngo Archive Staging/loadngo-archive-cas\" --archive zhoenus-ii-20260915 --add ~/Downloads/export.zip --under added/2026-09-27 --reason \"LinkedIn export\" --actor jay",
     ];
     const NOTES: &[&str] = &[
         "Stores the new files first, then writes a new version whose change record names what was added; the old manifest and its signature are untouched.",
-        "A path already in the archive is refused; remove it first with archive_cas_remove to replace it.",
+        "A path already in the archive is refused unless --replace is given; with it, a file whose bytes differ is replaced and recorded as changed, in the same version as the new paths (recorded as created). Nothing is removed: archive_cas_remove does that.",
         "The new manifest is unsigned; verify and sign it with archive_cas_verify and archive_cas_sign.",
     ];
     Usage {

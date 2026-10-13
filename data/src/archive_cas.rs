@@ -358,15 +358,29 @@ impl ArchiveManifest {
 
     /// The next version of this archive: `entries`, made from this one by `record`.
     fn successor(&self, entries: Vec<ArchiveEntry>, record: ArchiveRecord) -> Result<Self> {
+        self.successor_with_records(entries, vec![record])
+    }
+
+    /// The next version: `entries`, with this one as its parent and `records` (at least
+    /// one, all from the same moment) saying what changed.
+    fn successor_with_records(
+        &self,
+        entries: Vec<ArchiveEntry>,
+        records: Vec<ArchiveRecord>,
+    ) -> Result<Self> {
+        let at = records
+            .first()
+            .map(|record| record.at_unix_secs)
+            .ok_or_else(|| anyhow!("a new version needs a record of what changed"))?;
         let parent = self.digest()?;
         let mut next = Self::new(
             self.archive_id.clone(),
             self.source_label.clone(),
-            record.at_unix_secs,
+            at,
             entries,
         )?;
         next.parents = vec![parent];
-        next.records = vec![record];
+        next.records = records;
         Ok(next)
     }
 
@@ -559,12 +573,40 @@ impl ArchiveManifest {
     /// from this one by a `Created` record naming them. Missing parent directories are
     /// created as directory entries (and named too); an added directory that already
     /// exists is kept as it is. A file, symlink or other entry whose path is already
-    /// taken is refused: remove the old one first, so nothing is replaced silently. The
-    /// objects the added files point at must already be stored (see
+    /// taken is refused: remove the old one first, or use
+    /// [`Self::with_entries_replaced`], so nothing is replaced silently. The objects the
+    /// added files point at must already be stored (see
     /// [`ArchiveCasStorage::ingest_file`]).
     pub fn with_entries_added(
         &self,
         added: Vec<ArchiveEntry>,
+        reason: impl Into<String>,
+        actor: impl Into<String>,
+        created_at_unix_secs: u64,
+    ) -> Result<Self> {
+        self.amended(added, false, reason, actor, created_at_unix_secs)
+    }
+
+    /// As [`Self::with_entries_added`], but a file already in the archive is replaced by
+    /// the added one when its bytes differ, all in one version: a `Changed` record names
+    /// the replaced files and a `Created` record the new paths. A file whose bytes are
+    /// the same is left as it is and named in neither. Nothing is removed: a file the
+    /// archive has and `added` does not stays (`archive_cas_remove` removes). A file where
+    /// the archive has a directory, or the reverse, is refused.
+    pub fn with_entries_replaced(
+        &self,
+        added: Vec<ArchiveEntry>,
+        reason: impl Into<String>,
+        actor: impl Into<String>,
+        created_at_unix_secs: u64,
+    ) -> Result<Self> {
+        self.amended(added, true, reason, actor, created_at_unix_secs)
+    }
+
+    fn amended(
+        &self,
+        added: Vec<ArchiveEntry>,
+        replace: bool,
         reason: impl Into<String>,
         actor: impl Into<String>,
         created_at_unix_secs: u64,
@@ -578,6 +620,7 @@ impl ArchiveManifest {
             .map(|entry| (entry.path().to_string(), entry.clone()))
             .collect();
         let mut added_paths = Vec::new();
+        let mut changed_paths = Vec::new();
         for entry in added {
             let path = entry.path().to_string();
             validate_relative_path(&path)?;
@@ -604,8 +647,22 @@ impl ArchiveManifest {
             }
             match (entries.get(&path), &entry) {
                 (Some(ArchiveEntry::Directory { .. }), ArchiveEntry::Directory { .. }) => continue,
+                (
+                    Some(ArchiveEntry::File { object: old, .. }),
+                    ArchiveEntry::File { object: new, .. },
+                ) if replace => {
+                    if old != new {
+                        changed_paths.push(path.clone());
+                        entries.insert(path, entry);
+                    }
+                }
+                (Some(_), _) if replace => bail!(
+                    "{path:?} is a different kind of entry in the archive; remove it first \
+                     (archive_cas_remove) to replace it"
+                ),
                 (Some(_), _) => bail!(
-                    "{path:?} is already in the archive; remove it first (archive_cas_remove) to replace it"
+                    "{path:?} is already in the archive; remove it first (archive_cas_remove) \
+                     or pass --replace to replace it"
                 ),
                 (None, _) => {
                     added_paths.push(path.clone());
@@ -613,17 +670,36 @@ impl ArchiveManifest {
                 }
             }
         }
-        if added_paths.is_empty() {
+        if added_paths.is_empty() && changed_paths.is_empty() {
+            if replace {
+                bail!("nothing changed: everything given is already in the archive with the same bytes");
+            }
             bail!("everything given is already in the archive");
         }
+        let (actor, reason) = (actor.into(), reason.into());
+        changed_paths.sort();
         added_paths.sort();
-        let record = ArchiveRecord::new(
+        let mut records = Vec::new();
+        for change in [
+            ArchiveChange::Changed {
+                paths: changed_paths,
+            },
             ArchiveChange::Created { paths: added_paths },
-            actor,
-            reason,
-            created_at_unix_secs,
-        )?;
-        self.successor(entries.into_values().collect(), record)
+        ] {
+            let named = match &change {
+                ArchiveChange::Changed { paths } | ArchiveChange::Created { paths } => paths,
+                _ => unreachable!("only changed and created are made here"),
+            };
+            if !named.is_empty() {
+                records.push(ArchiveRecord::new(
+                    change,
+                    actor.clone(),
+                    reason.clone(),
+                    created_at_unix_secs,
+                )?);
+            }
+        }
+        self.successor_with_records(entries.into_values().collect(), records)
     }
 
     /// Produces a new manifest with the named entries removed, made from this one by a
@@ -2326,6 +2402,98 @@ mod tests {
         assert!(base
             .with_entries_added(vec![file("a")], " ", "jay", 8)
             .is_err());
+    }
+
+    #[test]
+    fn replacing_entries_records_changed_and_created_in_one_version() {
+        let object = |bytes: &[u8]| ArchiveObject {
+            hash: CasHash::digest(bytes),
+            size: bytes.len() as u64,
+        };
+        let file = |path: &str, bytes: &[u8]| ArchiveEntry::File {
+            path: path.into(),
+            object: object(bytes),
+            modified_at_unix_secs: Some(2),
+        };
+        let folder = ArchiveEntry::Directory {
+            path: "folder".into(),
+            modified_at_unix_secs: None,
+        };
+        let base = ArchiveManifest::new(
+            "replace-test",
+            "test",
+            1,
+            vec![
+                folder.clone(),
+                file("folder/a.txt", b"first a"),
+                file("folder/b.txt", b"same b"),
+            ],
+        )
+        .unwrap();
+        let given = vec![
+            folder.clone(),
+            file("folder/a.txt", b"second a"),
+            file("folder/b.txt", b"same b"),
+            file("folder/c.txt", b"new c"),
+        ];
+        // Without replacing, a taken path is still refused.
+        let refused = base.with_entries_added(given.clone(), "x", "jay", 3);
+        assert!(refused
+            .unwrap_err()
+            .to_string()
+            .contains("already in the archive"));
+
+        let replaced = base
+            .with_entries_replaced(given.clone(), "board", "claude-code", 4)
+            .unwrap();
+        assert_eq!(replaced.parents(), vec![base.digest().unwrap()]);
+        let changes: Vec<&ArchiveChange> = replaced.records.iter().map(|r| &r.change).collect();
+        assert_eq!(
+            changes,
+            [
+                &ArchiveChange::Changed {
+                    paths: vec!["folder/a.txt".into()]
+                },
+                &ArchiveChange::Created {
+                    paths: vec!["folder/c.txt".into()]
+                }
+            ]
+        );
+        let object_at = |manifest: &ArchiveManifest, path: &str| {
+            manifest
+                .file_objects()
+                .find(|(p, _)| *p == path)
+                .map(|(_, o)| o)
+        };
+        assert_eq!(
+            object_at(&replaced, "folder/a.txt"),
+            Some(object(b"second a"))
+        );
+        assert_eq!(
+            object_at(&replaced, "folder/b.txt"),
+            Some(object(b"same b"))
+        );
+        assert_eq!(object_at(&replaced, "folder/c.txt"), Some(object(b"new c")));
+
+        // Only a changed file: one record. Nothing different: refused.
+        let only_changed = base
+            .with_entries_replaced(vec![file("folder/a.txt", b"third a")], "x", "jay", 5)
+            .unwrap();
+        assert_eq!(only_changed.records.len(), 1);
+        assert!(matches!(
+            only_changed.records[0].change,
+            ArchiveChange::Changed { .. }
+        ));
+        let same = base.with_entries_replaced(vec![file("folder/b.txt", b"same b")], "x", "jay", 6);
+        assert!(same.unwrap_err().to_string().contains("nothing changed"));
+        // A file where the archive has a directory is refused, not replaced.
+        let kind = base.with_entries_replaced(vec![file("folder", b"not a dir")], "x", "jay", 7);
+        assert!(kind.unwrap_err().to_string().contains("different kind"));
+        // A file the archive has and the replacement does not stays.
+        let partial = base
+            .with_entries_replaced(vec![file("folder/c.txt", b"new c")], "x", "jay", 8)
+            .unwrap();
+        assert!(object_at(&partial, "folder/a.txt").is_some());
     }
 
     #[test]
