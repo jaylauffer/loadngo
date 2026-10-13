@@ -82,6 +82,29 @@ The intended execution flow is:
 7. the submitter validates the result and responds with `TaskAck`
 8. a reward, if one was agreed, is settled only after verification accepts the result
 
+## How the tools wait
+
+`task_submitter`, `task_worker`, `task_request` and `task_offer` wait for messages on
+an `Inbox` (`network/src/inbox.rs`). The inbox keeps one `recv_from` posted on each
+socket through the platform proactor (kqueue, epoll, io_uring or IOCP), so a tool waiting
+for offers, a result or an acknowledgement sleeps in the kernel until a datagram arrives
+or its deadline passes. `task-node` posts the same receives on its own proactor. Each
+socket has one 64 KiB buffer, and every receive reuses it.
+
+Until 2026-10-14 the tools tried a non-blocking receive and slept 25 ms when nothing had
+come, and `task-node` drained its sockets from a 250 ms timer. Measured with
+`/usr/bin/time -l` on the Mac mini, doing nothing:
+
+| Tool | Idle time | Context switches before | After |
+|---|---|---|---|
+| `task_worker` | 5 s | 163 | 5 |
+| `task_submitter` (waiting for offers) | 5 s | 167 | 9 |
+| `task-node` | 10 s | 53 | 11 |
+
+`task-node` still accepts `--idle-interval-millis` and ignores it, because dolores's
+launcher passes it. The change was run as a Task; its record is in
+`task-records/2026-10-14-task-tools-stop-polling/`.
+
 ## Message Semantics
 
 ### `TaskRequest`

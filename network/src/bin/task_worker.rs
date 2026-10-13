@@ -5,6 +5,7 @@ use data::{
     p2pmsg::{Message, TaskAccept, TaskOffer, TaskRequest, TaskResult, TaskStatus},
 };
 use network::{
+    inbox::Inbox,
     task_reward::{describe_settlement, shell_command, verify, WorkerRewards},
     task_runtime::{parse_multicast_v4, parse_multicast_v6, task_network_config},
     Network,
@@ -13,7 +14,6 @@ use std::{
     collections::{HashMap, HashSet},
     env,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
-    thread,
     time::{Duration, Instant},
 };
 
@@ -183,45 +183,37 @@ fn main() -> Result<()> {
     let mut network = Network::with_config(config);
     network.init()?;
 
+    let mut inbox = Inbox::new(&network)?;
     let mut responded_requests = HashSet::new();
     let mut offers = HashMap::<u64, OfferedRequest>::new();
     let listen_window = listen_window_duration(args.listen_seconds);
     loop {
         let deadline = Instant::now() + listen_window;
         let mut handled_assignment = false;
-        let mut captured = None;
-        while Instant::now() < deadline {
-            if network.recv_and_dispatch_p2p(&mut |source, _header, message| {
-                captured = Some((source, message));
-            })? {
-                match captured.take() {
-                    Some((source, Message::TaskRequest(request))) => {
-                        if let Some(offered) = handle_request(
-                            &network,
-                            &args,
-                            &mut responded_requests,
-                            source,
-                            request,
-                        )? {
-                            offers.insert(offered.request.request_id, offered);
-                        }
+        while let Some((source, _header, message)) = inbox.next_until(deadline)? {
+            match message {
+                Message::TaskRequest(request) => {
+                    if let Some(offered) =
+                        handle_request(&network, &args, &mut responded_requests, source, request)?
+                    {
+                        offers.insert(offered.request.request_id, offered);
                     }
-                    Some((source, Message::TaskAccept(accept))) => {
-                        if let Some(offered) = offers.get(&accept.request_id).cloned() {
-                            if offered.offer.offer_id == accept.offer_id
-                                && accept.worker_node_id == args.worker_node_id
-                            {
-                                execute_assignment(&network, &args, source, &offered, accept)?;
-                                offers.remove(&offered.request.request_id);
-                                handled_assignment = true;
-                                break;
-                            }
-                        }
-                    }
-                    _ => {}
                 }
-            } else {
-                thread::sleep(Duration::from_millis(25));
+                Message::TaskAccept(accept) => {
+                    if let Some(offered) = offers.get(&accept.request_id).cloned() {
+                        if offered.offer.offer_id == accept.offer_id
+                            && accept.worker_node_id == args.worker_node_id
+                        {
+                            execute_assignment(
+                                &network, &mut inbox, &args, source, &offered, accept,
+                            )?;
+                            offers.remove(&offered.request.request_id);
+                            handled_assignment = true;
+                            break;
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -330,6 +322,7 @@ fn handle_request(
 
 fn execute_assignment(
     network: &Network,
+    inbox: &mut Inbox<'_>,
     args: &Args,
     accept_source: SocketAddr,
     offered: &OfferedRequest,
@@ -391,41 +384,34 @@ fn execute_assignment(
     );
 
     let ack_deadline = Instant::now() + Duration::from_secs(args.ack_timeout_seconds);
-    while Instant::now() < ack_deadline {
-        let mut captured = None;
-        if network.recv_and_dispatch_p2p(&mut |source, _header, message| {
-            captured = Some((source, message));
-        })? {
-            if let Some((source, Message::TaskAck(ack))) = captured {
-                if ack.assignment_id == accept.assignment_id
-                    && ack.request_id == accept.request_id
-                    && ack.offer_id == accept.offer_id
-                {
-                    println!(
-                        "task_worker_ack assignment_id={} source={} accepted={} reward={} note={}",
-                        ack.assignment_id,
-                        source,
-                        ack.accepted,
-                        describe_settlement(ack.reward.as_ref()),
-                        ack.note.clone().unwrap_or_default()
-                    );
-                    if let Some(settlement) = ack.reward.as_ref() {
-                        if let Some(command) = args.rewards.verifier(&settlement.scheme) {
-                            let verified = verify(command, settlement);
-                            println!(
-                                "task_worker_reward_verified assignment_id={} real={} now={} note={}",
-                                ack.assignment_id,
-                                verified.real,
-                                describe_settlement(verified.updated.as_ref()),
-                                verified.note.unwrap_or_default()
-                            );
-                        }
+    while let Some((source, _header, message)) = inbox.next_until(ack_deadline)? {
+        if let Message::TaskAck(ack) = message {
+            if ack.assignment_id == accept.assignment_id
+                && ack.request_id == accept.request_id
+                && ack.offer_id == accept.offer_id
+            {
+                println!(
+                    "task_worker_ack assignment_id={} source={} accepted={} reward={} note={}",
+                    ack.assignment_id,
+                    source,
+                    ack.accepted,
+                    describe_settlement(ack.reward.as_ref()),
+                    ack.note.clone().unwrap_or_default()
+                );
+                if let Some(settlement) = ack.reward.as_ref() {
+                    if let Some(command) = args.rewards.verifier(&settlement.scheme) {
+                        let verified = verify(command, settlement);
+                        println!(
+                            "task_worker_reward_verified assignment_id={} real={} now={} note={}",
+                            ack.assignment_id,
+                            verified.real,
+                            describe_settlement(verified.updated.as_ref()),
+                            verified.note.unwrap_or_default()
+                        );
                     }
-                    return Ok(());
                 }
+                return Ok(());
             }
-        } else {
-            thread::sleep(Duration::from_millis(25));
         }
     }
 

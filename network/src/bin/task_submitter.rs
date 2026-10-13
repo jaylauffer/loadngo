@@ -8,6 +8,7 @@ use data::{
     },
 };
 use network::{
+    inbox::Inbox,
     task_reward::{
         choose_reward, parse_scheme_value, settle, shell_command, SchemeCommand, SettleRequest,
         DEFAULT_SETTLE_WAIT,
@@ -25,7 +26,6 @@ use std::{
     env, fs,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
-    thread,
     time::{Duration, Instant},
 };
 
@@ -281,6 +281,7 @@ fn main() -> Result<()> {
     config.multicast_target_port = args.multicast_port;
     let mut network = Network::with_config(config);
     network.init()?;
+    let mut inbox = Inbox::new(&network)?;
 
     let created_at = now_timestamp();
     let request = TaskRequest {
@@ -315,7 +316,7 @@ fn main() -> Result<()> {
         request.request_id, request.submitter_node_id, sent, request.expires_at
     );
 
-    let offers = collect_offers(&network, &request, &args)?;
+    let offers = collect_offers(&mut inbox, &request, &args)?;
     let selected = select_offer(&offers, args.select_worker_node_id.as_deref())?;
     let reward = choose_reward(&request.reward_offers, &selected.offer.reward_payees);
     let accepted_at = now_timestamp();
@@ -360,7 +361,7 @@ fn main() -> Result<()> {
             .unwrap_or_else(|| "none".to_string())
     );
 
-    let result = wait_for_result(&network, &accept, selected, &args)?;
+    let result = wait_for_result(&mut inbox, &accept, selected, &args)?;
     let verify_output = run_verify_command(&args, &accept, selected, &result)?;
     let verification = Verification::new(&args.verify_command, &verify_output);
     for (stream, text) in [
@@ -462,39 +463,36 @@ fn main() -> Result<()> {
     }
 }
 
-fn collect_offers(network: &Network, request: &TaskRequest, args: &Args) -> Result<Vec<SeenOffer>> {
+fn collect_offers(
+    inbox: &mut Inbox<'_>,
+    request: &TaskRequest,
+    args: &Args,
+) -> Result<Vec<SeenOffer>> {
     let mut seen_offers = HashMap::<u64, SeenOffer>::new();
     let deadline = Instant::now() + Duration::from_secs(args.offer_timeout_seconds);
-    while Instant::now() < deadline {
-        let mut captured = None;
-        if network.recv_and_dispatch_p2p(&mut |source, _header, message| {
-            captured = Some((source, message));
-        })? {
-            if let Some((source, Message::TaskOffer(offer))) = captured {
-                if offer.request_id == request.request_id {
-                    println!(
-                        "task_submitter_offer request_id={} offer_id={} worker_node_id={} source={} estimated_duration_secs={} max_status_interval_secs={} reward_schemes={} note={}",
-                        request.request_id,
-                        offer.offer_id,
-                        offer.worker_node_id,
-                        source,
-                        offer.estimated_duration_secs.unwrap_or_default(),
-                        offer.max_status_interval_secs.unwrap_or_default(),
-                        offer
-                            .reward_payees
-                            .iter()
-                            .map(|payee| payee.scheme.as_str())
-                            .collect::<Vec<_>>()
-                            .join(","),
-                        offer.note.clone().unwrap_or_default()
-                    );
-                    seen_offers
-                        .entry(offer.offer_id)
-                        .or_insert(SeenOffer { source, offer });
-                }
+    while let Some((source, _header, message)) = inbox.next_until(deadline)? {
+        if let Message::TaskOffer(offer) = message {
+            if offer.request_id == request.request_id {
+                println!(
+                    "task_submitter_offer request_id={} offer_id={} worker_node_id={} source={} estimated_duration_secs={} max_status_interval_secs={} reward_schemes={} note={}",
+                    request.request_id,
+                    offer.offer_id,
+                    offer.worker_node_id,
+                    source,
+                    offer.estimated_duration_secs.unwrap_or_default(),
+                    offer.max_status_interval_secs.unwrap_or_default(),
+                    offer
+                        .reward_payees
+                        .iter()
+                        .map(|payee| payee.scheme.as_str())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    offer.note.clone().unwrap_or_default()
+                );
+                seen_offers
+                    .entry(offer.offer_id)
+                    .or_insert(SeenOffer { source, offer });
             }
-        } else {
-            thread::sleep(Duration::from_millis(25));
         }
     }
 
@@ -524,60 +522,51 @@ fn select_offer<'a>(
 }
 
 fn wait_for_result(
-    network: &Network,
+    inbox: &mut Inbox<'_>,
     accept: &TaskAccept,
     selected: &SeenOffer,
     args: &Args,
 ) -> Result<TaskResult> {
     let deadline = Instant::now() + Duration::from_secs(args.result_timeout_seconds);
-    while Instant::now() < deadline {
-        let mut captured = None;
-        if network.recv_and_dispatch_p2p(&mut |source, _header, message| {
-            captured = Some((source, message));
-        })? {
-            match captured {
-                Some((source, Message::TaskStatus(status)))
-                    if status.assignment_id == accept.assignment_id
-                        && status.request_id == accept.request_id
-                        && status.offer_id == accept.offer_id =>
-                {
-                    println!(
-                        "task_submitter_status assignment_id={} worker_node_id={} source={} state={} next_check_in_by={} note={}",
-                        status.assignment_id,
-                        status.worker_node_id,
-                        source,
-                        status.state,
-                        status.next_check_in_by.unwrap_or_default(),
-                        status.note.unwrap_or_default()
-                    );
-                }
-                Some((source, Message::TaskResult(result)))
-                    if result.assignment_id == accept.assignment_id
-                        && result.request_id == accept.request_id
-                        && result.offer_id == accept.offer_id =>
-                {
-                    println!(
-                        "task_submitter_result assignment_id={} worker_node_id={} source={} artifact_hint={} note={}",
-                        result.assignment_id,
-                        result.worker_node_id,
-                        source,
-                        result.artifact_hint.clone().unwrap_or_default(),
-                        result.note.clone().unwrap_or_default()
-                    );
-                    return Ok(result);
-                }
-                Some((source, Message::TaskOffer(offer)))
-                    if offer.request_id == accept.request_id =>
-                {
-                    println!(
-                        "task_submitter_ignored_offer request_id={} offer_id={} worker_node_id={} source={}",
-                        offer.request_id, offer.offer_id, offer.worker_node_id, source
-                    );
-                }
-                _ => {}
+    while let Some((source, _header, message)) = inbox.next_until(deadline)? {
+        match message {
+            Message::TaskStatus(status)
+                if status.assignment_id == accept.assignment_id
+                    && status.request_id == accept.request_id
+                    && status.offer_id == accept.offer_id =>
+            {
+                println!(
+                    "task_submitter_status assignment_id={} worker_node_id={} source={} state={} next_check_in_by={} note={}",
+                    status.assignment_id,
+                    status.worker_node_id,
+                    source,
+                    status.state,
+                    status.next_check_in_by.unwrap_or_default(),
+                    status.note.unwrap_or_default()
+                );
             }
-        } else {
-            thread::sleep(Duration::from_millis(25));
+            Message::TaskResult(result)
+                if result.assignment_id == accept.assignment_id
+                    && result.request_id == accept.request_id
+                    && result.offer_id == accept.offer_id =>
+            {
+                println!(
+                    "task_submitter_result assignment_id={} worker_node_id={} source={} artifact_hint={} note={}",
+                    result.assignment_id,
+                    result.worker_node_id,
+                    source,
+                    result.artifact_hint.clone().unwrap_or_default(),
+                    result.note.clone().unwrap_or_default()
+                );
+                return Ok(result);
+            }
+            Message::TaskOffer(offer) if offer.request_id == accept.request_id => {
+                println!(
+                    "task_submitter_ignored_offer request_id={} offer_id={} worker_node_id={} source={}",
+                    offer.request_id, offer.offer_id, offer.worker_node_id, source
+                );
+            }
+            _ => {}
         }
     }
 

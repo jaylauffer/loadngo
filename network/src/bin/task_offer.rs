@@ -4,12 +4,11 @@ use data::{
     model_utils::now_timestamp,
     p2pmsg::{Message, RewardPayee, TaskOffer, TaskRequest},
 };
-use network::{task_reward::parse_scheme_value, Config, MulticastConfig, Network};
+use network::{inbox::Inbox, task_reward::parse_scheme_value, Config, MulticastConfig, Network};
 use std::{
     collections::HashSet,
     env,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
-    thread,
     time::{Duration, Instant},
 };
 
@@ -168,22 +167,16 @@ fn main() -> Result<()> {
     };
     let mut network = Network::with_config(config);
     network.init()?;
+    let mut inbox = Inbox::new(&network)?;
 
     let mut responded_requests = HashSet::new();
     let mut offers_sent = 0usize;
     let deadline = Instant::now() + Duration::from_secs(args.timeout_seconds);
-    while Instant::now() < deadline {
-        let mut captured = None;
-        if network.recv_and_dispatch_p2p(&mut |source, _header, message| {
-            captured = Some((source, message));
-        })? {
-            if let Some((source, Message::TaskRequest(request))) = captured {
-                if handle_request(&network, &args, &mut responded_requests, source, request)? {
-                    offers_sent += 1;
-                }
+    while let Some((source, _header, message)) = inbox.next_until(deadline)? {
+        if let Message::TaskRequest(request) = message {
+            if handle_request(&network, &args, &mut responded_requests, source, request)? {
+                offers_sent += 1;
             }
-        } else {
-            thread::sleep(Duration::from_millis(25));
         }
     }
 

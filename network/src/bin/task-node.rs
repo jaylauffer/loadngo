@@ -4,15 +4,19 @@ use data::{
     model_utils::now_timestamp,
     p2pmsg::{Message, TaskAccept, TaskAck, TaskOffer, TaskRequest, TaskResult, TaskStatus},
 };
-use loadngo_proactor::{ChannelPort, CompletionKind, Proactor, ProactorHandle};
+use loadngo_proactor::{
+    new_platform_proactor, CompletionKind, IoBuf, IoResult, PlatformPort, ProactorHandle,
+    RawFdCompat,
+};
 use network::{
+    inbox::{datagram, receive_again, DATAGRAM_BYTES},
     task_reward::{describe_settlement, shell_command, verify, WorkerRewards},
     task_runtime::{parse_multicast_v4, parse_multicast_v6, task_network_config},
     Network,
 };
 use std::{
     collections::{HashMap, HashSet},
-    env,
+    env, io,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::{Arc, Mutex},
     thread,
@@ -33,7 +37,6 @@ struct Args {
     result_note: Option<String>,
     ack_timeout_seconds: u64,
     rewards: WorkerRewards,
-    idle_interval_millis: u64,
     run_seconds: Option<u64>,
     multicast_v6: Vec<(Ipv6Addr, u32)>,
     multicast_v4: Vec<(Ipv4Addr, Ipv4Addr)>,
@@ -61,9 +64,11 @@ struct TaskNodeState {
 
 struct TaskNode {
     network: Arc<Network>,
-    handle: ProactorHandle<ChannelPort>,
+    handle: ProactorHandle<PlatformPort>,
+    /// The network's sockets as registered with the proactor; one receive stays posted
+    /// on each, so the node sleeps until a datagram arrives.
+    sockets: Vec<RawFdCompat>,
     args: Arc<Args>,
-    idle_interval: Duration,
     state: Mutex<TaskNodeState>,
 }
 
@@ -81,7 +86,6 @@ impl Args {
         let mut result_note = None;
         let mut rewards = WorkerRewards::default();
         let mut ack_timeout_seconds = 90u64;
-        let mut idle_interval_millis = 250u64;
         let mut run_seconds = None;
         let mut multicast_v6 = Vec::new();
         let mut multicast_v4 = Vec::new();
@@ -147,7 +151,9 @@ impl Args {
                         .context("invalid --ack-timeout-seconds")?;
                 }
                 "--idle-interval-millis" => {
-                    idle_interval_millis = args
+                    // Accepted for older launchers (dolores's passes it) and ignored: the
+                    // node no longer checks its sockets on a timer.
+                    let _: u64 = args
                         .next()
                         .context("missing value for --idle-interval-millis")?
                         .parse()
@@ -192,7 +198,6 @@ impl Args {
             result_note,
             ack_timeout_seconds,
             rewards,
-            idle_interval_millis,
             run_seconds,
             multicast_v6,
             multicast_v4,
@@ -203,77 +208,77 @@ impl Args {
 impl TaskNode {
     fn start(
         network: Arc<Network>,
-        handle: ProactorHandle<ChannelPort>,
+        handle: ProactorHandle<PlatformPort>,
         args: Arc<Args>,
     ) -> Result<Arc<Self>> {
-        let idle_interval = Duration::from_millis(args.idle_interval_millis.max(1));
+        let sockets = network
+            .raw_sockets()?
+            .into_iter()
+            .map(|socket| handle.register(socket))
+            .collect::<io::Result<Vec<_>>>()
+            .context("cannot register a socket with the proactor")?;
         let node = Arc::new(Self {
             network,
             handle,
+            sockets,
             args,
-            idle_interval,
             state: Mutex::new(TaskNodeState::default()),
         });
-        node.schedule(Duration::ZERO)?;
+        for index in 0..node.sockets.len() {
+            node.receive(index, IoBuf::with_capacity(DATAGRAM_BYTES))?;
+        }
         Ok(node)
     }
 
-    fn schedule(self: &Arc<Self>, delay: Duration) -> Result<()> {
+    /// Posts a receive on socket `index`; its completion handles the message and posts
+    /// the next receive with the same buffer.
+    fn receive(self: &Arc<Self>, index: usize, buf: IoBuf) -> Result<()> {
         let node = Arc::clone(self);
         self.handle
-            .defer_for(delay, CompletionKind::Net, 0, move |_| {
-                node.run();
-            })?;
+            .recv_from(self.sockets[index], buf, move |result| {
+                node.received(index, result);
+            })
+            .context("cannot post a receive")?;
         Ok(())
     }
 
-    fn run(self: Arc<Self>) {
-        let drained = match self.drain_once() {
-            Ok(drained) => drained,
-            Err(err) => {
+    fn received(self: Arc<Self>, index: usize, result: IoResult) {
+        if !self.handle.is_running() {
+            // Stopping: the receive was cancelled.
+            return;
+        }
+        let buf = match result {
+            Ok(transfer) => {
+                let (received, buf) = datagram(transfer);
+                if let Some((source, _header, message)) = received {
+                    if let Err(err) = self.handle_message(source, message) {
+                        eprintln!(
+                            "task-node_error worker_node_id={} error={err:#}",
+                            self.args.worker_node_id
+                        );
+                        let _ = self.handle.stop();
+                        return;
+                    }
+                }
+                buf
+            }
+            Err(error) if receive_again(&error) => IoBuf::with_capacity(DATAGRAM_BYTES),
+            Err(error) => {
                 eprintln!(
-                    "task-node_error worker_node_id={} error={err:#}",
+                    "task-node_receive_error worker_node_id={} error={error}",
                     self.args.worker_node_id
                 );
                 let _ = self.handle.stop();
                 return;
             }
         };
-
-        if !self.handle.is_running() {
-            return;
-        }
-
-        let delay = if drained == 0 {
-            self.idle_interval
-        } else {
-            Duration::ZERO
-        };
-        if let Err(err) = self.schedule(delay) {
+        if let Err(err) = self.receive(index, buf) {
             eprintln!(
-                "task-node_schedule_error worker_node_id={} error={err:#}",
+                "task-node_receive_error worker_node_id={} error={err:#}",
                 self.args.worker_node_id
             );
             let _ = self.handle.stop();
         }
-    }
-
-    fn drain_once(self: &Arc<Self>) -> Result<usize> {
-        let mut first_err = None;
-        let drained = self
-            .network
-            .drain_and_dispatch_p2p(&mut |source, _header, message| {
-                if first_err.is_some() {
-                    return;
-                }
-                if let Err(err) = self.handle_message(source, message) {
-                    first_err = Some(err);
-                }
-            })?;
-        if let Some(err) = first_err {
-            return Err(err);
-        }
-        Ok(drained)
     }
 
     fn handle_message(self: &Arc<Self>, source: SocketAddr, message: Message) -> Result<()> {
@@ -673,7 +678,7 @@ fn main() -> Result<()> {
     network.init()?;
     let network = Arc::new(network);
 
-    let proactor = Proactor::new(ChannelPort::new());
+    let proactor = new_platform_proactor().context("cannot start the proactor")?;
     let handle = proactor.handle();
     let stop_handle = handle.clone();
     let _node = TaskNode::start(Arc::clone(&network), handle.clone(), Arc::clone(&args))?;
@@ -690,8 +695,8 @@ fn main() -> Result<()> {
     }
 
     println!(
-        "task-node_started worker_node_id={} bind_port={} idle_interval_millis={}",
-        args.worker_node_id, args.bind_port, args.idle_interval_millis
+        "task-node_started worker_node_id={} bind_port={}",
+        args.worker_node_id, args.bind_port
     );
     proactor.run_until_stopped()?;
     Ok(())
@@ -707,7 +712,7 @@ fn print_usage() {
          [--bind-port <port>] [--capability <tag>] [--artifact-hint <path>] \
          [--estimated-duration-seconds <n>] [--max-status-interval-seconds <n>] \
          [--note <text>] [--result-note <text>] [--ack-timeout-seconds <n>] \
-         [--idle-interval-millis <n>] [--run-seconds <n>] \
+         [--run-seconds <n>] [--idle-interval-millis <n> (ignored)] \
          [--reward-payee <scheme>=<payee>]... [--reward-verify <scheme>=<command>]..."
     );
 }

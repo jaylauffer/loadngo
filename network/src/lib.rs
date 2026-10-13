@@ -21,6 +21,7 @@
 //! ```
 
 mod core;
+pub mod inbox;
 pub mod interfaces;
 pub mod model_service;
 pub mod p2p;
@@ -198,6 +199,23 @@ impl Network {
             .iter()
             .map(|entry| entry.socket.local_addr().map_err(anyhow::Error::from))
             .collect()
+    }
+
+    /// The bound sockets' OS handles, for a proactor to receive on ([`inbox::Inbox`]).
+    pub fn raw_sockets(&self) -> Result<Vec<loadngo_proactor::RawFdCompat>> {
+        #[cfg(windows)]
+        use std::os::windows::io::AsRawSocket;
+        Ok(self
+            .bound_sockets()?
+            .iter()
+            .map(|entry| {
+                #[cfg(unix)]
+                let raw = entry.socket.as_raw_fd();
+                #[cfg(windows)]
+                let raw = entry.socket.as_raw_socket();
+                raw
+            })
+            .collect())
     }
 
     #[cfg(unix)]
