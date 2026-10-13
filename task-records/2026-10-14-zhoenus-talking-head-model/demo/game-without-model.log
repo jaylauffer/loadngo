@@ -1,0 +1,1643 @@
+﻿Log file open, 10/14/26 05:42:17
+LogInit: Running DelayedAutoRegister Phase StartOfEnginePreInit
+LogCore: UTS: Unreal Trace Server launched successfully
+LogTrace: Initializing trace...
+LogCore: Display: Requested channels: 'cpu,gpu,frame,log,bookmark,screenshot,region'
+LogCore: No trace connection. Tracing to in-memory cache.
+LogTrace: Finished trace initialization.
+LogCsvProfiler: Display: Metadata set : platform="Mac"
+LogCsvProfiler: Display: Metadata set : config="Development"
+LogCsvProfiler: Display: Metadata set : buildversion="UE5-CL-0"
+LogCsvProfiler: Display: Metadata set : engineversion="5.8.3-0+UE5"
+LogTrace: Display: Control listening on port 1985
+LogCsvProfiler: Display: Metadata set : enginereleaseversion="5.8.3"
+LogCsvProfiler: Display: Metadata set : os="macOS 26.6.2 25G83"
+LogCsvProfiler: Display: Metadata set : cpu="Apple|Apple M4 Pro"
+LogCsvProfiler: Display: Metadata set : pgoenabled="0"
+LogCsvProfiler: Display: Metadata set : pgoprofilingenabled="0"
+LogCsvProfiler: Display: Metadata set : ltoenabled="0"
+LogCsvProfiler: Display: Metadata set : asan="0"
+LogCsvProfiler: Display: Metadata set : mergedmodules="0"
+LogCsvProfiler: Display: Metadata set : compacttset="0"
+LogCsvProfiler: Display: Metadata set : commandline="" /Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Zhoenus.uproject /Game/Map/Level-1 -game -nullrhi -nosound -unattended -nosplash -NoLoadingScreen -ABSLOG=/Users/jay/pudding/loadngo/task-records/2026-10-14-zhoenus-talking-head-model/demo/game-without-model.log -ZhoenusAsk="How do I save the flyers?" -ZhoenusModelSocket=/var/folders/x0/vq6dbxcs3wn5cf9lhgr03g180000gn/T/tmp.bxdhK8jUUE/node/gpt-oss.sock""
+LogCsvProfiler: Display: Metadata set : loginid="5b9c354fe44d518b16f07dafff9b563e"
+LogCsvProfiler: Display: Metadata set : llm="0"
+LogModuleManager: InternalLoadLibrary: 'StorageServerClient' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-StorageServerClient.dylib')
+LogModuleManager: InternalLoadLibrary: 'CookOnTheFly' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-CookOnTheFly.dylib')
+LogModuleManager: InternalLoadLibrary: 'StreamingFile' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-StreamingFile.dylib')
+LogModuleManager: InternalLoadLibrary: 'NetworkFile' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NetworkFile.dylib')
+LogModuleManager: InternalLoadLibrary: 'PakFile' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PakFile.dylib')
+LogModuleManager: InternalLoadLibrary: 'RSA' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-RSA.dylib')
+LogModuleManager: InternalLoadLibrary: 'SandboxFile' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-SandboxFile.dylib')
+LogCsvProfiler: Display: Metadata set : zenstreaming="0"
+LogInit: Running DelayedAutoRegister Phase FileSystemReady
+LogModuleManager: InternalLoadLibrary: 'DesktopPlatform' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-DesktopPlatform.dylib')
+Launching UnrealBuildTool... [/Volumes/Micro-Data-Transfer/Zhoenus/unreal/Engine/Build/BatchFiles/Mac/Build.sh -Mode=ValidatePlatforms -OutputSDKs  -AllPlatforms  -project="/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Zhoenus.uproject" -log="/Users/jay/Library/Logs/Zhoenus/AutoSDKInfo.txt" -verbose -timestamps]
+LogInit: Running DelayedAutoRegister Phase TaskGraphSystemReady
+LogStats: Stats thread started at 0.137996
+LogInit: Running DelayedAutoRegister Phase StatSystemReady
+LogModuleManager: InternalLoadLibrary: 'CoreUObject' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-CoreUObject.dylib')
+LogCsvProfiler: Display: Metadata set : systemresolution.resx="1280"
+LogCsvProfiler: Display: Metadata set : systemresolution.resy="720"
+LogModuleManager: InternalLoadLibrary: 'Engine' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Engine.dylib')
+LogModuleManager: InternalLoadLibrary: 'UniversalObjectLocator' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-UniversalObjectLocator.dylib')
+LogModuleManager: InternalLoadLibrary: 'Renderer' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Renderer.dylib')
+LogModuleManager: InternalLoadLibrary: 'AnimGraphRuntime' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AnimGraphRuntime.dylib')
+LogModuleManager: InternalLoadLibrary: 'AudioMixerCoreAudio' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AudioMixerCoreAudio.dylib')
+LogModuleManager: InternalLoadLibrary: 'AudioMixerCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AudioMixerCore.dylib')
+LogModuleManager: InternalLoadLibrary: 'SignalProcessing' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-SignalProcessing.dylib')
+LogModuleManager: InternalLoadLibrary: 'SlateRHIRenderer' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-SlateRHIRenderer.dylib')
+LogModuleManager: InternalLoadLibrary: 'Landscape' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Landscape.dylib')
+LogModuleManager: InternalLoadLibrary: 'RHICore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-RHICore.dylib')
+LogModuleManager: InternalLoadLibrary: 'RenderCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-RenderCore.dylib')
+LogModuleManager: InternalLoadLibrary: 'TextureCompressor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TextureCompressor.dylib')
+LogModuleManager: InternalLoadLibrary: 'OpenColorIOWrapper' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OpenColorIOWrapper.dylib')
+LogModuleManager: InternalLoadLibrary: 'Virtualization' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Virtualization.dylib')
+LogModuleManager: InternalLoadLibrary: 'MessageLog' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MessageLog.dylib')
+LogModuleManager: InternalLoadLibrary: 'AudioEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AudioEditor.dylib')
+LogModuleManager: InternalLoadLibrary: 'PropertyEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PropertyEditor.dylib')
+LogModuleManager: InternalLoadLibrary: 'AudioExtensions' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AudioExtensions.dylib')
+LogModuleManager: InternalLoadLibrary: 'AnimationModifiers' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AnimationModifiers.dylib')
+LogICUInternationalization: ICU TimeZone Detection - Raw Offset: +7:00, Platform Override: ''
+LogInit: Session CrashGUID >====================================================
+         Session CrashGUID >   UECC-Mac-0624E4747F46EE4FF50C94A20B0E3424
+         Session CrashGUID >====================================================
+LogConfig: No local boot hotfix file found at: [../../Saved/PersistentDownloadDir/HotfixForNextBoot.txt]
+LogInit: Running DelayedAutoRegister Phase IniSystemReady
+LogAudio: Display: Audio Device Manager not initializing due to all audio being disabled. If this is not intentional, please check command line arguments for "-nosound".
+LogModuleManager: InternalLoadLibrary: 'TelemetryUtils' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TelemetryUtils.dylib')
+LogPluginManager: Mounting Engine plugin EnhancedInput
+LogPluginManager: Mounting Engine plugin Dataflow
+LogPluginManager: Mounting Engine plugin ChaosCloth
+LogPluginManager: Mounting Engine plugin Mutable
+LogPluginManager: Mounting Engine plugin CmdLinkServer
+LogPluginManager: Mounting Engine plugin PCG
+LogPluginManager: Mounting Engine plugin AudioInsights
+LogPluginManager: Mounting Engine plugin MeshPainting
+LogPluginManager: Mounting Engine plugin TraceUtilities
+LogPluginManager: Mounting Engine plugin IoStoreInsights
+LogPluginManager: Mounting Engine plugin AudioInsightsRuntime
+LogPluginManager: Mounting Engine plugin Bridge
+LogPluginManager: Mounting Engine plugin Fab
+LogPluginManager: Mounting Engine plugin ChaosClothAsset
+LogPluginManager: Mounting Engine plugin XGEController
+LogPluginManager: Mounting Engine plugin UbaController
+LogPluginManager: Mounting Engine plugin RenderGraphInsights
+LogPluginManager: Mounting Engine plugin BaseMaterial
+LogPluginManager: Mounting Engine plugin MassInsights
+LogPluginManager: Mounting Engine plugin AudioModulationInsights
+LogPluginManager: Mounting Engine plugin ChaosVD
+LogPluginManager: Mounting Engine plugin WorldMetrics
+LogPluginManager: Mounting Engine plugin ChaosInsights
+LogPluginManager: Mounting Engine plugin RenderTraceInsights
+LogPluginManager: Mounting Engine plugin DerivedDataBuildController
+LogPluginManager: Mounting Engine plugin AnimationSharing
+LogPluginManager: Mounting Engine plugin GPUReshape
+LogPluginManager: Mounting Engine plugin PropertyAccessNode
+LogPluginManager: Mounting Engine plugin ProjectLauncher
+LogPluginManager: Mounting Engine plugin RenderDocPlugin
+LogPluginManager: Mounting Engine plugin UObjectPlugin
+LogPluginManager: Mounting Engine plugin VisualStudioCodeSourceCodeAccess
+LogPluginManager: Mounting Engine plugin VisualStudioSourceCodeAccess
+LogPluginManager: Mounting Engine plugin PixWinPlugin
+LogPluginManager: Mounting Engine plugin N10XSourceCodeAccess
+LogPluginManager: Mounting Engine plugin NullSourceCodeAccess
+LogPluginManager: Mounting Engine plugin XCodeSourceCodeAccess
+LogPluginManager: Mounting Engine plugin NamingTokens
+LogPluginManager: Mounting Engine plugin DumpGPUServices
+LogPluginManager: Mounting Engine plugin PluginUtils
+LogPluginManager: Mounting Engine plugin GLTFExporter
+LogPluginManager: Mounting Engine plugin VariantManager
+LogPluginManager: Mounting Engine plugin DatasmithContent
+LogPluginManager: Mounting Engine plugin VariantManagerContent
+LogPluginManager: Mounting Engine plugin Takes
+LogPluginManager: Mounting Engine plugin AutomatedPerfTestTools
+LogPluginManager: Mounting Engine plugin NiagaraSimCaching
+LogPluginManager: Mounting Engine plugin Niagara
+LogConfig: Display: Loading VulkanPC ini files took 0.01 seconds
+LogPluginManager: Mounting Engine plugin NiagaraInsights
+LogPluginManager: Mounting Engine plugin NiagaraPreviewContent
+LogPluginManager: Mounting Engine plugin Cascade
+LogPluginManager: Mounting Engine plugin NiagaraFluids
+LogPluginManager: Mounting Engine plugin NNERuntimeORT
+LogPluginManager: Mounting Engine plugin NNEDenoiser
+LogPluginManager: Mounting Engine plugin Interchange
+LogPluginManager: Mounting Engine plugin InterchangeAssets
+LogPluginManager: Mounting Engine plugin InterchangeEditor
+LogPluginManager: Mounting Engine plugin OodleNetwork
+LogPluginManager: Mounting Engine plugin MetaHumanSDK
+LogPluginManager: Mounting Engine plugin LauncherChunkInstaller
+LogPluginManager: Mounting Engine plugin TemplateSequence
+LogPluginManager: Mounting Engine plugin ActorSequence
+LogPluginManager: Mounting Engine plugin MovieRenderPipeline
+LogPluginManager: Mounting Engine plugin SequencerScripting
+LogPluginManager: Mounting Engine plugin LevelSequenceEditor
+LogPluginManager: Mounting Engine plugin SequenceValidator
+LogPluginManager: Mounting Engine plugin AlembicImporter
+LogPluginManager: Mounting Engine plugin InterchangeTests
+LogPluginManager: Mounting Engine plugin OnlineSubsystem
+LogPluginManager: Mounting Engine plugin OnlineBase
+LogPluginManager: Mounting Engine plugin EOSShared
+LogPluginManager: Mounting Engine plugin OnlineServices
+LogPluginManager: Mounting Engine plugin OnlineSubsystemNull
+LogPluginManager: Mounting Engine plugin OnlineSubsystemUtils
+LogPluginManager: Mounting Engine plugin MediaPlate
+LogPluginManager: Mounting Engine plugin OpusDecoderElectra
+LogPluginManager: Mounting Engine plugin ElectraCDM
+LogPluginManager: Mounting Engine plugin ElectraUtil
+LogPluginManager: Mounting Engine plugin AvidDNxHDDecoderElectra
+LogPluginManager: Mounting Engine plugin D3D12VideoDecodersElectra
+LogPluginManager: Mounting Engine plugin AndroidMedia
+LogPluginManager: Mounting Engine plugin MediaProfile
+LogPluginManager: Mounting Engine plugin MediaCompositing
+LogPluginManager: Mounting Engine plugin AppleProResMedia
+LogPluginManager: Mounting Engine plugin MediaPlayerEditor
+LogPluginManager: Mounting Engine plugin ElectraPlayer
+LogPluginManager: Mounting Engine plugin MP4Utilities
+LogPluginManager: Mounting Engine plugin MediaFrameworkUtilities
+LogPluginManager: Mounting Engine plugin AppleProResDecoderElectra
+LogPluginManager: Mounting Engine plugin ElectraCodecs
+LogPluginManager: Mounting Engine plugin ElectraSubtitles
+LogPluginManager: Mounting Engine plugin ImgMedia
+LogPluginManager: Mounting Engine plugin MediaIOFramework
+LogConfig: Display: Loading LinuxArm64 ini files took 0.01 seconds
+LogPluginManager: Mounting Engine plugin WmfMedia
+LogPluginManager: Mounting Engine plugin TmvMedia
+LogPluginManager: Mounting Engine plugin AvfMedia
+LogPluginManager: Mounting Engine plugin WebMMedia
+LogPluginManager: Mounting Engine plugin LocalizableMessage
+LogPluginManager: Mounting Engine plugin EditorTelemetry
+LogPluginManager: Mounting Engine plugin AutomationUtils
+LogPluginManager: Mounting Engine plugin RuntimeTelemetry
+LogPluginManager: Mounting Engine plugin EditorTRSGizmo
+LogPluginManager: Mounting Engine plugin BackChannel
+LogPluginManager: Mounting Engine plugin LevelSequenceNavigatorBridge
+LogPluginManager: Mounting Engine plugin Water
+LogPluginManager: Mounting Engine plugin SkeletalReduction
+LogPluginManager: Mounting Engine plugin Buoyancy
+LogPluginManager: Mounting Engine plugin LowLevelNetTrace
+LogPluginManager: Mounting Engine plugin PythonScriptPlugin
+LogPluginManager: Mounting Engine plugin ChaosNiagara
+LogPluginManager: Mounting Engine plugin SequenceNavigator
+LogPluginManager: Mounting Engine plugin ChaosUserDataPT
+LogPluginManager: Mounting Engine plugin ToolPresets
+LogPluginManager: Mounting Engine plugin Landmass
+LogPluginManager: Mounting Engine plugin GeometryFlow
+LogPluginManager: Mounting Engine plugin FieldSystemPlugin
+LogPluginManager: Mounting Engine plugin EditorDataStorageFeatures
+LogPluginManager: Mounting Engine plugin ChaosSolverPlugin
+LogPluginManager: Mounting Engine plugin MutableAssetUserData
+LogPluginManager: Mounting Engine plugin PythonFoundationPackages
+LogPluginManager: Mounting Engine plugin AdvancedRenamer
+LogPluginManager: Mounting Engine plugin ChaosEditor
+LogPluginManager: Mounting Engine plugin HttpInsights
+LogPluginManager: Mounting Engine plugin ControlRigPhysics
+LogPluginManager: Mounting Engine plugin GizmoFramework
+LogPluginManager: Mounting Engine plugin MeshModelingToolsetExp
+LogPluginManager: Mounting Engine plugin EditorPerformance
+LogPluginManager: Mounting Engine plugin ChaosCaching
+LogPluginManager: Mounting Engine plugin PlatformCrypto
+LogPluginManager: Mounting Engine plugin EditorDataStorage
+LogPluginManager: Mounting Engine plugin FullBodyIK
+LogPluginManager: Mounting Engine plugin CharacterAI
+LogPluginManager: Mounting Engine plugin NFORDenoise
+LogPluginManager: Mounting Engine plugin GlobalConfigurationData
+LogPluginManager: Mounting Engine plugin PlanarCut
+LogPluginManager: Mounting Engine plugin RawInput
+LogPluginManager: Display: The Plugin RawInput has been marked deprecated for 5.8 and will be removed soon. Please update your dependencies.
+LogPluginManager: Mounting Engine plugin GeometryDataflow
+LogPluginManager: Mounting Engine plugin GeometryCollectionPlugin
+LogPluginManager: Mounting Engine plugin Fracture
+LogPluginManager: Mounting Engine plugin EaseCurveTool
+LogPluginManager: Mounting Engine plugin BlendSpaceMotionAnalysis
+LogPluginManager: Mounting Engine plugin GameplayInsights
+LogPluginManager: Mounting Engine plugin ControlRigSpline
+LogPluginManager: Mounting Engine plugin TweeningUtils
+LogPluginManager: Mounting Engine plugin ACLPlugin
+LogPluginManager: Mounting Engine plugin SkeletalMeshModelingTools
+LogPluginManager: Mounting Engine plugin ControlRig
+LogPluginManager: Mounting Engine plugin AnimatorKit
+LogPluginManager: Mounting Engine plugin DeformerGraph
+LogPluginManager: Mounting Engine plugin IKRig
+LogPluginManager: Mounting Engine plugin RigLogic
+LogPluginManager: Mounting Engine plugin AnimationModifierLibrary
+LogPluginManager: Mounting Engine plugin ControlRigModules
+LogPluginManager: Mounting Engine plugin AnimationData
+LogPluginManager: Mounting Engine plugin PhysicsControl
+LogPluginManager: Mounting Engine plugin CameraShakePreviewer
+LogPluginManager: Mounting Engine plugin EngineCameras
+LogPluginManager: Mounting Engine plugin GameplayCameras
+LogPluginManager: Mounting Engine plugin CableComponent
+LogPluginManager: Mounting Engine plugin SoundFields
+LogConfig: Display: Loading IOS ini files took 0.01 seconds
+LogPluginManager: Mounting Engine plugin InputDebugging
+LogPluginManager: Mounting Engine plugin WebMMoviePlayer
+LogPluginManager: Mounting Engine plugin ProceduralMeshComponent
+LogPluginManager: Mounting Engine plugin ResonanceAudio
+LogPluginManager: Mounting Engine plugin ModelViewViewModel
+LogPluginManager: Mounting Engine plugin AssetTags
+LogPluginManager: Mounting Engine plugin AndroidFileServer
+LogPluginManager: Mounting Engine plugin RigVM
+LogPluginManager: Mounting Engine plugin WindowsDeviceProfileSelector
+LogPluginManager: Mounting Engine plugin AudioWidgets
+LogPluginManager: Mounting Engine plugin AndroidMoviePlayer
+LogPluginManager: Mounting Engine plugin AndroidPermission
+LogPluginManager: Mounting Engine plugin ActorLayerUtilities
+LogPluginManager: Mounting Engine plugin PropertyBindingUtils
+LogPluginManager: Mounting Engine plugin CustomMeshComponent
+LogPluginManager: Mounting Engine plugin Synthesis
+LogPluginManager: Mounting Engine plugin PropertyAccessEditor
+LogPluginManager: Mounting Engine plugin GooglePAD
+LogPluginManager: Mounting Engine plugin MobilePatchingUtils
+LogPluginManager: Mounting Engine plugin OpenCV
+LogPluginManager: Mounting Engine plugin WindowsMoviePlayer
+LogPluginManager: Mounting Engine plugin HairStrands
+LogPluginManager: Mounting Engine plugin ComputeFramework
+LogPluginManager: Mounting Engine plugin GeometryScripting
+LogPluginManager: Mounting Engine plugin CommonUI
+LogPluginManager: Mounting Engine plugin MsQuic
+LogPluginManager: Mounting Engine plugin AudioCapture
+LogPluginManager: Mounting Engine plugin SignificanceManager
+LogPluginManager: Mounting Engine plugin MeshModelingToolset
+LogPluginManager: Mounting Engine plugin ChunkDownloader
+LogPluginManager: Mounting Engine plugin ExampleDeviceProfileSelector
+LogPluginManager: Mounting Engine plugin WaveTable
+LogPluginManager: Mounting Engine plugin AudioSynesthesia
+LogPluginManager: Mounting Engine plugin AppleImageUtils
+LogPluginManager: Mounting Engine plugin IOSDeviceProfileSelector
+LogPluginManager: Mounting Engine plugin StateTree
+LogPluginManager: Mounting Engine plugin GeometryCache
+LogPluginManager: Mounting Engine plugin SkeletalMerging
+LogPluginManager: Mounting Engine plugin AndroidDeviceProfileSelector
+LogPluginManager: Mounting Engine plugin GeometryProcessing
+LogPluginManager: Mounting Engine plugin LinuxDeviceProfileSelector
+LogPluginManager: Mounting Engine plugin LocationServicesBPLibrary
+LogPluginManager: Mounting Engine plugin ArchVisCharacter
+LogPluginManager: Mounting Engine plugin Metasound
+LogPluginManager: Mounting Engine plugin GoogleCloudMessaging
+LogConfig: Display: Loading Mac ini files took 0.01 seconds
+LogPluginManager: Mounting Engine plugin CompositeCore
+LogPluginManager: Mounting Engine plugin OpenColorIO
+LogPluginManager: Mounting Engine plugin OpenCVLensDistortion
+LogPluginManager: Mounting Engine plugin EnvironmentQueryEditor
+LogPluginManager: Mounting Engine plugin AISupport
+LogPluginManager: Mounting Engine plugin UdpMessaging
+LogPluginManager: Mounting Engine plugin TcpMessaging
+LogPluginManager: Mounting Engine plugin FacialAnimation
+LogPluginManager: Mounting Engine plugin MeshLODToolset
+LogPluginManager: Mounting Engine plugin StaticMeshEditorModeling
+LogPluginManager: Mounting Engine plugin EditorDebugTools
+LogPluginManager: Mounting Engine plugin MaterialAnalyzer
+LogPluginManager: Mounting Engine plugin MobileLauncherProfileWizard
+LogPluginManager: Mounting Engine plugin BlueprintMaterialTextureNodes
+LogPluginManager: Mounting Engine plugin SequencerAnimTools
+LogPluginManager: Mounting Engine plugin AssetManagerEditor
+LogPluginManager: Mounting Engine plugin BlueprintHeaderView
+LogPluginManager: Mounting Engine plugin GameplayTagsEditor
+LogPluginManager: Mounting Engine plugin ConsoleVariables
+LogPluginManager: Mounting Engine plugin CurveEditorTools
+LogPluginManager: Mounting Engine plugin EditorScriptingUtilities
+LogPluginManager: Mounting Engine plugin ChangelistReview
+LogPluginManager: Mounting Engine plugin UVEditor
+LogPluginManager: Mounting Engine plugin CryptoKeys
+LogPluginManager: Mounting Engine plugin StylusInput
+LogPluginManager: Mounting Engine plugin MaterialAssetWizard
+LogPluginManager: Mounting Engine plugin ProxyLODPlugin
+LogPluginManager: Mounting Engine plugin MacGraphicsSwitching
+LogPluginManager: Mounting Engine plugin WorldPartitionHLODUtilities
+LogPluginManager: Mounting Engine plugin ModelingToolsEditorMode
+LogPluginManager: Mounting Engine plugin GeometryMode
+LogPluginManager: Mounting Engine plugin PluginBrowser
+LogPluginManager: Mounting Engine plugin SpeedTreeImporter
+LogPluginManager: Mounting Engine plugin ColorGrading
+LogPluginManager: Mounting Engine plugin UMGWidgetPreview
+LogPluginManager: Mounting Engine plugin EngineAssetDefinitions
+LogPluginManager: Mounting Engine plugin DataValidation
+LogPluginManager: Mounting Engine plugin ContentBrowserFileDataSource
+LogPluginManager: Mounting Engine plugin ContentBrowserAssetDataSource
+LogPluginManager: Mounting Engine plugin FileSandbox
+LogPluginManager: Mounting Engine plugin ContentBrowserClassDataSource
+LogPluginManager: Mounting Engine plugin Scribble
+LogPluginManager: Mounting Engine plugin InterchangeAxfAssets
+LogPluginManager: Mounting Engine plugin ConcertMain
+LogPluginManager: Mounting Engine plugin OnlineSubsystemGooglePlay
+LogPluginManager: Mounting Engine plugin BaseCharacterFXEditor
+LogPluginManager: Mounting Engine plugin XInputDevice
+LogPluginManager: Mounting Engine plugin OnlineSubsystemIOS
+LogPluginManager: Mounting Engine plugin SQLiteCore
+LogPluginManager: Mounting Engine plugin PortableObjectFileDataSource
+LogPluginManager: Mounting Engine plugin ObjectMixer
+LogPluginManager: Mounting Engine plugin LightMixer
+LogPluginManager: Mounting Engine plugin ConcertSyncCore
+LogPluginManager: Mounting Engine plugin ConcertSyncClient
+LogPluginManager: Mounting Engine plugin ConcertSharedSlate
+LogConfig: Display: Loading Unix ini files took 0.01 seconds
+LogConfig: Display: Loading TVOS ini files took 0.01 seconds
+LogConfig: Display: Loading Linux ini files took 0.01 seconds
+LogConfig: Display: Loading Android ini files took 0.01 seconds
+LogModuleManager: InternalLoadLibrary: 'GPUTextureTransfer' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GPUTextureTransfer.dylib')
+LogModuleManager: InternalLoadLibrary: 'PythonScriptPluginPreload' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PythonScriptPluginPreload.dylib')
+LogConfig: Display: Loading Windows ini files took 0.01 seconds
+LogConfig: Display: Loading VisionOS ini files took 0.01 seconds
+LogModuleManager: InternalLoadLibrary: 'PlatformCrypto' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PlatformCrypto.dylib')
+LogModuleManager: InternalLoadLibrary: 'PlatformCryptoTypes' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PlatformCryptoTypes.dylib')
+LogModuleManager: InternalLoadLibrary: 'PlatformCryptoContext' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PlatformCryptoContext.dylib')
+LogInit: Running DelayedAutoRegister Phase EarliestPossiblePluginsLoaded
+LogModuleManager: InternalLoadLibrary: 'ChaosCloth' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ChaosCloth.dylib')
+LogModuleManager: InternalLoadLibrary: 'PCGCompute' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PCGCompute.dylib')
+LogModuleManager: InternalLoadLibrary: 'GLTFExporter' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GLTFExporter.dylib')
+LogModuleManager: InternalLoadLibrary: 'DatasmithContent' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-DatasmithContent.dylib')
+LogModuleManager: InternalLoadLibrary: 'VariantManagerContent' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-VariantManagerContent.dylib')
+LogModuleManager: InternalLoadLibrary: 'NiagaraShader' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NiagaraShader.dylib')
+LogModuleManager: InternalLoadLibrary: 'NiagaraVertexFactories' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NiagaraVertexFactories.dylib')
+LogModuleManager: InternalLoadLibrary: 'NNEDenoiserShaders' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NNEDenoiserShaders.dylib')
+LogModuleManager: InternalLoadLibrary: 'InterchangeAssets' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-InterchangeAssets.dylib')
+LogModuleManager: InternalLoadLibrary: 'LauncherChunkInstaller' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-LauncherChunkInstaller.dylib')
+LogModuleManager: InternalLoadLibrary: 'OnlineSubsystem' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OnlineSubsystem.dylib')
+LogModuleManager: InternalLoadLibrary: 'HTTP' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-HTTP.dylib')
+LogInit: Creating http thread with maximum 256 concurrent requests
+LogModuleManager: InternalLoadLibrary: 'OnlineSubsystemNULL' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OnlineSubsystemNull.dylib')
+LogModuleManager: InternalLoadLibrary: 'Sockets' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Sockets.dylib')
+LogOnline: OSS: Created online subsystem instance for: NULL
+LogOnline: OSS: TryLoadSubsystemAndSetDefault: Loaded subsystem for type [NULL]
+LogModuleManager: InternalLoadLibrary: 'EOSShared' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-EOSShared.dylib')
+LogEOSShared: Loaded "libEOSSDK-Mac-Shipping.dylib"
+LogEOSShared: Initialize Initializing EOSSDK Version:1.19.1.2-53289219
+LogModuleManager: InternalLoadLibrary: 'OnlineServicesInterface' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OnlineServicesInterface.dylib')
+LogModuleManager: InternalLoadLibrary: 'OnlineServicesCommon' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OnlineServicesCommon.dylib')
+LogModuleManager: InternalLoadLibrary: 'OnlineServicesCommonEngineUtils' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OnlineServicesCommonEngineUtils.dylib')
+LogModuleManager: InternalLoadLibrary: 'OnlineSubsystemUtils' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OnlineSubsystemUtils.dylib')
+LogModuleManager: InternalLoadLibrary: 'OnlineBlueprintSupport' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OnlineBlueprintSupport.dylib')
+LogModuleManager: InternalLoadLibrary: 'MediaIOCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MediaIOCore.dylib')
+LogModuleManager: InternalLoadLibrary: 'TmvMediaShaders' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TmvMediaShaders.dylib')
+LogModuleManager: InternalLoadLibrary: 'RuntimeTelemetry' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-RuntimeTelemetry.dylib')
+LogAnalytics: Display: Provider StudioTelemetry.Provider.Log is disabled for this application
+LogAnalytics: Display: Provider StudioTelemetry.Provider.CSV is disabled for this application
+LogAnalytics: Display: Provider StudioTelemetry.Provider.Horde is disabled for this application
+LogModuleManager: InternalLoadLibrary: 'Analytics' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Analytics.dylib')
+LogStudioTelemetry: Started StudioTelemetry Session
+LogModuleManager: InternalLoadLibrary: 'Water' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Water.dylib')
+LogModuleManager: InternalLoadLibrary: 'Buoyancy' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Buoyancy.dylib')
+LogModuleManager: InternalLoadLibrary: 'ACLPlugin' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ACLPlugin.dylib')
+LogModuleManager: InternalLoadLibrary: 'OptimusSettings' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OptimusSettings.dylib')
+LogModuleManager: InternalLoadLibrary: 'OpenCVHelper' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OpenCVHelper.dylib')
+LogModuleManager: InternalLoadLibrary: 'HairStrandsCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-HairStrandsCore.dylib')
+LogAsyncCompilation: Display: MemorySharingInfo: UsedMemory=428692MiB, MaxMemoryAvailable=66560MiB
+LogModuleManager: InternalLoadLibrary: 'ComputeFramework' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ComputeFramework.dylib')
+LogModuleManager: InternalLoadLibrary: 'ChunkDownloader' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ChunkDownloader.dylib')
+LogModuleManager: InternalLoadLibrary: 'ExampleDeviceProfileSelector' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ExampleDeviceProfileSelector.dylib')
+LogModuleManager: InternalLoadLibrary: 'CompositeCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-CompositeCore.dylib')
+LogConfig: Applying CVar settings from Section [/Script/CompositeCore.CompositeCorePluginSettings] File [Engine]
+LogModuleManager: InternalLoadLibrary: 'OpenColorIO' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OpenColorIO.dylib')
+LogModuleManager: InternalLoadLibrary: 'OpenCVLensCalibration' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OpenCVLensCalibration.dylib')
+LogModuleManager: InternalLoadLibrary: 'OpenCVLensDistortion' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OpenCVLensDistortion.dylib')
+LogModuleManager: InternalLoadLibrary: 'AISupportModule' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AISupportModule.dylib')
+LogModuleManager: InternalLoadLibrary: 'InterchangeAxFAssets' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-InterchangeAxFAssets.dylib')
+LogInit: ExecutableName: ZhoenusEditor
+LogInit: Build: UE5-CL-0
+LogInit: Platform=MacEditor
+LogInit: MachineId=5b9c354fe44d518b16f07dafff9b563e
+LogInit: DeviceId=
+LogInit: Engine Version: 5.8.3-0+UE5
+LogInit: Compatible Engine Version: 5.8.0-0+UE5
+LogInit: Net CL: 0
+LogInit: OS: macOS 26.6.2 (25G83), CPU: Apple M4 Pro, GPU: Apple M4 Pro
+LogInit: CPU Model ID: 0, microcode revision: 0
+LogInit: Compiled (64-bit): Oct 14 2026 05:05:33
+LogInit: Architecture: arm64
+LogInit: Compiled with Clang: 21.0.0 (clang-2100.1.1.101)
+LogInit: Build Configuration: Development
+LogInit: Branch Name: UE5
+LogInit: Command Line: /Game/Map/Level-1 -game -nullrhi -nosound -unattended -nosplash -NoLoadingScreen -ABSLOG=/Users/jay/pudding/loadngo/task-records/2026-10-14-zhoenus-talking-head-model/demo/game-without-model.log -ZhoenusAsk="How do I save the flyers?" -ZhoenusModelSocket=/var/folders/x0/vq6dbxcs3wn5cf9lhgr03g180000gn/T/tmp.bxdhK8jUUE/node/gpt-oss.sock
+LogInit: Base Directory: /Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/
+LogInit: Allocator: Mimalloc
+LogInit: Installed Engine Build: 0
+LogInit: This binary is optimized with LTO: no, PGO: no, instrumented for PGO data collection: no
+LogDevObjectVersion: Number of dev versions registered: 36
+LogDevObjectVersion:   Dev-Blueprints (B0D832E4-1F89-4F0D-ACCF-7EB736FD4AA2): 10
+LogDevObjectVersion:   Dev-Build (E1C64328-A22C-4D53-A36C-8E866417BD8C): 0
+LogDevObjectVersion:   Dev-Core (375EC13C-06E4-48FB-B500-84F0262A717E): 4
+LogDevObjectVersion:   Dev-Editor (E4B068ED-F494-42E9-A231-DA0B2E46BB41): 40
+LogDevObjectVersion:   Dev-Framework (CFFC743F-43B0-4480-9391-14DF171D2073): 37
+LogDevObjectVersion:   Dev-Mobile (B02B49B5-BB20-44E9-A304-32B752E40360): 3
+LogDevObjectVersion:   Dev-Networking (A4E4105C-59A1-49B5-A7C5-40C4547EDFEE): 0
+LogDevObjectVersion:   Dev-Online (39C831C9-5AE6-47DC-9A44-9C173E1C8E7C): 0
+LogDevObjectVersion:   Dev-Physics (78F01B33-EBEA-4F98-B9B4-84EACCB95AA2): 20
+LogDevObjectVersion:   Dev-Platform (6631380F-2D4D-43E0-8009-CF276956A95A): 0
+LogDevObjectVersion:   Dev-Rendering (12F88B9F-8875-4AFC-A67C-D90C383ABD29): 49
+LogDevObjectVersion:   Dev-Sequencer (7B5AE74C-D270-4C10-A958-57980B212A5A): 13
+LogDevObjectVersion:   Dev-VR (D7296918-1DD6-4BDD-9DE2-64A83CC13884): 3
+LogDevObjectVersion:   Dev-LoadTimes (C2A15278-BFE7-4AFE-6C17-90FF531DF755): 1
+LogDevObjectVersion:   Private-Geometry (6EACA3D4-40EC-4CC1-B786-8BED09428FC5): 3
+LogDevObjectVersion:   Dev-AnimPhys (29E575DD-E0A3-4627-9D10-D276232CDCEA): 17
+LogDevObjectVersion:   Dev-Anim (AF43A65D-7FD3-4947-9873-3E8ED9C1BB05): 15
+LogDevObjectVersion:   Dev-ReflectionCapture (6B266CEC-1EC7-4B8F-A30B-E4D90942FC07): 1
+LogDevObjectVersion:   Dev-Automation (0DF73D61-A23F-47EA-B727-89E90C41499A): 1
+LogDevObjectVersion:   FortniteMain (601D1886-AC64-4F84-AA16-D3DE0DEAC7D6): 268
+LogDevObjectVersion:   FortniteValkyrie (8DBC2C5B-54A7-43E0-A768-FCBB7DA29060): 8
+LogDevObjectVersion:   FortniteSeason (5B4C06B7-2463-4AF8-805B-BF70CDF5D0DD): 15
+LogDevObjectVersion:   FortniteRelease (E7086368-6B23-4C58-8439-1B7016265E91): 20
+LogDevObjectVersion:   Dev-Enterprise (9DFFBCD6-494F-0158-E221-12823C92A888): 11
+LogDevObjectVersion:   Dev-Niagara (F2AED0AC-9AFE-416F-8664-AA7FFA26D6FC): 1
+LogDevObjectVersion:   Dev-Destruction (174F1F0B-B4C6-45A5-B13F-2EE8D0FB917D): 10
+LogDevObjectVersion:   Dev-Physics-Ext (35F94A83-E258-406C-A318-09F59610247C): 41
+LogDevObjectVersion:   Dev-PhysicsMaterial-Chaos (B68FC16E-8B1B-42E2-B453-215C058844FE): 1
+LogDevObjectVersion:   Dev-CineCamera (B2E18506-4273-CFC2-A54E-F4BB758BBA07): 1
+LogDevObjectVersion:   Dev-VirtualProduction (64F58936-FD1B-42BA-BA96-7289D5D0FA4E): 1
+LogDevObjectVersion:   UE5-Main (697DD581-E64F-41AB-AA4A-51ECBEB7B628): 123
+LogDevObjectVersion:   UE5-Release (D89B5E42-24BD-4D46-8412-ACA8DF641779): 68
+LogDevObjectVersion:   UE5-SpecialProject (59DA5D52-1232-4948-B878-597870B8E98B): 9
+LogDevObjectVersion:   Dev-MediaFramework (6F0ED827-A609-4895-9C91-998D90180EA4): 2
+LogDevObjectVersion:   Dev-NaniteResearch (30D58BE3-95EA-4282-A6E3-B159D8EBB06A): 1
+LogDevObjectVersion:   Dev-ComputeFramework (6304A3E7-0059-4F59-8CFC-21BD7721FD4E): 0
+LogInit: Presizing for max 25165824 objects, including 0 objects not considered by GC.
+LogStreaming: Display: AsyncLoading2 - Created: Async Loading Thread: false, Async Post Load: false, Multithreaded: false
+LogInit: Object subsystem initialized
+LogConfig: Set CVar [[con.DebugEarlyDefault:1]]
+LogConfig: CVar [[con.DebugLateDefault:1]] deferred - dummy variable created
+LogConfig: CVar [[con.DebugLateCheat:1]] deferred - dummy variable created
+LogConfig: CVar [[LogNamedEventFilters:Frame *]] deferred - dummy variable created
+LogConfig: Set CVar [[r.setres:1280x720]]
+LogConfig: Set CVar [[g.TimeoutForBlockOnRenderFence:300000]]
+LogConfig: CVar [[framepro.ScopeMinTimeMicroseconds:10]] deferred - dummy variable created
+LogConfig: Set CVar [[fx.NiagaraAllowRuntimeScalabilityChanges:1]]
+LogConfig: CVar [[QualityLevelMapping:high]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[con.DebugLateDefault:1]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[con.DebugLateCheat:1]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[LogNamedEventFilters:Frame *]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[framepro.ScopeMinTimeMicroseconds:10]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[QualityLevelMapping:high]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: Applying CVar settings from Section [/Script/Engine.RendererSettings] File [Engine]
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[VisualizeCalibrationColorMaterialPath:/Engine/EngineMaterials/PPM_DefaultCalibrationColor.PPM_DefaultCalibrationColor]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[VisualizeCalibrationGrayscaleMaterialPath:/Engine/EngineMaterials/PPM_DefaultCalibrationGrayscale.PPM_DefaultCalibrationGrayscale]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.GPUCrashDebugging:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[MaxSkinBones:(Default=65536,PerPlatform=(("Mobile", 256)))]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Substrate.RoughDiffuse:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Substrate.ShadingQuality:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Substrate.TileCoord8bits:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Substrate.Glints:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Substrate.ClosuresPerPixel:4]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Refraction.Blur:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Mobile.ShadingPath:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Mobile.SupportGPUScene:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Mobile.AntiAliasing:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Mobile.FloatPrecisionMode:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Mobile.AllowDitheredLODTransition:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[#r.Mobile.VirtualTextures:0]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.DiscardUnusedQuality:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[r.Shaders.CompressionFormat:2]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.AllowOcclusionQueries:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.MinScreenRadiusForLights:0.030000]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.MinScreenRadiusForDepthPrepass:0.030000]]
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[r.MinScreenRadiusForCSMDepth:0.010000]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.PrecomputedVisibilityWarning:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.TextureStreaming:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[Compat.UseDXT5NormalMaps:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.VirtualTextures:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.VT.EnableAutoImport:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.VirtualTexturedLightmaps:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.VT.AnisotropicFiltering:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[bEnableVirtualTextureOpacityMask:0]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.VT.TileSize:128]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.VT.TileBorderSize:4]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.vt.FeedbackFactor:16]]
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[WorkingColorSpaceChoice:sRGB]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[RedChromaticityCoordinate:(X=0.640000,Y=0.330000)]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[GreenChromaticityCoordinate:(X=0.300000,Y=0.600000)]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[BlueChromaticityCoordinate:(X=0.150000,Y=0.060000)]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[WhiteChromaticityCoordinate:(X=0.312700,Y=0.329000)]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.ClearCoatNormal:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.DynamicGlobalIlluminationMethod:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.ReflectionMethod:2]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.ReflectionCaptureResolution:128]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.ReflectionEnvironmentLightmapMixBasedOnRoughness:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Lumen.HardwareRayTracing:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Lumen.HardwareRayTracing.LightingMode:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Lumen.TranslucencyReflections.FrontLayer.EnableForProject:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Lumen.TraceMeshSDFs:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Shadow.Virtual.Enable:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.RayTracing:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.RayTracing.Shadows:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.RayTracing.Skylight:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.RayTracing.UseTextureLod:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.PathTracing:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.GenerateMeshDistanceFields:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.DistanceFields.DefaultVoxelDensity:0.200000]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Nanite.ProjectEnabled:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.AllowStaticLighting:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.NormalMapsForStaticLighting:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.ForwardShading:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.VertexFoggingForOpaque:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.SeparateTranslucency:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.TranslucentSortPolicy:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[TranslucentSortAxis:(X=0.000000,Y=-1.000000,Z=0.000000)]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[vr.VRS.HMDFixedFoveationLevel:0]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[vr.VRS.HMDFixedFoveationDynamic:0]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.CustomDepth:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.CustomDepthTemporalAAJitter:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.PostProcessing.PropagateAlpha:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.DefaultFeature.Bloom:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.DefaultFeature.AmbientOcclusion:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.DefaultFeature.AmbientOcclusionStaticFraction:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.DefaultFeature.AutoExposure:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.DefaultFeature.AutoExposure.Method:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.DefaultFeature.AutoExposure.Bias:1.000000]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.DefaultFeature.MotionBlur:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.DefaultFeature.LensFlare:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.TemporalAA.Upsampling:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.AntiAliasingMethod:4]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.MSAACount:4]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.DefaultFeature.LightUnits:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.DefaultBackBufferPixelFormat:4]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Shadow.UnbuiltPreviewInGame:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.StencilForLODDither:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.EarlyZPass:3]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.EarlyZPassOnlyMaterialMasking:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Shadow.CSMCaching:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.DBuffer:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.ClearSceneMethod:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.VelocityOutputPass:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Velocity.EnableVertexDeformation:2]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.SelectiveBasePassOutputs:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: CVar [[bDefaultParticleCutouts:0]] deferred - dummy variable created
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[fx.GPUSimulationTextureSizeX:1024]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[fx.GPUSimulationTextureSizeY:1024]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.AllowGlobalClipPlane:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.GBufferFormat:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.MorphTarget.Mode:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[vr.InstancedStereo:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.MobileHDR:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[vr.MobileMultiView:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.Mobile.UseHWsRGBEncoding:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[vr.RoundRobinOcclusion:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.MeshStreaming:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.HeterogeneousVolumes:0]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.WireframeCullThreshold:5.000000]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.SupportStationarySkylight:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.SupportLowQualityLightmaps:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.SupportPointLightWholeSceneShadows:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.SupportSkyAtmosphere:1]]
+[2026.10.13-22.42.18:290][  0]LogConfig: Set CVar [[r.SupportSkyAtmosphereAffectsHeightFog:1]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.SupportCloudShadowOnForwardLitTranslucent:0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.Shadow.TranslucentPerObject.ProjectEnabled:0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.Water.SingleLayerWater.SupportCloudShadow:0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[r.Strata:0]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[r.Strata.OpaqueMaterialRoughRefraction:0]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[r.Strata.Debug.AdvancedVisualizationShaders:0]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.Material.RoughDiffuse:0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.Material.EnergyConservation:0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.OIT.SortedPixels:0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.SkinCache.CompileShaders:0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[r.SkinCache.SkipCompilingGPUSkinVF:0]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.SkinCache.DefaultBehavior:1]]
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[r.SkinCache.SceneMemoryLimitInMB:128.000000]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.Mobile.EnableStaticAndCSMShadowReceivers:1]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.Mobile.EnableMovableLightCSMShaderCulling:1]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.Mobile.Forward.EnableLocalLights:1]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.Mobile.Forward.EnableClusteredReflections:0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[r.Mobile.EnableNoPrecomputedLightingCSMShader:0]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.Mobile.AllowDistanceFieldShadows:1]]
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[r.Mobile.AllowMovableDirectionalLights:1]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.Mobile.EnableMovableSpotlightsShadow:1]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.GPUSkin.Support16BitBoneIndex:0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.GPUSkin.Limit2BoneInfluences:0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.SupportDepthOnlyIndexBuffers:1]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.SupportReversedIndexBuffers:1]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.Mobile.AmbientOcclusion:0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.GPUSkin.UnlimitedBoneInfluences:0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.GPUSkin.UnlimitedBoneInfluencesThreshold:8]]
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[DefaultBoneInfluenceLimit:(Default=0,PerPlatform=())]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[r.Mobile.PlanarReflectionMode:0]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[r.Mobile.SupportsGen4TAA:1]]
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[bStreamSkeletalMeshLODs:(Default=False,PerPlatform=())]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[bDiscardSkeletalMeshOptionalLODs:(Default=False,PerPlatform=())]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[VisualizeCalibrationCustomMaterialPath:None]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: Applying CVar settings from Section [/Script/Engine.RendererOverrideSettings] File [Engine]
+[2026.10.13-22.42.18:291][  0]LogConfig: Applying CVar settings from Section [/Script/Engine.StreamingSettings] File [Engine]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[s.MinBulkDataSizeForAsyncLoading:131072]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[s.AsyncLoadingThreadEnabled:1]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[s.EventDrivenLoaderEnabled:1]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[s.WarnIfTimeLimitExceeded:0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[s.TimeLimitExceededMultiplier:1.5]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[s.TimeLimitExceededMinTime:0.005]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[s.UseBackgroundLevelStreaming:1]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[s.PriorityAsyncLoadingExtraTime:15.0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[s.LevelStreamingActorsUpdateTimeLimit:5.0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[s.PriorityLevelStreamingActorsUpdateExtraTime:5.0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[s.LevelStreamingComponentsRegistrationGranularity:10]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[s.UnregisterComponentsTimeLimit:1.0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[s.LevelStreamingComponentsUnregistrationGranularity:5]]
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[s.MaxPackageSummarySize:16384]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[s.FlushStreamingOnExit:1]]
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[FixedBootOrder:/Script/Engine/Default__SoundBase]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[FixedBootOrder:/Script/Engine/Default__MaterialInterface]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[FixedBootOrder:/Script/Engine/Default__DeviceProfileManager]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: Applying CVar settings from Section [/Script/Engine.GarbageCollectionSettings] File [Engine]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[gc.MaxObjectsNotConsideredByGC:1]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[gc.NumRetriesBeforeForcingGC:10]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[gc.AllowParallelGC:1]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[gc.TimeBetweenPurgingPendingKillObjects:61.1]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[gc.MaxObjectsInEditor:25165824]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[gc.IncrementalBeginDestroyEnabled:1]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[gc.CreateGCClusters:1]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[gc.MinGCClusterSize:5]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[gc.AssetClustreringEnabled:0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[gc.ActorClusteringEnabled:0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Set CVar [[gc.VerifyUObjectsAreNotFGCObjects:0]]
+[2026.10.13-22.42.18:291][  0]LogConfig: Applying CVar settings from Section [/Script/Engine.NetworkSettings] File [Engine]
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[NetworkEmulationProfiles:(ProfileName="Average",ToolTip="Simulates average internet conditions")]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[NetworkEmulationProfiles:(ProfileName="Bad",ToolTip="Simulates laggy internet conditions")]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[NetworkEmulationProfiles:(ProfileName="BufferBloat",ToolTip="Simulates a connection affected by buffer bloat (in and out)")]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: Applying CVar settings from Section [/Script/UnrealEd.CookerSettings] File [Engine]
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[DefaultASTCQualityBySpeed:2]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[DefaultASTCQualityBySize:3]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[DefaultASTCQualityBySizeHQ:4]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedServer:WidgetBlueprint]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedServer:GroupActor]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedServer:MetaData]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedServer:ObjectRedirector]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedServer:NavMeshRenderingComponent]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedServer:ReflectionCaptureComponent]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedServer:TextRenderComponent]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedServer:Font]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedServer:InterpCurveEdSetup]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedServer:MaterialExpression]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedServer:NiagaraEmitter]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedServer:NiagaraScript]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedServer:ParticleEmitter]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedServer:ParticleLODLevel]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedServer:ParticleModule]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedServer:SubUVAnimation]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedServer:SoundNode]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedServer:GameplayEffectUIData]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedServer:AmbientSound]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedClient:WidgetBlueprint]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedClient:GroupActor]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedClient:MetaData]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedClient:ObjectRedirector]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[ClassesExcludedOnDedicatedClient:InterpCurveEdSetup]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[VersionedIntRValues:r.AllowStaticLighting]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[VersionedIntRValues:r.MaterialEditor.LWCTruncateMode]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[VersionedIntRValues:r.VelocityOutputPass]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[VersionedIntRValues:r.SelectiveBasePassOutputs]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[VersionedIntRValues:r.DBuffer]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[VersionedIntRValues:r.Mobile.DBuffer]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[VersionedIntRValues:r.Shaders.Symbols]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[VersionedIntRValues:r.Shaders.GenerateSymbols]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[VersionedIntRValues:r.Shaders.WriteSymbols]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[VersionedIntRValues:r.Shaders.AllowUniqueSymbols]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[VersionedIntRValues:r.Shaders.ExtraData]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[VersionedIntRValues:r.Shaders.Optimize]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[VersionedIntRValues:r.CompileShadersForDevelopment]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[VersionedIntRValues:r.MobileHDR]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogConfig: CVar [[VersionedIntRValues:r.UsePreExposure]] deferred - dummy variable created
+[2026.10.13-22.42.18:291][  0]LogCsvProfiler: Display: Metadata set : systemresolution.resx="800"
+[2026.10.13-22.42.18:291][  0]LogCsvProfiler: Display: Metadata set : systemresolution.resy="450"
+[2026.10.13-22.42.18:292][  0]LogConfig: Applying CVar settings from Section [ViewDistanceQuality@3] File [Scalability]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SkeletalMeshLODBias:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.ViewDistanceScale:1.0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Applying CVar settings from Section [AntiAliasingQuality@3] File [Scalability]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.FXAA.Quality:4]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.TemporalAA.Quality:2]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.TSR.History.R11G11B10:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.TSR.History.ScreenPercentage:200]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.TSR.History.UpdateQuality:3]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.TSR.ShadingRejection.Flickering:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.TSR.RejectionAntiAliasingQuality:2]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.TSR.ReprojectionField:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.TSR.Resurrection:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Applying CVar settings from Section [ShadowQuality@3] File [Scalability]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.LightFunctionQuality:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.ShadowQuality:5]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Shadow.CSM.MaxCascades:10]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Shadow.MaxResolution:2048]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Shadow.MaxCSMResolution:2048]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Shadow.RadiusThreshold:0.01]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Shadow.DistanceScale:1.0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Shadow.CSM.TransitionScale:1.0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Shadow.PreShadowResolutionFactor:1.0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.DistanceFieldShadowing:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.VolumetricFog:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.VolumetricFog.GridPixelSize:8]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.VolumetricFog.GridSizeZ:128]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.VolumetricFog.HistoryMissSupersampleCount:4]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.LightMaxDrawDistanceScale:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.CapsuleShadows:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Shadow.Virtual.MaxPhysicalPages:4096]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Shadow.Virtual.ResolutionLodBiasDirectional:-1.5]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Shadow.Virtual.ResolutionLodBiasDirectionalMoving:-1.5]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Shadow.Virtual.ResolutionLodBiasLocal:0.0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Shadow.Virtual.ResolutionLodBiasLocalMoving:1.0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Shadow.Virtual.SMRT.RayCountDirectional:8]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Shadow.Virtual.SMRT.SamplesPerRayDirectional:4]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Shadow.Virtual.SMRT.RayCountLocal:8]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Shadow.Virtual.SMRT.SamplesPerRayLocal:4]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Shadow.Virtual.MarkCoarsePagesLocal:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.MegaLights.NumSamplesPerPixel:4]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.MegaLights.DownsampleMode:2]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.MegaLights.ScreenTraces.Quality:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.MegaLights.FrontLayerTranslucency.Allow:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.MegaLights.FrontLayerTranslucency.SpecularOnly:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.MegaLights.FrontLayerTranslucency.SoftShadows:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.MegaLights.FrontLayerTranslucency.TexturedRectLights:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.MegaLights.Spatial.UseHistorySpatialVariance:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.MegaLights.Volume.GridPixelSize:8]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.MegaLights.Volume.GridSizeZ:128]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Applying CVar settings from Section [GlobalIlluminationQuality@3] File [Scalability]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.DistanceFieldAO:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SkylightIntensityMultiplier:1.0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.AOQuality:2]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.DiffuseIndirect.Allow:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.FinalGatherMethod:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.LumenScene.SurfaceCache.AtlasSize:4096]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.LumenScene.SurfaceCache.CardTexelDensityScale:100]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.LumenScene.SurfaceCache.CardMinResolution:2]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.LumenScene.SurfaceCache.CardMaxResolution:512]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.LumenScene.DirectLighting.MaxLightsPerTile:8]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.LumenScene.DirectLighting.UpdateFactor:32]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.LumenScene.Radiosity.UpdateFactor:64]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.LumenScene.Radiosity.ProbeSpacing:4]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.LumenScene.Radiosity.HemisphereProbeResolution:4]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.TraceMeshSDFs.Allow:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.ScreenProbeGather.RadianceCache.ProbeResolution:32]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.ScreenProbeGather.RadianceCache.NumProbesToTraceBudget:150]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.ScreenProbeGather.DownsampleFactor:16]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.ScreenProbeGather.NumAdaptiveProbes:8]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.ScreenProbeGather.TracingOctahedronResolution:8]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.ScreenProbeGather.IrradianceFormat:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.ScreenProbeGather.StochasticInterpolation:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.ScreenProbeGather.FullResolutionJitterWidth:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.ScreenProbeGather.TwoSidedFoliageBackfaceDiffuse:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.ScreenProbeGather.ScreenTraces.HZBTraversal.FullResDepth:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.ScreenProbeGather.ShortRangeAO.DownsampleFactor:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.ScreenProbeGather.ShortRangeAO.HorizonSearch.SliceCount:2]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.ScreenProbeGather.ShortRangeAO.BentNormal:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.ScreenProbeGather.ShortRangeAO.HorizonSearch.HZB:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.ScreenProbeGather.ShortRangeAO.HorizonSearch.ForegroundSampleRejectPower:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.ScreenProbeGather.ShortRangeAO.FoliageOcclusionStrength:.7]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.TranslucencyVolume.GridPixelSize:32]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.TranslucencyVolume.TraceFromVolume:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.TranslucencyVolume.ShareRadianceCacheWithOpaque:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.TranslucencyVolume.SpatialFilter:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.TranslucencyVolume.TracingOctahedronResolution:3]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.TranslucencyVolume.RadianceCache.ProbeResolution:8]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.TranslucencyVolume.RadianceCache.GridResolution:24]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.TranslucencyVolume.RadianceCache.NumProbesToTraceBudget:100]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.HardwareRayTracing.HitLighting.Allowed:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.RayTracing.Scene.BuildMode:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.RayTracing.Geometry.SkeletalMeshes:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.MeshCardRepresentation.SkeletalMesh:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.RayTracing.DynamicGeometry.MaxUpdatePrimitivesPerFrame:-1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Applying CVar settings from Section [ReflectionQuality@3] File [Scalability]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SSR.Quality:3]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SSR.HalfResSceneColor:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.Reflections.Allow:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.Reflections.DownsampleFactor:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.Reflections.MaxRoughnessToTraceForFoliage:0.4]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.ScreenProbeGather.MaxRoughnessToEvaluateRoughSpecularForFoliage:0.8]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.Reflections.ScreenSpaceReconstruction.NumSamples:5]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.Reflections.ScreenSpaceReconstruction.MinWeight:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.TranslucencyReflections.FrontLayer.Allow:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Lumen.TranslucencyReflections.FrontLayer.Enable:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Applying CVar settings from Section [PostProcessQuality@3] File [Scalability]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.MotionBlurQuality:4]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.MotionBlur.HalfResGather:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.AmbientOcclusionMipLevelFactor:0.4]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.AmbientOcclusionMaxQuality:100]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.AmbientOcclusionLevels:-1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.AmbientOcclusionRadiusScale:1.0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.DepthOfFieldQuality:2]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.RenderTargetPoolMin:400]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.LensFlareQuality:2]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SceneColorFringeQuality:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.EyeAdaptationQuality:2]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.BloomQuality:5]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Bloom.ScreenPercentage:50.000]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.FastBlurThreshold:100]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Upscale.Quality:3]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.LightShaftQuality:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Filter.SizeScale:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.LUT.Shaper:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.LUT.Size:32]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Tonemapper.Quality:5]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.DOF.Gather.ResolutionDivisor:2         ; lower gathering resolution]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.DOF.Gather.AccumulatorQuality:1        ; higher gathering accumulator quality]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.DOF.Gather.PostfilterMethod:1          ; Median3x3 postfilering method]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.DOF.Gather.EnableBokehSettings:0       ; no bokeh simulation when gathering]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.DOF.Gather.RingCount:4                 ; medium number of samples when gathering]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.DOF.Scatter.ForegroundCompositing:1    ; additive foreground scattering]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.DOF.Scatter.BackgroundCompositing:2    ; additive background scattering]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.DOF.Scatter.EnableBokehSettings:1      ; bokeh simulation when scattering]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.DOF.Scatter.MaxSpriteRatio:0.1         ; only a maximum of 10% of scattered bokeh]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.DOF.Recombine.Quality:1                ; cheap slight out of focus]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.DOF.Recombine.EnableBokehSettings:0    ; no bokeh simulation on slight out of focus]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.DOF.TemporalAAQuality:1                ; more stable temporal accumulation]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.DOF.Kernel.MaxForegroundRadius:0.025]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.DOF.Kernel.MaxBackgroundRadius:0.025]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Applying CVar settings from Section [TextureQuality@3] File [Scalability]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Streaming.MipBias:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Streaming.AmortizeCPUToGPUCopy:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Streaming.MaxNumTexturesToStreamPerFrame:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Streaming.Boost:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.MaxAnisotropy:8]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.VT.MaxAnisotropy:8]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Streaming.LimitPoolSizeToVRAM:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Streaming.PoolSize:1000]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Streaming.MaxEffectiveScreenSize:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Applying CVar settings from Section [EffectsQuality@3] File [Scalability]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.TranslucencyLightingVolume.Dim:64]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.RefractionQuality:2]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SceneColorFormat:4]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.DetailMode:3]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.TranslucencyLightingVolume.Blur:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.MaterialQualityLevel:1 ; High quality]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SSS.Scale:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SSS.SampleSet:2]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SSS.Quality:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SSS.HalfRes:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SSGI.Quality:3]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.EmitterSpawnRateScale:1.0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.ParticleLightQuality:2]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SkyAtmosphere.AerialPerspectiveLUT.FastApplyOnOpaque:1 ; Always have FastSkyLUT 1 in this case to avoid wrong sky]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SkyAtmosphere.AerialPerspectiveLUT.SampleCountMaxPerSlice:4]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SkyAtmosphere.AerialPerspectiveLUT.DepthResolution:16.0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SkyAtmosphere.FastSkyLUT:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SkyAtmosphere.FastSkyLUT.SampleCountMin:4.0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SkyAtmosphere.FastSkyLUT.SampleCountMax:128.0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SkyAtmosphere.SampleCountMin:4.0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SkyAtmosphere.SampleCountMax:128.0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SkyAtmosphere.TransmittanceLUT.UseSmallFormat:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SkyAtmosphere.TransmittanceLUT.SampleCount:10.0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.SkyAtmosphere.MultiScatteringLUT.SampleCount:15.0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Fog.SeparateComposition:-1	; Allow fog separate composition when FSSS is enabled.]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[fx.Niagara.QualityLevel:3]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.Refraction.OffsetQuality:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.HeterogeneousVolumes.Allowed:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.HeterogeneousVolumes.DownsampleFactor:2]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.HeterogeneousVolumes.MaxStepCount:256]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.HeterogeneousVolumes.Shadows.Resolution:512]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.HeterogeneousVolumes.Shadows.Precision:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.HeterogeneousVolumes.UseExistenceMask:0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Applying CVar settings from Section [FoliageQuality@3] File [Scalability]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[foliage.DensityScale:1.0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[grass.DensityScale:1.0]]
+[2026.10.13-22.42.18:292][  0]LogConfig: CVar [[pcg.Quality:3]] deferred - dummy variable created
+[2026.10.13-22.42.18:292][  0]LogConfig: Applying CVar settings from Section [ShadingQuality@3] File [Scalability]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.HairStrands.SkyLighting.IntegrationType:2]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.HairStrands.SkyAO.SampleCount:4]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.HairStrands.Visibility.MSAA.SamplePerPixel:4]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.AnisotropicMaterials:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Applying CVar settings from Section [LandscapeQuality@3] File [Scalability]
+[2026.10.13-22.42.18:292][  0]LogInit: Selected Device Profile: [MacEditor]
+[2026.10.13-22.42.18:292][  0]LogInit: Selected Device Profile: [MacEditor]
+[2026.10.13-22.42.18:292][  0]LogHAL: Display: Platform has ~ 64 GB [68719476736 / 68719476736 / 64], which maps to Largest [LargestMinGB=32, LargerMinGB=12, DefaultMinGB=8, SmallerMinGB=6, SmallestMinGB=0)
+[2026.10.13-22.42.18:292][  0]LogDeviceProfileManager: Going up to parent DeviceProfile [Mac]
+[2026.10.13-22.42.18:292][  0]LogDeviceProfileManager: Going up to parent DeviceProfile []
+[2026.10.13-22.42.18:292][  0]LogDeviceProfileManager: Pushing Device Profile CVar: [[r.Shaders.ZeroInitialise:1 -> 1]]
+[2026.10.13-22.42.18:292][  0]LogDeviceProfileManager: Pushing Device Profile CVar: [[r.Shaders.BoundsChecking:1 -> 1]]
+[2026.10.13-22.42.18:292][  0]LogDeviceProfileManager: Pushing Device Profile CVar: [[UI.SlateSDFText.RasterizationMode:Bitmap -> Msdf]]
+[2026.10.13-22.42.18:292][  0]LogDeviceProfileManager: Pushing Device Profile CVar: [[UI.SlateSDFText.ResolutionLevel:2 -> 2]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Applying CVar settings from Section [Startup] File [../../../unreal/Engine/Config/ConsoleVariables.ini]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[p.chaos.AllowCreatePhysxBodies:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[fx.SkipVectorVMBackendOptimizations:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: Applying CVar settings from Section [Startup_Mac] File [../../../unreal/Engine/Config/ConsoleVariables.ini]
+[2026.10.13-22.42.18:292][  0]LogConfig: Applying CVar settings from Section [ConsoleVariables] File [Engine]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[r.HairStrands.Visibility.MSAA.SamplePerPixel:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: CVar [[r.SceneCulling.ExplicitCellBounds:1]] deferred - dummy variable created
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[Slate.NoAnimationOnTabForegroundedEvent:1]]
+[2026.10.13-22.42.18:292][  0]LogConfig: CVar [[r.CEFGPUAcceleration:1]] deferred - dummy variable created
+[2026.10.13-22.42.18:292][  0]LogConfig: Applying CVar settings from Section [ConsoleVariables] File [/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Saved/Config/MacEditor/Editor.ini]
+[2026.10.13-22.42.18:292][  0]LogConfig: Set CVar [[SplineComponent.OnlyUpdateActiveSpline:0]]
+[2026.10.13-22.42.18:292][  0]LogInit: macOS 26.6.2 (25G83)
+[2026.10.13-22.42.18:292][  0]LogInit: Model: Mac16,11
+[2026.10.13-22.42.18:292][  0]LogInit: CPU: Apple M4 Pro
+[2026.10.13-22.42.18:292][  0]LogInit: CPU Page size=16384, Cores=12, HT=12
+[2026.10.13-22.42.18:292][  0]LogInit: Computer: Jays-Mac-mini.local
+[2026.10.13-22.42.18:292][  0]LogInit: User: jay
+[2026.10.13-22.42.18:292][  0]LogInit: High frequency timer resolution =24.000000 MHz
+[2026.10.13-22.42.18:292][  0]LogInit: Power Source: AC Power
+[2026.10.13-22.42.18:292][  0]LogInit: Xcode developer folder path: /Applications/Xcode.app/Contents/Developer, version 26.5.0
+[2026.10.13-22.42.18:293][  0]LogInit: Memory total: Physical=64.0GB (64GB approx) Pagefile=1.0GB Virtual=65.0GB
+[2026.10.13-22.42.18:293][  0]LogCsvProfiler: Display: Metadata set : extradevelopmentmemorymb="0"
+[2026.10.13-22.42.18:293][  0]LogApplePlatformMisc: Network path changed (IsConstrained=0, IsExpensive=0)
+[2026.10.13-22.42.18:293][  0]LogModuleManager: InternalLoadLibrary: 'IoStoreOnDemandCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-IoStoreOnDemandCore.dylib')
+[2026.10.13-22.42.18:293][  0]LogModuleManager: InternalLoadLibrary: 'BandwidthDebugDelegates' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-BandwidthDebugDelegates.dylib')
+[2026.10.13-22.42.18:293][  0]LogModuleManager: InternalLoadLibrary: 'BandwidthMeasurementTool' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-BandwidthMeasurementTool.dylib')
+[2026.10.13-22.42.18:293][  0]LogModuleManager: InternalLoadLibrary: 'DownlinkBandwidthManager' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-DownlinkBandwidthManager.dylib')
+[2026.10.13-22.42.18:294][  0]LogObj: Display: Attempting to load config data for Default__DownlinkBandwidthManagerConfig before the Class has been constructed/registered/linked (likely during module loading or early startup). This will result in the load silently failing and should be fixed.
+[2026.10.13-22.42.18:294][  0]LogModuleManager: InternalLoadLibrary: 'Chaos' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Chaos.dylib')
+[2026.10.13-22.42.18:294][  0]LogModuleManager: InternalLoadLibrary: 'GeometryCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GeometryCore.dylib')
+[2026.10.13-22.42.18:294][  0]LogSpline: Registered spline type: TypeId=0x54E3AD22, Impl=MultiSpline, Value=Vector
+[2026.10.13-22.42.18:294][  0]LogModuleManager: InternalLoadLibrary: 'ChaosSolverEngine' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ChaosSolverEngine.dylib')
+[2026.10.13-22.42.18:294][  0]LogChaosDD: Chaos Debug Draw Startup
+[2026.10.13-22.42.18:294][  0]LogInit: Physics initialised using underlying interface: Chaos
+[2026.10.13-22.42.18:294][  0]LogInit: Using OS detected language (en-US).
+[2026.10.13-22.42.18:294][  0]LogInit: Using OS detected locale (en-US).
+[2026.10.13-22.42.18:294][  0]LogTextLocalizationManager: No specific localization for 'en-US' exists, so 'en' will be used for the language.
+[2026.10.13-22.42.18:317][  0]LogAppleController: [HandleMouseConnected] Handling physical mouse connection...
+[2026.10.13-22.42.18:318][  0]LogObj: Display: Attempting to load config data for Default__SlateThemeManager before the Class has been constructed/registered/linked (likely during module loading or early startup). This will result in the load silently failing and should be fixed.
+[2026.10.13-22.42.18:319][  0]LogModuleManager: InternalLoadLibrary: 'Settings' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Settings.dylib')
+[2026.10.13-22.42.18:319][  0]LogModuleManager: InternalLoadLibrary: 'InputCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-InputCore.dylib')
+[2026.10.13-22.42.18:319][  0]LogSlate: New Slate User Created. Platform User Id 0, User Index 0, Is Virtual User: 0
+[2026.10.13-22.42.18:319][  0]LogSlate: Slate User Registered.  User Index 0, Is Virtual User: 0
+[2026.10.13-22.42.18:334][  0]LogInit: Running DelayedAutoRegister Phase PreRHIInit
+[2026.10.13-22.42.18:336][  0]LogModuleManager: InternalLoadLibrary: 'NullDrv' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NullDrv.dylib')
+[2026.10.13-22.42.18:343][  0]LogVRS: Current RHI does not support Variable Rate Shading
+[2026.10.13-22.42.18:343][  0]LogRHI: Render tracing channels set: 'Submission' -> 0xf
+[2026.10.13-22.42.18:343][  0]LogCsvProfiler: Display: Metadata set : verbatimrhiname="Null"
+[2026.10.13-22.42.18:343][  0]LogCsvProfiler: Display: Metadata set : rhiname="Null"
+[2026.10.13-22.42.18:343][  0]LogCsvProfiler: Display: Metadata set : rhifeaturelevel="SM6"
+[2026.10.13-22.42.18:343][  0]LogCsvProfiler: Display: Metadata set : shaderplatform="METAL_SM6"
+[2026.10.13-22.42.18:343][  0]LogCsvProfiler: Display: Metadata set : gpu=""
+[2026.10.13-22.42.18:343][  0]LogCsvProfiler: Display: Metadata set : gpudriver=""
+[2026.10.13-22.42.18:343][  0]LogInit: Initializing FReadOnlyCVARCache
+[2026.10.13-22.42.18:343][  0]LogModuleManager: InternalLoadLibrary: 'TargetPlatform' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TargetPlatform.dylib')
+[2026.10.13-22.42.18:343][  0]LogModuleManager: InternalLoadLibrary: 'TurnkeySupport' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TurnkeySupport.dylib')
+[2026.10.13-22.42.18:350][  0]LogTargetPlatformManager: UBT AutoSDK ReturnCode: 0
+[2026.10.13-22.42.18:350][  0]LogModuleManager: InternalLoadLibrary: 'TextureFormat' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TextureFormat.dylib')
+[2026.10.13-22.42.18:350][  0]LogModuleManager: InternalLoadLibrary: 'TextureFormatASTC' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TextureFormatASTC.dylib')
+[2026.10.13-22.42.18:356][  0]LogModuleManager: InternalLoadLibrary: 'TextureFormatETC2' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TextureFormatETC2.dylib')
+[2026.10.13-22.42.18:362][  0]LogModuleManager: InternalLoadLibrary: 'TextureFormatOodle' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TextureFormatOodle.dylib')
+[2026.10.13-22.42.18:369][  0]LogModuleManager: InternalLoadLibrary: 'TextureFormatUncompressed' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TextureFormatUncompressed.dylib')
+[2026.10.13-22.42.18:381][  0]LogTextureFormatASTC: Display: ASTCEnc version 5.0.1 library loaded
+[2026.10.13-22.42.18:381][  0]LogTextureFormatManager: Display: Loaded Base TextureFormat: TextureFormatASTC
+[2026.10.13-22.42.18:381][  0]LogTextureFormatManager: Display: Loaded Base TextureFormat: TextureFormatETC2
+[2026.10.13-22.42.18:381][  0]LogTextureFormatOodle: Display: Oodle Texture TFO init; latest sdk version = 2.9.16
+[2026.10.13-22.42.18:381][  0]LogTextureFormatOodle: Display: Oodle Texture loading DLL: liboo2texmac64.2.9.16.dylib
+[2026.10.13-22.42.18:388][  0]LogTextureFormatManager: Display: Loaded Base TextureFormat: TextureFormatOodle
+[2026.10.13-22.42.18:388][  0]LogTextureFormatManager: Display: Loaded Base TextureFormat: TextureFormatUncompressed
+[2026.10.13-22.42.18:390][  0]LogModuleManager: InternalLoadLibrary: 'MacTargetPlatform' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MacTargetPlatform.dylib')
+[2026.10.13-22.42.18:397][  0]LogModuleManager: InternalLoadLibrary: 'MacTargetPlatformSettings' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MacTargetPlatformSettings.dylib')
+[2026.10.13-22.42.18:405][  0]LogModuleManager: InternalLoadLibrary: 'MacTargetPlatformControls' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MacTargetPlatformControls.dylib')
+[2026.10.13-22.42.18:405][  0]LogTargetPlatformManager: Display: Loaded TargetPlatform 'Mac'
+[2026.10.13-22.42.18:405][  0]LogTargetPlatformManager: Display: Loaded TargetPlatform 'MacEditor'
+[2026.10.13-22.42.18:405][  0]LogTargetPlatformManager: Display: Loaded TargetPlatform 'MacServer'
+[2026.10.13-22.42.18:405][  0]LogTargetPlatformManager: Display: Loaded TargetPlatform 'MacClient'
+[2026.10.13-22.42.18:405][  0]LogTargetPlatformManager: Display: Building Assets For MacEditor
+[2026.10.13-22.42.18:405][  0]LogModuleManager: InternalLoadLibrary: 'AudioFormatOPUS' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AudioFormatOpus.dylib')
+[2026.10.13-22.42.18:412][  0]LogModuleManager: InternalLoadLibrary: 'AudioFormatOGG' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AudioFormatOgg.dylib')
+[2026.10.13-22.42.18:418][  0]LogModuleManager: InternalLoadLibrary: 'AudioFormatADPCM' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AudioFormatADPCM.dylib')
+[2026.10.13-22.42.18:425][  0]LogModuleManager: InternalLoadLibrary: 'AudioFormatBINK' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AudioFormatBink.dylib')
+[2026.10.13-22.42.18:431][  0]LogModuleManager: InternalLoadLibrary: 'AudioFormatRAD' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AudioFormatRad.dylib')
+[2026.10.13-22.42.18:438][  0]LogModuleManager: InternalLoadLibrary: 'ShaderFormatVectorVM' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ShaderFormatVectorVM.dylib')
+[2026.10.13-22.42.18:449][  0]LogTargetPlatformManager: Unable to find shader format SF_METAL_SM6 from hinted modules, loading all potential format modules to find it
+[2026.10.13-22.42.18:449][  0]LogModuleManager: InternalLoadLibrary: 'MetalShaderFormat' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MetalShaderFormat.dylib')
+[2026.10.13-22.42.18:487][  0]LogTargetPlatformManager: Loaded format module MetalShaderFormat
+[2026.10.13-22.42.18:487][  0]LogTargetPlatformManager:   SF_METAL_ES3_1_IOS
+[2026.10.13-22.42.18:487][  0]LogTargetPlatformManager:   SF_METAL_SM5_IOS
+[2026.10.13-22.42.18:487][  0]LogTargetPlatformManager:   SF_METAL_SM6_IOS
+[2026.10.13-22.42.18:487][  0]LogTargetPlatformManager:   SF_METAL_ES3_1_TVOS
+[2026.10.13-22.42.18:487][  0]LogTargetPlatformManager:   SF_METAL_SM5_TVOS
+[2026.10.13-22.42.18:487][  0]LogTargetPlatformManager:   SF_METAL_SM5
+[2026.10.13-22.42.18:487][  0]LogTargetPlatformManager:   SF_METAL_SM6
+[2026.10.13-22.42.18:487][  0]LogTargetPlatformManager:   SF_METAL_SIM
+[2026.10.13-22.42.18:487][  0]LogTargetPlatformManager:   SF_METAL_ES3_1
+[2026.10.13-22.42.18:487][  0]LogModuleManager: InternalLoadLibrary: 'ShaderFormatOpenGL' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ShaderFormatOpenGL.dylib')
+[2026.10.13-22.42.18:494][  0]LogTargetPlatformManager: Loaded format module ShaderFormatOpenGL
+[2026.10.13-22.42.18:494][  0]LogTargetPlatformManager:   GLSL_150_ES31
+[2026.10.13-22.42.18:494][  0]LogTargetPlatformManager:   GLSL_ES3_1_ANDROID
+[2026.10.13-22.42.18:494][  0]LogTargetPlatformManager: Loaded format module ShaderFormatVectorVM
+[2026.10.13-22.42.18:494][  0]LogTargetPlatformManager:   VVM_1_0
+[2026.10.13-22.42.18:494][  0]LogModuleManager: InternalLoadLibrary: 'VulkanShaderFormat' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-VulkanShaderFormat.dylib')
+[2026.10.13-22.42.18:501][  0]LogTargetPlatformManager: Loaded format module VulkanShaderFormat
+[2026.10.13-22.42.18:501][  0]LogTargetPlatformManager:   SF_VULKAN_SM5
+[2026.10.13-22.42.18:501][  0]LogTargetPlatformManager:   SF_VULKAN_ES31_ANDROID
+[2026.10.13-22.42.18:501][  0]LogTargetPlatformManager:   SF_VULKAN_ES31
+[2026.10.13-22.42.18:501][  0]LogTargetPlatformManager:   SF_VULKAN_SM5_ANDROID
+[2026.10.13-22.42.18:501][  0]LogTargetPlatformManager:   SF_VULKAN_SM6
+[2026.10.13-22.42.18:501][  0]LogRendererCore: Ray tracing is disabled. Reason: disabled through project setting (r.RayTracing=0).
+[2026.10.13-22.42.18:501][  0]LogModuleManager: InternalLoadLibrary: 'DerivedDataCache' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-DerivedDataCache.dylib')
+[2026.10.13-22.42.18:501][  0]LogModuleManager: InternalLoadLibrary: 'SSL' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-SSL.dylib')
+[2026.10.13-22.42.18:504][  0]LogDerivedDataCache: ProjectPak: Pak cache file ../../DerivedDataCache/DDC.ddp not found, will not use a pak cache.
+[2026.10.13-22.42.18:504][  0]LogDerivedDataCache: EnginePak: Pak cache file ../../../unreal/Engine/DerivedDataCache/DDC.ddp not found, will not use a pak cache.
+[2026.10.13-22.42.18:504][  0]LogZenServiceInstance: Found Zen config default=/Users/jay/Library/Application Support/Epic/UnrealEngine/Common/Zen/Data
+[2026.10.13-22.42.18:505][  0]LogZenServiceInstance: Display: Launching zen utility '/Volumes/Micro-Data-Transfer/Zhoenus/unreal/Engine/Binaries/Mac/zen service status'.
+[2026.10.13-22.42.18:660][  0]LogZenServiceInstance: Display: Writing plugin version info to '/Users/jay/Library/Application Support/Epic/UnrealEngine/Common/Zen/Install/zen_plugin_versions.json'
+[2026.10.13-22.42.18:660][  0]LogZenServiceInstance: Display: Read zen version cache file from '/Volumes/Micro-Data-Transfer/Zhoenus/unreal/Engine/Saved/Zen/zen.version', version: '5.8.13-202605190511-macosx-arm64-release-094f62c'
+[2026.10.13-22.42.18:660][  0]LogZenServiceInstance: InTree version at '/Volumes/Micro-Data-Transfer/Zhoenus/unreal/Engine/Binaries/Mac/zenserver' is '5.8.13-202605190511-macosx-arm64-release-094f62c'
+[2026.10.13-22.42.18:660][  0]LogZenServiceInstance: Display: Read zen version cache file from '/Users/jay/Library/Application Support/Epic/UnrealEngine/Common/Zen/Install/zen.version', version: '5.8.13-202605190511-macosx-arm64-release-094f62c'
+[2026.10.13-22.42.18:660][  0]LogZenServiceInstance: Installed version at '/Users/jay/Library/Application Support/Epic/UnrealEngine/Common/Zen/Install/zenserver' is '5.8.13-202605190511-macosx-arm64-release-094f62c'
+[2026.10.13-22.42.18:660][  0]LogZenServiceInstance: Display: Installed service at '/Users/jay/Library/Application Support/Epic/UnrealEngine/Common/Zen/Install/zenserver' is up to date
+[2026.10.13-22.42.18:661][  0]LogZenServiceInstance: Found existing instance running on port 8558 matching our settings, no actions needed
+[2026.10.13-22.42.18:769][  0]LogZenServiceInstance: Display: Unreal Zen Storage Server HTTP service at http://[::1]:8558 status: OK!.
+[2026.10.13-22.42.18:769][  0]LogZenServiceInstance: Local ZenServer AutoLaunch initialization completed in 0.110 seconds
+[2026.10.13-22.42.18:772][  0]LogDerivedDataCache: Display: ZenLocal: Using ZenServer HTTP service at [::1] with namespace ue.ddc. Status: OK!.
+[2026.10.13-22.42.18:778][  0]LogDerivedDataCache: ../../../unreal/Engine/DerivedDataCache: Speed tests took 0.01 seconds.
+[2026.10.13-22.42.18:778][  0]LogDerivedDataCache: Display: ../../../unreal/Engine/DerivedDataCache: Performance: Latency=0.01ms. RandomReadSpeed=1295.43MBs, RandomWriteSpeed=188.15MBs. Assigned SpeedClass 'Local'
+[2026.10.13-22.42.18:778][  0]LogDerivedDataCache: Local: Using data cache path ../../../unreal/Engine/DerivedDataCache: Writable
+[2026.10.13-22.42.18:778][  0]LogDerivedDataCache: ZenShared: Disabled because Host is set to 'None'
+[2026.10.13-22.42.18:778][  0]LogDerivedDataCache: Shared: Disabled because no path is configured.
+[2026.10.13-22.42.18:778][  0]LogDerivedDataCache: Cloud: Disabled because Host is set to 'None'
+[2026.10.13-22.42.18:779][  0]LogModuleManager: InternalLoadLibrary: 'ShaderPreprocessor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ShaderPreprocessor.dylib')
+[2026.10.13-22.42.18:779][  0]LogShaderCompilers: Guid format shader working directory is 14 characters bigger than the processId version (../../Intermediate/Shaders/WorkingDirectory/28870/).
+[2026.10.13-22.42.18:779][  0]LogShaderCompilers: Cleaned the shader compiler working directory '../../Intermediate/Shaders/tmp/7964AFD8724021394EE8EDBFD24CCFCC/'.
+[2026.10.13-22.42.18:779][  0]LogShaderCompilers: Display: No distributed shader compiler controller found
+[2026.10.13-22.42.18:779][  0]LogShaderCompilers: Display: Using 9 local workers for shader compilation
+[2026.10.13-22.42.18:780][  0]LogShaderCompilers: Display: Compiling shader autogen file: ../../Intermediate/ShaderAutogen/METAL_SM6/AutogenShaderHeaders.ush
+[2026.10.13-22.42.18:780][  0]LogShaderCompilers: Display: Autogen file is unchanged, skipping write.
+[2026.10.13-22.42.19:315][  0]LogInit: Running DelayedAutoRegister Phase ShaderTypesReady
+[2026.10.13-22.42.19:316][  0]LogModuleManager: InternalLoadLibrary: 'SlateNullRenderer' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-SlateNullRenderer.dylib')
+[2026.10.13-22.42.19:323][  0]LogSlate: Using FreeType 2.14.1
+[2026.10.13-22.42.19:323][  0]LogSlate: SlateFontServices - WITH_FREETYPE: 1, WITH_HARFBUZZ: 1
+[2026.10.13-22.42.19:324][  0]LogInit: Using OS detected language (en-US).
+[2026.10.13-22.42.19:324][  0]LogInit: Using OS detected locale (en-US).
+[2026.10.13-22.42.19:324][  0]LogTextLocalizationManager: No localization for 'en-US' exists, so 'en' will be used for the language.
+[2026.10.13-22.42.19:324][  0]LogTextLocalizationManager: No localization for 'en-US' exists, so 'en' will be used for the locale.
+[2026.10.13-22.42.19:324][  0]LogSlate: FontCache flush requested. Reason: Culture for localization was changed
+[2026.10.13-22.42.19:324][  0]LogModuleManager: InternalLoadLibrary: 'AssetRegistry' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AssetRegistry.dylib')
+[2026.10.13-22.42.19:325][  0]LogAssetRegistry: ActiveMountsLoading is disabled.
+[2026.10.13-22.42.19:325][  0]LogAssetRegistry: FAssetRegistry took 0.0002 seconds to start up
+[2026.10.13-22.42.19:326][  0]LogInit: Running DelayedAutoRegister Phase PreObjectSystemReady
+[2026.10.13-22.42.19:451][  0]LogDeviceProfileManager: Display: Deviceprofile LinuxArm64Editor not found.
+[2026.10.13-22.42.19:451][  0]LogDeviceProfileManager: Display: Deviceprofile LinuxArm64 not found.
+[2026.10.13-22.42.19:477][  0]LogInit: Selected Device Profile: [MacEditor]
+[2026.10.13-22.42.19:477][  0]LogDeviceProfileManager: Active device profile: [0x9f1b5bcdc00][0x9f1b7b32800 82] MacEditor
+[2026.10.13-22.42.19:477][  0]LogCsvProfiler: Display: Metadata set : deviceprofile="MacEditor"
+[2026.10.13-22.42.19:477][  0]LogInit: Running DelayedAutoRegister Phase DeviceProfileManagerReady
+[2026.10.13-22.42.19:479][  0]LogStreaming: Display: FlushAsyncLoading(1): 1 QueuedPackages, 0 AsyncPackages
+[2026.10.13-22.42.19:480][  0]LogPackageLocalizationCache: Processed 100 localized package path(s) for 1 prioritized culture(s) in 0.001262 seconds
+[2026.10.13-22.42.19:486][  0]LogTextureEncodingSettings: Display: Texture Encode Speed: Final (cook).
+[2026.10.13-22.42.19:486][  0]LogTextureEncodingSettings: Display: Oodle Texture Encode Speed settings: Fast: RDO Off Lambda=0, Effort=Normal Final: RDO Off Lambda=0, Effort=Normal
+[2026.10.13-22.42.19:486][  0]LogTextureEncodingSettings: Display: Shared linear texture encoding: Disabled
+[2026.10.13-22.42.19:487][  0]LogModuleManager: InternalLoadLibrary: 'MeshUtilities' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MeshUtilities.dylib')
+[2026.10.13-22.42.19:487][  0]LogModuleManager: InternalLoadLibrary: 'MaterialBaking' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MaterialBaking.dylib')
+[2026.10.13-22.42.19:487][  0]LogModuleManager: InternalLoadLibrary: 'MeshMergeUtilities' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MeshMergeUtilities.dylib')
+[2026.10.13-22.42.19:487][  0]LogModuleManager: InternalLoadLibrary: 'MeshReductionInterface' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MeshReductionInterface.dylib')
+[2026.10.13-22.42.19:488][  0]LogMeshReduction: Display: HLOD mesh reduction module (r.ProxyLODMeshReductionModule) set to "ProxyLODMeshReduction" which doesn't exist.
+[2026.10.13-22.42.19:488][  0]LogModuleManager: InternalLoadLibrary: 'QuadricMeshReduction' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-QuadricMeshReduction.dylib')
+[2026.10.13-22.42.19:488][  0]LogModuleManager: InternalLoadLibrary: 'SkeletalMeshReduction' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-SkeletalMeshReduction.dylib')
+[2026.10.13-22.42.19:495][  0]LogModuleManager: InternalLoadLibrary: 'MeshBoneReduction' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MeshBoneReduction.dylib')
+[2026.10.13-22.42.19:495][  0]LogMeshReduction: Display: Using QuadricMeshReduction for automatic static mesh reduction
+[2026.10.13-22.42.19:495][  0]LogMeshReduction: Display: Using SkeletalMeshReduction for automatic skeletal mesh reduction
+[2026.10.13-22.42.19:495][  0]LogMeshReduction: Display: No automatic mesh merging module available
+[2026.10.13-22.42.19:495][  0]LogMeshReduction: Display: No distributed automatic mesh merging module available
+[2026.10.13-22.42.19:495][  0]LogMeshMerging: No automatic mesh merging module available
+[2026.10.13-22.42.19:495][  0]LogMeshMerging: No distributed automatic mesh merging module available
+[2026.10.13-22.42.19:495][  0]LogModuleManager: InternalLoadLibrary: 'StaticMeshDescription' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-StaticMeshDescription.dylib')
+[2026.10.13-22.42.19:495][  0]LogModuleManager: InternalLoadLibrary: 'GeometryProcessingInterfaces' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GeometryProcessingInterfaces.dylib')
+[2026.10.13-22.42.19:502][  0]LogModuleManager: InternalLoadLibrary: 'NaniteBuilder' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NaniteBuilder.dylib')
+[2026.10.13-22.42.19:502][  0]LogModuleManager: InternalLoadLibrary: 'MeshBuilder' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MeshBuilder.dylib')
+[2026.10.13-22.42.19:507][  0]LogClass: Warning: ConsoleVariable-Backed Enum Property of type '/Script/Engine.EMobileLocalLightSetting' was set from a string. Please update the cvar in your ini files.
+[2026.10.13-22.42.19:514][  0]LogModuleManager: InternalLoadLibrary: 'KismetCompiler' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-KismetCompiler.dylib')
+[2026.10.13-22.42.19:514][  0]LogModuleManager: InternalLoadLibrary: 'MovieSceneTools' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MovieSceneTools.dylib')
+[2026.10.13-22.42.19:514][  0]LogModuleManager: InternalLoadLibrary: 'Sequencer' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Sequencer.dylib')
+[2026.10.13-22.42.19:530][  0]LogModuleManager: InternalLoadLibrary: 'AssetDefinition' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AssetDefinition.dylib')
+[2026.10.13-22.42.19:543][  0]LogModuleManager: InternalLoadLibrary: 'Media' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Media.dylib')
+[2026.10.13-22.42.19:564][  0]LogConfig: Applying CVar settings from Section [/Script/CQTest.CQTestSettings] File [Engine]
+[2026.10.13-22.42.19:573][  0]LogShaderCompilers: Display: Compiling shader autogen file: ../../Intermediate/ShaderAutogen/METAL_SM5/AutogenShaderHeaders.ush
+[2026.10.13-22.42.19:573][  0]LogShaderCompilers: Display: Autogen file is unchanged, skipping write.
+[2026.10.13-22.42.19:573][  0]LogVirtualization: Display: VirtualizationSystem name found in ini file: None
+[2026.10.13-22.42.19:573][  0]LogVirtualization: Display: FNullVirtualizationSystem mounted, virtualization will be disabled
+[2026.10.13-22.42.19:573][  0]LogInit: Running DelayedAutoRegister Phase ObjectSystemReady
+[2026.10.13-22.42.19:573][  0]LogModuleManager: StartProcessingNewlyLoadedObjects
+[2026.10.13-22.42.19:573][  0]LogModuleManager: InternalLoadLibrary: 'Core' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Core.dylib')
+[2026.10.13-22.42.19:573][  0]LogModuleManager: InternalLoadLibrary: 'Networking' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Networking.dylib')
+[2026.10.13-22.42.19:573][  0]LogModuleManager: InternalLoadLibrary: 'Messaging' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Messaging.dylib')
+[2026.10.13-22.42.19:574][  0]LogModuleManager: InternalLoadLibrary: 'MRMesh' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MRMesh.dylib')
+[2026.10.13-22.42.19:574][  0]LogModuleManager: InternalLoadLibrary: 'UnrealEd' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-UnrealEd.dylib')
+[2026.10.13-22.42.19:574][  0]LogModuleManager: InternalLoadLibrary: 'LandscapeEditorUtilities' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-LandscapeEditorUtilities.dylib')
+[2026.10.13-22.42.19:581][  0]LogModuleManager: InternalLoadLibrary: 'SubobjectDataInterface' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-SubobjectDataInterface.dylib')
+[2026.10.13-22.42.19:581][  0]LogModuleManager: InternalLoadLibrary: 'SlateCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-SlateCore.dylib')
+[2026.10.13-22.42.19:581][  0]LogModuleManager: InternalLoadLibrary: 'Slate' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Slate.dylib')
+[2026.10.13-22.42.19:581][  0]LogModuleManager: InternalLoadLibrary: 'MacMenu' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MacMenu.dylib')
+[2026.10.13-22.42.19:588][  0]LogModuleManager: InternalLoadLibrary: 'SlateReflector' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-SlateReflector.dylib')
+[2026.10.13-22.42.19:589][  0]LogModuleManager: InternalLoadLibrary: 'EditorStyle' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-EditorStyle.dylib')
+[2026.10.13-22.42.19:589][  0]LogSlate: InvalidateAllWidgets triggered.  All widgets were invalidated
+[2026.10.13-22.42.19:589][  0]LogSlate: InvalidateAllWidgets triggered.  All widgets were invalidated
+[2026.10.13-22.42.19:590][  0]LogModuleManager: InternalLoadLibrary: 'UMG' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-UMG.dylib')
+[2026.10.13-22.42.19:590][  0]LogModuleManager: InternalLoadLibrary: 'UMGEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-UMGEditor.dylib')
+[2026.10.13-22.42.19:590][  0]LogModuleManager: InternalLoadLibrary: 'ScriptableEditorWidgets' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ScriptableEditorWidgets.dylib')
+[2026.10.13-22.42.19:597][  0]LogModuleManager: InternalLoadLibrary: 'CollisionAnalyzer' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-CollisionAnalyzer.dylib')
+[2026.10.13-22.42.19:597][  0]LogModuleManager: InternalLoadLibrary: 'WorkspaceMenuStructure' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-WorkspaceMenuStructure.dylib')
+[2026.10.13-22.42.19:597][  0]LogModuleManager: InternalLoadLibrary: 'FunctionalTesting' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-FunctionalTesting.dylib')
+[2026.10.13-22.42.19:598][  0]LogModuleManager: InternalLoadLibrary: 'BehaviorTreeEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-BehaviorTreeEditor.dylib')
+[2026.10.13-22.42.19:606][  0]LogModuleManager: InternalLoadLibrary: 'GameplayTasksEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GameplayTasksEditor.dylib')
+[2026.10.13-22.42.19:613][  0]LogModuleManager: InternalLoadLibrary: 'StringTableEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-StringTableEditor.dylib')
+[2026.10.13-22.42.19:620][  0]LogModuleManager: InternalLoadLibrary: 'AssetTools' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AssetTools.dylib')
+[2026.10.13-22.42.19:620][  0]LogModuleManager: InternalLoadLibrary: 'VREditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-VREditor.dylib')
+[2026.10.13-22.42.19:620][  0]LogModuleManager: InternalLoadLibrary: 'MaterialEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MaterialEditor.dylib')
+[2026.10.13-22.42.19:621][  0]LogModuleManager: InternalLoadLibrary: 'Overlay' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Overlay.dylib')
+[2026.10.13-22.42.19:621][  0]LogModuleManager: InternalLoadLibrary: 'OverlayEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OverlayEditor.dylib')
+[2026.10.13-22.42.19:628][  0]LogModuleManager: InternalLoadLibrary: 'MediaAssets' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MediaAssets.dylib')
+[2026.10.13-22.42.19:628][  0]LogModuleManager: InternalLoadLibrary: 'ClothingSystemRuntimeNv' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ClothingSystemRuntimeNv.dylib')
+[2026.10.13-22.42.19:628][  0]LogModuleManager: InternalLoadLibrary: 'ClothingSystemEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ClothingSystemEditor.dylib')
+[2026.10.13-22.42.19:628][  0]LogModuleManager: InternalLoadLibrary: 'AnimationDataController' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AnimationDataController.dylib')
+[2026.10.13-22.42.19:635][  0]LogModuleManager: InternalLoadLibrary: 'TimeManagement' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TimeManagement.dylib')
+[2026.10.13-22.42.19:635][  0]LogModuleManager: InternalLoadLibrary: 'AnimGraph' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AnimGraph.dylib')
+[2026.10.13-22.42.19:635][  0]LogModuleManager: InternalLoadLibrary: 'WorldBookmark' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-WorldBookmark.dylib')
+[2026.10.13-22.42.19:643][  0]LogModuleManager: InternalLoadLibrary: 'WorldPartitionEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-WorldPartitionEditor.dylib')
+[2026.10.13-22.42.19:655][  0]LogModuleManager: InternalLoadLibrary: 'ImageWrapper' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ImageWrapper.dylib')
+[2026.10.13-22.42.19:655][  0]LogWorldPartition: Display: FWorldPartitionClassDescRegistry::Initialize started...
+[2026.10.13-22.42.19:656][  0]LogWorldPartition: Display: FWorldPartitionClassDescRegistry::Initialize took 945 us
+[2026.10.13-22.42.19:656][  0]LogModuleManager: InternalLoadLibrary: 'SceneOutliner' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-SceneOutliner.dylib')
+[2026.10.13-22.42.19:656][  0]LogModuleManager: InternalLoadLibrary: 'PacketHandler' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PacketHandler.dylib')
+[2026.10.13-22.42.19:656][  0]LogModuleManager: InternalLoadLibrary: 'NetworkReplayStreaming' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NetworkReplayStreaming.dylib')
+[2026.10.13-22.42.19:656][  0]LogModuleManager: InternalLoadLibrary: 'MassEntity' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MassEntity.dylib')
+[2026.10.13-22.42.19:666][  0]LogModuleManager: InternalLoadLibrary: 'MassEntityTestSuite' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MassEntityTestSuite.dylib')
+[2026.10.13-22.42.19:675][  0]LogModuleManager: InternalLoadLibrary: 'ElectraPlayerPluginHandler' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ElectraPlayerPluginHandler.dylib')
+[2026.10.13-22.42.19:686][  0]LogModuleManager: InternalLoadLibrary: 'ElectraPlayerRuntime' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ElectraPlayerRuntime.dylib')
+[2026.10.13-22.42.19:686][  0]LogModuleManager: InternalLoadLibrary: 'ElectraBase' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ElectraBase.dylib')
+[2026.10.13-22.42.19:686][  0]LogModuleManager: InternalLoadLibrary: 'ElectraSamples' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ElectraSamples.dylib')
+[2026.10.13-22.42.19:686][  0]LogModuleManager: InternalLoadLibrary: 'ElectraCodecFactory' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ElectraCodecFactory.dylib')
+[2026.10.13-22.42.19:686][  0]LogModuleManager: InternalLoadLibrary: 'ElectraDecoders' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ElectraDecoders.dylib')
+[2026.10.13-22.42.19:686][  0]LogModuleManager: InternalLoadLibrary: 'ElectraHTTPStream' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ElectraHTTPStream.dylib')
+[2026.10.13-22.42.19:686][  0]LogModuleManager: InternalLoadLibrary: 'ElectraSubtitles' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ElectraSubtitles.dylib')
+[2026.10.13-22.42.19:687][  0]LogModuleManager: InternalLoadLibrary: 'ElectraCDM' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ElectraCDM.dylib')
+[2026.10.13-22.42.19:687][  0]LogModuleManager: InternalLoadLibrary: 'ElectraPlayerPlugin' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ElectraPlayerPlugin.dylib')
+[2026.10.13-22.42.19:687][  0]LogElectraPlayerPlugin: Dummy Dynamic RHI detected. Electra Player plugin is not initialized.
+[2026.10.13-22.42.19:687][  0]LogModuleManager: InternalLoadLibrary: 'ElectraProtron' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ElectraProtron.dylib')
+[2026.10.13-22.42.19:694][  0]LogModuleManager: InternalLoadLibrary: 'AvfMedia' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AvfMedia.dylib')
+[2026.10.13-22.42.19:702][  0]LogModuleManager: InternalLoadLibrary: 'WebMMoviePlayer' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-WebMMoviePlayer.dylib')
+[2026.10.13-22.42.19:709][  0]LogModuleManager: InternalLoadLibrary: 'AndroidFileServer' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AndroidFileServer.dylib')
+[2026.10.13-22.42.19:717][  0]LogModuleManager: InternalLoadLibrary: 'BlueprintMaterialTextureNodes' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-BlueprintMaterialTextureNodes.dylib')
+[2026.10.13-22.42.19:725][  0]LogModuleManager: InternalLoadLibrary: 'EnhancedInput' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-EnhancedInput.dylib')
+[2026.10.13-22.42.19:734][  0]LogStats: UGameplayTagsManager::InitializeManager -  0.000 s
+[2026.10.13-22.42.19:734][  0]LogModuleManager: InternalLoadLibrary: 'InputBlueprintNodes' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-InputBlueprintNodes.dylib')
+[2026.10.13-22.42.19:744][  0]LogModuleManager: InternalLoadLibrary: 'BlueprintGraph' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-BlueprintGraph.dylib')
+[2026.10.13-22.42.19:744][  0]LogModuleManager: InternalLoadLibrary: 'MutableRuntime' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MutableRuntime.dylib')
+[2026.10.13-22.42.19:753][  0]LogModuleManager: InternalLoadLibrary: 'CustomizableObject' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-CustomizableObject.dylib')
+[2026.10.13-22.42.19:763][  0]LogModuleManager: InternalLoadLibrary: 'MutableTools' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MutableTools.dylib')
+[2026.10.13-22.42.19:764][  0]LogModuleManager: InternalLoadLibrary: 'AnimationSharing' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AnimationSharing.dylib')
+[2026.10.13-22.42.19:771][  0]LogModuleManager: InternalLoadLibrary: 'PropertyAccessNode' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PropertyAccessNode.dylib')
+[2026.10.13-22.42.19:779][  0]LogModuleManager: InternalLoadLibrary: 'NiagaraSimCaching' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NiagaraSimCaching.dylib')
+[2026.10.13-22.42.19:799][  0]LogModuleManager: InternalLoadLibrary: 'NiagaraCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NiagaraCore.dylib')
+[2026.10.13-22.42.19:800][  0]LogModuleManager: InternalLoadLibrary: 'Niagara' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Niagara.dylib')
+[2026.10.13-22.42.19:800][  0]LogNiagaraDebuggerClient: Niagara Debugger Client Initialized | Session: 39B0E00ADE3848808000000000004800 | Instance: F59BBEF61E472A1C7B05248CB498D212 (Jays-Mac-mini.local-28870).
+[2026.10.13-22.42.19:800][  0]LogModuleManager: InternalLoadLibrary: 'NiagaraEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NiagaraEditor.dylib')
+[2026.10.13-22.42.19:816][  0]LogModuleManager: InternalLoadLibrary: 'ContentBrowser' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ContentBrowser.dylib')
+[2026.10.13-22.42.19:816][  0]LogModuleManager: InternalLoadLibrary: 'ContentBrowserData' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ContentBrowserData.dylib')
+[2026.10.13-22.42.19:816][  0]LogModuleManager: InternalLoadLibrary: 'CollectionManager' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-CollectionManager.dylib')
+[2026.10.13-22.42.19:817][  0]LogCollectionManager: Loaded 0 collections in 0.000984 seconds
+[2026.10.13-22.42.19:817][  0]LogModuleManager: InternalLoadLibrary: 'DirectoryWatcher' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-DirectoryWatcher.dylib')
+[2026.10.13-22.42.19:817][  0]LogFileCache: Scanning file cache for directory '/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Saved/Collections/' took 0.00s
+[2026.10.13-22.42.19:818][  0]LogFileCache: Scanning file cache for directory '/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Content/Developers/jay/Collections/' took 0.00s
+[2026.10.13-22.42.19:818][  0]LogFileCache: Scanning file cache for directory '/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Content/Collections/' took 0.00s
+[2026.10.13-22.42.19:818][  0]LogCollectionManager: Fixed up redirectors for 0 collections in 0.000000 seconds (updated 0 objects)
+[2026.10.13-22.42.19:819][  0]LogModuleManager: InternalLoadLibrary: 'ToolMenus' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ToolMenus.dylib')
+[2026.10.13-22.42.19:820][  0]LogModuleManager: InternalLoadLibrary: 'LevelSequence' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-LevelSequence.dylib')
+[2026.10.13-22.42.19:820][  0]LogModuleManager: InternalLoadLibrary: 'NiagaraAnimNotifies' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NiagaraAnimNotifies.dylib')
+[2026.10.13-22.42.19:828][  0]LogModuleManager: InternalLoadLibrary: 'NNERuntimeORT' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NNERuntimeORT.dylib')
+[2026.10.13-22.42.19:845][  0]LogNNERuntimeORT: MakeRuntimeORTDml:
+[2026.10.13-22.42.19:845][  0]LogNNERuntimeORT:   DirectML:  no
+[2026.10.13-22.42.19:845][  0]LogNNERuntimeORT:   RHI D3D12: no
+[2026.10.13-22.42.19:845][  0]LogNNERuntimeORT:   D3D12:     n/a (checked in CanCreateModelGPU)
+[2026.10.13-22.42.19:845][  0]LogNNERuntimeORT: Interface availability:
+[2026.10.13-22.42.19:845][  0]LogNNERuntimeORT:   GPU: n/a (checked in CanCreateModelGPU)
+[2026.10.13-22.42.19:845][  0]LogNNERuntimeORT:   RDG: no
+[2026.10.13-22.42.19:845][  0]LogNNERuntimeORT: NNERuntimeORTDml can only cook!
+[2026.10.13-22.42.19:845][  0]LogModuleManager: InternalLoadLibrary: 'NNEEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NNEEditor.dylib')
+[2026.10.13-22.42.19:928][  0]LogModuleManager: InternalLoadLibrary: 'InterchangeNodes' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-InterchangeNodes.dylib')
+[2026.10.13-22.42.19:928][  0]LogModuleManager: InternalLoadLibrary: 'InterchangeFactoryNodes' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-InterchangeFactoryNodes.dylib')
+[2026.10.13-22.42.19:928][  0]LogModuleManager: InternalLoadLibrary: 'InterchangeImport' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-InterchangeImport.dylib')
+[2026.10.13-22.42.20:008][  0]LogModuleManager: InternalLoadLibrary: 'InterchangePipelines' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-InterchangePipelines.dylib')
+[2026.10.13-22.42.20:049][  0]LogModuleManager: InternalLoadLibrary: 'ActorSequence' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ActorSequence.dylib')
+[2026.10.13-22.42.20:057][  0]LogModuleManager: InternalLoadLibrary: 'ImgMediaEngine' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ImgMediaEngine.dylib')
+[2026.10.13-22.42.20:066][  0]LogModuleManager: InternalLoadLibrary: 'PythonScriptPlugin' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PythonScriptPlugin.dylib')
+[2026.10.13-22.42.20:066][  0]LogModuleManager: InternalLoadLibrary: 'ChaosCaching' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ChaosCaching.dylib')
+[2026.10.13-22.42.20:067][  0]LogModuleManager: InternalLoadLibrary: 'FullBodyIK' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-FullBodyIK.dylib')
+[2026.10.13-22.42.20:101][  0]LogModuleManager: InternalLoadLibrary: 'PBIK' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PBIK.dylib')
+[2026.10.13-22.42.20:129][  0]LogModuleManager: InternalLoadLibrary: 'ControlRig' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ControlRig.dylib')
+[2026.10.13-22.42.20:130][  0]LogModuleManager: InternalLoadLibrary: 'Constraints' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Constraints.dylib')
+[2026.10.13-22.42.20:130][  0]LogModuleManager: InternalLoadLibrary: 'ControlRigDeveloper' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ControlRigDeveloper.dylib')
+[2026.10.13-22.42.20:130][  0]LogModuleManager: InternalLoadLibrary: 'OptimusCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OptimusCore.dylib')
+[2026.10.13-22.42.20:142][  0]LogModuleManager: InternalLoadLibrary: 'OptimusDeveloper' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OptimusDeveloper.dylib')
+[2026.10.13-22.42.20:151][  0]LogModuleManager: InternalLoadLibrary: 'RigLogicLib' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-RigLogicLib.dylib')
+[2026.10.13-22.42.20:160][  0]LogModuleManager: InternalLoadLibrary: 'RigLogicDeveloper' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-RigLogicDeveloper.dylib')
+[2026.10.13-22.42.20:170][  0]LogModuleManager: InternalLoadLibrary: 'AnimationModifierLibrary' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AnimationModifierLibrary.dylib')
+[2026.10.13-22.42.20:180][  0]LogModuleManager: InternalLoadLibrary: 'AnimationData' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AnimationData.dylib')
+[2026.10.13-22.42.20:189][  0]LogModuleManager: InternalLoadLibrary: 'EngineCameras' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-EngineCameras.dylib')
+[2026.10.13-22.42.20:200][  0]LogModuleManager: InternalLoadLibrary: 'GameplayCameras' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GameplayCameras.dylib')
+[2026.10.13-22.42.20:217][  0]LogModuleManager: InternalLoadLibrary: 'CableComponent' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-CableComponent.dylib')
+[2026.10.13-22.42.20:227][  0]LogModuleManager: InternalLoadLibrary: 'SoundFields' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-SoundFields.dylib')
+[2026.10.13-22.42.20:236][  0]LogModuleManager: InternalLoadLibrary: 'ProceduralMeshComponent' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ProceduralMeshComponent.dylib')
+[2026.10.13-22.42.20:246][  0]LogModuleManager: InternalLoadLibrary: 'ResonanceAudio' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ResonanceAudio.dylib')
+[2026.10.13-22.42.20:256][  0]LogModuleManager: InternalLoadLibrary: 'RigVM' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-RigVM.dylib')
+[2026.10.13-22.42.20:256][  0]LogModuleManager: InternalLoadLibrary: 'RigVMDeveloper' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-RigVMDeveloper.dylib')
+[2026.10.13-22.42.20:257][  0]LogModuleManager: InternalLoadLibrary: 'PropertyBindingUtils' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PropertyBindingUtils.dylib')
+[2026.10.13-22.42.20:257][  0]LogModuleManager: InternalLoadLibrary: 'PropertyBindingUtilsTestSuite' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PropertyBindingUtilsTestSuite.dylib')
+[2026.10.13-22.42.20:266][  0]LogModuleManager: InternalLoadLibrary: 'CustomMeshComponent' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-CustomMeshComponent.dylib')
+[2026.10.13-22.42.20:276][  0]LogModuleManager: InternalLoadLibrary: 'Synthesis' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Synthesis.dylib')
+[2026.10.13-22.42.20:288][  0]LogModuleManager: InternalLoadLibrary: 'PropertyAccessEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PropertyAccessEditor.dylib')
+[2026.10.13-22.42.20:288][  0]LogModuleManager: InternalLoadLibrary: 'HairStrandsDeformer' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-HairStrandsDeformer.dylib')
+[2026.10.13-22.42.20:299][  0]LogModuleManager: InternalLoadLibrary: 'HairStrandsSolver' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-HairStrandsSolver.dylib')
+[2026.10.13-22.42.20:300][  0]LogModuleManager: InternalLoadLibrary: 'GeometryScriptingCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GeometryScriptingCore.dylib')
+[2026.10.13-22.42.20:300][  0]LogModuleManager: InternalLoadLibrary: 'MsQuicRuntime' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MsQuicRuntime.dylib')
+[2026.10.13-22.42.20:309][  0]LogModuleManager: InternalLoadLibrary: 'SignificanceManager' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-SignificanceManager.dylib')
+[2026.10.13-22.42.20:310][  0]LogModuleManager: InternalLoadLibrary: 'AudioSynesthesiaCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AudioSynesthesiaCore.dylib')
+[2026.10.13-22.42.20:310][  0]LogModuleManager: InternalLoadLibrary: 'AudioSynesthesia' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AudioSynesthesia.dylib')
+[2026.10.13-22.42.20:320][  0]LogModuleManager: InternalLoadLibrary: 'AudioAnalyzer' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AudioAnalyzer.dylib')
+[2026.10.13-22.42.20:320][  0]LogModuleManager: InternalLoadLibrary: 'StateTreeModule' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-StateTreeModule.dylib')
+[2026.10.13-22.42.20:320][  0]LogModuleManager: InternalLoadLibrary: 'TraceServices' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TraceServices.dylib')
+[2026.10.13-22.42.20:320][  0]LogModuleManager: InternalLoadLibrary: 'TraceAnalysis' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TraceAnalysis.dylib')
+[2026.10.13-22.42.20:321][  0]LogModuleManager: InternalLoadLibrary: 'StateTreeTestSuite' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-StateTreeTestSuite.dylib')
+[2026.10.13-22.42.20:335][  0]LogModuleManager: InternalLoadLibrary: 'LocationServicesBPLibrary' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-LocationServicesBPLibrary.dylib')
+[2026.10.13-22.42.20:344][  0]LogModuleManager: InternalLoadLibrary: 'MetasoundGraphCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MetasoundGraphCore.dylib')
+[2026.10.13-22.42.20:354][  0]LogModuleManager: InternalLoadLibrary: 'MetasoundGenerator' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MetasoundGenerator.dylib')
+[2026.10.13-22.42.20:370][  0]LogModuleManager: InternalLoadLibrary: 'MetasoundFrontend' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MetasoundFrontend.dylib')
+[2026.10.13-22.42.20:372][  0]LogModuleManager: InternalLoadLibrary: 'AudioChannelAgnosticCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AudioChannelAgnosticCore.dylib')
+[2026.10.13-22.42.20:372][  0]LogModuleManager: InternalLoadLibrary: 'MetasoundStandardNodes' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MetasoundStandardNodes.dylib')
+[2026.10.13-22.42.20:377][  0]LogModuleManager: InternalLoadLibrary: 'MetasoundEngine' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MetasoundEngine.dylib')
+[2026.10.13-22.42.20:389][  0]LogMetaSound: Display: MetaSound Page Target Initialized to 'Default'
+[2026.10.13-22.42.20:389][  0]LogModuleManager: InternalLoadLibrary: 'WaveTable' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-WaveTable.dylib')
+[2026.10.13-22.42.20:391][  0]LogAudio: Display: Registering Engine Module Parameter Interfaces...
+[2026.10.13-22.42.20:391][  0]LogMetaSound: MetaSound Engine Initialized
+[2026.10.13-22.42.20:391][  0]LogModuleManager: InternalLoadLibrary: 'MetasoundEngineTest' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MetasoundEngineTest.dylib')
+[2026.10.13-22.42.20:409][  0]LogModuleManager: InternalLoadLibrary: 'AudioWidgets' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AudioWidgets.dylib')
+[2026.10.13-22.42.20:410][  0]LogModuleManager: InternalLoadLibrary: 'AdvancedWidgets' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AdvancedWidgets.dylib')
+[2026.10.13-22.42.20:410][  0]LogModuleManager: InternalLoadLibrary: 'MetasoundEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MetasoundEditor.dylib')
+[2026.10.13-22.42.20:411][  0]LogModuleManager: InternalLoadLibrary: 'EnvironmentQueryEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-EnvironmentQueryEditor.dylib')
+[2026.10.13-22.42.20:421][  0]LogModuleManager: InternalLoadLibrary: 'UdpMessaging' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-UdpMessaging.dylib')
+[2026.10.13-22.42.20:431][  0]LogModuleManager: InternalLoadLibrary: 'TcpMessaging' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TcpMessaging.dylib')
+[2026.10.13-22.42.20:440][  0]LogModuleManager: InternalLoadLibrary: 'FacialAnimation' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-FacialAnimation.dylib')
+[2026.10.13-22.42.20:450][  0]LogModuleManager: InternalLoadLibrary: 'AssetManagerEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AssetManagerEditor.dylib')
+[2026.10.13-22.42.20:462][  0]LogModuleManager: InternalLoadLibrary: 'SourceControl' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-SourceControl.dylib')
+[2026.10.13-22.42.20:463][  0]SourceControl: Revision control is disabled
+[2026.10.13-22.42.20:463][  0]LogModuleManager: InternalLoadLibrary: 'TreeMap' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TreeMap.dylib')
+[2026.10.13-22.42.20:463][  0]LogModuleManager: InternalLoadLibrary: 'GameplayTagsEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GameplayTagsEditor.dylib')
+[2026.10.13-22.42.20:474][  0]LogModuleManager: InternalLoadLibrary: 'Scribble' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Scribble.dylib')
+[2026.10.13-22.42.20:474][  0]LogModuleManager: InternalLoadLibrary: 'Concert' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Concert.dylib')
+[2026.10.13-22.42.20:485][  0]LogModuleManager: InternalLoadLibrary: 'ConcertClient' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ConcertClient.dylib')
+[2026.10.13-22.42.20:495][  0]LogModuleManager: InternalLoadLibrary: 'ConcertTransport' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ConcertTransport.dylib')
+[2026.10.13-22.42.20:495][  0]LogModuleManager: InternalLoadLibrary: 'ConcertServer' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ConcertServer.dylib')
+[2026.10.13-22.42.20:505][  0]LogModuleManager: InternalLoadLibrary: 'SQLiteCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-SQLiteCore.dylib')
+[2026.10.13-22.42.20:516][  0]LogModuleManager: InternalLoadLibrary: 'ConcertSyncCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ConcertSyncCore.dylib')
+[2026.10.13-22.42.20:527][  0]LogModuleManager: InternalLoadLibrary: 'Zhoenus' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Zhoenus.dylib')
+[2026.10.13-22.42.20:631][  0]LogMetaSound: Display: Migrated Class Interface paged input defaults for MetaSound '/Game/Sound/Game/LevelSong.LevelSong'
+[2026.10.13-22.42.20:631][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/A-Miracle-I-Believe.A-Miracle-I-Believe for SaveThemAll.
+[2026.10.13-22.42.20:631][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Father-and-Son.Father-and-Son for SaveThemAll.
+[2026.10.13-22.42.20:631][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Love-Run-Wrong.Love-Run-Wrong for SaveThemAll.
+[2026.10.13-22.42.20:631][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Ode-to-TS-Part1.Ode-to-TS-Part1 for SaveThemAll.
+[2026.10.13-22.42.20:631][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Ode-to-TS-Part2.Ode-to-TS-Part2 for SaveThemAll.
+[2026.10.13-22.42.20:631][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Ode-to-TS-Part3.Ode-to-TS-Part3 for SaveThemAll.
+[2026.10.13-22.42.20:631][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Rage_Appropriate-converted.Rage_Appropriate-converted for SaveThemAll.
+[2026.10.13-22.42.20:631][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Rung-down-converted.Rung-down-converted for SaveThemAll.
+[2026.10.13-22.42.20:631][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Sunrise-Love-Calls.Sunrise-Love-Calls for SaveThemAll.
+[2026.10.13-22.42.20:631][  0]LogSaveThemAllGameMode: Prepared 9 runtime music entries for SaveThemAll.
+[2026.10.13-22.42.20:634][  0]LogMetaSound: Display: Migrated Class Interface paged input defaults for MetaSound '/Game/Sound/Lobby/LobbySong.LobbySong'
+[2026.10.13-22.42.20:634][  0]LogModuleManager: InternalLoadLibrary: 'DataflowEnginePlugin' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-DataflowEnginePlugin.dylib')
+[2026.10.13-22.42.20:635][  0]LogModuleManager: InternalLoadLibrary: 'DataflowEngine' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-DataflowEngine.dylib')
+[2026.10.13-22.42.20:635][  0]LogModuleManager: InternalLoadLibrary: 'DataflowSimulation' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-DataflowSimulation.dylib')
+[2026.10.13-22.42.20:636][  0]LogModuleManager: InternalLoadLibrary: 'DataflowNodes' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-DataflowNodes.dylib')
+[2026.10.13-22.42.20:638][  0]LogModuleManager: InternalLoadLibrary: 'CustomizableObjectEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-CustomizableObjectEditor.dylib')
+[2026.10.13-22.42.20:654][  0]LogMutable: Creating Mutable Customizable Object System.
+[2026.10.13-22.42.20:654][  0]LogModuleManager: InternalLoadLibrary: 'PCG' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PCG.dylib')
+[2026.10.13-22.42.20:678][  0]LogConfig: Applying CVar settings from Section [/Script/PCG.PCGEngineSettings] File [Engine]
+[2026.10.13-22.42.20:681][  0]LogModuleManager: InternalLoadLibrary: 'TraceUtilities' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TraceUtilities.dylib')
+[2026.10.13-22.42.20:692][  0]LogModuleManager: InternalLoadLibrary: 'AudioInsightsRuntime' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AudioInsightsRuntime.dylib')
+[2026.10.13-22.42.20:702][  0]LogModuleManager: InternalLoadLibrary: 'ChaosClothAsset' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ChaosClothAsset.dylib')
+[2026.10.13-22.42.20:715][  0]LogModuleManager: InternalLoadLibrary: 'ChaosClothAssetEngine' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ChaosClothAssetEngine.dylib')
+[2026.10.13-22.42.20:728][  0]LogModuleManager: InternalLoadLibrary: 'ChaosVDBlueprint' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ChaosVDBlueprint.dylib')
+[2026.10.13-22.42.20:737][  0]LogModuleManager: InternalLoadLibrary: 'WorldMetricsCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-WorldMetricsCore.dylib')
+[2026.10.13-22.42.20:748][  0]LogModuleManager: InternalLoadLibrary: 'WorldMetricsTest' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-WorldMetricsTest.dylib')
+[2026.10.13-22.42.20:758][  0]LogModuleManager: InternalLoadLibrary: 'CsvMetrics' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-CsvMetrics.dylib')
+[2026.10.13-22.42.20:768][  0]LogModuleManager: InternalLoadLibrary: 'UObjectPlugin' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-UObjectPlugin.dylib')
+[2026.10.13-22.42.20:778][  0]LogModuleManager: InternalLoadLibrary: 'VisualStudioCodeSourceCodeAccess' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-VisualStudioCodeSourceCodeAccess.dylib')
+[2026.10.13-22.42.20:788][  0]LogModuleManager: InternalLoadLibrary: 'XCodeSourceCodeAccess' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-XCodeSourceCodeAccess.dylib')
+[2026.10.13-22.42.20:798][  0]LogModuleManager: InternalLoadLibrary: 'NamingTokens' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NamingTokens.dylib')
+[2026.10.13-22.42.20:798][  0]LogModuleManager: InternalLoadLibrary: 'NamingTokensUI' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NamingTokensUI.dylib')
+[2026.10.13-22.42.20:799][  0]LogModuleManager: InternalLoadLibrary: 'NamingTokensUncookedOnly' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NamingTokensUncookedOnly.dylib')
+[2026.10.13-22.42.20:809][  0]LogModuleManager: InternalLoadLibrary: 'DumpGPUServices' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-DumpGPUServices.dylib')
+[2026.10.13-22.42.20:819][  0]LogModuleManager: InternalLoadLibrary: 'TakeMovieScene' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TakeMovieScene.dylib')
+[2026.10.13-22.42.20:819][  0]LogModuleManager: InternalLoadLibrary: 'NiagaraBlueprintNodes' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NiagaraBlueprintNodes.dylib')
+[2026.10.13-22.42.20:830][  0]LogModuleManager: InternalLoadLibrary: 'NiagaraFluids' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NiagaraFluids.dylib')
+[2026.10.13-22.42.20:840][  0]LogModuleManager: InternalLoadLibrary: 'NNEDenoiser' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NNEDenoiser.dylib')
+[2026.10.13-22.42.20:850][  0]LogConfig: Applying CVar settings from Section [/Script/NNEDenoiser.NNEDenoiserSettings] File [Engine]
+[2026.10.13-22.42.20:850][  0]LogModuleManager: InternalLoadLibrary: 'GLTFCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GLTFCore.dylib')
+[2026.10.13-22.42.20:851][  0]LogModuleManager: InternalLoadLibrary: 'InterchangeMessages' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-InterchangeMessages.dylib')
+[2026.10.13-22.42.20:851][  0]LogModuleManager: InternalLoadLibrary: 'InterchangeExport' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-InterchangeExport.dylib')
+[2026.10.13-22.42.20:861][  0]LogModuleManager: InternalLoadLibrary: 'InterchangeDispatcher' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-InterchangeDispatcher.dylib')
+[2026.10.13-22.42.20:861][  0]LogModuleManager: InternalLoadLibrary: 'InterchangeCommon' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-InterchangeCommon.dylib')
+[2026.10.13-22.42.20:861][  0]LogModuleManager: InternalLoadLibrary: 'InterchangeAnalytics' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-InterchangeAnalytics.dylib')
+[2026.10.13-22.42.20:872][  0]LogModuleManager: InternalLoadLibrary: 'InterchangeCommonParser' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-InterchangeCommonParser.dylib')
+[2026.10.13-22.42.20:872][  0]LogModuleManager: InternalLoadLibrary: 'InterchangeFbxParser' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-InterchangeFbxParser.dylib')
+[2026.10.13-22.42.20:872][  0]LogModuleManager: InternalLoadLibrary: 'OodleNetworkHandlerComponent' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OodleNetworkHandlerComponent.dylib')
+[2026.10.13-22.42.20:882][  0]LogModuleManager: InternalLoadLibrary: 'MetaHumanSDKRuntime' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MetaHumanSDKRuntime.dylib')
+[2026.10.13-22.42.20:893][  0]LogModuleManager: InternalLoadLibrary: 'TemplateSequence' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TemplateSequence.dylib')
+[2026.10.13-22.42.20:893][  0]LogModuleManager: InternalLoadLibrary: 'MovieRenderPipelineCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MovieRenderPipelineCore.dylib')
+[2026.10.13-22.42.20:912][  0]LogModuleManager: InternalLoadLibrary: 'ImageWriteQueue' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ImageWriteQueue.dylib')
+[2026.10.13-22.42.20:912][  0]LogModuleManager: InternalLoadLibrary: 'MovieRenderPipelineSettings' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MovieRenderPipelineSettings.dylib')
+[2026.10.13-22.42.20:927][  0]LogModuleManager: InternalLoadLibrary: 'MovieRenderPipelineRenderPasses' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MovieRenderPipelineRenderPasses.dylib')
+[2026.10.13-22.42.20:966][  0]LogModuleManager: InternalLoadLibrary: 'MovieRenderPipelineMP4Encoder' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MovieRenderPipelineMP4Encoder.dylib')
+[2026.10.13-22.42.20:977][  0]LogModuleManager: InternalLoadLibrary: 'UEOpenExrRTTI' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-UEOpenExrRTTI.dylib')
+[2026.10.13-22.42.20:977][  0]LogModuleManager: InternalLoadLibrary: 'SequencerScripting' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-SequencerScripting.dylib')
+[2026.10.13-22.42.20:977][  0]LogModuleManager: InternalLoadLibrary: 'OnlineBase' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OnlineBase.dylib')
+[2026.10.13-22.42.20:977][  0]LogModuleManager: InternalLoadLibrary: 'MediaPlate' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MediaPlate.dylib')
+[2026.10.13-22.42.20:989][  0]LogModuleManager: InternalLoadLibrary: 'MediaProfile' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MediaProfile.dylib')
+[2026.10.13-22.42.21:002][  0]LogModuleManager: InternalLoadLibrary: 'MediaCompositing' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MediaCompositing.dylib')
+[2026.10.13-22.42.21:013][  0]LogModuleManager: InternalLoadLibrary: 'MediaFrameworkUtilities' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MediaFrameworkUtilities.dylib')
+[2026.10.13-22.42.21:030][  0]LogModuleManager: InternalLoadLibrary: 'ImgMedia' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ImgMedia.dylib')
+[2026.10.13-22.42.21:044][  0]LogModuleManager: InternalLoadLibrary: 'AvfMediaCapture' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AvfMediaCapture.dylib')
+[2026.10.13-22.42.21:054][  0]LogModuleManager: InternalLoadLibrary: 'LocalizableMessage' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-LocalizableMessage.dylib')
+[2026.10.13-22.42.21:064][  0]LogModuleManager: InternalLoadLibrary: 'LocalizableMessageBlueprint' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-LocalizableMessageBlueprint.dylib')
+[2026.10.13-22.42.21:075][  0]LogModuleManager: InternalLoadLibrary: 'AutomationUtils' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AutomationUtils.dylib')
+[2026.10.13-22.42.21:086][  0]LogModuleManager: InternalLoadLibrary: 'BackChannel' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-BackChannel.dylib')
+[2026.10.13-22.42.21:096][  0]LogModuleManager: InternalLoadLibrary: 'ChaosNiagara' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ChaosNiagara.dylib')
+[2026.10.13-22.42.21:108][  0]LogModuleManager: InternalLoadLibrary: 'ChaosUserDataPT' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ChaosUserDataPT.dylib')
+[2026.10.13-22.42.21:108][  0]LogModuleManager: InternalLoadLibrary: 'Landmass' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Landmass.dylib')
+[2026.10.13-22.42.21:108][  0]LogModuleManager: InternalLoadLibrary: 'GeometryFlowCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GeometryFlowCore.dylib')
+[2026.10.13-22.42.21:108][  0]LogModuleManager: InternalLoadLibrary: 'GeometryFlowMeshProcessing' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GeometryFlowMeshProcessing.dylib')
+[2026.10.13-22.42.21:109][  0]LogModuleManager: InternalLoadLibrary: 'MutableAssetUserData' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MutableAssetUserData.dylib')
+[2026.10.13-22.42.21:119][  0]LogModuleManager: InternalLoadLibrary: 'ControlRigPhysics' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ControlRigPhysics.dylib')
+[2026.10.13-22.42.21:133][  0]LogModuleManager: InternalLoadLibrary: 'MeshModelingToolsExp' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MeshModelingToolsExp.dylib')
+[2026.10.13-22.42.21:134][  0]LogModuleManager: InternalLoadLibrary: 'ModelingUI' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ModelingUI.dylib')
+[2026.10.13-22.42.21:134][  0]LogModuleManager: InternalLoadLibrary: 'TedsCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TedsCore.dylib')
+[2026.10.13-22.42.21:148][  0]LogModuleManager: InternalLoadLibrary: 'TypedElementFramework' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TypedElementFramework.dylib')
+[2026.10.13-22.42.21:149][  0]LogModuleManager: InternalLoadLibrary: 'MassEntityEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MassEntityEditor.dylib')
+[2026.10.13-22.42.21:149][  0]LogModuleManager: InternalLoadLibrary: 'MassEntityDebugger' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MassEntityDebugger.dylib')
+[2026.10.13-22.42.21:160][  0]LogModuleManager: InternalLoadLibrary: 'GlobalConfigurationData' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GlobalConfigurationData.dylib')
+[2026.10.13-22.42.21:171][  0]LogModuleManager: InternalLoadLibrary: 'GlobalConfigurationDataCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GlobalConfigurationDataCore.dylib')
+[2026.10.13-22.42.21:171][  0]LogModuleManager: InternalLoadLibrary: 'GeometryDataflowNodes' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GeometryDataflowNodes.dylib')
+[2026.10.13-22.42.21:183][  0]LogModuleManager: InternalLoadLibrary: 'DataflowMedialSkeleton' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-DataflowMedialSkeleton.dylib')
+[2026.10.13-22.42.21:193][  0]LogModuleManager: InternalLoadLibrary: 'GeometryCollectionTracks' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GeometryCollectionTracks.dylib')
+[2026.10.13-22.42.21:205][  0]LogModuleManager: InternalLoadLibrary: 'GeometryCollectionSequencer' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GeometryCollectionSequencer.dylib')
+[2026.10.13-22.42.21:215][  0]LogModuleManager: InternalLoadLibrary: 'GeometryCollectionEngine' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GeometryCollectionEngine.dylib')
+[2026.10.13-22.42.21:216][  0]LogModuleManager: InternalLoadLibrary: 'GeometryCollectionNodes' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GeometryCollectionNodes.dylib')
+[2026.10.13-22.42.21:242][  0]LogModuleManager: InternalLoadLibrary: 'GeometryCollectionDepNodes' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GeometryCollectionDepNodes.dylib')
+[2026.10.13-22.42.21:254][  0]LogModuleManager: InternalLoadLibrary: 'RewindDebuggerRuntime' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-RewindDebuggerRuntime.dylib')
+[2026.10.13-22.42.21:265][  0]LogModuleManager: InternalLoadLibrary: 'RewindDebuggerVLogRuntime' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-RewindDebuggerVLogRuntime.dylib')
+[2026.10.13-22.42.21:276][  0]LogModuleManager: InternalLoadLibrary: 'ControlRigSpline' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ControlRigSpline.dylib')
+[2026.10.13-22.42.21:287][  0]LogModuleManager: InternalLoadLibrary: 'TweeningUtils' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TweeningUtils.dylib')
+[2026.10.13-22.42.21:288][  0]LogModuleManager: InternalLoadLibrary: 'IKRig' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-IKRig.dylib')
+[2026.10.13-22.42.21:302][  0]LogModuleManager: InternalLoadLibrary: 'IKRigDeveloper' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-IKRigDeveloper.dylib')
+[2026.10.13-22.42.21:313][  0]LogModuleManager: InternalLoadLibrary: 'RigLogicModule' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-RigLogicModule.dylib')
+[2026.10.13-22.42.21:313][  0]LogModuleManager: InternalLoadLibrary: 'PhysicsControl' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PhysicsControl.dylib')
+[2026.10.13-22.42.21:314][  0]LogModuleManager: InternalLoadLibrary: 'PhysicsControlUncookedOnly' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PhysicsControlUncookedOnly.dylib')
+[2026.10.13-22.42.21:325][  0]LogModuleManager: InternalLoadLibrary: 'GameplayCamerasUncookedOnly' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GameplayCamerasUncookedOnly.dylib')
+[2026.10.13-22.42.21:336][  0]LogModuleManager: InternalLoadLibrary: 'InputDebugging' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-InputDebugging.dylib')
+[2026.10.13-22.42.21:348][  0]LogModuleManager: InternalLoadLibrary: 'ModelViewViewModel' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ModelViewViewModel.dylib')
+[2026.10.13-22.42.21:348][  0]LogModuleManager: InternalLoadLibrary: 'ModelViewViewModelBlueprint' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ModelViewViewModelBlueprint.dylib')
+[2026.10.13-22.42.21:360][  0]LogModuleManager: InternalLoadLibrary: 'ModelViewViewModelDebugger' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ModelViewViewModelDebugger.dylib')
+[2026.10.13-22.42.21:371][  0]LogModuleManager: InternalLoadLibrary: 'AssetTags' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AssetTags.dylib')
+[2026.10.13-22.42.21:382][  0]LogModuleManager: InternalLoadLibrary: 'AudioWidgetsCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AudioWidgetsCore.dylib')
+[2026.10.13-22.42.21:383][  0]LogModuleManager: InternalLoadLibrary: 'AndroidPermission' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AndroidPermission.dylib')
+[2026.10.13-22.42.21:394][  0]LogAndroidPermission: UAndroidPermissionCallbackProxy::GetInstance
+[2026.10.13-22.42.21:394][  0]LogModuleManager: InternalLoadLibrary: 'ActorLayerUtilities' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ActorLayerUtilities.dylib')
+[2026.10.13-22.42.21:394][  0]LogModuleManager: InternalLoadLibrary: 'GooglePAD' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GooglePAD.dylib')
+[2026.10.13-22.42.21:405][  0]LogModuleManager: InternalLoadLibrary: 'MobilePatchingUtils' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MobilePatchingUtils.dylib')
+[2026.10.13-22.42.21:417][  0]LogModuleManager: InternalLoadLibrary: 'HairStrandsRuntime' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-HairStrandsRuntime.dylib')
+[2026.10.13-22.42.21:428][  0]LogModuleManager: InternalLoadLibrary: 'ComputeDataInterface' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ComputeDataInterface.dylib')
+[2026.10.13-22.42.21:439][  0]LogModuleManager: InternalLoadLibrary: 'EditableComputeGraph' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-EditableComputeGraph.dylib')
+[2026.10.13-22.42.21:450][  0]LogModuleManager: InternalLoadLibrary: 'CommonUI' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-CommonUI.dylib')
+[2026.10.13-22.42.21:450][  0]LogModuleManager: InternalLoadLibrary: 'CommonInput' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-CommonInput.dylib')
+[2026.10.13-22.42.21:451][  0]LogModuleManager: InternalLoadLibrary: 'AudioCapture' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AudioCapture.dylib')
+[2026.10.13-22.42.21:463][  0]LogAudioCaptureCore: Display: No Audio Capture implementations found. Audio input will be silent.
+[2026.10.13-22.42.21:463][  0]LogAudioCaptureCore: Display: No Audio Capture implementations found. Audio input will be silent.
+[2026.10.13-22.42.21:463][  0]LogModuleManager: InternalLoadLibrary: 'AudioCaptureRtAudio' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AudioCaptureRtAudio.dylib')
+[2026.10.13-22.42.21:463][  0]LogModuleManager: InternalLoadLibrary: 'MeshModelingTools' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MeshModelingTools.dylib')
+[2026.10.13-22.42.21:464][  0]LogModuleManager: InternalLoadLibrary: 'ModelingComponents' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ModelingComponents.dylib')
+[2026.10.13-22.42.21:464][  0]LogModuleManager: InternalLoadLibrary: 'GeometryFramework' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GeometryFramework.dylib')
+[2026.10.13-22.42.21:464][  0]LogModuleManager: InternalLoadLibrary: 'ModelingOperators' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ModelingOperators.dylib')
+[2026.10.13-22.42.21:464][  0]LogModuleManager: InternalLoadLibrary: 'AppleImageUtils' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AppleImageUtils.dylib')
+[2026.10.13-22.42.21:476][  0]LogModuleManager: InternalLoadLibrary: 'AppleImageUtilsBlueprintSupport' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AppleImageUtilsBlueprintSupport.dylib')
+[2026.10.13-22.42.21:487][  0]LogModuleManager: InternalLoadLibrary: 'StateTreeDeveloper' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-StateTreeDeveloper.dylib')
+[2026.10.13-22.42.21:487][  0]LogModuleManager: InternalLoadLibrary: 'StateTreeEditorModule' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-StateTreeEditorModule.dylib')
+[2026.10.13-22.42.21:488][  0]LogModuleManager: InternalLoadLibrary: 'GeometryCache' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GeometryCache.dylib')
+[2026.10.13-22.42.21:488][  0]LogModuleManager: InternalLoadLibrary: 'GeometryCacheEd' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GeometryCacheEd.dylib')
+[2026.10.13-22.42.21:489][  0]LogModuleManager: InternalLoadLibrary: 'GeometryCacheTracks' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GeometryCacheTracks.dylib')
+[2026.10.13-22.42.21:500][  0]LogModuleManager: InternalLoadLibrary: 'GeometryCacheSequencer' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GeometryCacheSequencer.dylib')
+[2026.10.13-22.42.21:511][  0]LogModuleManager: InternalLoadLibrary: 'SkeletalMerging' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-SkeletalMerging.dylib')
+[2026.10.13-22.42.21:512][  0]LogModuleManager: InternalLoadLibrary: 'GeometryAlgorithms' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GeometryAlgorithms.dylib')
+[2026.10.13-22.42.21:512][  0]LogModuleManager: InternalLoadLibrary: 'DynamicMesh' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-DynamicMesh.dylib')
+[2026.10.13-22.42.21:512][  0]LogModuleManager: InternalLoadLibrary: 'MeshFileUtils' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MeshFileUtils.dylib')
+[2026.10.13-22.42.21:523][  0]LogModuleManager: InternalLoadLibrary: 'ArchVisCharacter' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ArchVisCharacter.dylib')
+[2026.10.13-22.42.21:535][  0]LogModuleManager: InternalLoadLibrary: 'ConsoleVariablesEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ConsoleVariablesEditor.dylib')
+[2026.10.13-22.42.21:536][  0]LogModuleManager: InternalLoadLibrary: 'ConsoleVariablesEditorRuntime' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ConsoleVariablesEditorRuntime.dylib')
+[2026.10.13-22.42.21:536][  0]LogModuleManager: InternalLoadLibrary: 'FileSandboxCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-FileSandboxCore.dylib')
+[2026.10.13-22.42.21:536][  0]LogModuleManager: InternalLoadLibrary: 'ConcertSyncClient' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ConcertSyncClient.dylib')
+[2026.10.13-22.42.21:537][  0]LogModuleManager: InternalLoadLibrary: 'ConcertSharedSlate' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ConcertSharedSlate.dylib')
+[2026.10.13-22.42.21:537][  0]LogModuleManager: InternalLoadLibrary: 'TakesCore' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TakesCore.dylib')
+[2026.10.13-22.42.21:537][  0]LogModuleManager: InternalLoadLibrary: 'TakeTrackRecorders' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TakeTrackRecorders.dylib')
+[2026.10.13-22.42.21:538][  0]LogModuleManager: InternalLoadLibrary: 'TakeRecorderSources' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TakeRecorderSources.dylib')
+[2026.10.13-22.42.21:550][  0]LogModuleManager: InternalLoadLibrary: 'TakeRecorder' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TakeRecorder.dylib')
+[2026.10.13-22.42.21:551][  0]LogModuleManager: InternalLoadLibrary: 'TakeRecorderEditor' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TakeRecorderEditor.dylib')
+[2026.10.13-22.42.21:563][  0]LogModuleManager: InternalLoadLibrary: 'CacheTrackRecorder' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-CacheTrackRecorder.dylib')
+[2026.10.13-22.42.21:575][  0]LogModuleManager: InternalLoadLibrary: 'TakeRecorderNamingTokens' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TakeRecorderNamingTokens.dylib')
+[2026.10.13-22.42.21:596][  0]LogUObjectArray: 55309 objects as part of root set at end of initial load.
+[2026.10.13-22.42.21:596][  0]LogUObjectArray: CloseDisregardForGC: 0/0 objects in disregard for GC pool
+[2026.10.13-22.42.21:606][  0]LogModuleManager: InternalLoadLibrary: 'ProfileVisualizer' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ProfileVisualizer.dylib')
+[2026.10.13-22.42.21:668][  0]LogTemp: Error test: UE::UnifiedErrorTest::Empty: [Empty error]
+[2026.10.13-22.42.21:668][  0]LogTemp: Error with param: UE::UnifiedErrorTest::WithInt: [Error with int -7]
+[2026.10.13-22.42.21:668][  0]LogTemp: Error with context: UE::UnifiedErrorTest::Empty: [Empty error]
+[2026.10.13-22.42.21:668][  0]LogTemp: FError that has been invalidated: ::: []
+[2026.10.13-22.42.21:668][  0]LogTemp: FError that has been moved from: ::: []
+[2026.10.13-22.42.21:689][  0]LogAutomationTest: Error: Saving and loading a serialized object containing FText properties failed to maintain FText values.
+[2026.10.13-22.42.21:689][  0]LogEngine: Initializing Engine...
+[2026.10.13-22.42.21:689][  0]LogModuleManager: InternalLoadLibrary: 'TypedElementRuntime' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TypedElementRuntime.dylib')
+[2026.10.13-22.42.21:701][  0]LogNetVersion: Set ProjectVersion to 1.0.0.0. Version Checksum will be recalculated on next use.
+[2026.10.13-22.42.21:701][  0]LogInit: Texture streaming: Disabled
+[2026.10.13-22.42.21:705][  0]LogModuleManager: InternalLoadLibrary: 'MessagingRpc' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MessagingRpc.dylib')
+[2026.10.13-22.42.21:705][  0]LogModuleManager: InternalLoadLibrary: 'PortalRpc' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PortalRpc.dylib')
+[2026.10.13-22.42.21:705][  0]LogModuleManager: InternalLoadLibrary: 'PortalServices' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PortalServices.dylib')
+[2026.10.13-22.42.21:706][  0]LogModuleManager: InternalLoadLibrary: 'StreamingPauseRendering' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-StreamingPauseRendering.dylib')
+[2026.10.13-22.42.21:717][  0]LogModuleManager: InternalLoadLibrary: 'MovieScene' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MovieScene.dylib')
+[2026.10.13-22.42.21:717][  0]LogModuleManager: InternalLoadLibrary: 'MovieSceneTracks' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MovieSceneTracks.dylib')
+[2026.10.13-22.42.21:718][  0]LogModuleManager: InternalLoadLibrary: 'CinematicCamera' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-CinematicCamera.dylib')
+[2026.10.13-22.42.21:718][  0]LogModuleManager: InternalLoadLibrary: 'SparseVolumeTexture' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-SparseVolumeTexture.dylib')
+[2026.10.13-22.42.21:718][  0]LogCsvProfiler: Display: Metadata set : largeworldcoordinates="1"
+[2026.10.13-22.42.21:718][  0]LogChaosDD: Creating Chaos Debug Draw Scene for world Untitled
+[2026.10.13-22.42.21:719][  0]LogNiagara: UAV Float16 is not supported, compressed GPU emitters will be disabled.
+[2026.10.13-22.42.21:719][  0]LogModuleManager: InternalLoadLibrary: 'ChaosVDRuntime' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ChaosVDRuntime.dylib')
+[2026.10.13-22.42.21:720][  0]LogModuleManager: InternalLoadLibrary: 'MovieSceneCapture' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MovieSceneCapture.dylib')
+[2026.10.13-22.42.21:720][  0]LogEngine: GameWindow did not exist.  Was created
+[2026.10.13-22.42.21:721][  0]LogSlate: Updating window title bar state: overlay mode, drag disabled, window buttons hidden, title bar hidden
+[2026.10.13-22.42.21:721][  0]LogUIActionRouter: Display: Found 0 derived classes when attemping to create action router (CommonUIActionRouterBase)
+[2026.10.13-22.42.21:721][  0]LogInit: Display: Game Engine Initialized.
+[2026.10.13-22.42.21:721][  0]LogNNEDenoiser: Ray Tracing is not enabled, therefore NNEDenoiser is not registered!
+[2026.10.13-22.42.21:722][  0]LogPython: Python enabled via CVar 'Engine.Python.IsEnabledByDefault'
+[2026.10.13-22.42.21:722][  0]LogPython: Using Python 3.11.8
+[2026.10.13-22.42.21:871][  0]LogPython: Running python command: python -c "import pkg_resources;dist=pkg_resources.working_set.find(pkg_resources.Requirement.parse('ue-pipinstall-utils'));exit(dist.version!='0.1.5' if dist is not None else 1)"
+[2026.10.13-22.42.21:943][  0]LogPython: Running python command: python -m ue_parse_plugin_reqs  -vv "/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Intermediate/PipInstall/merged_requirements.in" "/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Intermediate/PipInstall/merged_requirements.txt"
+[2026.10.13-22.42.22:027][  0]LogPython: DEBUG:root:Found matching installed version: certifi 2023.7.22 <=> certifi==2023.7.22
+[2026.10.13-22.42.22:027][  0]LogPython: DEBUG:root:Found matching installed version: chardet 3.0.4 <=> chardet==3.0.4
+[2026.10.13-22.42.22:027][  0]LogPython: DEBUG:root:Found matching installed version: charset-normalizer 2.1.1 <=> charset-normalizer==2.1.1
+[2026.10.13-22.42.22:027][  0]LogPython: DEBUG:root:Found matching installed version: filelock 3.13.1 <=> filelock==3.13.1
+[2026.10.13-22.42.22:027][  0]LogPython: DEBUG:root:Found matching installed version: fsspec 2023.10.0 <=> fsspec==2023.10.0
+[2026.10.13-22.42.22:027][  0]LogPython: DEBUG:root:Found matching installed version: idna 2.10 <=> idna==2.10
+[2026.10.13-22.42.22:027][  0]LogPython: DEBUG:root:Found matching installed version: Jinja2 3.1.2 <=> Jinja2==3.1.2
+[2026.10.13-22.42.22:027][  0]LogPython: DEBUG:root:Found matching installed version: MarkupSafe 2.1.3 <=> MarkupSafe==2.1.3
+[2026.10.13-22.42.22:027][  0]LogPython: DEBUG:root:Found matching installed version: mpmath 1.3.0 <=> mpmath==1.3.0
+[2026.10.13-22.42.22:027][  0]LogPython: DEBUG:root:Found matching installed version: networkx 3.2.1 <=> networkx==3.2.1
+[2026.10.13-22.42.22:027][  0]LogPython: DEBUG:root:Found matching installed version: numpy 1.26.4 <=> numpy==1.26.4
+[2026.10.13-22.42.22:027][  0]LogPython: DEBUG:root:Found matching installed version: Pillow 10.1.0 <=> Pillow==10.1.0
+[2026.10.13-22.42.22:027][  0]LogPython: DEBUG:root:Found matching installed version: protobuf 4.24.0 <=> protobuf==4.24.0
+[2026.10.13-22.42.22:027][  0]LogPython: DEBUG:root:Found matching installed version: requests 2.28.1 <=> requests==2.28.1
+[2026.10.13-22.42.22:027][  0]LogPython: DEBUG:root:Found matching installed version: scipy 1.11.4 <=> scipy==1.11.4
+[2026.10.13-22.42.22:027][  0]LogPython: DEBUG:root:Found matching installed version: sympy 1.13.1 <=> sympy==1.13.1
+[2026.10.13-22.42.22:027][  0]LogPython: DEBUG:root:Found matching installed version: typing-extensions 4.12.2 <=> typing-extensions==4.12.2
+[2026.10.13-22.42.22:027][  0]LogPython: DEBUG:root:Found matching installed version: urllib3 1.25.11 <=> urllib3==1.25.11
+[2026.10.13-22.42.22:027][  0]LogPython: DEBUG:root:Found matching installed version: opencv-python 4.5.5.62 <=> opencv-python==4.5.5.62
+[2026.10.13-22.42.22:148][  0]LogNiagaraEditor: GEditor isn't valid! Particle reset commands will not work for Niagara components!
+[2026.10.13-22.42.22:148][  0]LogModuleManager: InternalLoadLibrary: 'SessionServices' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-SessionServices.dylib')
+[2026.10.13-22.42.22:152][  0]LogMac: Attached monitors:
+[2026.10.13-22.42.22:153][  0]LogMac: Screen: LG Monitor, Resolution: 1920x1080, Points: 1920x1080, WorkArea: (0, 76) -> (1920, 1050), Scale: 1.00
+[2026.10.13-22.42.22:153][  0]LogMac: Found 1 attached monitors.
+[2026.10.13-22.42.22:153][  0]LogCsvProfiler: Display: Metadata set : raytracing="0"
+[2026.10.13-22.42.22:153][  0]LogModuleManager: InternalLoadLibrary: 'OpusDecoderElectra' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OpusDecoderElectra.dylib')
+[2026.10.13-22.42.22:166][  0]LogModuleManager: InternalLoadLibrary: 'AppleProResMedia' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AppleProResMedia.dylib')
+[2026.10.13-22.42.22:179][  0]LogModuleManager: InternalLoadLibrary: 'ElectraPlayerFactory' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ElectraPlayerFactory.dylib')
+[2026.10.13-22.42.22:191][  0]LogModuleManager: InternalLoadLibrary: 'ElectraProtronFactory' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ElectraProtronFactory.dylib')
+[2026.10.13-22.42.22:191][  0]LogModuleManager: InternalLoadLibrary: 'MP4Utilities' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MP4Utilities.dylib')
+[2026.10.13-22.42.22:191][  0]LogModuleManager: InternalLoadLibrary: 'MP4Boxes' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MP4Boxes.dylib')
+[2026.10.13-22.42.22:191][  0]LogModuleManager: InternalLoadLibrary: 'MP4Muxer' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-MP4Muxer.dylib')
+[2026.10.13-22.42.22:204][  0]LogModuleManager: InternalLoadLibrary: 'AppleProResDecoderElectra' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AppleProResDecoderElectra.dylib')
+[2026.10.13-22.42.22:218][  0]LogModuleManager: InternalLoadLibrary: 'ImgMediaFactory' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-ImgMediaFactory.dylib')
+[2026.10.13-22.42.22:219][  0]LogModuleManager: InternalLoadLibrary: 'OpenExrWrapper' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-OpenExrWrapper.dylib')
+[2026.10.13-22.42.22:219][  0]LogModuleManager: InternalLoadLibrary: 'TmvMedia' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TmvMedia.dylib')
+[2026.10.13-22.42.22:219][  0]LogModuleManager: InternalLoadLibrary: 'WmfMediaFactory' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-WmfMediaFactory.dylib')
+[2026.10.13-22.42.22:219][  0]LogModuleManager: InternalLoadLibrary: 'AvfMediaFactory' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AvfMediaFactory.dylib')
+[2026.10.13-22.42.22:220][  0]LogModuleManager: InternalLoadLibrary: 'WebMMedia' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-WebMMedia.dylib')
+[2026.10.13-22.42.22:220][  0]LogModuleManager: InternalLoadLibrary: 'WebMMediaFactory' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-WebMMediaFactory.dylib')
+[2026.10.13-22.42.22:220][  0]LogModuleManager: InternalLoadLibrary: 'CharacterAI' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-CharacterAI.dylib')
+[2026.10.13-22.42.22:232][  0]LogModuleManager: InternalLoadLibrary: 'PlanarCut' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-PlanarCut.dylib')
+[2026.10.13-22.42.22:233][  0]LogModuleManager: InternalLoadLibrary: 'FractureEngine' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-FractureEngine.dylib')
+[2026.10.13-22.42.22:240][  0]LogEditorDataStorage: Initializing
+[2026.10.13-22.42.22:240][  0]LogEditorDataStorage: Initializing TEDS Core.
+[2026.10.13-22.42.22:241][  0]LogEditorDataStorage: Initialized TEDS Core.
+[2026.10.13-22.42.22:241][  0]LogEditorDataStorage: Initializing TEDS Compatibility.
+[2026.10.13-22.42.22:241][  0]LogEditorDataStorage: Initialized TEDS Compatibility.
+[2026.10.13-22.42.22:242][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'ActorLayersWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:242][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'AlertWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:242][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'AlertHeaderWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:242][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'UObjectLabelWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:242][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'FolderCompatibilityWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:242][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'DiskSizeWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:242][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'AssetDataItemTypeWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:242][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'AssetDataLabelWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:242][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'AssetDataVirtualPathWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:242][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'AssetNameWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:242][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'DynamicAssetDataColumnBaseWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:242][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'DynamicAssetDataColumnBaseWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:242][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'DynamicAssetDataColumnBaseWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:242][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'DynamicAssetDataColumnBaseWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:242][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'DynamicAssetDataColumnBaseWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:242][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'StaticMeshTrianglesWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:242][  0]LogModuleManager: InternalLoadLibrary: 'TedsTypeInfo' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-TedsTypeInfo.dylib')
+[2026.10.13-22.42.22:243][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'OutlinerUnsavedWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:243][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'OutlinerUnsavedHeaderConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:243][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'SocketWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:243][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'TypeInfoWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:243][  0]LogEditorDataStorageUI: Warning: Unable to register widget factory 'VisibilityWidgetConstructor' as purpose '0' isn't registered.
+[2026.10.13-22.42.22:243][  0]LogEditorDataStorage: Initialized
+[2026.10.13-22.42.22:243][  0]LogInit: Display: Starting Game.
+[2026.10.13-22.42.22:243][  0]LogGlobalStatus: Browse Started Browse: "/Game/Map/Level-1?Name=Player"
+[2026.10.13-22.42.22:243][  0]LogNet: Browse: /Game/Map/Level-1?Name=Player
+[2026.10.13-22.42.22:243][  0]LogLoad: LoadMap: /Game/Map/Level-1?Name=Player
+[2026.10.13-22.42.22:243][  0]LogWorld: BeginTearingDown for /Temp/Untitled_0
+[2026.10.13-22.42.22:243][  0]LogWorld: UWorld::CleanupWorld for Untitled, bSessionEnded=true, bCleanupResources=true
+[2026.10.13-22.42.22:243][  0]LogSlate: InvalidateAllWidgets triggered.  All widgets were invalidated
+[2026.10.13-22.42.22:254][  0]LogUObjectHash: Compacting FUObjectHashTables data took   0.29ms
+[2026.10.13-22.42.22:274][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/A-Miracle-I-Believe.A-Miracle-I-Believe for SaveThemAll.
+[2026.10.13-22.42.22:274][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Father-and-Son.Father-and-Son for SaveThemAll.
+[2026.10.13-22.42.22:274][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Love-Run-Wrong.Love-Run-Wrong for SaveThemAll.
+[2026.10.13-22.42.22:274][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Ode-to-TS-Part1.Ode-to-TS-Part1 for SaveThemAll.
+[2026.10.13-22.42.22:274][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Ode-to-TS-Part2.Ode-to-TS-Part2 for SaveThemAll.
+[2026.10.13-22.42.22:274][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Ode-to-TS-Part3.Ode-to-TS-Part3 for SaveThemAll.
+[2026.10.13-22.42.22:274][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Rage_Appropriate-converted.Rage_Appropriate-converted for SaveThemAll.
+[2026.10.13-22.42.22:274][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Rung-down-converted.Rung-down-converted for SaveThemAll.
+[2026.10.13-22.42.22:274][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Sunrise-Love-Calls.Sunrise-Love-Calls for SaveThemAll.
+[2026.10.13-22.42.22:274][  0]LogSaveThemAllGameMode: Prepared 9 runtime music entries for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/A-Miracle-I-Believe.A-Miracle-I-Believe for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Father-and-Son.Father-and-Son for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Love-Run-Wrong.Love-Run-Wrong for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Ode-to-TS-Part1.Ode-to-TS-Part1 for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Ode-to-TS-Part2.Ode-to-TS-Part2 for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Ode-to-TS-Part3.Ode-to-TS-Part3 for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Rage_Appropriate-converted.Rage_Appropriate-converted for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Rung-down-converted.Rung-down-converted for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Sunrise-Love-Calls.Sunrise-Love-Calls for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Prepared 9 runtime music entries for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/A-Miracle-I-Believe.A-Miracle-I-Believe for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Father-and-Son.Father-and-Son for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Love-Run-Wrong.Love-Run-Wrong for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Ode-to-TS-Part1.Ode-to-TS-Part1 for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Ode-to-TS-Part2.Ode-to-TS-Part2 for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Ode-to-TS-Part3.Ode-to-TS-Part3 for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Rage_Appropriate-converted.Rage_Appropriate-converted for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Rung-down-converted.Rung-down-converted for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Sunrise-Love-Calls.Sunrise-Love-Calls for SaveThemAll.
+[2026.10.13-22.42.22:275][  0]LogSaveThemAllGameMode: Prepared 9 runtime music entries for SaveThemAll.
+[2026.10.13-22.42.22:491][  0]LogChaosDD: Creating Chaos Debug Draw Scene for world Level-1
+[2026.10.13-22.42.22:492][  0]LogModuleManager: InternalLoadLibrary: 'AIModule' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AIModule.dylib')
+[2026.10.13-22.42.22:493][  0]LogModuleManager: InternalLoadLibrary: 'NavigationSystem' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-NavigationSystem.dylib')
+[2026.10.13-22.42.22:493][  0]LogModuleManager: InternalLoadLibrary: 'AITestSuite' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AITestSuite.dylib')
+[2026.10.13-22.42.22:494][  0]LogModuleManager: InternalLoadLibrary: 'GameplayDebugger' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-GameplayDebugger.dylib')
+[2026.10.13-22.42.22:494][  0]LogLoad: Game class is 'SaveThemAllV1_C'
+[2026.10.13-22.42.22:494][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/A-Miracle-I-Believe.A-Miracle-I-Believe for SaveThemAll.
+[2026.10.13-22.42.22:494][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Father-and-Son.Father-and-Son for SaveThemAll.
+[2026.10.13-22.42.22:494][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Love-Run-Wrong.Love-Run-Wrong for SaveThemAll.
+[2026.10.13-22.42.22:494][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Ode-to-TS-Part1.Ode-to-TS-Part1 for SaveThemAll.
+[2026.10.13-22.42.22:494][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Ode-to-TS-Part2.Ode-to-TS-Part2 for SaveThemAll.
+[2026.10.13-22.42.22:494][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Ode-to-TS-Part3.Ode-to-TS-Part3 for SaveThemAll.
+[2026.10.13-22.42.22:494][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Rage_Appropriate-converted.Rage_Appropriate-converted for SaveThemAll.
+[2026.10.13-22.42.22:494][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Rung-down-converted.Rung-down-converted for SaveThemAll.
+[2026.10.13-22.42.22:494][  0]LogSaveThemAllGameMode: Found music path /Game/Sound/Game/Sunrise-Love-Calls.Sunrise-Love-Calls for SaveThemAll.
+[2026.10.13-22.42.22:494][  0]LogSaveThemAllGameMode: Prepared 9 runtime music entries for SaveThemAll.
+[2026.10.13-22.42.22:495][  0]LogStaticMesh: Display: Waiting on static mesh StaticMesh /Game/Geometry/SM_MERGED_Three_Column_Covered_Floor.SM_MERGED_Three_Column_Covered_Floor being ready before playing
+[2026.10.13-22.42.22:495][  0]LogStaticMesh: Display: Waiting on static mesh StaticMesh /Game/Map/_GENERATED/jay/Cylinder_109A4C24.Cylinder_109A4C24 being ready before playing
+[2026.10.13-22.42.22:495][  0]LogStaticMesh: Display: Waiting on static mesh StaticMesh /Game/Map/_GENERATED/jay/Cylinder_380CFF62.Cylinder_380CFF62 being ready before playing
+[2026.10.13-22.42.22:495][  0]LogStaticMesh: Display: Waiting on static mesh StaticMesh /Game/Map/_GENERATED/jay/Cylinder_B35146F9.Cylinder_B35146F9 being ready before playing
+[2026.10.13-22.42.22:495][  0]LogStaticMesh: Display: Waiting on static mesh StaticMesh /Game/Map/_GENERATED/jay/Extrude_1EC11CBC.Extrude_1EC11CBC being ready before playing
+[2026.10.13-22.42.22:495][  0]LogStaticMesh: Display: Waiting on static mesh StaticMesh /Game/Map/_GENERATED/jay/Extrude_93C6656B.Extrude_93C6656B being ready before playing
+[2026.10.13-22.42.22:495][  0]LogStaticMesh: Display: Waiting on static mesh StaticMesh /Game/Map/_GENERATED/jay/Extrude_B3311247.Extrude_B3311247 being ready before playing
+[2026.10.13-22.42.22:495][  0]LogStaticMesh: Display: Waiting on static mesh StaticMesh /Game/Map/_GENERATED/jay/Path_A0974E1D.Path_A0974E1D being ready before playing
+[2026.10.13-22.42.22:495][  0]LogStaticMesh: Display: Waiting on static mesh StaticMesh /Game/Map/_GENERATED/jay/Path_A557CE1A.Path_A557CE1A being ready before playing
+[2026.10.13-22.42.22:495][  0]LogStaticMesh: Display: Waiting on static mesh StaticMesh /Game/Geometry/Meshes/goal-v1.goal-v1 being ready before playing
+[2026.10.13-22.42.22:495][  0]LogStaticMesh: Display: Waiting on static mesh StaticMesh /Game/Map/_GENERATED/jay/Extrude_A1731E78.Extrude_A1731E78 being ready before playing
+[2026.10.13-22.42.22:495][  0]LogStaticMesh: Display: Waiting on static mesh StaticMesh /Game/Geometry/SM_MERGED_TemplateCube_Rounded_152.SM_MERGED_TemplateCube_Rounded_152 being ready before playing
+[2026.10.13-22.42.22:495][  0]LogStaticMesh: Display: Waiting on static mesh StaticMesh /Game/Geometry/SM_MERGED_TemplateCube_Rounded_74.SM_MERGED_TemplateCube_Rounded_74 being ready before playing
+[2026.10.13-22.42.22:495][  0]LogStaticMesh: Display: Waiting on static mesh StaticMesh /Game/Map/_GENERATED/jay/Extrude_72760FA7.Extrude_72760FA7 being ready before playing
+[2026.10.13-22.42.22:495][  0]LogStaticMesh: Display: Waiting on static mesh StaticMesh /Game/Sky/SM_Zhoenus_SkySphere.SM_Zhoenus_SkySphere being ready before playing
+[2026.10.13-22.42.22:559][  0]LogWorld: Bringing World /Game/Map/Level-1.Level-1 up for play (max tick rate 0) at 2026.10.14-05.42.22
+[2026.10.13-22.42.22:559][  0]LogWorld: Bringing up level for play took: 0.063843
+[2026.10.13-22.42.22:559][  0]LogEnhancedInput: Enhanced Input local player subsystem has initialized the user settings!
+[2026.10.13-22.42.22:559][  0]LogModuleManager: InternalLoadLibrary: 'Voice' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-Voice.dylib')
+[2026.10.13-22.42.22:563][  0]LogTemp: DonutFlyerSpawner 'DonutFlyerSpawner_1' requested 100 flyers and spawned 100 after 172 attempts.
+[2026.10.13-22.42.22:569][  0]LogSaveThemAllGameMode: Error: 3-peat Number of attempts 12, Index 6, Selected song: /Game/Sound/Game/Rage_Appropriate-converted.Rage_Appropriate-converted
+[2026.10.13-22.42.22:569][  0]LogSaveThemAllGameMode: Warning: Failed to create background music component for /Game/Sound/Game/Rage_Appropriate-converted.Rage_Appropriate-converted.
+[2026.10.13-22.42.22:570][  0]LogLevelVideoSurfaceManager: Prepared 220 movie entries for randomized level playback.
+[2026.10.13-22.42.22:571][  0]LogLevelVideoSurfaceManager: Applied randomized video surface material to SM_MERGED_TemplateCube_Rounded_5.
+[2026.10.13-22.42.22:571][  0]LogLevelVideoSurfaceManager: Applied randomized video surface material to SM_MERGED_TemplateCube_Rounded_8.
+[2026.10.13-22.42.22:571][  0]LogLevelVideoSurfaceManager: Applied randomized video surface material to SM_MERGED_TemplateCube_Rounded_11.
+[2026.10.13-22.42.22:571][  0]LogLevelVideoSurfaceManager: Applied randomized video surface material to StaticMeshActor_2.
+[2026.10.13-22.42.22:571][  0]LogLevelVideoSurfaceManager: Warning: Failed to open a random level video.
+[2026.10.13-22.42.22:571][  0]LogPlanetBody: Planet body cached authored core bounds: min X=-119100.000 Y=-144300.000 Z=-22415.000 max X=119100.000 Y=119100.000 Z=31035.000.
+[2026.10.13-22.42.22:571][  0]LogPlanetBody: Planet body initialized at center X=-31560.000 Y=-5710.000 Z=-1498877.500 with radius 1500000.0.
+[2026.10.13-22.42.22:571][  0]LogPlanetSurfaceRuntime: Planet surface runtime is waiting outside the authored core before generating tiles.
+[2026.10.13-22.42.22:571][  0]LogViewport: Display: Viewport MouseLockMode Changed, DoNotLock -> LockOnCapture
+[2026.10.13-22.42.22:571][  0]LogViewport: Display: Viewport MouseCaptureMode Changed, NoCapture -> CapturePermanently
+[2026.10.13-22.42.22:572][  0]LogLoad: Took 0.328233 seconds to LoadMap(/Game/Map/Level-1)
+[2026.10.13-22.42.22:572][  0]LogGlobalStatus: LoadMap Load map complete /Game/Map/Level-1
+[2026.10.13-22.42.22:572][  0]LogModuleManager: InternalLoadLibrary: 'AutomationWorker' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AutomationWorker.dylib')
+[2026.10.13-22.42.22:572][  0]LogModuleManager: InternalLoadLibrary: 'AutomationController' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-AutomationController.dylib')
+[2026.10.13-22.42.22:572][  0]LogModuleManager: InternalLoadLibrary: 'SequenceRecorder' ('/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/libZhoenusEditor-SequenceRecorder.dylib')
+[2026.10.13-22.42.22:660][  0]LogAssetRegistry: Display: CleanupOrphanedCacheFiles (PreLoad): 1 .ref files found, 1 referenced binaries
+[2026.10.13-22.42.22:660][  0]LogAssetRegistry: Display: CleanupOrphanedCacheFiles: 1 total binaries, 1 referenced (kept), 0 old-style pre-migration (kept), 0 orphans deleted, 0 orphans locked (kept)
+[2026.10.13-22.42.22:660][  0]LogAssetRegistry: Display: FindShardedCacheFiles: 1 via .ref, 0 via migration fallback, 1 total
+[2026.10.13-22.42.22:660][  0]LogAssetRegistry: Display: LoadCacheFiles: loading 1 cache files, memory-mapping=enabled
+[2026.10.13-22.42.22:762][  0]LogAssetRegistry: Display: Asset registry cache read as 121.4 MiB from ../../Intermediate/CachedAssetRegistry/CachedAssetRegistry_0_411E247DDF4530AF8CB3869244E16A99.bin (memory-mapped=no, platform unsupported)
+[2026.10.13-22.42.22:762][  0]LogAssetRegistry: Display: AssetDataGatherer spent 0.102s loading caches from ../../Intermediate/CachedAssetRegistry.
+[2026.10.13-22.42.22:828][  0]LogAssetRegistry: AssetRegistryGather time 0.1270s: AssetDataDiscovery 0.0000s, AssetDataGather 0.1062s, StoreResults 0.0208s. Wall time 3.5030s.
+	NumCachedDirectories 0. NumUncachedDirectories 3290. NumCachedFiles 9823. NumUncachedFiles 0.
+	BackgroundTickInterruptions 0.
+[2026.10.13-22.42.22:829][  0]LogAssetRegistry: Display: Starting OnFilesLoaded.Broadcast
+[2026.10.13-22.42.22:830][  0]LogAssetRegistry: Display: Completed OnFilesLoaded.Broadcast: 0.001s
+[2026.10.13-22.42.22:830][  0]LogInit: Running DelayedAutoRegister Phase EndOfEngineInit
+[2026.10.13-22.42.22:877][  0]LogInit: Display: Engine is initialized. Leaving FEngineLoop::Init()
+[2026.10.13-22.42.22:877][  0]LogLoad: (Engine Initialization) Total time: 5.15 seconds
+[2026.10.13-22.42.22:877][  0]LogSaveThemAllGameMode: SaveThemAll initial donuts: requested 100, spawned 100.
+[2026.10.13-22.42.22:878][  0]LogZhoenusTalkingHead: Display: asking the model at /var/folders/x0/vq6dbxcs3wn5cf9lhgr03g180000gn/T/tmp.bxdhK8jUUE/node/gpt-oss.sock: How do I save the flyers?
+[2026.10.13-22.42.22:878][  0]LogSaveThemAllGameMode: Spawned talking head assistant above 'StaticMeshActor_2' at X=-40544.954 Y=-29699.278 Z=1958.224.
+[2026.10.13-22.42.22:879][  0]LogAutomationController: Ignoring very large delta of 17248774.80 seconds in calls to FAutomationControllerManager::Tick() and not penalizing unresponsive tests
+[2026.10.13-22.42.22:879][  0]LogZhoenusTalkingHead: Display: no model reply (unreachable: no model at /var/folders/x0/vq6dbxcs3wn5cf9lhgr03g180000gn/T/tmp.bxdhK8jUUE/node/gpt-oss.sock (errno 2)) after 0.00 s; kept the built-in reply
+[2026.10.13-22.42.22:879][  0]LogSlate: InvalidateAllWidgets triggered.  All widgets were invalidated
+[2026.10.13-22.42.22:879][  0]LogPython: Display: Running start-up script /Volumes/Micro-Data-Transfer/Zhoenus/unreal/Engine/Plugins/Animation/IKRig/Content/Python/init_unreal.py... started...
+[2026.10.13-22.42.22:896][  0]LogPython: Display: Running start-up script /Volumes/Micro-Data-Transfer/Zhoenus/unreal/Engine/Plugins/Animation/IKRig/Content/Python/init_unreal.py... took 17.163 ms
+[2026.10.13-22.42.22:896][  0]LogPython: Display: Running start-up script /Volumes/Micro-Data-Transfer/Zhoenus/unreal/Engine/Plugins/Animation/ControlRig/Content/Python/init_unreal.py... started...
+[2026.10.13-22.42.22:899][  0]LogPython: registering <class 'ControlRigWorkflows.workflow_deformation_rig_preset.provider'>
+
+[2026.10.13-22.42.22:907][  0]LogPython: Display: Running start-up script /Volumes/Micro-Data-Transfer/Zhoenus/unreal/Engine/Plugins/Animation/ControlRig/Content/Python/init_unreal.py... took 10.740 ms (total: 27.904 ms)
+[2026.10.13-22.42.22:907][  0]LogPython: Display: Running start-up script /Volumes/Micro-Data-Transfer/Zhoenus/unreal/Engine/Plugins/MovieScene/MovieRenderPipeline/Content/Python/init_unreal.py... started...
+[2026.10.13-22.42.22:907][  0]LogPython: Display: Running start-up script /Volumes/Micro-Data-Transfer/Zhoenus/unreal/Engine/Plugins/MovieScene/MovieRenderPipeline/Content/Python/init_unreal.py... took 447 us (total: 28.352 ms)
+[2026.10.13-22.42.23:431][486]LogCore: Engine exit requested (reason: Mac GracefulTerminationHandler)
+[2026.10.13-22.42.23:655][487]Log file closed, 10/14/26 05:42:23

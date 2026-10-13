@@ -1,0 +1,30 @@
+{
+  "accepted": true,
+  "receipt": {
+    "receipt_version": 2,
+    "request_id": 4586261452476968111,
+    "offer_id": 16069614985952244482,
+    "assignment_id": 9288111485905133421,
+    "submitter_node_id": "jay-macmini",
+    "worker_node_id": "claude-code-macmini",
+    "summary": "The Zhoenus talking head asks the local model: the player's question goes to gpt_oss_serve over its Unix socket off the game thread, the answer replaces the caption, and the built-in reply stays when no model answers",
+    "success_criteria": "Zhoenus commit on GitHub dev adding the bridge and updating its doc; ZhoenusEditor builds; on Level-1 in game mode the head logs a model answer within 300 s and, with no server, keeps its built-in reply; nothing left running. Checked by task-records/2026-10-14-zhoenus-talking-head-model/verify.sh as pushed in loadngo d92bb078.",
+    "artifact_hint": "/Users/jay/pudding/reviews/2026-10-14-task-zhoenus-talking-head/result.md",
+    "artifact_copy_path": "/Users/jay/pudding/loadngo/task-records/2026-10-14-zhoenus-talking-head-model/result.md",
+    "artifact_hash_hex": "5b6f2f979715fb43ea4e0436525b4fcd7b7d7045565be1a469ddc0510d8a1823",
+    "result_note": "result delivered by Claude Code; see the artifact",
+    "accepted_at": 1791931345,
+    "submitted_at": 1791931297,
+    "reward": null
+  },
+  "receipt_commitment_hex": "7defeb55e482cb6327122242d653f5a244997097929bf0f79ae8fdebf40ef449",
+  "reward": null,
+  "verification": {
+    "command": "git -C /Users/jay/pudding/loadngo diff --quiet d92bb078 -- task-records/2026-10-14-zhoenus-talking-head-model/verify.sh && bash /Users/jay/pudding/loadngo/task-records/2026-10-14-zhoenus-talking-head-model/verify.sh",
+    "exit_code": 0,
+    "stdout": "verify: ok: 1: 543ffa3632217af5f22453b42b784c5790340b8a on zhoenus github/dev with the bridge and its doc\nverify: ok: 2: ZhoenusEditor builds at 543ffa3\nverify: ok: 3: the talking head answered from the model after 17 s: model replied in 2.03 s: Wake them with a ZapEm shot, then use the ship’s smooth six‑axis turns to guide the awakened flyers into the goal gate—keep the battery topped up so you can keep steering them.\nverify: ok: 4: without the model the talking head kept its built-in reply\nverify: ok: 5: no ZhoenusEditor left; gpt_oss_serve stopped cleanly on SIGTERM\nverify: accepted\n",
+    "stdout_dropped_bytes": 0,
+    "stderr": "",
+    "stderr_dropped_bytes": 0
+  }
+}

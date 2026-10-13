@@ -1,0 +1,98 @@
+Setting up bundled DotNet SDK
+/Volumes/Micro-Data-Transfer/Zhoenus/unreal/Engine/Binaries/ThirdParty/DotNet/10.0/mac-arm64
+Running dotnet Engine/Binaries/DotNET/UnrealBuildTool/UnrealBuildTool.dll ZhoenusEditor Mac Development -Project=/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Zhoenus.uproject -WaitMutex
+Log file: /Volumes/Micro-Data-Transfer/Zhoenus/unreal/Engine/Programs/UnrealBuildTool/Log.txt
+Determining max actions to execute in parallel (12 physical cores, 12 logical cores)
+  Executing up to 12 processes, one per physical core
+Using 'git status' to determine working set for adaptive non-unity build (/Volumes/Micro-Data-Transfer/Zhoenus/unreal).
+Using 'git status' to determine working set for adaptive non-unity build (/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus).
+UbaServer - Listening on 0.0.0.0:1345
+Waiting for 'git status' command to complete
+Project 'ZhoenusEditor' depends on plugin 'RawInput' which was deprecated in 5.8 and will soon be removed. Please update your dependencies.
+Building ZhoenusEditor...
+===== Toolchain Information =====
+Using Clang compiler 21.1.6 (/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++)
+  Apple clang version 21.0.0 (clang-2100.1.1.101) Target: arm64-apple-darwin25.6.0 Thread model: posix InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin
+Using Clang archiver (/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/libtool)
+  Apple clang version 21.0.0 (clang-2100.1.1.101) Target: arm64-apple-darwin25.6.0 Thread model: posix InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin
+[Adaptive Build] Excluded from Zhoenus unity file: ZhoenusModelCall.cpp, ZhoenusTalkingHeadAssistant.cpp
+=================================
+Using Unreal Build Accelerator local executor to run 2 action(s)
+  CPU 12 physical cores, 12 logical cores
+  Memory 64 GB physical, 22.4 GB/64 GB committed
+  UBA Storage capacity 40 GB
+[1/2] ApplePostBuildSync Executing PostBuildSync [/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/ZhoenusEditor] [NoUba]
+Discovering modules, targets and source code for project...
+Adding projects for all targets...
+Adding projects for all targets took 0.14s
+Adding projects for all game projects took 0.00s
+Adding projects for all modules took 0.64s
+Project 'ZhoenusEditor' depends on plugin 'RawInput' which was deprecated in 5.8 and will soon be removed. Please update your dependencies.
+Compiling with Mac SDK 26.5, minimum Target OS version 14.00
+Adding additional Xcode project info took 0.63s
+Writing project files...
+Writing xcode workspace /Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Intermediate/ProjectFiles/Zhoenus_Mac_ZhoenusEditor.xcworkspace
+Writing project files... 100%
+Writing project files took 0.10s
+params: UBT_NO_POST_DEPLOY=true /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild build -workspace "/Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Intermediate/ProjectFiles/Zhoenus_Mac_ZhoenusEditor.xcworkspace" -scheme "ZhoenusEditor" -configuration "Development" -destination generic/platform="macOS" CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES  -allowProvisioningUpdates UE_XCODE_BUILD_MODE=PostBuildSync -hideShellScriptEnvironment
+No certs of truth reported, skipping certificate verification...
+Known Apple certificate for this team is installed!
+Command line invocation:
+    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild build -workspace /Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Intermediate/ProjectFiles/Zhoenus_Mac_ZhoenusEditor.xcworkspace -scheme ZhoenusEditor -configuration Development -destination generic/platform=macOS CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES -allowProvisioningUpdates UE_XCODE_BUILD_MODE=PostBuildSync -hideShellScriptEnvironment
+
+Build settings from command line:
+    CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES
+    UE_XCODE_BUILD_MODE = PostBuildSync
+
+Run pre-actions
+
+SchemeAction Touch\ UBT\ generated\ tiles /var/folders/x0/vq6dbxcs3wn5cf9lhgr03g180000gn/T/SchemeScriptAction-90FzRE.sh
+    cd /var/folders/x0/vq6dbxcs3wn5cf9lhgr03g180000gn/T/
+    /bin/sh -c /var/folders/x0/vq6dbxcs3wn5cf9lhgr03g180000gn/T/SchemeScriptAction-90FzRE.sh
+
+ComputePackagePrebuildTargetDependencyGraph
+
+CreateBuildRequest
+
+SendProjectDescription
+
+CreateBuildOperation
+
+ComputeTargetDependencyGraph
+note: Building targets in dependency order
+note: Target dependency graph (1 target)
+    Target 'ZhoenusEditor' in project 'ZhoenusEditor (Mac)' (no dependencies)
+
+GatherProvisioningInputs
+
+CreateBuildDescription
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -v -E -dM -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk -x c -c /dev/null
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/usr/bin/actool --version --output-format xml1
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/usr/bin/ibtool --version --output-format xml1
+
+Build description signature: 785b98cd5e00e147c4500d4209a80e84
+Build description path: /Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Intermediate/ProjectFilesMac/build/XCBuildData/785b98cd5e00e147c4500d4209a80e84.xcbuilddata
+PhaseScriptExecution Copy\ Executable\ into\ .app /Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/ZhoenusEditor\ (Mac).build/Mac/ZhoenusEditor.build/Script-3097EBDCC3DF37D4C6F7616E.sh (in target 'ZhoenusEditor' from project 'ZhoenusEditor (Mac)')
+    cd /Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Intermediate/ProjectFilesMac
+    /bin/sh -c /Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/ZhoenusEditor\\\ \\\(Mac\\\).build/Mac/ZhoenusEditor.build/Script-3097EBDCC3DF37D4C6F7616E.sh
+Copying executable and any standalone dylibs into /Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/ZhoenusEditor.app/Contents/MacOS but do not overwrite unless src is newer
+
+ProcessInfoPlistFile /Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/ZhoenusEditor.app/Contents/Info.plist /Volumes/Micro-Data-Transfer/Zhoenus/unreal/Engine/Intermediate/Build/Mac/Resources/Info-Editor.Template.plist (in target 'ZhoenusEditor' from project 'ZhoenusEditor (Mac)')
+    cd /Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Intermediate/ProjectFilesMac
+    builtin-infoPlistUtility /Volumes/Micro-Data-Transfer/Zhoenus/unreal/Engine/Intermediate/Build/Mac/Resources/Info-Editor.Template.plist -producttype com.apple.product-type.application -genpkginfo /Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/ZhoenusEditor.app/Contents/PkgInfo -expandbuildsettings -format xml -platform macosx -additionalcontentfile /Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/ZhoenusEditor\ \(Mac\).build/Mac/ZhoenusEditor.build/assetcatalog_generated_info.plist -o /Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/ZhoenusEditor.app/Contents/Info.plist
+
+** BUILD SUCCEEDED **
+
+[2/2] WriteMetadata ZhoenusEditor.target [NoUba]
+
+Total time in Unreal Build Accelerator local executor: 4.13 seconds
+Output binary: /Volumes/Micro-Data-Transfer/Zhoenus/zhoenus/Binaries/Mac/ZhoenusEditor
+Deploying ZhoenusEditor Mac Development...
+Deploying now!
+
+Result: Succeeded
+Total execution time: 9.05 seconds
+Trace written to file /Volumes/Micro-Data-Transfer/Zhoenus/unreal/Engine/Programs/UnrealBuildTool/Trace.uba with size 3.6kb
