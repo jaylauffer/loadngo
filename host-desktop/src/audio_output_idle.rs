@@ -286,10 +286,14 @@ mod tests {
         );
         switch.request(true);
         assert_eq!(seen.recv_timeout(Duration::from_secs(5)), Ok(true));
-        // A burst of requests: whatever is applied last is the latest one.
+        // A burst of requests ending on the opposite of what was last
+        // applied: whatever is applied last must be that latest request.
+        // (A burst ending on the state already applied may rightly apply
+        // nothing: the job still running from the last request can see the
+        // wanted state is already in place.)
         for _ in 0..50 {
-            switch.request(false);
             switch.request(true);
+            switch.request(false);
         }
         // The pool is shared with every other test, so allow for queueing:
         // wait for the first switch, then until none follows for a while.
@@ -297,7 +301,35 @@ mod tests {
         while let Ok(open) = seen.recv_timeout(Duration::from_secs(2)) {
             last = Some(open);
         }
-        assert_eq!(last, Some(true));
+        assert_eq!(last, Some(false));
+    }
+
+    /// A request that arrives while a switch is in progress is applied
+    /// after it, by the same job: nothing is lost to the `busy` hand-off.
+    #[test]
+    fn a_request_during_a_switch_is_applied_after_it() {
+        let (applied, seen) = channel();
+        let (go, gate) = channel::<()>();
+        let gate = Mutex::new(gate);
+        let switch = OutputSwitch::new(true, move |open| {
+            let _ = applied.send(open);
+            // Hold the switch until the test says so.
+            let _ = gate
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .recv_timeout(Duration::from_secs(5));
+        });
+        switch.request(false);
+        assert_eq!(seen.recv_timeout(Duration::from_secs(5)), Ok(false));
+        // The close is still in progress: this open must not be dropped.
+        switch.request(true);
+        go.send(()).unwrap();
+        assert_eq!(
+            seen.recv_timeout(Duration::from_secs(5)),
+            Ok(true),
+            "the open requested during the close was lost"
+        );
+        go.send(()).unwrap();
     }
 
     #[test]
