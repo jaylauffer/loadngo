@@ -1,0 +1,8 @@
+task_submitter_request_sent request_id=11204491046708918060 submitter_node_id=demo-submitter bytes=882 expires_at=1791923893
+task_submitter_offer request_id=11204491046708918060 offer_id=17440007537036669882 worker_node_id=demo-node source=127.0.0.1:47973 estimated_duration_secs=0 max_status_interval_secs=0 reward_schemes= note=
+task_submitter_accept_sent assignment_id=10078873057072238347 request_id=11204491046708918060 offer_id=17440007537036669882 worker_node_id=demo-node reward=none
+task_submitter_status assignment_id=10078873057072238347 worker_node_id=demo-node source=127.0.0.1:47973 state=running next_check_in_by=1791923923 note=task node accepted assignment and started execution
+task_submitter_result assignment_id=10078873057072238347 worker_node_id=demo-node source=127.0.0.1:47973 artifact_hint=/Users/jay/pudding/loadngo/task-records/2026-10-14-task-tools-stop-polling/demo/node/artifact.txt note=task node command completed successfully
+task_submitter_verify_output assignment_id=10078873057072238347 stream=stdout line=checked
+task_submitter_verify assignment_id=10078873057072238347 success=true exit_code=0
+task_submitter_ack_sent assignment_id=10078873057072238347 accepted=true target=127.0.0.1:47973 reward=none

@@ -1,0 +1,30 @@
+{
+  "accepted": true,
+  "receipt": {
+    "receipt_version": 2,
+    "request_id": 17763077972088297954,
+    "offer_id": 9246361488446106448,
+    "assignment_id": 4158359342281407921,
+    "submitter_node_id": "jay-macmini",
+    "worker_node_id": "claude-code-macmini",
+    "summary": "The Task tools stop polling their sockets: task_worker, task_submitter, task_offer and task_request wait on proactor receives instead of 25 ms sleeps, and task-node keeps a receive posted instead of a 250 ms timer",
+    "success_criteria": "Change on loadngo GitHub dev touching task_worker.rs and task-node.rs; no thread::sleep in network/src/bin; fmt, strict clippy, network tests and a named proactor-receive test pass; CI green on four platforms; idle at 20 context switches or fewer (from 163/167/53) with deadlines kept; loopback cycles with task_worker and task-node accepted. Checked by task-records/2026-10-14-task-tools-stop-polling/verify.sh as pushed in loadngo 6300d0ce.",
+    "artifact_hint": "/Users/jay/pudding/reviews/2026-10-14-task-tools-stop-polling/result.md",
+    "artifact_copy_path": "/Users/jay/pudding/loadngo/task-records/2026-10-14-task-tools-stop-polling/result.md",
+    "artifact_hash_hex": "f6086983fd262caa1eae446813695ed8537a5eee68625f954b4be357fbf42429",
+    "result_note": "result delivered by Claude Code; see the artifact",
+    "accepted_at": 1791923903,
+    "submitted_at": 1791923850,
+    "reward": null
+  },
+  "receipt_commitment_hex": "be560c06b53e9caf547d083a4cd81ca6fba86506ff0abac342af99f0cd2c9b08",
+  "reward": null,
+  "verification": {
+    "command": "git -C /Users/jay/pudding/loadngo diff --quiet 6300d0ce -- task-records/2026-10-14-task-tools-stop-polling/verify.sh && bash /Users/jay/pudding/loadngo/task-records/2026-10-14-task-tools-stop-polling/verify.sh",
+    "exit_code": 0,
+    "stdout": "verify: ok: 1: efdb1ecc20aeee2f6520cb0390876498ffb166d9 on github/dev, changes task_worker.rs and task-node.rs\nverify: ok: 2: no thread::sleep in network/src/bin; task-node accepts --idle-interval-millis\nverify: ok: 3: fmt, clippy, network tests and an_inbox_receives_a_message_and_returns_none_at_its_deadline pass at efdb1ecc\nverify: ok: 4: CI run 38460546575 passed (4 jobs) at efdb1ecc, which contains efdb1ecc20aeee2f6520cb0390876498ffb166d9\nverify: ok: 5: idle-worker made 7 context switches in 5.20 s doing nothing\nverify: ok: 5: idle-submitter made 12 context switches in 5.21 s doing nothing\nverify: ok: 5: idle-node made 7 context switches in 10.21 s doing nothing\nverify: ok: 5: the idle worker and submitter ended at their 5 s deadlines\nverify: ok: 5: a loopback cycle with task_worker was accepted\nverify: ok: 5: a loopback cycle with task-node was accepted\nverify: accepted\n",
+    "stdout_dropped_bytes": 0,
+    "stderr": "",
+    "stderr_dropped_bytes": 0
+  }
+}

@@ -1,0 +1,18 @@
+task_submitter_request_sent request_id=17763077972088297954 submitter_node_id=jay-macmini bytes=2324 expires_at=1791921806
+task_submitter_offer request_id=17763077972088297954 offer_id=9246361488446106448 worker_node_id=claude-code-macmini source=127.0.0.1:47911 estimated_duration_secs=7200 max_status_interval_secs=0 reward_schemes= note=Claude Code (Opus 5.5) in Jay's session on the Mac mini; works in the loadngo checkout
+task_submitter_accept_sent assignment_id=4158359342281407921 request_id=17763077972088297954 offer_id=9246361488446106448 worker_node_id=claude-code-macmini reward=none
+task_submitter_status assignment_id=4158359342281407921 worker_node_id=claude-code-macmini source=127.0.0.1:47911 state=running next_check_in_by=1791922406 note=worker accepted assignment and started execution
+task_submitter_result assignment_id=4158359342281407921 worker_node_id=claude-code-macmini source=127.0.0.1:47911 artifact_hint=/Users/jay/pudding/reviews/2026-10-14-task-tools-stop-polling/result.md note=result delivered by Claude Code; see the artifact
+task_submitter_verify_output assignment_id=4158359342281407921 stream=stdout line=verify: ok: 1: efdb1ecc20aeee2f6520cb0390876498ffb166d9 on github/dev, changes task_worker.rs and task-node.rs
+task_submitter_verify_output assignment_id=4158359342281407921 stream=stdout line=verify: ok: 2: no thread::sleep in network/src/bin; task-node accepts --idle-interval-millis
+task_submitter_verify_output assignment_id=4158359342281407921 stream=stdout line=verify: ok: 3: fmt, clippy, network tests and an_inbox_receives_a_message_and_returns_none_at_its_deadline pass at efdb1ecc
+task_submitter_verify_output assignment_id=4158359342281407921 stream=stdout line=verify: ok: 4: CI run 38460546575 passed (4 jobs) at efdb1ecc, which contains efdb1ecc20aeee2f6520cb0390876498ffb166d9
+task_submitter_verify_output assignment_id=4158359342281407921 stream=stdout line=verify: ok: 5: idle-worker made 7 context switches in 5.20 s doing nothing
+task_submitter_verify_output assignment_id=4158359342281407921 stream=stdout line=verify: ok: 5: idle-submitter made 12 context switches in 5.21 s doing nothing
+task_submitter_verify_output assignment_id=4158359342281407921 stream=stdout line=verify: ok: 5: idle-node made 7 context switches in 10.21 s doing nothing
+task_submitter_verify_output assignment_id=4158359342281407921 stream=stdout line=verify: ok: 5: the idle worker and submitter ended at their 5 s deadlines
+task_submitter_verify_output assignment_id=4158359342281407921 stream=stdout line=verify: ok: 5: a loopback cycle with task_worker was accepted
+task_submitter_verify_output assignment_id=4158359342281407921 stream=stdout line=verify: ok: 5: a loopback cycle with task-node was accepted
+task_submitter_verify_output assignment_id=4158359342281407921 stream=stdout line=verify: accepted
+task_submitter_verify assignment_id=4158359342281407921 success=true exit_code=0
+task_submitter_ack_sent assignment_id=4158359342281407921 accepted=true target=127.0.0.1:47911 reward=none

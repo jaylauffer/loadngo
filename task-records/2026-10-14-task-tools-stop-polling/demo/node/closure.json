@@ -1,0 +1,30 @@
+{
+  "accepted": true,
+  "receipt": {
+    "receipt_version": 2,
+    "request_id": 11204491046708918060,
+    "offer_id": 17440007537036669882,
+    "assignment_id": 10078873057072238347,
+    "submitter_node_id": "demo-submitter",
+    "worker_node_id": "demo-node",
+    "summary": "polling-free cycle (node)",
+    "success_criteria": null,
+    "artifact_hint": "/Users/jay/pudding/loadngo/task-records/2026-10-14-task-tools-stop-polling/demo/node/artifact.txt",
+    "artifact_copy_path": "/Users/jay/pudding/loadngo/task-records/2026-10-14-task-tools-stop-polling/demo/node/artifact-copy.txt",
+    "artifact_hash_hex": "bc9f40e126a3f777a97a4131ffd5c2e1e7e2f8428cfd0c7d8a366fec298e6211",
+    "result_note": "task node command completed successfully",
+    "accepted_at": 1791923893,
+    "submitted_at": 1791923893,
+    "reward": null
+  },
+  "receipt_commitment_hex": "6c7e1b32ad25061ad48281e77ecd4a6ce5f2e4879c2186e76d7691734416f493",
+  "reward": null,
+  "verification": {
+    "command": "cp \"$LOADNGO_TASK_ARTIFACT_HINT\" \"$LOADNGO_TASK_ARTIFACT_COPY_PATH\" && echo checked",
+    "exit_code": 0,
+    "stdout": "checked\n",
+    "stdout_dropped_bytes": 0,
+    "stderr": "",
+    "stderr_dropped_bytes": 0
+  }
+}

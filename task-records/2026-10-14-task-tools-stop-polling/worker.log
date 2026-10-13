@@ -1,0 +1,5 @@
+task_worker_request request_id=17763077972088297954 submitter_node_id=jay-macmini source=127.0.0.1:47910 capabilities_match=true summary=The Task tools stop polling their sockets: task_worker, task_submitter, task_offer and task_request wait on proactor receives instead of 25 ms sleeps, and task-node keeps a receive posted instead of a 250 ms timer
+task_worker_offer_sent request_id=17763077972088297954 offer_id=9246361488446106448 worker_node_id=claude-code-macmini targets=1 expires_at=1791921916
+task_worker_status assignment_id=4158359342281407921 state=running target=127.0.0.1:47910
+task_worker_result assignment_id=4158359342281407921 target=127.0.0.1:47910 status_success=true
+task_worker_ack assignment_id=4158359342281407921 source=127.0.0.1:47910 accepted=true reward=none note=artifact verified

@@ -1,0 +1,7 @@
+task-node_started worker_node_id=demo-node bind_port=47973
+task-node_request request_id=11204491046708918060 submitter_node_id=demo-submitter source=127.0.0.1:47972 capabilities_match=true summary=polling-free cycle (node)
+task-node_offer_sent request_id=11204491046708918060 offer_id=17440007537036669882 worker_node_id=demo-node targets=1 expires_at=1791923950
+task-node_request request_id=11204491046708918060 submitter_node_id=demo-submitter source=[fe80::1%1]:47972 capabilities_match=true summary=polling-free cycle (node)
+task-node_status assignment_id=10078873057072238347 state=running target=127.0.0.1:47972
+task-node_result assignment_id=10078873057072238347 target=127.0.0.1:47972 status_success=true
+task-node_ack assignment_id=10078873057072238347 source=127.0.0.1:47972 accepted=true reward=none note=artifact verified

@@ -1,0 +1,19 @@
+task-node_started worker_node_id=idle-node bind_port=47964
+       10.21 real         0.00 user         0.00 sys
+             2441216  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                 325  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                   0  voluntary context switches
+                   7  involuntary context switches
+            21246227  instructions retired
+            15886478  cycles elapsed
+             1114448  peak memory footprint

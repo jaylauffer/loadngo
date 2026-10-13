@@ -1,0 +1,5 @@
+task_worker_request request_id=642350849431653629 submitter_node_id=demo-submitter source=127.0.0.1:47970 capabilities_match=true summary=polling-free cycle (worker)
+task_worker_offer_sent request_id=642350849431653629 offer_id=9477749214872674069 worker_node_id=demo-worker targets=1 expires_at=1791923915
+task_worker_status assignment_id=12560954122919851792 state=running target=127.0.0.1:47970
+task_worker_result assignment_id=12560954122919851792 target=127.0.0.1:47970 status_success=true
+task_worker_ack assignment_id=12560954122919851792 source=127.0.0.1:47970 accepted=true reward=none note=artifact verified
