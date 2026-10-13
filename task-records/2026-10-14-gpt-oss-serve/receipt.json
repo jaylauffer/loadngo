@@ -1,0 +1,14 @@
+{
+  "accepted": false,
+  "receipt": null,
+  "receipt_commitment_hex": null,
+  "reward": null,
+  "verification": {
+    "command": "git -C /Users/jay/pudding/loadngo diff --quiet e935c46c -- task-records/2026-10-14-gpt-oss-serve/verify.sh && bash /Users/jay/pudding/loadngo/task-records/2026-10-14-gpt-oss-serve/verify.sh",
+    "exit_code": 1,
+    "stdout": "0a0a728ae6ffc8e263aa0baa151d040b6ad21575:task-records/2026-10-14-gpt-oss-serve/verify.sh:3:# 2026-10-14: \"We don't need a llama-server, we have loadngo inference, remove the noise\n0a0a728ae6ffc8e263aa0baa151d040b6ad21575:task-records/2026-10-14-gpt-oss-serve/verify.sh:9:# started Homebrew's llama-server, fell back from Metal to the CPU, read its logs and\n0a0a728ae6ffc8e263aa0baa151d040b6ad21575:task-records/2026-10-14-gpt-oss-serve/verify.sh:19:#     exists, and no Rust, TOML or shell source and no README mentions llama.\n0a0a728ae6ffc8e263aa0baa151d040b6ad21575:task-records/2026-10-14-gpt-oss-serve/verify.sh:52:# 1. On GitHub, the old service gone, no llama.\n0a0a728ae6ffc8e263aa0baa151d040b6ad21575:task-records/2026-10-14-gpt-oss-serve/verify.sh:60:if git grep -n -i llama \"$commit\" -- '*.rs' '*.toml' '*.sh' '*README.md'; then\n0a0a728ae6ffc8e263aa0baa151d040b6ad21575:task-records/2026-10-14-gpt-oss-serve/verify.sh:61:    fail \"llama is still mentioned in source or a README at $commit\"\n0a0a728ae6ffc8e263aa0baa151d040b6ad21575:task-records/2026-10-14-gpt-oss-serve/verify.sh:63:pass \"1: $commit on github/dev; model_service and zhoenus_head_model gone, gpt_oss_serve there, no llama\"\n",
+    "stdout_dropped_bytes": 0,
+    "stderr": "verify: FAIL: llama is still mentioned in source or a README at 0a0a728ae6ffc8e263aa0baa151d040b6ad21575\n",
+    "stderr_dropped_bytes": 0
+  }
+}

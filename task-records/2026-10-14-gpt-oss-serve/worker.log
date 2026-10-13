@@ -1,0 +1,5 @@
+task_worker_request request_id=2822360520345601809 submitter_node_id=jay-macmini source=127.0.0.1:47910 capabilities_match=true summary=The model service runs on loadngo inference: llama-server and its supervision removed; gpt_oss_serve holds gpt-oss-20b (verified by hash, restored from the CAS) and answers JSON-line calls on a local Unix socket
+task_worker_offer_sent request_id=2822360520345601809 offer_id=5711918298734647097 worker_node_id=claude-code-macmini targets=1 expires_at=1791924914
+task_worker_status assignment_id=18433555314372718964 state=running target=127.0.0.1:47910
+task_worker_result assignment_id=18433555314372718964 target=127.0.0.1:47910 status_success=true
+task_worker_ack assignment_id=18433555314372718964 source=127.0.0.1:47910 accepted=false reward=none note=verification failed (exit 1): verify: FAIL: llama is still mentioned in source or a README at 0a0a728ae6ffc8e263aa0baa151d040b6ad21575
