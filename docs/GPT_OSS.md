@@ -742,6 +742,12 @@ same call three times before trying no arguments.
     `ANDROID_BUILD_PROFILE=release`, so it would make a debug build.
   - "why can't you compile the binaries for sng-mahjong?" It ran `cargo build`, which
     succeeded, and said so. It did not refuse.
+  - After the first-answer change (`76072414`), the first question again (02:40,
+    `~/pudding/reviews/2026-10-14-task-gpt-oss-first-answer/2026-10-14-024032.jsonl`).
+    This time the first answer said "I can't, however, run arbitrary shell commands".
+    That is true, since there is no shell, but the wording check sent the note: its
+    first live false alarm. The reply made no call, so Jay got the first answer. The
+    note cost 3.2 s.
 - Real devices, through the tool from a small harness (2026-10-13):
   - `list`: the Xiaomi (`e8a6ab881222`, device), Zheonus VI (connected) and an
     unavailable second iPhone.
