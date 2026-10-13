@@ -19,12 +19,12 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-# The server's peer credentials and signal pipe (`gpt_oss_serve`).
+# The server (`gpt_oss_serve`): its proactor, peer credentials and signal pipe.
 libc = "0.2"
+loadngo-proactor = { path = "../proactor" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 loadngo-metal-compute = { path = "../metal-compute" }
-loadngo-proactor = { path = "../proactor" }
 
 [dev-dependencies]
 serde_json.workspace = true
