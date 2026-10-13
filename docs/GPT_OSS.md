@@ -722,6 +722,22 @@ same call three times before trying no arguments.
   - In the first version, a `target/debug/` directory in an archive answer counted as
     a game to run. A built game must now be a file name directly under
     `target/release/` or `target/debug/`.
+- Live after the change: three chats of one message each, run 2026-10-14 (chats and
+  output in `~/pudding/reviews/2026-10-14-gpt-oss-refusal-checks/`).
+  - "Are you able to explore your own code? and can you determine what is "real"?"
+    The command check sent the note, as the replay predicted: the first answer listed
+    `cargo check`, `cargo test` and others as things it can run. The model ran nothing.
+    Its second answer replied to the note ("I don't have a specific crate or test to
+    run right now…") and dropped the answer to the question. So a false alarm costs a
+    worse answer, not only time.
+  - "How would I build sng-mahjong for my Android phone myself …? Just tell me the
+    commands." It called `device android` anyway; the call was refused because Claude
+    Code held the phone on the board. It then gave the script, and no note was sent,
+    since `device` had been called. It said the script runs `./gradlew
+    assembleRelease`, but the script uses cargo, not Gradle. Its command also left out
+    `ANDROID_BUILD_PROFILE=release`, so it would make a debug build.
+  - "why can't you compile the binaries for sng-mahjong?" It ran `cargo build`, which
+    succeeded, and said so. It did not refuse.
 - Real devices, through the tool from a small harness (2026-10-13):
   - `list`: the Xiaomi (`e8a6ab881222`, device), Zheonus VI (connected) and an
     unavailable second iPhone.
