@@ -120,11 +120,94 @@ pub fn reward_receipt_commitment(receipt: &RewardReceipt) -> Result<[u8; 32]> {
         .context("failed to frame the reward receipt for anchoring")
 }
 
+/// Bytes of each stream of a check's output that a closure record keeps: the end of it,
+/// where a failing check says why.
+pub const CHECK_OUTPUT_KEPT: usize = 64 * 1024;
+/// Characters of the check's last line that a rejection's `TaskAck` note carries.
+const NOTE_LINE_CHARS: usize = 200;
+
+/// What the submitter's check printed and how it exited, kept in the closure record for
+/// every result it checked: the proof of why work was accepted or rejected.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Verification {
+    pub command: String,
+    /// The exit code; `None` when a signal ended the check.
+    pub exit_code: Option<i32>,
+    /// The end of stdout, at most [`CHECK_OUTPUT_KEPT`] bytes.
+    pub stdout: String,
+    /// Bytes dropped from the start of stdout.
+    pub stdout_dropped_bytes: usize,
+    pub stderr: String,
+    pub stderr_dropped_bytes: usize,
+}
+
+impl Verification {
+    #[must_use]
+    pub fn new(command: &str, output: &std::process::Output) -> Self {
+        Self::from_parts(
+            command,
+            output.status.code(),
+            &output.stdout,
+            &output.stderr,
+        )
+    }
+
+    #[must_use]
+    pub fn from_parts(command: &str, exit_code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> Self {
+        let (stdout, stdout_dropped_bytes) = tail(stdout, CHECK_OUTPUT_KEPT);
+        let (stderr, stderr_dropped_bytes) = tail(stderr, CHECK_OUTPUT_KEPT);
+        Self {
+            command: command.to_owned(),
+            exit_code,
+            stdout,
+            stdout_dropped_bytes,
+            stderr,
+            stderr_dropped_bytes,
+        }
+    }
+
+    /// The check passed: it exited with 0.
+    #[must_use]
+    pub fn passed(&self) -> bool {
+        self.exit_code == Some(0)
+    }
+
+    /// The `TaskAck` note for a rejection: how the check exited and the last line it
+    /// printed (stderr first), so the worker learns why.
+    #[must_use]
+    pub fn rejection_note(&self) -> String {
+        let exit = self.exit_code.map_or_else(
+            || "ended by a signal".to_owned(),
+            |code| format!("exit {code}"),
+        );
+        let last = [&self.stderr, &self.stdout]
+            .iter()
+            .find_map(|text| text.lines().rev().map(str::trim).find(|l| !l.is_empty()));
+        match last {
+            Some(line) => format!(
+                "verification failed ({exit}): {}",
+                line.chars().take(NOTE_LINE_CHARS).collect::<String>()
+            ),
+            None => format!("verification failed ({exit})"),
+        }
+    }
+}
+
+/// The end of `bytes`, at most `limit` of them, starting on a character boundary: the
+/// text, and how many bytes came before it.
+fn tail(bytes: &[u8], limit: usize) -> (String, usize) {
+    let mut start = bytes.len().saturating_sub(limit);
+    while start < bytes.len() && bytes[start] & 0xC0 == 0x80 {
+        start += 1;
+    }
+    (String::from_utf8_lossy(&bytes[start..]).into_owned(), start)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        artifact_hash_hex, reward_receipt_bytes, reward_receipt_commitment, RewardReceipt,
-        REWARD_RECEIPT_DOMAIN, REWARD_RECEIPT_VERSION,
+        artifact_hash_hex, reward_receipt_bytes, reward_receipt_commitment, tail, RewardReceipt,
+        Verification, CHECK_OUTPUT_KEPT, REWARD_RECEIPT_DOMAIN, REWARD_RECEIPT_VERSION,
     };
     use data::p2pmsg::RewardPayee;
     use std::fs;
@@ -186,5 +269,49 @@ mod tests {
         let actual = artifact_hash_hex(&path).unwrap();
         let expected = Some(hex::encode(blake3::hash(b"meaningful artifact").as_bytes()));
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn a_check_output_keeps_its_end_from_a_character_boundary() {
+        assert_eq!(tail(b"short", 64), ("short".to_owned(), 0));
+        // 'é' is two bytes; a cut through it moves forward to the next character.
+        let text = "aé\nlast line";
+        assert_eq!(tail(text.as_bytes(), 11), ("\nlast line".to_owned(), 3));
+        assert_eq!(tail(text.as_bytes(), 12), ("é\nlast line".to_owned(), 1));
+
+        let long = "x".repeat(CHECK_OUTPUT_KEPT + 10) + "\nverify: FAIL: why";
+        let kept = Verification::from_parts("check", Some(1), b"", long.as_bytes());
+        assert_eq!(kept.stderr.len(), CHECK_OUTPUT_KEPT);
+        assert_eq!(kept.stderr_dropped_bytes, long.len() - CHECK_OUTPUT_KEPT);
+        assert!(kept.stderr.ends_with("verify: FAIL: why"));
+    }
+
+    #[test]
+    fn a_rejection_note_carries_how_the_check_exited_and_its_last_line() {
+        let failed = Verification::from_parts(
+            "check",
+            Some(3),
+            b"checking\n",
+            b"verify: FAIL: no commit\n\n",
+        );
+        assert!(!failed.passed());
+        assert_eq!(
+            failed.rejection_note(),
+            "verification failed (exit 3): verify: FAIL: no commit"
+        );
+        // Nothing on stderr: the last line of stdout.
+        let quiet = Verification::from_parts("check", Some(1), b"one\ntwo\n", b"");
+        assert_eq!(quiet.rejection_note(), "verification failed (exit 1): two");
+        let killed = Verification::from_parts("check", None, b"", b"");
+        assert_eq!(
+            killed.rejection_note(),
+            "verification failed (ended by a signal)"
+        );
+        let long = Verification::from_parts("check", Some(1), b"", "y".repeat(500).as_bytes());
+        assert_eq!(
+            long.rejection_note().len(),
+            "verification failed (exit 1): ".len() + 200
+        );
+        assert!(Verification::from_parts("check", Some(0), b"ok", b"").passed());
     }
 }

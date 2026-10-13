@@ -14,7 +14,8 @@ use network::{
     },
     task_runtime::{
         artifact_hash_hex, endpoint_host, parse_multicast_v4, parse_multicast_v6,
-        reward_receipt_commitment, task_network_config, RewardReceipt, REWARD_RECEIPT_VERSION,
+        reward_receipt_commitment, task_network_config, RewardReceipt, Verification,
+        REWARD_RECEIPT_VERSION,
     },
     Network,
 };
@@ -60,13 +61,16 @@ struct SeenOffer {
     offer: TaskOffer,
 }
 
-/// Written for accepted work: the completion receipt, its commitment, and the reward
+/// Written for every result the submitter checked, accepted or not: what its check
+/// printed and, for accepted work, the completion receipt, its commitment and the reward
 /// settlement if one was agreed.
 #[derive(Debug, Serialize)]
 struct ClosureRecord {
-    receipt: RewardReceipt,
-    receipt_commitment_hex: String,
+    accepted: bool,
+    receipt: Option<RewardReceipt>,
+    receipt_commitment_hex: Option<String>,
     reward: Option<RewardSettlement>,
+    verification: Verification,
 }
 
 impl Args {
@@ -358,18 +362,34 @@ fn main() -> Result<()> {
 
     let result = wait_for_result(&network, &accept, selected, &args)?;
     let verify_output = run_verify_command(&args, &accept, selected, &result)?;
-    let verification_ok = verify_output.status.success();
+    let verification = Verification::new(&args.verify_command, &verify_output);
+    for (stream, text) in [
+        ("stdout", &verification.stdout),
+        ("stderr", &verification.stderr),
+    ] {
+        for line in text.lines() {
+            println!(
+                "task_submitter_verify_output assignment_id={} stream={stream} line={line}",
+                accept.assignment_id
+            );
+        }
+    }
     println!(
-        "task_submitter_verify assignment_id={} success={}",
-        accept.assignment_id, verification_ok
+        "task_submitter_verify assignment_id={} success={} exit_code={}",
+        accept.assignment_id,
+        verification.passed(),
+        verification
+            .exit_code
+            .map_or_else(|| "signal".to_owned(), |code| code.to_string())
     );
 
     // Acceptance is verification alone. The reward, if one was agreed, is settled
     // only for accepted work, and its outcome never changes `accepted`.
-    let accepted = verification_ok;
+    let accepted = verification.passed();
     let mut settlement = None;
+    let mut receipt = None;
     if accepted {
-        let receipt = completion_receipt(&args, &accept, &request, &result)?;
+        let completed = completion_receipt(&args, &accept, &request, &result)?;
         if let Some(reward) = accept.reward.as_ref() {
             let command = args
                 .rewards
@@ -379,7 +399,7 @@ fn main() -> Result<()> {
                 .expect("the agreed scheme is one this submitter offered");
             let settle_request = SettleRequest::new(
                 reward,
-                &receipt,
+                &completed,
                 Duration::from_secs(args.settle_wait_seconds),
             )?;
             let outcome = settle(command, &settle_request);
@@ -393,16 +413,20 @@ fn main() -> Result<()> {
             );
             settlement = Some(outcome);
         }
-        write_closure_record(&receipt, settlement.clone(), args.receipt_path.as_deref())?;
+        receipt = Some(completed);
     }
-
     let ack_note = match (accepted, settlement.as_ref().map(|s| s.state)) {
-        (false, _) => format!("verification failed: {}", verify_output.status),
+        (false, _) => verification.rejection_note(),
         (true, None) => "artifact verified".to_string(),
         (true, Some(RewardState::Settled)) => "artifact verified; reward settled".to_string(),
         (true, Some(RewardState::Pending)) => "artifact verified; reward pending".to_string(),
         (true, Some(RewardState::Failed)) => "artifact verified; reward failed".to_string(),
     };
+    write_closure_record(
+        closure_record(receipt, settlement.clone(), verification)?,
+        args.receipt_path.as_deref(),
+        accept.assignment_id,
+    )?;
     let ack = TaskAck {
         assignment_id: accept.assignment_id,
         request_id: accept.request_id,
@@ -653,12 +677,30 @@ fn default_receipt_path(configured: Option<&Path>, assignment_id: u64) -> PathBu
         .unwrap_or_else(|| PathBuf::from(format!("task-receipts/assignment-{assignment_id}.json")))
 }
 
-fn write_closure_record(
-    receipt: &RewardReceipt,
+fn closure_record(
+    receipt: Option<RewardReceipt>,
     reward: Option<RewardSettlement>,
+    verification: Verification,
+) -> Result<ClosureRecord> {
+    let receipt_commitment_hex = receipt
+        .as_ref()
+        .map(|receipt| reward_receipt_commitment(receipt).map(hex::encode))
+        .transpose()?;
+    Ok(ClosureRecord {
+        accepted: verification.passed(),
+        receipt,
+        receipt_commitment_hex,
+        reward,
+        verification,
+    })
+}
+
+fn write_closure_record(
+    closure: ClosureRecord,
     configured_path: Option<&Path>,
+    assignment_id: u64,
 ) -> Result<()> {
-    let path = default_receipt_path(configured_path, receipt.assignment_id);
+    let path = default_receipt_path(configured_path, assignment_id);
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -666,11 +708,6 @@ fn write_closure_record(
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create receipt dir: {}", parent.display()))?;
     }
-    let closure = ClosureRecord {
-        receipt: receipt.clone(),
-        receipt_commitment_hex: hex::encode(reward_receipt_commitment(receipt)?),
-        reward,
-    };
     let bytes =
         serde_json::to_vec_pretty(&closure).context("failed to serialize closure record")?;
     fs::write(&path, bytes)
@@ -695,9 +732,29 @@ fn print_usage() {
          [--receipt-path <path>] \
          [--reward <scheme>=<settler command>]... [--reward-settle-seconds <n>, default 30]\n\
          \n\
+         The closure record (--receipt-path, default task-receipts/assignment-<id>.json) is\n\
+         written for every result checked, accepted or not: what the check printed (the\n\
+         last 64 KiB of each stream), its exit code and, for accepted work, the receipt.\n\
+         A rejection's TaskAck note carries the check's last line.\n\
+         \n\
          A reward is optional: with no --reward, work is offered unrewarded. Acceptance is\n\
          verification alone; the agreed reward is settled only for accepted work, and a\n\
          slow or failing settler gives a pending or failed reward, never rejected work.\n\
          Example: --reward 'qcoin=qcoin-node task-reward settle --target 10.10.10.6:9700'"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{closure_record, Verification};
+
+    #[test]
+    fn a_rejected_result_gets_a_closure_record_with_what_the_check_said() {
+        let check = Verification::from_parts("check", Some(3), b"", b"verify: FAIL: why\n");
+        let record = serde_json::to_value(closure_record(None, None, check).unwrap()).unwrap();
+        assert_eq!(record["accepted"], false);
+        assert!(record["receipt"].is_null() && record["receipt_commitment_hex"].is_null());
+        assert_eq!(record["verification"]["exit_code"], 3);
+        assert_eq!(record["verification"]["stderr"], "verify: FAIL: why\n");
+    }
 }

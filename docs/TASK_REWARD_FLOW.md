@@ -77,6 +77,15 @@ version 2 (`reward_receipt_commitment`). The submitter writes it, with the
 commitment and the settlement, to `--receipt-path` for every accepted task,
 rewarded or not.
 
+That closure record is written for every result the submitter checks, accepted
+or not (since 2026-10-14). It has `accepted`, and a `verification` with the
+check's command, exit code and output (the last 64 KiB of stdout and of stderr,
+`network::task_runtime::Verification`). A rejected result's record has no
+receipt. The submitter's log has the same output, one
+`task_submitter_verify_output` line per line. A rejection's `TaskAck` note
+carries the check's last line, so the worker learns why. Before this change, the
+submitter printed only `success=true/false`, and a rejection left no record.
+
 A reward scheme settles a receipt. It does not define one. QCoin's settlement is
 a metadata-only output to the payee's owner script hash whose `metadata_hash` is
 that commitment; it is a proof of accepted work, not monetary issuance.
