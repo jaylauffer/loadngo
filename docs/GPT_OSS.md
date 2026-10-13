@@ -680,11 +680,21 @@ same call three times before trying no arguments.
   its tools run them; when Jay asks to build, run or install, call the tool instead of
   handing him commands. "No shell for other commands" replaces "cannot run other
   commands".
-- **Capability-denial check** (`guards::denies_capability`, `docs/AGENT_LOOP.md`): an
-  answer saying it is in a sandbox or cannot build, compile, run or install is held back
-  once a turn, with what is installed, what the tools do, and the chat's last four
-  `cargo`/`device` results. All five of gpt-oss's denials from the transcript are
-  caught by the test; first-person subjects only, so "if you can't run it" is not.
+- **Refusal checks** (`docs/AGENT_LOOP.md`): two checks, one note, once a turn. The
+  note says what is installed and what the tools do, and lists the chat's last four
+  `cargo`/`device` results.
+  - Commands handed to Jay (`guards::commands_for_tools`, added 2026-10-14): fenced
+    code lines, or inline code that is a path or a program with an argument, that the
+    tools run, when this turn has not called the tool. `cargo` build, check, test,
+    clippy and fmt need a `cargo` or `device` call. `cargo run`, a build for an Android
+    or iOS target, `adb`, `xcrun`, `xcodebuild`, the device scripts and a built game
+    under `target/` need a `device` call. This judges what the answer hands over,
+    however it is worded.
+  - Wording (`guards::denies_capability`): "sandbox", or an "I cannot" phrase with the
+    model as its subject and a build or run verb after it. First person only, so "if
+    you can't run it" is not caught.
+  - Each covers the other's misses: a reworded refusal that hands over commands, and a
+    refusal with no command in it.
 
 ### Evidence
 
@@ -692,8 +702,26 @@ same call three times before trying no arguments.
   expired/wildcard/other device, identity by certificate, `adb`/`devicectl` output,
   script defaults), refusals (no script, outside the workspace, phone held on the
   board), `mac` on real crates (left running, restarted, early exit with its log, a
-  compile error, a refused `--target-dir`), the loop's denial note (once a turn, with
-  the cargo result), `fmt --check` given twice, the board's device holder.
+  compile error, a refused `--target-dir`), the loop's refusal note for each check
+  (once a turn, with the cargo result; a `device` call covers its commands and
+  cargo's, a `cargo` call does not cover a phone command), `fmt --check` given twice,
+  the board's device holder. The command check's 17 mutations are all caught.
+- Both checks replayed on every saved answer (2026-10-14): 481 final answers in
+  `~/.loadngo/gpt-oss/transcripts` and `~/.loadngo/kimi/transcripts`, run through
+  copies of the two functions, with the tools each turn called taken from the
+  transcript.
+  - The 12:49 chat had 8 refusing answers. The wording check found all 8, but it was
+    written from that chat. The command check found 6. It missed the two that only
+    name the programs ("external binaries such as `rustc`, `cargo`, …").
+  - On the other answers, the wording check sent no note. The command check sent 2
+    notes on fine answers, each costing one more reply. One was a plan for Jay ("Run
+    `cargo test` and `cargo fmt --check`", 12:17). The other answered "are you able to
+    explore your own code?" with what it would run (23:01). A third, in Kimi's 10-08
+    chat, was a `cargo test` she had run through that chat's terminal tools, which are
+    gone.
+  - In the first version, a `target/debug/` directory in an archive answer counted as
+    a game to run. A built game must now be a file name directly under
+    `target/release/` or `target/debug/`.
 - Real devices, through the tool from a small harness (2026-10-13):
   - `list`: the Xiaomi (`e8a6ab881222`, device), Zheonus VI (connected) and an
     unavailable second iPhone.
@@ -716,8 +744,8 @@ same call three times before trying no arguments.
     mac` call; the game was a foreground app on the Mac with 0.0% CPU on its title menu
     after gpt-oss exited, log in `sng-mahjong/target/loadngo-agent-run.log`. Its answer
     said running the same command again would "stop or restart" the game; it restarts.
-  - Neither run reached the capability-denial check (no denial was written); it is
-    covered by the scripted loop test.
+  - Neither run triggered either refusal check (the replay above agrees); both are
+    covered by the scripted loop tests.
 - Not checked: a device build of sng-roguelite or sng-zhoenus through the tool (same
   script template), Linux or Windows hosts (no device scripts there; `list` reports
   that `xcrun` cannot start), an expired profile on the real keychain (unit test only).

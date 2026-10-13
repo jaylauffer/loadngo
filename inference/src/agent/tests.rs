@@ -468,6 +468,83 @@ fn an_answer_saying_it_is_in_a_sandbox_is_sent_back_once_with_what_ran() {
 }
 
 #[test]
+fn an_answer_handing_jay_commands_its_tools_run_is_sent_back_once_with_what_ran() {
+    // gpt-oss, 2026-10-13: cargo test passed, then build commands for Jay instead of a call.
+    let (cargo, tests) = fake("cargo", |_, _| {
+        Ok("cargo test --quiet in sng-mahjong: succeeded (exit 0) after 13.8s\n44 passed".into())
+    });
+    let (device, builds) = fake("device", |_, _| {
+        Ok("scripts/android_device_build.sh (release, install) in sng-mahjong: succeeded".into())
+    });
+    let (mut a, notes) = agent(vec![cargo, device], false);
+    let again = "Built again; `scripts/android_device_build.sh` or `cargo build --release` \
+                 builds it.";
+    let mut b = Scripted::new(vec![
+        call(r#"cargo {"dir":"sng-mahjong","command":"test"}"#),
+        answer("Tests pass; run `cargo test` again after any change."),
+        answer(
+            "I can't build it here: run `cargo build --release --target aarch64-linux-android`.",
+        ),
+        call(r#"device {"action":"android","dir":"sng-mahjong"}"#),
+        answer("Built and installed on the phone."),
+        call(r#"device {"action":"android","dir":"sng-mahjong"}"#),
+        answer(again),
+        call(r#"cargo {"dir":"sng-mahjong","command":"test"}"#),
+        answer("Tests pass. Start it yourself with `adb shell am start -n a/b`."),
+        answer("Start it yourself with `adb shell am start -n a/b`."),
+    ]);
+    // Commands whose tool ran this turn go through.
+    let end = turn(&mut a, &mut b, "run the tests", 100, &NO).unwrap();
+    assert_eq!(
+        end.read.answer,
+        "Tests pass; run `cargo test` again after any change."
+    );
+    assert!(!b.held_text().contains("Check before your answer"));
+
+    let end = turn(&mut a, &mut b, "build it for the phone", 100, &NO).unwrap();
+    assert_eq!(end.read.answer, "Built and installed on the phone.");
+    let held = b.held_text();
+    assert_eq!(
+        held.matches("Check before your answer reaches Jay").count(),
+        1
+    );
+    assert!(held.contains("(`cargo build --release --target aarch64-linux-android`)"));
+    assert!(held.contains("- cargo test --quiet in sng-mahjong: succeeded (exit 0) after 13.8s"));
+    assert!(notes
+        .0
+        .borrow()
+        .iter()
+        .any(|n| n.contains("hands Jay commands")));
+
+    // After a device call, its commands and cargo's go through.
+    let end = turn(&mut a, &mut b, "build it again", 100, &NO).unwrap();
+    assert_eq!(end.read.answer, again);
+    assert_eq!(*builds.borrow(), 2);
+    assert!(!b.held_text().contains("Check before your answer"));
+
+    // A cargo call does not cover a command for the phone; once a turn, the second
+    // answer goes through to Jay. (A finished turn's notes leave the context.)
+    let end = turn(&mut a, &mut b, "test it and run it", 100, &NO).unwrap();
+    assert_eq!(
+        end.read.answer,
+        "Start it yourself with `adb shell am start -n a/b`."
+    );
+    assert_eq!(*tests.borrow(), 2);
+    assert_eq!(
+        b.held_text()
+            .matches("Check before your answer reaches Jay")
+            .count(),
+        1
+    );
+
+    // Without the tools there is nothing to point at, and the answer goes through.
+    let (mut a, _) = agent(Vec::new(), false);
+    let mut b = Scripted::new(vec![answer("Run `cargo build --release`.")]);
+    let end = turn(&mut a, &mut b, "build it", 100, &NO).unwrap();
+    assert_eq!(end.read.answer, "Run `cargo build --release`.");
+}
+
+#[test]
 fn a_write_failing_twice_the_same_way_ends_the_turn_and_three_failures_get_a_note() {
     let (write, _) = fake("text_edit", |_, _| Err("old_text not found".into()));
     let (mut a, _) = agent(vec![write], false);

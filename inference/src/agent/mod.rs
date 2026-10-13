@@ -347,8 +347,8 @@ struct Turn {
     gated: bool,
     /// The archive coverage note was sent.
     scope_checked: bool,
-    /// The note about an answer denying what the tools do was sent.
-    denial_checked: bool,
+    /// The note about an answer refusing, or handing Jay, work the tools do was sent.
+    tools_checked: bool,
     /// Revisions each file has had in this turn.
     revisions: HashMap<String, Vec<String>>,
     /// Calls that succeeded this turn (the repeat guard).
@@ -398,7 +398,7 @@ pub struct Agent<'o, T> {
     opening: usize,
     evidence: Evidence,
     /// The first lines of the latest `cargo` and `device` results, newest last: what the
-    /// model has run in this chat, for an answer that says it cannot.
+    /// model has run in this chat, for an answer that hands Jay commands instead.
     ran: Vec<String>,
     verified: Option<(Vec<String>, bool)>,
     last_answer: String,
@@ -822,41 +822,17 @@ impl<'o, T: Template> Agent<'o, T> {
         Ok(tokens)
     }
 
-    /// A note the answer must wait for: an answer denying what the tools do, archive
-    /// coverage, or changes no check has passed since. Each is sent once a turn.
+    /// A note the answer must wait for: work the tools do refused or handed to Jay,
+    /// archive coverage, or changes no check has passed since. Each is sent once a turn.
     fn before_answer(&mut self, answer: &str) -> Option<String> {
         if self.turn.closed {
             return None;
         }
-        let can_run = self
-            .tools
-            .as_ref()
-            .is_some_and(|t| t.names().contains(&"device"));
-        if !self.turn.denial_checked && can_run && guards::denies_capability(answer) {
-            self.turn.denial_checked = true;
-            self.note("[check] the answer says it cannot build or run; asked to use its tools");
-            let ran = if self.ran.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    " In this chat your tools already ran:\n{}\n",
-                    self.ran
-                        .iter()
-                        .map(|r| format!("- {r}"))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                )
-            };
-            return Some(format!(
-                "Check before your answer reaches Jay: it says you are in a sandbox, or that you \
-                 cannot build, compile, run or install. That is not so. You are an ordinary \
-                 process on Jay's Mac mini; Rust, the Android SDK and NDK, adb, Xcode and \
-                 devicectl are installed, and your tools run them: cargo (check, test, clippy, \
-                 build, fmt) and device (list; android and ios: release build, install and \
-                 launch on the attached phone; mac: run on this Mac's screen).{ran} Do what Jay \
-                 asked with those tools now, instead of giving him commands. If a tool call \
-                 fails, answer with its actual error."
-            ));
+        if !self.turn.tools_checked {
+            if let Some(note) = self.tools_note(answer) {
+                self.turn.tools_checked = true;
+                return Some(note);
+            }
         }
         let archive_work = self
             .turn
@@ -909,6 +885,75 @@ impl<'o, T: Template> Agent<'o, T> {
             why: why.to_owned(),
             read,
         }
+    }
+
+    /// The note for an answer that gives Jay commands to run when this turn has not called
+    /// the tool that runs them (`guards::commands_for_tools`: what it hands over, whatever
+    /// the wording), or that says it is in a sandbox or cannot build or run
+    /// (`guards::denies_capability`: the wording gpt-oss used). Either check covers the
+    /// other's misses. A call that failed counts as called; its error is a fine answer.
+    fn tools_note(&mut self, answer: &str) -> Option<String> {
+        let names = self.tools.as_ref().map(Toolbox::names).unwrap_or_default();
+        let called = |tool: &str| {
+            self.turn
+                .rounds
+                .iter()
+                .flat_map(|r| &r.results)
+                .any(|(call, _)| call.name == tool)
+        };
+        let (cargo, device) = (names.contains(&"cargo"), names.contains(&"device"));
+        let left: Vec<String> = guards::commands_for_tools(answer)
+            .into_iter()
+            .filter(|(_, runner)| match runner {
+                guards::Runner::Cargo => cargo && !called("cargo") && !called("device"),
+                guards::Runner::Device => device && !called("device"),
+            })
+            .map(|(command, _)| format!("`{command}`"))
+            .collect();
+        let said = if !left.is_empty() {
+            self.note("[check] the answer hands Jay commands its tools run; asked to use them");
+            format!(
+                "it gives him commands to run ({}) that your tools run, and this turn you have \
+                 not called them.",
+                left.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+            )
+        } else if device && guards::denies_capability(answer) {
+            self.note("[check] the answer says it cannot build or run; asked to use its tools");
+            "it says you are in a sandbox, or that you cannot build, compile, run or install."
+                .to_owned()
+        } else {
+            return None;
+        };
+        let ran = if self.ran.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " In this chat your tools already ran:\n{}\n",
+                self.ran
+                    .iter()
+                    .map(|r| format!("- {r}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        };
+        let mut tools = Vec::new();
+        if cargo {
+            tools.push("cargo runs check, test, clippy, build and fmt");
+        }
+        if device {
+            tools.push(
+                "device lists the phones, makes a release build and installs and launches it \
+                 on the attached Android phone or iPhone, or runs it on this Mac's screen",
+            );
+        }
+        Some(format!(
+            "Check before your answer reaches Jay: {said} You are not in a sandbox: you are an \
+             ordinary process on Jay's Mac mini, where Rust, the Android SDK and NDK, adb, \
+             Xcode and devicectl are installed. {}.{ran} If Jay asked you to build, test, \
+             install or run something, do it with those tools now; if a call fails, answer \
+             with its actual error. If he asked only how to do it, give your answer again.",
+            tools.join("; ")
+        ))
     }
 
     /// Ends the turn: the exchange joins the history, and when files were written the

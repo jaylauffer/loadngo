@@ -1,6 +1,6 @@
 //! Mechanical checks on a model's work that need no judging: a reply looping on one
 //! block, the same call made again, an edit that puts a file back as it was, an answer
-//! that says it cannot build or run things its tools do.
+//! that says it cannot build or run things its tools do, or hands Jay commands they run.
 
 use std::collections::HashMap;
 
@@ -67,7 +67,9 @@ const MYSELF: [&str; 6] = ["i", "i'm", "i've", "me", "my", "assistant"];
 /// run, launch or install: gpt-oss's trained belief, which it kept after its own `cargo
 /// test` had passed twice in the same chat (2026-10-13, `docs/GPT_OSS.md`). Looks for an
 /// "I cannot" phrase with the model as its subject (within the three words before it)
-/// and one of those verbs after it in the same sentence.
+/// and one of those verbs after it in the same sentence. A refusal worded otherwise
+/// ("I couldn't", "it cannot") is missed unless it hands Jay commands, which
+/// [`commands_for_tools`] finds.
 #[must_use]
 pub fn denies_capability(answer: &str) -> bool {
     let text = answer
@@ -99,6 +101,110 @@ pub fn denies_capability(answer: &str) -> bool {
             })
         })
     })
+}
+
+/// Which tool runs a shell command an answer hands Jay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Runner {
+    /// `cargo`: check, test, clippy, build, fmt.
+    Cargo,
+    /// `device`: a release build installed and launched on a phone, or run on this Mac.
+    Device,
+}
+
+/// The shell commands `answer` gives Jay to type that the chat's tools run themselves,
+/// with the tool for each: lines of fenced code blocks, and inline code that is a path or
+/// a program with at least one argument (a bare `cargo` names the program; it is not a
+/// command).
+/// Judges what the answer hands over, not how it is worded: gpt-oss answered "build it
+/// for the attached android and ios devices" with `cargo build --release --target
+/// aarch64-linux-android` for Jay to run, and no call (2026-10-13, `docs/GPT_OSS.md`).
+/// A refusal with no command in it is left to [`denies_capability`].
+#[must_use]
+pub fn commands_for_tools(answer: &str) -> Vec<(String, Runner)> {
+    let mut found = Vec::new();
+    let mut fenced = false;
+    for line in answer.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            fenced = !fenced;
+        } else if fenced {
+            push_command(trimmed, 1, &mut found);
+        } else {
+            for span in line.split('`').skip(1).step_by(2) {
+                push_command(span, 2, &mut found);
+            }
+        }
+    }
+    found
+}
+
+/// Adds `line` to `found` when one of its commands (split at `&&`, `||`, `;` and `|`) is
+/// run by a tool and has at least `words` words.
+fn push_command(line: &str, words: usize, found: &mut Vec<(String, Runner)>) {
+    let line = line.trim();
+    let line = line
+        .strip_prefix("$ ")
+        .or_else(|| line.strip_prefix("% "))
+        .unwrap_or(line)
+        .trim();
+    let runner = line
+        .split(['&', '|', ';'])
+        .filter_map(|command| {
+            let mut parts = command.split_whitespace().skip_while(|w| {
+                matches!(*w, "sudo" | "env" | "time")
+                    || w.split_once('=').is_some_and(|(name, _)| {
+                        !name.is_empty()
+                            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    })
+            });
+            let program = parts.next()?;
+            let args: Vec<&str> = parts.collect();
+            if args.len() + 1 < words && !program.contains('/') {
+                return None;
+            }
+            runner(program, &args)
+        })
+        .next();
+    if let Some(runner) = runner {
+        found.push((line.to_owned(), runner));
+    }
+}
+
+/// The tool that runs `program` with `args`, if one does.
+fn runner(program: &str, args: &[&str]) -> Option<Runner> {
+    // A built game: `target/release/<name>`, not a directory or a build file.
+    let built = ["target/release/", "target/debug/"].iter().any(|dir| {
+        program
+            .split_once(dir)
+            .is_some_and(|(_, name)| !name.is_empty() && !name.contains(['/', '.']))
+    });
+    if built {
+        return Some(Runner::Device);
+    }
+    match program.rsplit('/').next().unwrap_or(program) {
+        "adb"
+        | "xcrun"
+        | "xcodebuild"
+        | "ios-deploy"
+        | "ndk-build"
+        | "gradle"
+        | "gradlew"
+        | "android_device_build.sh"
+        | "ios_device_build.sh" => Some(Runner::Device),
+        "cargo" => {
+            let mobile = args
+                .iter()
+                .any(|a| a.contains("android") || a.contains("apple-ios"));
+            match *args.iter().find(|a| !a.starts_with(['-', '+']))? {
+                "run" | "apk" | "ndk" => Some(Runner::Device),
+                "build" if mobile => Some(Runner::Device),
+                "build" | "check" | "test" | "clippy" | "fmt" => Some(Runner::Cargo),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Tools that change files or stored state: once one succeeds, earlier reads may read
@@ -221,6 +327,72 @@ mod tests {
             "I ran cargo test; it passed. The phone could not be found by adb.",
         ] {
             assert!(!denies_capability(fine), "{fine}");
+        }
+    }
+
+    #[test]
+    fn commands_an_answer_hands_jay_are_found_with_the_tool_that_runs_them() {
+        use Runner::{Cargo, Device};
+        // gpt-oss, 2026-10-13 transcript: its first answer to "build it for the attached
+        // android and ios devices", and a later one.
+        let refusal = "I can\u{2019}t actually compile the binaries for you, but I can give you \
+                       the exact commands.\n\n1. **Install the Rust target**:\n\n   ```bash\n   \
+                       rustup target add aarch64-linux-android\n   ```\n\n3. **Build the crate \
+                       for Android**:\n\n   ```bash\n   cd sng-mahjong\n   cargo build \
+                       --release --target aarch64-linux-android\n   ```\n";
+        assert_eq!(
+            commands_for_tools(refusal),
+            [(
+                "cargo build --release --target aarch64-linux-android".to_owned(),
+                Device
+            )]
+        );
+        let later = "Those binaries are not installed in the environment that hosts me, so a \
+                     `cargo build` or `rustc` call would fail with \u{201c}command not found\u{201d}.";
+        assert_eq!(
+            commands_for_tools(later),
+            [("cargo build".to_owned(), Cargo)]
+        );
+        for (line, runner) in [
+            ("```\n$ cargo test -p loadngo-inference\n```", Cargo),
+            ("Run `cargo clippy --all-targets -- -D warnings`.", Cargo),
+            ("```sh\ncd sng-mahjong && cargo run --release\n```", Device),
+            (
+                "```\nIOS_INSTALL_ON_DEVICE=1 ./scripts/ios_device_build.sh\n```",
+                Device,
+            ),
+            ("Then `adb install -r app.apk`.", Device),
+            (
+                "```\nxcrun devicectl device install app --device 0000\n```",
+                Device,
+            ),
+            ("Start it with `./target/release/sng-mahjong`.", Device),
+        ] {
+            assert_eq!(
+                commands_for_tools(line)
+                    .iter()
+                    .map(|c| c.1)
+                    .collect::<Vec<_>>(),
+                [runner],
+                "{line}"
+            );
+        }
+        for fine in [
+            "I reordered the tile drawing so the paper is drawn before the edge.",
+            "The `cargo` tool runs check and test; `adb` lists the phone.",
+            "Run cargo build with the Android target.",
+            "Update the lock with `cargo update -p ui-core` and review `git diff`.",
+            "```rust\nfn main() {\n    run(\"cargo test\");\n}\n```",
+            "```\n# build for Android\nexport ANDROID_NDK_HOME=~/ndk\n```",
+            "I can\u{2019}t build it: I am in a sandbox.",
+            // A path in an answer about the archive (Kimi, 2026-10-13).
+            "Its object is under `/Users/jay/pudding/loadngo/target/debug/`.",
+            "See `target/release/deps/loadngo_inference.d`.",
+            // Prose outside code: before, between and after code.
+            "Run `git diff`; cargo test passed earlier.",
+            "```\ngit status\n```\ncargo build reads Cargo.toml first.",
+        ] {
+            assert!(commands_for_tools(fine).is_empty(), "{fine}");
         }
     }
 
