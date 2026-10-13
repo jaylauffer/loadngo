@@ -15,6 +15,8 @@ pub mod bpe;
 pub mod cas_tools;
 pub mod compute;
 #[cfg(feature = "work")]
+pub mod device_tools;
+#[cfg(feature = "work")]
 pub mod edit_tools;
 pub mod memory_tools;
 pub mod rust_text;

@@ -435,6 +435,10 @@ meaningful tasks, and for local content to come before web searches.
     the output as completed jobs, and a proactor deadline kills a child that overruns
     (20 min for cargo, 60 s for git). The end of each stream comes back with the exit
     status.
+  - `fmt` adds `--check` itself; a `--check` the model passes too is dropped (cargo
+    refuses it twice, and gpt-oss retried that three times on 2026-10-13).
+- **`device`** (`device_tools`, added 2026-10-13) builds a game and puts it where Jay
+  can see it; see "Building and running on devices" below.
 
 ### Jev in the tool loop
 
@@ -614,6 +618,109 @@ taken from Kimi's chat and written fresh:
 Checked on the GPU on 2026-10-09: the date and self-description question answered
 without tools, and the seeded task above finished in 6 calls with the chat's own check
 passing; see `docs/AGENT_LOOP.md`, "Evidence, step 1".
+
+## Building and running on devices (2026-10-13)
+
+### Field report
+
+Jay asked gpt-oss to fix the stacked-tile look in sng-mahjong, then to "run the game on
+screen" and "build it for the attached android and ios devices" (transcript
+`~/.loadngo/gpt-oss/transcripts/2026-10-13-124906.jsonl`). The fix went well: two edits,
+`cargo fmt` and `cargo test` (44 tests, 13.8 s), the chat's own check passing. Then:
+
+- "run the game on screen": "I don't have the ability to launch a graphical window from
+  here", and `cargo run` instructions for Jay, with a hint to `brew install sdl2`.
+- the device build: Android and iOS instructions (`adb push` of a bare binary, an Xcode
+  project that does not exist).
+- asked why: "I'm running inside a sandboxed environment that has no access to the
+  system's compiler toolchains". It kept saying this for five more messages, including
+  after Jay said it runs on his Mac and pointed it at `loadngo/inference`, and after it
+  had read that code. It never tried a call.
+
+Three causes, from the code:
+
+1. There was no tool for it. `cargo` runs check, test, clippy, build and fmt; nothing
+   packaged an APK or app bundle, installed it, or started a window. The repositories'
+   own `scripts/android_device_build.sh` and `ios_device_build.sh` do that, but the
+   model has no shell.
+2. The standing instructions said "You cannot commit, push or run other commands", which
+   reads as "cannot build for a device".
+3. The model's trained belief that it is sandboxed beat the evidence in its own context:
+   its successful `cargo test` result was two turns up. Nothing checked an answer for it.
+
+And one tool bug it tripped on: the `cargo` tool adds `--check` to `fmt`, so a model
+passing `--check` too got cargo's "cannot be used multiple times" error; it retried the
+same call three times before trying no arguments.
+
+### What changed
+
+- **`device`** tool, given with the editing tools to every local model:
+  - `list`: `adb devices -l`, `xcrun devicectl list devices`, the board's holds on the
+    two phones, and the repositories with device build scripts.
+  - `android`: the repository's `scripts/android_device_build.sh` with a release profile
+    and install on the attached phone (one attached, or `device` names its serial), then
+    `am start` of the script's package.
+  - `ios`: `scripts/ios_device_build.sh` with signing looked up each time: the newest
+    unexpired provisioning profile for the script's bundle id (exact before wildcard)
+    that lists a connected iPhone, and the valid codesigning identity whose certificate
+    is in that profile, matched by the certificate body (two identities here share one
+    name, `~/pudding/ios-signing-notes.md`). The profile's plist is read from inside its
+    CMS signature, only to choose a file; `codesign` and the install check the
+    signature. With no usable profile the answer names what was found and that Jay
+    refreshes profiles. The script installs and launches with `devicectl`.
+  - `mac`: `cargo build --release` under the time limit (a compile error is the result),
+    then `cargo run --release` left running, output to `target/loadngo-agent-run.log` of
+    its repository. One proactor timer watches 4 s for an early exit, which comes back
+    with the end of the log. A second `mac` call for the same directory restarts it.
+  - A phone another agent holds in `AGENT-BOARD.md`'s shared devices table is refused.
+  - Builds run under the proactor (`work_tools::run`), 40 min limit; queries 60 s. A
+    successful build shows its last 12 lines, a failed one the end of each stream.
+- **Instructions**: the model runs as an ordinary process on Jay's Mac mini, not in a
+  sandbox; Rust, the Android SDK and NDK, adb, Xcode and devicectl are installed and
+  its tools run them; when Jay asks to build, run or install, call the tool instead of
+  handing him commands. "No shell for other commands" replaces "cannot run other
+  commands".
+- **Capability-denial check** (`guards::denies_capability`, `docs/AGENT_LOOP.md`): an
+  answer saying it is in a sandbox or cannot build, compile, run or install is held back
+  once a turn, with what is installed, what the tools do, and the chat's last four
+  `cargo`/`device` results. All five of gpt-oss's denials from the transcript are
+  caught by the test; first-person subjects only, so "if you can't run it" is not.
+
+### Evidence
+
+- Tests: device tool parsing (profile plist inside a signature, profile choice incl.
+  expired/wildcard/other device, identity by certificate, `adb`/`devicectl` output,
+  script defaults), refusals (no script, outside the workspace, phone held on the
+  board), `mac` on real crates (left running, restarted, early exit with its log, a
+  compile error, a refused `--target-dir`), the loop's denial note (once a turn, with
+  the cargo result), `fmt --check` given twice, the board's device holder.
+- Real devices, through the tool from a small harness (2026-10-13):
+  - `list`: the Xiaomi (`e8a6ab881222`, device), Zheonus VI (connected) and an
+    unavailable second iPhone.
+  - `android` for sng-mahjong: script succeeded in 11.6 s (incremental release build),
+    installed, `am start` launched it; `dumpsys` showed it as the resumed activity and a
+    screenshot showed its title menu.
+  - `ios` for sng-mahjong: it chose profile `cf60c22d…` (expires 2026-10-19) and identity
+    `ED54F607…`, the pair `ios-signing-notes.md` records as working, out of two
+    identities with one name. Built, signed and installed on Zheonus VI; the launch was
+    refused because the phone was locked (exit 1, 22.1 s). The result now adds a line
+    saying the app is installed and the phone only needs unlocking.
+- gpt-oss itself, release build on the GPU, one message each:
+  - "This is good now build sng-mahjong for the attached android and ios devices."
+    (`~/.loadngo/gpt-oss/transcripts/2026-10-13-145824.jsonl`): `device list`, `device
+    android`, `device ios`, then the answer: Android built and launched on
+    `e8a6ab881222`; iOS installed but not launched because the phone is locked, unlock
+    and run again. 3 calls, 40.7 s. That run predates the locked-phone line; the model
+    read the twenty-line devicectl error correctly anyway.
+  - "run sng-mahjong on screen, let's see it." (`2026-10-13-150940.jsonl`): one `device
+    mac` call; the game was a foreground app on the Mac with 0.0% CPU on its title menu
+    after gpt-oss exited, log in `sng-mahjong/target/loadngo-agent-run.log`. Its answer
+    said running the same command again would "stop or restart" the game; it restarts.
+  - Neither run reached the capability-denial check (no denial was written); it is
+    covered by the scripted loop test.
+- Not checked: a device build of sng-roguelite or sng-zhoenus through the tool (same
+  script template), Linux or Windows hosts (no device scripts there; `list` reports
+  that `xcrun` cannot start), an expired profile on the real keychain (unit test only).
 
 ## Line editing
 

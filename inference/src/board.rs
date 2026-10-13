@@ -122,6 +122,30 @@ pub fn conflict(board: &str, me: &str, repo: &str, path: &str) -> Option<Claim> 
     })
 }
 
+/// Who holds a shared device in `## Shared devices`, when an agent other than `me` does:
+/// the "Held by" and "Since" cells of the first row whose resource begins with `device`
+/// (`Android phone`, `iPhone`). A device marked free, or held by `me`, is `None`.
+pub fn device_holder(board: &str, me: &str, device: &str) -> Option<(String, String)> {
+    let (first, end) = table(board, "## Shared devices")?;
+    let row = board
+        .lines()
+        .skip(first)
+        .take(end - first)
+        .filter_map(cells)
+        .find(|c| {
+            c.len() >= 3
+                && c[0]
+                    .to_ascii_lowercase()
+                    .starts_with(&device.to_ascii_lowercase())
+        })?;
+    let held = row[1].trim();
+    let free = held.is_empty() || held.to_ascii_lowercase().starts_with("free");
+    let mine = held
+        .to_ascii_lowercase()
+        .starts_with(&me.to_ascii_lowercase());
+    (!free && !mine).then(|| (held.to_owned(), row[2].clone()))
+}
+
 /// The board with `row` inserted as the first row of `heading`'s table, or `None` when
 /// the table is missing.
 fn insert_first(board: &str, heading: &str, row: &str) -> Option<String> {
@@ -210,6 +234,31 @@ mod tests {
 |---|---|---|---|---|
 | 2026-10-03 | Codex | something | x | — |
 ";
+
+    #[test]
+    fn a_device_another_agent_holds_is_found_and_a_free_or_own_one_is_not() {
+        let board = "## Shared devices
+
+**Latest update from Jay:** prose before the table.
+
+| Resource | Held by | Since | Notes |
+|---|---|---|---|
+| Android phone — Xiaomi, adb `e8a6` | Codex (APK install) | 2026-10-04 | notes |
+| iPhone — Zheonus VI | free | 2026-10-13 | notes |
+| `dolores` | gpt-oss | 2026-10-12 | notes |
+";
+        assert_eq!(
+            device_holder(board, "gpt-oss", "Android phone"),
+            Some(("Codex (APK install)".into(), "2026-10-04".into()))
+        );
+        assert_eq!(device_holder(board, "Codex", "android phone"), None);
+        // Named in passing is not held: "(APK install)" does not make it gpt-oss's.
+        assert!(device_holder(board, "APK", "Android phone").is_some());
+        assert_eq!(device_holder(board, "gpt-oss", "iPhone"), None);
+        assert_eq!(device_holder(board, "gpt-oss", "`dolores`"), None);
+        assert_eq!(device_holder(board, "gpt-oss", "Pixel"), None);
+        assert_eq!(device_holder(BOARD, "gpt-oss", "iPhone"), None);
+    }
 
     #[test]
     fn claims_parse_with_escaped_bars() {

@@ -316,6 +316,9 @@ pub struct At {
     pub capacity: usize,
 }
 
+/// `cargo` and `device` results remembered for [`Agent::before_answer`].
+const RAN_KEPT: usize = 4;
+
 /// Not run: answered for calls left waiting when Jay sends a new message.
 const NOT_RUN: &str = "Not run: Jay paused this turn before this call ran and has sent a new \
 message; nothing was done for it.";
@@ -344,6 +347,8 @@ struct Turn {
     gated: bool,
     /// The archive coverage note was sent.
     scope_checked: bool,
+    /// The note about an answer denying what the tools do was sent.
+    denial_checked: bool,
     /// Revisions each file has had in this turn.
     revisions: HashMap<String, Vec<String>>,
     /// Calls that succeeded this turn (the repeat guard).
@@ -392,6 +397,9 @@ pub struct Agent<'o, T> {
     /// Positions the opening takes ([`Self::prepare`]).
     opening: usize,
     evidence: Evidence,
+    /// The first lines of the latest `cargo` and `device` results, newest last: what the
+    /// model has run in this chat, for an answer that says it cannot.
+    ran: Vec<String>,
     verified: Option<(Vec<String>, bool)>,
     last_answer: String,
     turn: Turn,
@@ -434,6 +442,7 @@ impl<'o, T: Template> Agent<'o, T> {
             starts: Vec::new(),
             opening: 0,
             evidence: Evidence::default(),
+            ran: Vec::new(),
             verified: None,
             last_answer: String::new(),
             turn: Turn::default(),
@@ -644,7 +653,7 @@ impl<'o, T: Template> Agent<'o, T> {
             }
             return Next::Tools(read.calls);
         }
-        if let Some(note) = self.before_answer() {
+        if let Some(note) = self.before_answer(&read.answer) {
             let room = at.capacity.saturating_sub(at.position);
             match self.template.note(self.turn.ended_by, &note) {
                 Ok(tokens) if tokens.len() + REPLY_RESERVE <= room => return Next::Feed(tokens),
@@ -813,11 +822,41 @@ impl<'o, T: Template> Agent<'o, T> {
         Ok(tokens)
     }
 
-    /// A note the answer must wait for: archive coverage, or changes no check has
-    /// passed since. Each is sent once a turn.
-    fn before_answer(&mut self) -> Option<String> {
+    /// A note the answer must wait for: an answer denying what the tools do, archive
+    /// coverage, or changes no check has passed since. Each is sent once a turn.
+    fn before_answer(&mut self, answer: &str) -> Option<String> {
         if self.turn.closed {
             return None;
+        }
+        let can_run = self
+            .tools
+            .as_ref()
+            .is_some_and(|t| t.names().contains(&"device"));
+        if !self.turn.denial_checked && can_run && guards::denies_capability(answer) {
+            self.turn.denial_checked = true;
+            self.note("[check] the answer says it cannot build or run; asked to use its tools");
+            let ran = if self.ran.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " In this chat your tools already ran:\n{}\n",
+                    self.ran
+                        .iter()
+                        .map(|r| format!("- {r}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
+            };
+            return Some(format!(
+                "Check before your answer reaches Jay: it says you are in a sandbox, or that you \
+                 cannot build, compile, run or install. That is not so. You are an ordinary \
+                 process on Jay's Mac mini; Rust, the Android SDK and NDK, adb, Xcode and \
+                 devicectl are installed, and your tools run them: cargo (check, test, clippy, \
+                 build, fmt) and device (list; android and ios: release build, install and \
+                 launch on the attached phone; mac: run on this Mac's screen).{ran} Do what Jay \
+                 asked with those tools now, instead of giving him commands. If a tool call \
+                 fails, answer with its actual error."
+            ));
         }
         let archive_work = self
             .turn
@@ -1046,6 +1085,14 @@ impl<'o, T: Template> Agent<'o, T> {
                     &result,
                 ));
                 self.evidence.record(&call.name, &call.arguments, &result);
+                if matches!(call.name.as_str(), "cargo" | "device") {
+                    if let Some(first) = result.lines().next() {
+                        self.ran.push(first.to_owned());
+                        if self.ran.len() > RAN_KEPT {
+                            self.ran.remove(0);
+                        }
+                    }
+                }
                 self.turn.since_checkpoint += 1;
                 if let Some(note) = self.checkpoint(backend) {
                     result.push_str(&note);

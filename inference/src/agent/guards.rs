@@ -1,5 +1,6 @@
 //! Mechanical checks on a model's work that need no judging: a reply looping on one
-//! block, the same call made again, an edit that puts a file back as it was.
+//! block, the same call made again, an edit that puts a file back as it was, an answer
+//! that says it cannot build or run things its tools do.
 
 use std::collections::HashMap;
 
@@ -35,10 +36,69 @@ pub fn call_key(name: &str, arguments: &str) -> (String, Value) {
 }
 
 /// Tools whose results change from call to call even with the same arguments, so a
-/// repeat is not refused: builds and tests, repository state, terminal sessions.
+/// repeat is not refused: builds and tests, repository state, devices, terminal sessions.
 #[must_use]
 pub fn repeatable(name: &str) -> bool {
-    matches!(name, "cargo" | "git") || name.starts_with("terminal_")
+    matches!(name, "cargo" | "git" | "device") || name.starts_with("terminal_")
+}
+
+/// Phrases that say "I cannot".
+const CANNOT: [&str; 11] = [
+    "can't",
+    "cannot",
+    "can not",
+    "unable",
+    "not able to",
+    "don't have the ability",
+    "do not have the ability",
+    "don't have access",
+    "do not have access",
+    "no access",
+    "won't be able",
+];
+/// Word stems of what the tools do.
+const DOING: [&str; 8] = [
+    "compil", "build", "run", "launch", "invok", "install", "deploy", "execut",
+];
+/// Words that make a sentence about the model itself.
+const MYSELF: [&str; 6] = ["i", "i'm", "i've", "me", "my", "assistant"];
+
+/// Whether an answer says the model is in a sandbox, or that it cannot build, compile,
+/// run, launch or install: gpt-oss's trained belief, which it kept after its own `cargo
+/// test` had passed twice in the same chat (2026-10-13, `docs/GPT_OSS.md`). Looks for an
+/// "I cannot" phrase with the model as its subject (within the three words before it)
+/// and one of those verbs after it in the same sentence.
+#[must_use]
+pub fn denies_capability(answer: &str) -> bool {
+    let text = answer
+        .to_lowercase()
+        .replace(['\u{2019}', '\u{2018}'], "'")
+        .replace(['*', '`', '\u{2011}'], " ");
+    if text.contains("sandbox") {
+        return true;
+    }
+    let words = |t: &str| -> Vec<String> {
+        t.split(|c: char| !c.is_alphanumeric() && c != '\'')
+            .filter(|w| !w.is_empty())
+            .map(str::to_owned)
+            .collect()
+    };
+    text.split(['.', '!', '?', '\n', ';', ':']).any(|sentence| {
+        CANNOT.iter().any(|phrase| {
+            sentence.match_indices(phrase).any(|(at, _)| {
+                let before = words(&sentence[..at]);
+                let subject = before
+                    .iter()
+                    .rev()
+                    .take(3)
+                    .any(|w| MYSELF.contains(&w.as_str()));
+                subject
+                    && words(&sentence[at + phrase.len()..])
+                        .iter()
+                        .any(|w| DOING.iter().any(|d| w.starts_with(d)))
+            })
+        })
+    })
 }
 
 /// Tools that change files or stored state: once one succeeds, earlier reads may read
@@ -135,6 +195,33 @@ mod tests {
             list.extend([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, item]);
         }
         assert_eq!(looping(&list), None);
+    }
+
+    #[test]
+    fn an_answer_denying_what_the_tools_do_is_found() {
+        // gpt-oss's answers, 2026-10-13 transcript.
+        for denial in [
+            "I don\u{2019}t have the ability to launch a graphical window from here, but you can",
+            "I can\u{2019}t actually compile the binaries for you, but I can give you the commands",
+            "I\u{2019}m running inside a sandboxed environment that has no access to the toolchains.",
+            "Because of that limitation I can\u{2019}t build the Android or iOS binaries for you.",
+            "The short answer is that **the assistant can\u{2019}t magically \u{201c}give itself\u{201d} \
+             access to the compiler** \u{2013} those binaries simply aren\u{2019}t in the PATH.",
+            "I am unable to run `cargo build` here.",
+        ] {
+            assert!(denies_capability(denial), "{denial}");
+        }
+        for fine in [
+            "All formatting and tests pass. No other files were modified.",
+            "I reordered the tile drawing so the paper rectangle is rendered before the edge.",
+            "If you can't run it, tell me and I will look at the log.",
+            "I can read, edit, build and run tests in the workspace.",
+            "The truncate call cannot fail here, as I checked.",
+            "I looked at the log and the old phone cannot install apps over Wi-Fi.",
+            "I ran cargo test; it passed. The phone could not be found by adb.",
+        ] {
+            assert!(!denies_capability(fine), "{fine}");
+        }
     }
 
     #[test]

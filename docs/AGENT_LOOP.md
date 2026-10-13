@@ -33,7 +33,7 @@ are re-implemented from their description in kimi `docs/CHAT.md`.
 | `Backend` | The model's context: load, feed, generate (every token fed except the one that ends the reply), truncate (for `/undo`, `/reset`), and a label model for Jev in a side session | per engine: `gpt_oss_generate`'s `GptOss`; kimi `agent_chat::Engine` (any kimi `Reader`) |
 | `Agent` | The turn: after each reply, run tools, send a note, or end; the tools with their guards; Jev's checkpoints and web gate; tool receipts across turns; the chat's own check and board handoff | `inference::agent` |
 | `turn` | One user message, blocking, for a terminal | `inference::agent::turn` |
-| `Workspace` | The tools and standing instructions (files, editing under `COLLABORATION.md`, `cargo`/`git`, Archive CAS, notes, web) | `inference::agent::workspace` |
+| `Workspace` | The tools and standing instructions (files, editing under `COLLABORATION.md`, `cargo`/`git`, `device`, Archive CAS, notes, web) | `inference::agent::workspace` |
 | `jev` | Jev's questions (checkpoint, web gate), for any `LabelModel` | `inference::agent::jev` |
 | `transcript` | Saved chats, one JSON event per line (Kimi's event names), and `Tee` for several observers | `inference::agent::transcript` |
 
@@ -64,7 +64,7 @@ more than the model's own view of its work.
 
 | Guard | From | What it does |
 |---|---|---|
-| Repeated call | Kimi (10-08) | A call with the same name and arguments (JSON-equal) as one that succeeded this turn is not run; its result says so. `cargo`, `git` and terminal tools are exempt. A successful write or other change lets reads be made again; an edit is never replayed. |
+| Repeated call | Kimi (10-08) | A call with the same name and arguments (JSON-equal) as one that succeeded this turn is not run; its result says so. `cargo`, `git`, `device` and terminal tools are exempt. A successful write or other change lets reads be made again; an edit is never replayed. |
 | Tools closed | Kimi (10-08) | A second round made only of repeated calls closes the tools: each result asks for an answer, and the reply is begun in the answer itself (`ANSWER_OPENING`). A tool call after that ends the turn. |
 | Write failures | Kimi (10-01), retuned | The same write failing twice with the same error, or five writes failing without one succeeding, ends the turn. (Kimi paused at three; gpt-oss's note at three failures in a row now comes first.) |
 | Failing tool | gpt-oss (10-04) | Three failures of one tool in a row add a note: change the call or the approach (for `text_edit`, how to copy `old_text`). |
@@ -74,6 +74,7 @@ more than the model's own view of its work.
 | Looping reply | Kimi (09-27) | A reply repeating one block (4 copies, at least 64 tokens, block up to 200) is halted and the turn ends. |
 | Verification gate | gpt-oss (10-04) | An answer after file changes with no passing `cargo` run since is held back once with a note to run the checks. |
 | Chat's own check | gpt-oss (10-04) | When a turn wrote files, the chat runs `cargo check` and `cargo test` in each changed crate and puts the result in the board handoff ("NEEDS JAY" on failure). |
+| Capability denial | gpt-oss (10-13) | An answer saying the model is in a sandbox, or that it cannot build, compile, run or install (an "I cannot" phrase with itself as subject, then one of those verbs), is held back once a turn when the chat has the `device` tool. The note says what is installed, what `cargo` and `device` do, and lists the last four `cargo`/`device` results of the chat; a tool error is still a fine answer. gpt-oss said it could not compile in the chat where its own `cargo test` had passed twice (`docs/GPT_OSS.md`, "Building and running on devices"). |
 | Archive coverage | gpt-oss (10-04) | An answer after archive searches is held back once with the actual receipts and a note to claim only their scope. |
 | Results fit | both | Long results are halved until they fit before the reply's reserve; when nothing fits, each says so; when even that does not fit, the turn ends. |
 | Jev checkpoint | gpt-oss (10-04) | Every 6 calls: stuck/repeating nudges, then closes the tools; needs-input asks to put the question to Jay; complete asks to check, then answer. |

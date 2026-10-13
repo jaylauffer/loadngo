@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::cas_tools::{cas_tools, Archives};
+use crate::device_tools::DeviceTools;
 use crate::edit_tools::EditSession;
 use crate::memory_tools::{format_notes, MemoryStore};
 use crate::tools::{FsTools, Toolbox};
@@ -26,7 +27,7 @@ pub struct WorkspaceOptions {
     pub agent: String,
     /// The board date, `YYYY-MM-DD`.
     pub today: String,
-    /// Editing (`text_*`) and checking (`cargo`, `git`) tools.
+    /// Editing (`text_*`), checking (`cargo`, `git`) and running (`device`) tools.
     pub edit: bool,
     /// Notes that last across conversations, kept in this file.
     pub memory: Option<PathBuf>,
@@ -145,10 +146,14 @@ impl Workspace {
             for tool in WorkTools::new(base)?.into_tools() {
                 tools.push(tool);
             }
+            for tool in DeviceTools::new(base, &o.agent)?.into_tools() {
+                tools.push(tool);
+            }
             described.push(format!(
                 "editing: text_read, text_edit, text_write, text_format in the workspace; cargo \
                  (check, test, clippy, build, fmt --check) and git (status, diff, log, show); \
-                 claims on AGENT-BOARD.md as {}; nothing is committed",
+                 device (list; android, ios: release build, install, launch; mac: run on this \
+                 screen); claims on AGENT-BOARD.md as {}; nothing is committed",
                 o.agent
             ));
             instructions.push_str(
@@ -161,9 +166,16 @@ impl Workspace {
                  text_format each Rust file you changed, and run cargo test, clippy and fmt \
                  (--check) in the crate, and git diff to review. Report what you changed, where, \
                  and how you checked it; say plainly if a check failed or you could not finish.\n\
-                 - Change only what the request needs. You cannot commit, push or run other \
-                 commands: Jay reviews your changes. A file another agent is working on is \
-                 refused; tell Jay instead of working around it.\n",
+                 - You run as an ordinary process on Jay's Mac mini, not in a sandbox. Rust \
+                 (cargo, rustc, rustup), the Android SDK and NDK, adb, Xcode and devicectl are \
+                 installed, and your tools run them for real: cargo builds and tests, and device \
+                 builds a game and runs it where Jay can see it (list: what is attached; \
+                 android, ios: release build, install and launch on the attached phone; mac: \
+                 this Mac's screen). When Jay asks you to build, run or install something, call \
+                 the tool; do not hand him commands to run. If a tool fails, report its error.\n\
+                 - Change only what the request needs. You cannot commit or push, and there is \
+                 no shell for other commands: Jay reviews your changes. A file another agent is \
+                 working on is refused; tell Jay instead of working around it.\n",
             );
             Some(session)
         } else {

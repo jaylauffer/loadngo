@@ -27,7 +27,7 @@ use crate::tools::Tool;
 
 /// The end of each stream kept, in bytes.
 const TAIL_BYTES: usize = 8 * 1024;
-const CARGO_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+pub(crate) const CARGO_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 const GIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// What a finished command left.
@@ -39,9 +39,9 @@ pub struct Ran {
     pub stderr: String,
 }
 
-/// The last `TAIL_BYTES` of `bytes` as text, starting at a line.
-fn tail(bytes: &[u8]) -> String {
-    let start = bytes.len().saturating_sub(TAIL_BYTES);
+/// The last `keep` bytes of `bytes` as text, starting at a line.
+fn tail(bytes: &[u8], keep: usize) -> String {
+    let start = bytes.len().saturating_sub(keep);
     let text = String::from_utf8_lossy(&bytes[start..]);
     match (start > 0, text.find('\n')) {
         (true, Some(cut)) => format!("[…]\n{}", &text[cut + 1..]),
@@ -49,11 +49,21 @@ fn tail(bytes: &[u8]) -> String {
     }
 }
 
-/// Runs `command` to completion or `timeout`, waiting in a loadngo proactor.
+/// Runs `command` to completion or `timeout`, waiting in a loadngo proactor; keeps the
+/// end of each stream (`TAIL_BYTES`).
 ///
 /// # Errors
 /// When the program cannot be started or the proactor fails.
-pub fn run(mut command: Command, timeout: Duration) -> Result<Ran, String> {
+pub fn run(command: Command, timeout: Duration) -> Result<Ran, String> {
+    run_keeping(command, timeout, TAIL_BYTES)
+}
+
+/// [`run`], keeping the last `keep` bytes of each stream: more for a command whose whole
+/// output is read as data.
+///
+/// # Errors
+/// As [`run`].
+pub fn run_keeping(mut command: Command, timeout: Duration, keep: usize) -> Result<Ran, String> {
     let proactor = new_platform_proactor().map_err(|e| format!("proactor: {e}"))?;
     let handle = proactor.handle();
     let started = Instant::now();
@@ -80,8 +90,8 @@ pub fn run(mut command: Command, timeout: Duration) -> Result<Ran, String> {
                     break;
                 }
                 kept.extend_from_slice(&chunk[..n]);
-                if kept.len() > 4 * TAIL_BYTES {
-                    kept.drain(..kept.len() - 2 * TAIL_BYTES);
+                if kept.len() > 4 * keep {
+                    kept.drain(..kept.len() - 2 * keep);
                 }
             }
             let _ = handle.enqueue_work(move |_| {
@@ -122,13 +132,13 @@ pub fn run(mut command: Command, timeout: Duration) -> Result<Ran, String> {
         status: status.code(),
         timed_out: killed,
         elapsed: started.elapsed(),
-        stdout: tail(&out.unwrap_or_default()),
-        stderr: tail(&err.unwrap_or_default()),
+        stdout: tail(&out.unwrap_or_default(), keep),
+        stderr: tail(&err.unwrap_or_default(), keep),
     })
 }
 
 /// How a finished command reads to the model.
-fn report(what: &str, ran: &Ran) -> String {
+pub(crate) fn report(what: &str, ran: &Ran) -> String {
     let status = match (ran.timed_out, ran.status) {
         (true, _) => "stopped: it ran past its time limit".to_owned(),
         (false, Some(0)) => "succeeded (exit 0)".to_owned(),
@@ -160,6 +170,11 @@ impl WorkTools {
         })
     }
 
+    /// The workspace, resolved.
+    pub(crate) fn workspace(&self) -> &Path {
+        &self.workspace
+    }
+
     /// `cargo` and `git`.
     pub fn into_tools(self) -> Vec<Box<dyn Tool>> {
         let shared = std::rc::Rc::new(self);
@@ -170,7 +185,7 @@ impl WorkTools {
     }
 
     /// A directory inside the workspace (`.` for the workspace), and how it is shown.
-    fn dir(&self, given: &str) -> Result<(PathBuf, String), String> {
+    pub(crate) fn dir(&self, given: &str) -> Result<(PathBuf, String), String> {
         let joined = self.workspace.join(given.trim().trim_start_matches("./"));
         let real = joined.canonicalize().map_err(|e| format!("{given}: {e}"))?;
         if !real.starts_with(&self.workspace) {
@@ -188,7 +203,7 @@ impl WorkTools {
 }
 
 /// The `args` array, refusing any that starts with one of `refused`.
-fn arguments(args: &Value, refused: &[&str]) -> Result<Vec<String>, String> {
+pub(crate) fn arguments(args: &Value, refused: &[&str]) -> Result<Vec<String>, String> {
     let list = match args.get("args") {
         None | Some(Value::Null) => return Ok(Vec::new()),
         Some(Value::Array(list)) => list,
@@ -220,6 +235,15 @@ struct Cargo(std::rc::Rc<WorkTools>);
 struct Git(std::rc::Rc<WorkTools>);
 
 const CARGO_COMMANDS: [&str; 5] = ["check", "test", "clippy", "build", "fmt"];
+/// `cargo` arguments that reach outside the workspace or run other programs.
+pub(crate) const REFUSED_CARGO_ARGS: [&str; 6] = [
+    "--manifest-path",
+    "--config",
+    "--target-dir",
+    "-Z",
+    "--out-dir",
+    "--artifact-dir",
+];
 const GIT_COMMANDS: [&str; 4] = ["status", "diff", "log", "show"];
 
 impl Tool for Cargo {
@@ -247,17 +271,12 @@ impl Tool for Cargo {
         if !dir.join("Cargo.toml").is_file() {
             return Err(format!("{shown} has no Cargo.toml"));
         }
-        let extra = arguments(
-            args,
-            &[
-                "--manifest-path",
-                "--config",
-                "--target-dir",
-                "-Z",
-                "--out-dir",
-                "--artifact-dir",
-            ],
-        )?;
+        let mut extra = arguments(args, &REFUSED_CARGO_ARGS)?;
+        if name == "fmt" {
+            // The tool adds `--check` itself; a second one is an error to cargo, which
+            // gpt-oss retried three times without seeing why (2026-10-13 transcript).
+            extra.retain(|a| a != "--check");
+        }
         let mut command = Command::new("cargo");
         command
             .current_dir(&dir)
@@ -424,5 +443,26 @@ mod tests {
             .call("cargo", r#"{"dir":".","command":"run"}"#)
             .unwrap_err();
         assert!(error.contains("must be one of"), "{error}");
+    }
+
+    #[test]
+    fn a_check_flag_given_to_fmt_is_not_passed_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("c/src")).unwrap();
+        std::fs::write(
+            dir.path().join("c/Cargo.toml"),
+            "[package]\nname = \"c\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[workspace]\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("c/src/lib.rs"), "pub fn f() {}\n").unwrap();
+        let tools = toolbox(dir.path());
+        // gpt-oss passed `--check` itself three times, 2026-10-13.
+        let ran = tools
+            .call("cargo", r#"{"dir":"c","command":"fmt","args":["--check"]}"#)
+            .unwrap();
+        assert!(
+            ran.starts_with("cargo fmt --check  in c: succeeded"),
+            "{ran}"
+        );
     }
 }
