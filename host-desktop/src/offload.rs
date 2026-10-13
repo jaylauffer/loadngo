@@ -233,7 +233,18 @@ mod pool {
     /// wakes no frame. If no worker could be started the job runs here, so
     /// it is never lost.
     pub(crate) fn run_detached(job: impl FnOnce() + Send + 'static) {
-        let job: Job = Box::new(job);
+        // A panic is reported and contained, as `offload_through` does, so
+        // it costs this job and not a worker thread.
+        let job: Job = Box::new(move || {
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(job)) {
+                let message = payload
+                    .downcast_ref::<&str>()
+                    .map(|text| (*text).to_string())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "unknown panic".to_string());
+                eprintln!("[loadngo] detached job panicked: {message}");
+            }
+        });
         match pool() {
             Some(pool) => {
                 if let Err(mpsc::SendError(job)) = pool.sender.send(job) {
@@ -332,6 +343,31 @@ mod pool {
             assert!(job.try_take().is_none());
             assert_eq!(run_until(&proactor, &mut job), Ok(42));
             assert!(job.try_take().is_none(), "a result is taken once");
+        }
+
+        #[test]
+        fn a_panicking_detached_job_costs_no_worker() {
+            for _ in 0..2 * super::WORKERS {
+                super::run_detached(|| panic!("detached job fails on purpose"));
+            }
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            for _ in 0..2 * super::WORKERS {
+                let done_tx = done_tx.clone();
+                super::run_detached(move || {
+                    let name = std::thread::current().name().map(str::to_owned);
+                    done_tx.send(name).unwrap();
+                });
+            }
+            for _ in 0..2 * super::WORKERS {
+                let name = done_rx
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("the pool still runs jobs after panics");
+                assert!(
+                    name.as_deref()
+                        .is_some_and(|name| name.starts_with("loadngo-offload-")),
+                    "ran on {name:?}, not a pool worker: the panics cost workers"
+                );
+            }
         }
 
         #[test]
