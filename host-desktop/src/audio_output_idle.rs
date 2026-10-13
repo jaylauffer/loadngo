@@ -291,8 +291,10 @@ mod tests {
             switch.request(false);
             switch.request(true);
         }
-        let mut last = None;
-        while let Ok(open) = seen.recv_timeout(Duration::from_millis(500)) {
+        // The pool is shared with every other test, so allow for queueing:
+        // wait for the first switch, then until none follows for a while.
+        let mut last = seen.recv_timeout(Duration::from_secs(5)).ok();
+        while let Ok(open) = seen.recv_timeout(Duration::from_secs(2)) {
             last = Some(open);
         }
         assert_eq!(last, Some(true));
