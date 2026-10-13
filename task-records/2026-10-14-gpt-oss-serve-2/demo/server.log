@@ -1,0 +1,5 @@
+gpt_oss_serve_model hash=56fcc05caeabd1f4f352f7b9d6762cad2035b860973c07a5c330a7fa3944e8e1 path=/Users/jay/.loadngo/models/56fcc05caeabd1f4f352f7b9d6762cad2035b860973c07a5c330a7fa3944e8e1.gguf verified (BLAKE3) loaded in 8.7s on GPU: Apple M4 Pro
+gpt_oss_serve_listening socket=/var/folders/x0/vq6dbxcs3wn5cf9lhgr03g180000gn/T/gpt-oss-serve-cp95bpdt/node/gpt-oss.sock model=56fcc05caeabd1f4f352f7b9d6762cad2035b860973c07a5c330a7fa3944e8e1 engine=GPU: Apple M4 Pro
+gpt_oss_serve_call call_id=10 tokens=54 seconds=1.91 expired=false complete=true
+gpt_oss_serve_call call_id=11 tokens=54 seconds=1.78 expired=false complete=true
+gpt_oss_serve: stopped

@@ -1,0 +1,71 @@
+{
+ "calls": [
+  {
+   "request": {
+    "call_id": 10,
+    "capability": "chat",
+    "deadline_ms": 120000,
+    "body": {
+     "instructions": "You are the talking head above the base in Zhoenus, a game where the player flies a ship and saves flyers. Answer in one or two short sentences.",
+     "message": "How do I save the flyers?"
+    }
+   },
+   "reply": {
+    "call_id": 10,
+    "status": "ok",
+    "body": {
+     "text": "Fly the ship to the flyer\u2019s location, hover over them, and press the \u201cRescue\u201d button to pull them aboard. Once aboard, head to the nearest safe zone to drop them off."
+    }
+   },
+   "seconds": 1.91
+  },
+  {
+   "request": {
+    "call_id": 11,
+    "capability": "chat",
+    "deadline_ms": 120000,
+    "body": {
+     "instructions": "You are the talking head above the base in Zhoenus, a game where the player flies a ship and saves flyers. Answer in one or two short sentences.",
+     "message": "What happens when my battery runs low?"
+    }
+   },
+   "reply": {
+    "call_id": 11,
+    "status": "ok",
+    "body": {
+     "text": "When your battery runs low, the ship\u2019s engines will start to sputter and you\u2019ll lose the ability to fly for long distances. You\u2019ll need to land at a charging station or risk crashing."
+    }
+   },
+   "seconds": 1.78
+  },
+  {
+   "reply": {
+    "call_id": 20,
+    "status": "expired",
+    "body": {
+     "error": "the deadline had passed"
+    }
+   }
+  },
+  {
+   "reply": {
+    "call_id": 21,
+    "status": "error",
+    "body": {
+     "error": "no capability \"paint\" here; this host answers \"chat\""
+    }
+   }
+  },
+  {
+   "reply": {
+    "call_id": 0,
+    "status": "error",
+    "body": {
+     "error": "not a call: expected ident at line 1 column 2"
+    }
+   }
+  }
+ ],
+ "idle_context_switches_10s": 12,
+ "exit": 0
+}

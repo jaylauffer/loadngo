@@ -1,0 +1,30 @@
+{
+  "accepted": true,
+  "receipt": {
+    "receipt_version": 2,
+    "request_id": 5163374144703386381,
+    "offer_id": 13684685709028636351,
+    "assignment_id": 8871977625741469863,
+    "submitter_node_id": "jay-macmini",
+    "worker_node_id": "claude-code-macmini",
+    "summary": "The model service runs on loadngo inference (second run): llama-server and its supervision removed; gpt_oss_serve holds gpt-oss-20b and answers JSON-line calls on a local Unix socket",
+    "success_criteria": "As the first run (e935c46c), with the llama grep leaving out task-records/. Checked by task-records/2026-10-14-gpt-oss-serve-2/verify.sh as pushed in loadngo f39ecc78.",
+    "artifact_hint": "/Users/jay/pudding/reviews/2026-10-14-task-gpt-oss-serve-2/result.md",
+    "artifact_copy_path": "/Users/jay/pudding/loadngo/task-records/2026-10-14-gpt-oss-serve-2/result.md",
+    "artifact_hash_hex": "224d9dd2779c8f6a88d33c3121f0d048aedb9e82f45c44aaf5afb4765a0b1927",
+    "result_note": "result delivered by Claude Code; see the artifact",
+    "accepted_at": 1791930763,
+    "submitted_at": 1791930704,
+    "reward": null
+  },
+  "receipt_commitment_hex": "95fc3ed70d4fe0c23780a6a4fe4c1dd0e7b80cb4cd784f85923b5c724fa879d2",
+  "reward": null,
+  "verification": {
+    "command": "git -C /Users/jay/pudding/loadngo diff --quiet f39ecc78 -- task-records/2026-10-14-gpt-oss-serve-2/verify.sh && bash /Users/jay/pudding/loadngo/task-records/2026-10-14-gpt-oss-serve-2/verify.sh",
+    "exit_code": 0,
+    "stdout": "verify: ok: 1: 85c54a5dd889fcafd8519593a3f4f101632f884b on github/dev; model_service and zhoenus_head_model gone, gpt_oss_serve there, no llama\nverify: ok: 2: fmt, clippy and tests pass at d92bb078, model-store tests included\nverify: ok: 3: CI run 38472175714 passed (4 jobs) and contains 85c54a5dd889fcafd8519593a3f4f101632f884b\nverify: ok: 4: two answers (1.91 s, 1.78 s), expired and errors as asked, 12 context switches idle in 10 s, clean SIGTERM\nverify: accepted\n",
+    "stdout_dropped_bytes": 0,
+    "stderr": "",
+    "stderr_dropped_bytes": 0
+  }
+}
