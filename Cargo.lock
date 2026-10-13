@@ -1618,12 +1618,14 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "data",
+ "libc",
  "loadngo-inference",
  "loadngo-line-editor",
  "loadngo-metal-compute",
  "loadngo-proactor",
  "loadngo-weights",
  "regex-syntax",
+ "serde",
  "serde_json",
  "thiserror 1.0.69",
 ]

@@ -27,6 +27,7 @@ pub mod file_manager;
 pub mod listener;
 pub mod machine;
 pub mod machine_identity;
+pub mod model_store;
 pub mod p2pmsg;
 pub mod pudding;
 pub mod service;

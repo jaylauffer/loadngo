@@ -14,8 +14,13 @@ loadngo-inference = { path = "../inference", features = ["agent"] }
 data = { path = "../data" }
 loadngo-line-editor = { path = "../line-editor" }
 regex-syntax = "0.8"
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# The server's peer credentials and signal pipe (`gpt_oss_serve`).
+libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 loadngo-metal-compute = { path = "../metal-compute" }

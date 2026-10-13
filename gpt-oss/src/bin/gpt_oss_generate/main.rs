@@ -5,7 +5,6 @@
 //! System One (Jev) checks the work as it goes.
 
 mod agent;
-mod engine;
 mod jev;
 
 use std::{
@@ -18,7 +17,7 @@ use std::{
 use loadngo_gpt_oss::{chat::Reasoning, model::Model, tokenizer::Tokenizer};
 use loadngo_weights::gguf;
 
-use crate::engine::{Engine, Which};
+use loadngo_gpt_oss::engine::{Engine, Which};
 
 const HELP: &str = "\
 gpt_oss_generate -- runs a gpt-oss GGUF greedily. With TEXT it continues the text; with

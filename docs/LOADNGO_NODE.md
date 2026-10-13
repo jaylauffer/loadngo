@@ -18,8 +18,8 @@ Today each capability lives in whichever program loaded it:
 - Every chat loads its own model: `gpt_oss_generate` (12 GB of weights), kimi's `k3` with
   Kimi Linear (25 GB of experts, ready about 36 s after launch) or Gemma 4 (18 GB,
   6.5 s). An evaluation run loads another copy.
-- `zhoenus_head_model` supervises Homebrew's `llama-server`, which Jay does not trust;
-  only the model is checked (`ZHOENUS_HEAD_MODEL_RUNNER.md`).
+- `gpt_oss_serve` (2026-10-14) holds gpt-oss for local programs on a Unix socket
+  (`GPT_OSS.md`, "Serving"); it is one model in one process, not yet the node.
 - A decision model such as Strands Decider (Qwen3.5-2B and a pointer head, about 4 GB)
   would be one more copy inside every chat that asks a System One question.
 
@@ -32,7 +32,7 @@ machines that are allowed to ask.
   systemd) and run on the loadngo proactor like every loadngo program.
 - **It holds capabilities:**
   - models, restored from the Archive CAS by BLAKE3 hash and checked at every launch, as
-    `network::model_service` already does;
+    `data::model_store` already does;
   - the decision model;
   - CAS roots, the tools the agent loop uses, thermal state.
 
@@ -59,13 +59,15 @@ machines that are allowed to ask.
 | Discovery, capability tags | Task's multicast groups and request/offer; node ids from `data::machine_identity` |
 | Transport | `network`, `data::p2pmsg` messages, the proactor |
 | Request shape for decisions | `inference::system_one`: TypeSafe's request and response shape, the same one Strands Decider serves |
-| Model provenance | `network::model_service`: restore from the CAS by hash, refuse a substituted copy |
+| Model provenance | `data::model_store`: restore from the CAS by hash, refuse a substituted copy |
 | Authentication | `loadngo-pq-auth`: `SignedAuthToken` (issuer, audience, scopes, nonce, expiry, post-quantum signature) and `VerifyPolicy`, written and not used by anything |
 | Engines | `loadngo-gpt-oss`, `loadngo-metal-compute`, `inference::agent` (the shared chat loop) |
 
 New:
 
-1. **The call messages** (a sketch, not yet a wire format):
+1. **The call messages** (a sketch; the same-machine form exists for one model since
+   2026-10-14: one JSON line per call on `gpt_oss_serve`'s socket, `loadngo_gpt_oss::call`,
+   with no token and no `Cancel` yet):
    - `Call { call_id, capability, deadline_ms, token, body }`: `body` is the
      capability's own request, for a decision the `system_one` request JSON;
    - `Reply { call_id, status, body }`;
@@ -118,7 +120,7 @@ whoever asks is not acceptable on those terms. So:
    - local agents (gpt-oss chat, Kimi, the eval) call the node instead of loading their
      own decider.
 3. **Chat models move into the node.** gpt-oss and Gemma are hosted once per machine and
-   the chats become clients. `zhoenus_head_model` and its `llama-server` are retired.
+   the chats become clients. `gpt_oss_serve` moves into the node.
 4. **Other machines.** dolores and agnes run the node with the roles they can hold.
    dolores's `loadngo-task-node` service (disabled since 2026-09-30 while QCoin is stopped)
    is replaced by the node's worker role.

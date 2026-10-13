@@ -1,8 +1,8 @@
 # gpt-oss in loadngo
 
-OpenAI's gpt-oss-20b, run by Rust code in this repository, so the Zhoenus head model
-and Kimi's eventual orchestrator need neither `llama-server` nor the Apache-licensed
-kimi engine. Started 2026-10-04 at Jay's request. The code is written from:
+OpenAI's gpt-oss-20b, run by Rust code in this repository: the chat, and the model the
+Zhoenus talking head calls (`gpt_oss_serve`, "Serving" below), need no outside model
+server and not the Apache-licensed kimi engine. Started 2026-10-04 at Jay's request. The code is written from:
 
 - the GGUF specification (ggml `docs/gguf.md`, version 3);
 - OCP MX v1.0;
@@ -12,12 +12,50 @@ kimi engine. Started 2026-10-04 at Jay's request. The code is written from:
 Nothing is translated from kimi-k3-in-rust (Jay's 2026-09-16 rule for this BSD-3
 repository).
 
+## Serving
+
+`gpt_oss_serve` (2026-10-14) holds the model and answers calls from programs on this
+machine, the Zhoenus talking head first. It replaced `network::model_service` and
+`zhoenus_head_model`, which started an outside model server and watched it over HTTP;
+nothing called them.
+
+- **The model** is named by BLAKE3 hash and size (`data::model_store`). It is restored
+  from an attached Archive CAS root on first use, and hashed beside the load at every
+  launch; a copy that does not match is refused.
+- **The socket** is `~/.loadngo/node/gpt-oss.sock` (`--socket`), in a directory the
+  server makes 0700. It closes a connection from another user (`getpeereid`,
+  `SO_PEERCRED`). Calls from this machine carry no token (`docs/LOADNGO_NODE.md`).
+- **One JSON line per call, one call per connection** (`loadngo_gpt_oss::call`):
+
+  ```json
+  {"call_id": 7, "capability": "chat", "deadline_ms": 30000,
+   "body": {"instructions": "You are the talking head ...", "message": "How do I save them?"}}
+  ```
+
+  answered with `{"call_id": 7, "status": "ok", "body": {"text": "..."}}`. The status is
+  `ok`, `expired` (the deadline, counted from when the call was read, passed first),
+  `busy` (the queue was full) or `error` (`body.error` says why).
+- **Each call starts a fresh conversation:** the system message, the call's instructions
+  as the developer message, and its message as the user's. Reasoning is low by default.
+  Decoding is greedy, until the reply ends, `--max-tokens` (1024), or the deadline, which
+  is checked before each token.
+- **Connections are accepted, read and answered on the proactor.** The model runs on one
+  thread, one call at a time. `--queue` (4) calls are answered or waiting; any more get
+  `busy`. SIGTERM and SIGINT stop the server and remove the socket.
+
+Measured on the Mac mini (release build, GPU), 2026-10-14:
+
+- the server answers calls 11.7 s after launch, with the model hashed while it loads;
+- two talking-head questions were answered in 2.7 s and 1.8 s (54 tokens each);
+- idle, it made 11 context switches in 10 s.
+
 ## The model file
 
 gpt-oss-20b is one GGUF, held by content: Archive CAS object
 `56fcc05caeabd1f4f352f7b9d6762cad2035b860973c07a5c330a7fa3944e8e1` (12,109,565,760
 bytes). It is in the signed pudding CAS, and its verified local copy is
-`~/.loadngo/models/<hash>.gguf` (see `docs/ZHOENUS_HEAD_MODEL_RUNNER.md`).
+`~/.loadngo/models/<hash>.gguf` (`data::model_store`: restored from the CAS once, hashed
+at every launch).
 
 - Weight types: 72 MXFP4 expert tensors, 98 `Q8_0` (embedding, output, attention) and
   289 `f32` (norms, biases, sinks, routers).
@@ -836,5 +874,4 @@ proactor.
    the commentary channel to `functions.NAME`.
 4. **Load without the double copy.** Repack each tensor as it arrives (peak now
    29.6 GB).
-5. **The model service.** `network::model_service` runs this engine instead of
-   `llama-server`, keeping its by-hash model resolution.
+5. **The model service.** Done 2026-10-14: `gpt_oss_serve`, under "Serving".

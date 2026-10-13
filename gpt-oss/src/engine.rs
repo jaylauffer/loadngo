@@ -2,7 +2,11 @@
 //! conversation, and a short side session for Jev's questions, so judging never
 //! disturbs the conversation's cache.
 
-use loadngo_gpt_oss::model::{Model, Session};
+use std::time::Instant;
+
+use crate::chat::{read_reply, Conversation, Reply};
+use crate::model::{Model, Session};
+use crate::tokenizer::Tokenizer;
 
 /// Positions a GPU side session holds: a Jev state and its questions.
 #[cfg(target_os = "macos")]
@@ -14,6 +18,16 @@ pub enum Which {
     Side,
 }
 
+/// What [`Engine::answer`] produced.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Answered {
+    pub reply: Reply,
+    /// Tokens generated.
+    pub tokens: usize,
+    /// The deadline passed before the reply was finished.
+    pub expired: bool,
+}
+
 pub enum Engine {
     Cpu {
         model: Box<Model>,
@@ -22,9 +36,9 @@ pub enum Engine {
     },
     #[cfg(target_os = "macos")]
     Gpu {
-        gpu: Box<loadngo_gpt_oss::gpu::GpuModel>,
-        main: loadngo_gpt_oss::gpu::GpuSession,
-        side: Option<loadngo_gpt_oss::gpu::GpuSession>,
+        gpu: Box<crate::gpu::GpuModel>,
+        main: crate::gpu::GpuSession,
+        side: Option<crate::gpu::GpuSession>,
     },
 }
 
@@ -33,8 +47,8 @@ impl Engine {
         if on_gpu {
             #[cfg(target_os = "macos")]
             {
-                let gpu = loadngo_gpt_oss::gpu::GpuModel::new(model, 512, context)
-                    .map_err(|e| e.to_string())?;
+                let gpu =
+                    crate::gpu::GpuModel::new(model, 512, context).map_err(|e| e.to_string())?;
                 let main = gpu.session().map_err(|e| e.to_string())?;
                 return Ok(Self::Gpu {
                     gpu: Box::new(gpu),
@@ -160,12 +174,65 @@ impl Engine {
                     Which::Main => main,
                     Which::Side => side.as_mut().expect("made above"),
                 };
-                gpu.feed(session, tokens, loadngo_gpt_oss::gpu::Logits::Last)
+                gpu.feed(session, tokens, crate::gpu::Logits::Last)
                     .map_err(|e| e.to_string())?
                     .pop()
                     .ok_or_else(|| "no logits".to_owned())
             }
         }
+    }
+
+    /// Answers `conversation` from a fresh conversation session: greedy decoding until
+    /// the format ends the reply (`<|return|>`, or `<|call|>`), `limit` tokens, the end
+    /// of the context, or `deadline`, which is checked before each token.
+    ///
+    /// # Errors
+    /// When the prompt does not fit the context or the engine fails.
+    pub fn answer(
+        &mut self,
+        tokenizer: &Tokenizer,
+        conversation: &Conversation,
+        limit: usize,
+        deadline: Instant,
+    ) -> Result<Answered, String> {
+        let prompt = conversation.prompt(tokenizer).map_err(|e| e.to_string())?;
+        if prompt.len() + 1 >= self.context() {
+            return Err(format!(
+                "the prompt is {} tokens; the context holds {}",
+                prompt.len(),
+                self.context()
+            ));
+        }
+        let stops: Vec<u32> = ["<|return|>", "<|call|>"]
+            .iter()
+            .filter_map(|name| tokenizer.control(name))
+            .collect();
+        self.reset(Which::Main)?;
+        let mut logits = self.feed(Which::Main, &prompt)?;
+        let mut out = Vec::new();
+        let mut expired = false;
+        while out.len() < limit && self.position(Which::Main) + 1 < self.context() {
+            if Instant::now() >= deadline {
+                expired = true;
+                break;
+            }
+            let next = logits
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.total_cmp(b.1))
+                .map(|(i, _)| i as u32)
+                .ok_or("no logits")?;
+            out.push(next);
+            if stops.contains(&next) {
+                break;
+            }
+            logits = self.feed(Which::Main, &[next])?;
+        }
+        Ok(Answered {
+            reply: read_reply(tokenizer, &out),
+            tokens: out.len(),
+            expired,
+        })
     }
 
     fn has_side(&self) -> bool {

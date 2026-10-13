@@ -138,7 +138,6 @@ function rather than in per-backend arms — see
 - [`docs/TASK_EXECUTION_TEST_PLAN.md`](docs/TASK_EXECUTION_TEST_PLAN.md): lab validation plan for correlation, worker selection, status cadence, and reward closure.
 - [`docs/TASK_REWARD_FLOW.md`](docs/TASK_REWARD_FLOW.md): how accepted task work earns an optional reward, kept separate from acceptance; QCoin is the first-party scheme, and the plan for operator-configured rewards.
 - [`docs/WORKER_FIRST_TASK_MODEL.md`](docs/WORKER_FIRST_TASK_MODEL.md): worker posture and reward-gating model inside the submitter-driven task protocol.
-- [`docs/ZHOENUS_HEAD_MODEL_RUNNER.md`](docs/ZHOENUS_HEAD_MODEL_RUNNER.md): the Zhoenus talking-head model service: its model taken from the Archive CAS by hash, served by `llama-server` until the Rust engine replaces it.
 - [`docs/GPT_OSS.md`](docs/GPT_OSS.md): gpt-oss-20b in Rust (`loadngo-gpt-oss`): GGUF, the o200k tokenizer and the forward pass, checked against ggml, `tokenizers` and transformers.
 
 ## Codex skill
@@ -149,4 +148,4 @@ function rather than in per-backend arms — see
 - `cargo run -p network --bin task-node -- ...`: standing worker node on top of `loadngo-proactor`.
 - `cargo run -p network --bin task_worker -- ...`: bounded/manual worker helper for a single listening window or a narrow local session.
 - `cargo run -p network --bin task_submitter -- ...`: submitter-side request, selection, verification, and qcoin reward closure flow.
-- `cargo run --release -p network --bin zhoenus_head_model -- --dry-run`: where the Zhoenus talking-head model comes from (by BLAKE3 hash, from the Archive CAS) and the supervised `llama-server` command.
+- `cargo run --release -p loadngo-gpt-oss --bin gpt_oss_serve`: holds gpt-oss and answers calls from local programs (the Zhoenus talking head) on a Unix socket; `--dry-run` says where the model comes from (by BLAKE3 hash, from the Archive CAS). See `docs/GPT_OSS.md`, "Serving".

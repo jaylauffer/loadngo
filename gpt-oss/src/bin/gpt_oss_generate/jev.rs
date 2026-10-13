@@ -10,7 +10,7 @@ use loadngo_gpt_oss::{
 };
 use loadngo_inference::system_one::LabelModel;
 
-use crate::engine::{Engine, Which};
+use loadngo_gpt_oss::engine::{Engine, Which};
 
 /// gpt-oss as a [`LabelModel`]: the state is read once into the side session, then each
 /// question is read after it and the side session goes back to the state's end.

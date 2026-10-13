@@ -16,9 +16,9 @@ use loadngo_inference::agent::{
 };
 use loadngo_inference::system_one::LabelModel;
 
-use crate::engine::{Engine, Which};
 use crate::jev::Judge;
 use crate::{fail, Options};
+use loadngo_gpt_oss::engine::{Engine, Which};
 
 /// The name this chat claims work under on the agent board.
 pub const AGENT: &str = "gpt-oss";

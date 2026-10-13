@@ -157,7 +157,7 @@ scorer asked it as a `noul`, the Rust eval asks yes/no in two orders.
 
 ## Next
 
-1. **Weights from the CAS by hash**, as `network::model_service` serves gpt-oss, instead of
+1. **Weights from the CAS by hash**, as `data::model_store` gives gpt-oss its model, instead of
    the Hugging Face cache; loaded as bfloat16 bytes, not through `f32`.
 2. **The node hosts it** (`LOADNGO_NODE.md`). The agent loop's Jev checks then ask it, in
    shadow first, until labels from Jay show the confidence holds.
