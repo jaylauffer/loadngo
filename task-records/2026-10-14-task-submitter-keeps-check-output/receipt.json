@@ -1,0 +1,21 @@
+{
+  "receipt": {
+    "receipt_version": 2,
+    "request_id": 16234815405030951388,
+    "offer_id": 11096671389502870377,
+    "assignment_id": 14453840850501999899,
+    "submitter_node_id": "jay-macmini",
+    "worker_node_id": "claude-code-macmini",
+    "summary": "task_submitter keeps what its check prints: in the closure record for every checked result (rejected too), in its log, and in the TaskAck note of a rejection",
+    "success_criteria": "Change on loadngo GitHub dev touching network/src/bin/task_submitter.rs; fmt, strict clippy and network tests pass; two loopback cycles with binaries built from HEAD keep the output of a failing and a passing check. Checked by task-records/2026-10-14-task-submitter-keeps-check-output/verify.sh as pushed in loadngo 1ba558d2.",
+    "artifact_hint": "/Users/jay/pudding/reviews/2026-10-14-task-submitter-output/result.md",
+    "artifact_copy_path": "/Users/jay/pudding/loadngo/task-records/2026-10-14-task-submitter-keeps-check-output/result.md",
+    "artifact_hash_hex": "388387424a48385e04e289da24b3dfad91693a316cb1d4a1411973e91df4c1a0",
+    "result_note": "result delivered by Claude Code; see the artifact",
+    "accepted_at": 1791921589,
+    "submitted_at": 1791921573,
+    "reward": null
+  },
+  "receipt_commitment_hex": "73f0b22817119b78744a2941410645b7a74e3307d3fde2910a539c0c3ef2625e",
+  "reward": null
+}

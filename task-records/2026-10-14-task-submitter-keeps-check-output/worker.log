@@ -1,0 +1,5 @@
+task_worker_request request_id=16234815405030951388 submitter_node_id=jay-macmini source=127.0.0.1:47910 capabilities_match=true summary=task_submitter keeps what its check prints: in the closure record for every checked result (rejected too), in its log, and in the TaskAck note of a rejection
+task_worker_offer_sent request_id=16234815405030951388 offer_id=11096671389502870377 worker_node_id=claude-code-macmini targets=1 expires_at=1791921423
+task_worker_status assignment_id=14453840850501999899 state=running target=127.0.0.1:47910
+task_worker_result assignment_id=14453840850501999899 target=127.0.0.1:47910 status_success=true
+task_worker_ack assignment_id=14453840850501999899 source=127.0.0.1:47910 accepted=true reward=none note=artifact verified

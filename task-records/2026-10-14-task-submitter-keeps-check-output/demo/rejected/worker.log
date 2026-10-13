@@ -1,0 +1,5 @@
+task_worker_request request_id=224220565686571707 submitter_node_id=demo-submitter source=127.0.0.1:47940 capabilities_match=true summary=demo of the kept check output (rejected)
+task_worker_offer_sent request_id=224220565686571707 offer_id=4333618994259873568 worker_node_id=demo-worker targets=1 expires_at=1791921610
+task_worker_status assignment_id=15084031966691222610 state=running target=127.0.0.1:47940
+task_worker_result assignment_id=15084031966691222610 target=127.0.0.1:47940 status_success=true
+task_worker_ack assignment_id=15084031966691222610 source=127.0.0.1:47940 accepted=false reward=none note=verification failed (exit 3): check: the artifact names no commit

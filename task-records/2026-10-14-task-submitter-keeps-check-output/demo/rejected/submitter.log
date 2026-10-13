@@ -1,0 +1,9 @@
+task_submitter_request_sent request_id=224220565686571707 submitter_node_id=demo-submitter bytes=936 expires_at=1791921583
+task_submitter_offer request_id=224220565686571707 offer_id=4333618994259873568 worker_node_id=demo-worker source=127.0.0.1:47941 estimated_duration_secs=0 max_status_interval_secs=0 reward_schemes= note=
+task_submitter_accept_sent assignment_id=15084031966691222610 request_id=224220565686571707 offer_id=4333618994259873568 worker_node_id=demo-worker reward=none
+task_submitter_status assignment_id=15084031966691222610 worker_node_id=demo-worker source=127.0.0.1:47941 state=running next_check_in_by=1791921614 note=worker accepted assignment and started execution
+task_submitter_result assignment_id=15084031966691222610 worker_node_id=demo-worker source=127.0.0.1:47941 artifact_hint=/Users/jay/pudding/loadngo/task-records/2026-10-14-task-submitter-keeps-check-output/demo/rejected/artifact.txt note=worker command completed successfully
+task_submitter_verify_output assignment_id=15084031966691222610 stream=stderr line=check: the artifact names no commit
+task_submitter_verify assignment_id=15084031966691222610 success=false exit_code=3
+task_submitter_ack_sent assignment_id=15084031966691222610 accepted=false target=127.0.0.1:47941 reward=none
+Error: the task result did not pass verification

@@ -1,0 +1,30 @@
+{
+  "accepted": true,
+  "receipt": {
+    "receipt_version": 2,
+    "request_id": 16538023114139817273,
+    "offer_id": 2080019395231606121,
+    "assignment_id": 3533139819004733020,
+    "submitter_node_id": "demo-submitter",
+    "worker_node_id": "demo-worker",
+    "summary": "demo of the kept check output (accepted)",
+    "success_criteria": null,
+    "artifact_hint": "/Users/jay/pudding/loadngo/task-records/2026-10-14-task-submitter-keeps-check-output/demo/accepted/artifact.txt",
+    "artifact_copy_path": "/Users/jay/pudding/loadngo/task-records/2026-10-14-task-submitter-keeps-check-output/demo/accepted/artifact-copy.txt",
+    "artifact_hash_hex": "bc9f40e126a3f777a97a4131ffd5c2e1e7e2f8428cfd0c7d8a366fec298e6211",
+    "result_note": "worker command completed successfully",
+    "accepted_at": 1791921589,
+    "submitted_at": 1791921589,
+    "reward": null
+  },
+  "receipt_commitment_hex": "836e1a4bd6bd72d933c1fc752e5c3d84247a92ef66cae47c18ec0be1a4810028",
+  "reward": null,
+  "verification": {
+    "command": "cp \"$LOADNGO_TASK_ARTIFACT_HINT\" \"$LOADNGO_TASK_ARTIFACT_COPY_PATH\" && echo checked",
+    "exit_code": 0,
+    "stdout": "checked\n",
+    "stdout_dropped_bytes": 0,
+    "stderr": "",
+    "stderr_dropped_bytes": 0
+  }
+}

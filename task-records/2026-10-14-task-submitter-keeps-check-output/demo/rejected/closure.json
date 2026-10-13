@@ -1,0 +1,14 @@
+{
+  "accepted": false,
+  "receipt": null,
+  "receipt_commitment_hex": null,
+  "reward": null,
+  "verification": {
+    "command": "echo 'check: the artifact names no commit' >&2; exit 3",
+    "exit_code": 3,
+    "stdout": "",
+    "stdout_dropped_bytes": 0,
+    "stderr": "check: the artifact names no commit\n",
+    "stderr_dropped_bytes": 0
+  }
+}

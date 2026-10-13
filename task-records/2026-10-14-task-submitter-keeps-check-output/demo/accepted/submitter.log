@@ -1,0 +1,8 @@
+task_submitter_request_sent request_id=16538023114139817273 submitter_node_id=demo-submitter bytes=940 expires_at=1791921589
+task_submitter_offer request_id=16538023114139817273 offer_id=2080019395231606121 worker_node_id=demo-worker source=127.0.0.1:47943 estimated_duration_secs=0 max_status_interval_secs=0 reward_schemes= note=
+task_submitter_accept_sent assignment_id=3533139819004733020 request_id=16538023114139817273 offer_id=2080019395231606121 worker_node_id=demo-worker reward=none
+task_submitter_status assignment_id=3533139819004733020 worker_node_id=demo-worker source=127.0.0.1:47943 state=running next_check_in_by=1791921619 note=worker accepted assignment and started execution
+task_submitter_result assignment_id=3533139819004733020 worker_node_id=demo-worker source=127.0.0.1:47943 artifact_hint=/Users/jay/pudding/loadngo/task-records/2026-10-14-task-submitter-keeps-check-output/demo/accepted/artifact.txt note=worker command completed successfully
+task_submitter_verify_output assignment_id=3533139819004733020 stream=stdout line=checked
+task_submitter_verify assignment_id=3533139819004733020 success=true exit_code=0
+task_submitter_ack_sent assignment_id=3533139819004733020 accepted=true target=127.0.0.1:47943 reward=none
