@@ -1,0 +1,5 @@
+task_worker_request request_id=9285648564201594116 submitter_node_id=jay-macmini source=127.0.0.1:47910 capabilities_match=true summary=A replace is one changed version (archive_cas_add --replace), and the agent board, its archive and the Task records are versioned in the pudding CAS, signed with this Mac's jay-macmini key
+task_worker_offer_sent request_id=9285648564201594116 offer_id=4119705127852260307 worker_node_id=claude-code-macmini targets=1 expires_at=1791935820
+task_worker_status assignment_id=15428644392357762276 state=running target=127.0.0.1:47910
+task_worker_result assignment_id=15428644392357762276 target=127.0.0.1:47910 status_success=true
+task_worker_ack assignment_id=15428644392357762276 source=127.0.0.1:47910 accepted=true reward=none note=artifact verified
