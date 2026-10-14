@@ -1,0 +1,3 @@
+task_worker_request request_id=9809408529433484185 submitter_node_id=jay-macmini source=127.0.0.1:47910 capabilities_match=true summary=Archive CAS writes keep a free-space floor: ingest, add, compress and restore refuse, writing nothing, when a write would take a volume below the larger of 10 GiB and 5% (or --min-free-gib)
+task_worker_offer_sent request_id=9809408529433484185 offer_id=7445940818022672605 worker_node_id=claude-code-macmini targets=1 expires_at=1791940502
+task_worker_status assignment_id=126978169287718516 state=running target=127.0.0.1:47910

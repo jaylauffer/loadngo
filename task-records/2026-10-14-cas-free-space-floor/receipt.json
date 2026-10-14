@@ -1,0 +1,30 @@
+{
+  "accepted": true,
+  "receipt": {
+    "receipt_version": 2,
+    "request_id": 15748131498553877206,
+    "offer_id": 1358991994634414258,
+    "assignment_id": 2098899494681841713,
+    "submitter_node_id": "jay-macmini",
+    "worker_node_id": "claude-code-macmini",
+    "summary": "Archive CAS writes keep a free-space floor: ingest, add, compress and restore refuse, writing nothing, when a write would take a volume below the larger of 10 GiB and 5% (or --min-free-gib)",
+    "success_criteria": "loadngo commit on GitHub dev changing archive_cas.rs and adding disk.rs; data gates and a named test; CI green on four; with --min-free-gib above the disk, ingest, add and restore refuse naming free space and write nothing; without it they succeed. Checked by task-records/2026-10-14-cas-free-space-floor/verify.sh as pushed in loadngo fc44b4c2.",
+    "artifact_hint": "/Users/jay/pudding/reviews/2026-10-14-task-cas-free-space/result.md",
+    "artifact_copy_path": "/Users/jay/pudding/loadngo/task-records/2026-10-14-cas-free-space-floor/result.md",
+    "artifact_hash_hex": "0c1f52a955de9f182658c1e13c0735c8a0925befd5660a57465402377d246c43",
+    "result_note": "result delivered by Claude Code; see the artifact",
+    "accepted_at": 1791947715,
+    "submitted_at": 1791947692,
+    "reward": null
+  },
+  "receipt_commitment_hex": "20e1b655dfd3871ed564cd50707a1c976acec1d4149f72c9e43f8a66225a64f1",
+  "reward": null,
+  "verification": {
+    "command": "git -C /Users/jay/pudding/loadngo diff --quiet fc44b4c2 -- task-records/2026-10-14-cas-free-space-floor/verify.sh && bash /Users/jay/pudding/loadngo/task-records/2026-10-14-cas-free-space-floor/verify.sh",
+    "exit_code": 0,
+    "stdout": "verify: ok: 1: b8e5d387f5d635a73a6cf06420b95bcef1921f70 on github/dev, changes archive_cas.rs and adds disk.rs\nverify: ok: 2: fmt, clippy, data tests and a_write_below_the_free_space_floor_is_refused_and_leaves_nothing_written pass at 63850d2c\nverify: ok: 3: CI run 38496879520 passed (4 jobs) and contains b8e5d387f5d635a73a6cf06420b95bcef1921f70\nverify: ok: 4: ingest, add and restore refused above the floor with nothing written; allowed under the default floor\nverify: accepted\n",
+    "stdout_dropped_bytes": 0,
+    "stderr": "",
+    "stderr_dropped_bytes": 0
+  }
+}
