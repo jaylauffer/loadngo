@@ -36,6 +36,7 @@ members = [
     "code-editor",
     "terminal",
     "game-menu",
+    "bitmap-editor",
 ]
 default-members = [
     "task",
@@ -68,6 +69,7 @@ default-members = [
     "code-editor",
     "terminal",
     "game-menu",
+    "bitmap-editor",
 ]
 resolver = "2"
 

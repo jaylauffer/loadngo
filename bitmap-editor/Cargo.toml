@@ -1,0 +1,25 @@
+[package]
+name = "bitmap-editor"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "bitmap_editor"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+# The workspace's image (PNG and JPEG) plus the other still formats the editor
+# opens and saves itself. Video and anything else ffmpeg reads go through
+# ffmpeg (src/video.rs).
+image = { workspace = true, features = ["gif", "tiff", "bmp"] }
+loadngo-host-core = { path = "../host-core" }
+loadngo-host-desktop = { path = "../host-desktop" }
+loadngo-renderer = { path = "../renderer" }
+serde_json.workspace = true
+ui-core = { path = "../ui-core" }
+
+[dev-dependencies]
+tempfile = "3"
