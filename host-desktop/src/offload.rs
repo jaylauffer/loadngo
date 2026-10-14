@@ -5,10 +5,11 @@
 //! worker pool and hands the result back as a completion on the host's
 //! proactor, so it lands on the host's dispatch thread like any other I/O
 //! result. The app reads it with [`Offloaded::try_take`] on a later frame; it
-//! never waits for it. Results arrive between frames. On macOS a delivered
-//! result also runs a frame, so an app with an idle frame demand takes it at
-//! once; on the other hosts it sees the result on its next frame (input, a
-//! deadline, a resize).
+//! never waits for it. Results arrive between frames. On macOS, Linux and
+//! Windows a delivered result also runs a frame, so an app with an idle frame
+//! demand takes it at once (Linux and Windows since 2026-10-14; before, a
+//! decoded image waited there for the next mouse move); on iOS and Android it
+//! sees the result on its next frame (input, a deadline, a resize).
 //!
 //! The pool is deliberately small (two workers) to keep a phone cool. It queues
 //! without limit, so the caller bounds how many jobs it has in flight; that
@@ -138,10 +139,13 @@ pub(crate) fn completion_via<T: Send + 'static>(
     target_os = "android",
     target_os = "windows"
 ))]
-// macOS delivers through `offload_through_with_wake` instead.
-#[cfg_attr(target_os = "macos", allow(unused_imports))]
+// macOS, Linux and Windows deliver through `offload_through_with_wake`.
+#[cfg_attr(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    allow(unused_imports)
+)]
 pub(crate) use pool::offload_through;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) use pool::offload_through_with_wake;
 #[cfg(any(
     target_os = "macos",
@@ -256,7 +260,10 @@ mod pool {
     }
 
     /// Runs `job` on the pool and delivers its result through `handle`.
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    #[cfg_attr(
+        any(target_os = "macos", target_os = "linux", target_os = "windows"),
+        allow(dead_code)
+    )]
     pub(crate) fn offload_through<P, T>(
         handle: ProactorHandle<P>,
         job: impl FnOnce() -> T + Send + 'static,
@@ -270,8 +277,9 @@ mod pool {
 
     /// As [`offload_through`], then calls `wake` on the worker thread once
     /// the result is queued. A host whose thread waits somewhere other than
-    /// the completion port (macOS waits in AppKit's event queue) uses it to
-    /// get the result dispatched and an idle frame run.
+    /// the completion port (macOS waits in AppKit's event queue, Linux and
+    /// Windows in winit's) uses it to get the result dispatched and an idle
+    /// frame run.
     pub(crate) fn offload_through_with_wake<P, T>(
         handle: ProactorHandle<P>,
         job: impl FnOnce() -> T + Send + 'static,

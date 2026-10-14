@@ -727,26 +727,27 @@ pub fn app_data_dir(app_id: &str) -> Result<String, String> {
 }
 
 /// Runs `job` on the host's bounded worker pool; its result comes back as a
-/// completion on the host proactor. See [`crate::Offloaded`].
+/// completion on the host proactor and wakes the event loop, so an app with
+/// an idle frame demand takes it at once. See [`crate::Offloaded`].
 pub fn offload<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> crate::Offloaded<T> {
-    crate::offload::offload_through(proactor().handle.clone(), job)
+    crate::offload::offload_through_with_wake(proactor().handle.clone(), job, wake_host)
 }
 
 /// A result another thread will deliver: finish the [`crate::Completer`]
 /// from any thread and read the [`crate::Offloaded`] like an offloaded job's.
+/// Delivery wakes the event loop, as an offloaded job's does.
 pub fn completion<T: Send + 'static>() -> (crate::Completer<T>, crate::Offloaded<T>) {
     let handle = proactor().handle.clone();
     crate::offload::completion_via(move |store| {
-        let _ = handle.enqueue_work(move |_| store());
+        if handle.enqueue_work(move |_| store()).is_ok() {
+            wake_host();
+        }
     })
 }
 
 /// A [`crate::FrameWaker`] any thread can use to get the app a frame.
 pub fn frame_waker() -> crate::FrameWaker {
-    let handle = proactor().handle.clone();
-    crate::FrameWaker::new(move || {
-        let _ = handle.enqueue_work(|_| {});
-    })
+    crate::FrameWaker::new(wake_host)
 }
 
 pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {

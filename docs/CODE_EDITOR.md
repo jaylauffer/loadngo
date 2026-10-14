@@ -90,8 +90,9 @@ These are the workspace's demand-driven rules applied to the editor:
 - Reading files, listing folders, saving and checking for changes on disk
   all run through `offload`. On macOS a finished job now posts an
   application-defined event, so the result is dispatched and an idle frame
-  runs at once. Before, it waited for the next window event. On the other
-  hosts it still waits for the next frame. Nothing blocks a frame.
+  runs at once. Before, it waited for the next window event. Linux and
+  Windows do the same since 2026-10-14 (the host wakes winit's loop); iOS
+  and Android still wait for the next frame. Nothing blocks a frame.
 - Changes on disk are checked when the window regains focus
   (`HostFrame.focused`) and before a save, never by polling. A clean buffer
   reloads silently. A dirty buffer shows the conflict and keeps the edits.
@@ -173,7 +174,7 @@ older one, and its late result is ignored. The check runs on a thread of
 its own, since it can take minutes and the two offload workers serve the
 editor's file I/O. Its result comes back through the host's new
 `completion()`: a `Completer` another thread finishes, read like an
-offloaded job, and on macOS it wakes an idle frame.
+offloaded job, and on macOS, Linux and Windows it wakes an idle frame.
 
 Errors and warnings show as a bar in the gutter and an underline under the
 primary span; the caret's line shows its message in the status bar; and the
