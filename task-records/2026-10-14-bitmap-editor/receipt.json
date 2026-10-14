@@ -1,0 +1,30 @@
+{
+  "accepted": true,
+  "receipt": {
+    "receipt_version": 2,
+    "request_id": 2957321627248292685,
+    "offer_id": 12343697399031221711,
+    "assignment_id": 7339622766172950340,
+    "submitter_node_id": "jay-macmini",
+    "worker_node_id": "claude-code-macmini",
+    "summary": "Port loadngo-cpp/BitmapEditor to the loadngo Rust framework: BMP, PNG, JPEG, GIF, TIFF and MP4 frames, the scaled view and the zoomed pixel grid with its readout, alpha edits, decoding and saving on the host's offload workers",
+    "success_criteria": "bitmap-editor workspace member and docs on GitHub dev; gates and a named render test; CI green on four; every format probes right against ffmpeg's decode; set alpha, make opaque, premultiply and MP4 frame export right; the rendered editor shows the hovered pixel; the window loads and idles. Checked by task-records/2026-10-14-bitmap-editor/verify.sh as pushed in loadngo 63850d2c.",
+    "artifact_hint": "/Users/jay/pudding/reviews/2026-10-14-task-bitmap-editor/result.md",
+    "artifact_copy_path": "/Users/jay/pudding/loadngo/task-records/2026-10-14-bitmap-editor/result.md",
+    "artifact_hash_hex": "a8c9c7c4c4b3e8c7081ad38f345659ceb72a564c172154789757b7c297c4a2cd",
+    "result_note": "result delivered by Claude Code; see the artifact",
+    "accepted_at": 1791952262,
+    "submitted_at": 1791952233,
+    "reward": null
+  },
+  "receipt_commitment_hex": "d56b150d2572bb50b6b1205623dcf6b8b5a1bc8e06fa9c597981c0807476c1be",
+  "reward": null,
+  "verification": {
+    "command": "git -C /Users/jay/pudding/loadngo diff --quiet 63850d2c -- task-records/2026-10-14-bitmap-editor/verify.sh && bash /Users/jay/pudding/loadngo/task-records/2026-10-14-bitmap-editor/verify.sh",
+    "exit_code": 0,
+    "stdout": "verify: ok: 1: a12b9c64d8632994020dd01d13d1495dfeef064a on github/dev; bitmap-editor is a workspace member; docs/BITMAP_EDITOR.md\nverify: ok: 2: fmt, clippy, bitmap-editor tests and the_rendered_editor_shows_the_hovered_pixel_in_its_cell pass at a12b9c64\nverify: ok: 3: CI run 38509507447 passed (4 jobs) and contains a12b9c64d8632994020dd01d13d1495dfeef064a\nverify: ok: 4: PNG, JPEG, BMP, TIFF, GIF and MP4 probe right (sizes, frames, pixels against ffmpeg)\nverify: ok: 5: set alpha, make opaque, premultiply and MP4 frame export are right\nverify: ok: 6: the rendered editor shows pixel (10,10) in its hover cell at 479,180,16,12\n[loadngo] persistent logs: /Users/jay/Library/Application Support/loadngo-bitmap-editor/logs (8 MiB maximum, 14-day retention)\nverify: ok: 7: the window loaded the image, idled at 15 context switches in 10 s, and stopped\nverify: accepted\n",
+    "stdout_dropped_bytes": 0,
+    "stderr": "",
+    "stderr_dropped_bytes": 0
+  }
+}

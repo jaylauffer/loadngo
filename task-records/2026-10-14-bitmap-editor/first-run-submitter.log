@@ -1,0 +1,4 @@
+task_submitter_request_sent request_id=14232496649186467660 submitter_node_id=jay-macmini bytes=2218 expires_at=1791941955
+task_submitter_offer request_id=14232496649186467660 offer_id=8490482699098856327 worker_node_id=claude-code-macmini source=127.0.0.1:47931 estimated_duration_secs=14400 max_status_interval_secs=0 reward_schemes= note=Claude Code (Opus 5.5) in Jay's session on the Mac mini; works in the loadngo checkout
+task_submitter_accept_sent assignment_id=10197583189358677360 request_id=14232496649186467660 offer_id=8490482699098856327 worker_node_id=claude-code-macmini reward=none
+task_submitter_status assignment_id=10197583189358677360 worker_node_id=claude-code-macmini source=127.0.0.1:47931 state=running next_check_in_by=1791942555 note=worker accepted assignment and started execution
