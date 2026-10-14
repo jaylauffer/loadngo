@@ -482,6 +482,11 @@ struct AppState {
     /// Whether the app is active and the window key, as of the last event
     /// pump.
     focused: bool,
+    /// Whether the last pointer position reported to the app was inside the
+    /// view. A key window gets mouse-moved events from anywhere on screen;
+    /// the first one outside is reported, so hover clears, and the rest are
+    /// not, so an idle app does not run a frame for each.
+    pointer_inside: bool,
 }
 
 thread_local! {
@@ -798,6 +803,7 @@ fn start(
             entry_future: Some(Box::pin(entry)),
             should_close: false,
             focused: true,
+            pointer_inside: true,
         });
     });
     APP_STATE.with(|state| {
@@ -2073,7 +2079,12 @@ fn handle_event(event: *mut AnyObject) {
             | NSEVENT_TYPE_LEFT_MOUSE_DRAGGED
             | NSEVENT_TYPE_RIGHT_MOUSE_DRAGGED
             | NSEVENT_TYPE_OTHER_MOUSE_DRAGGED => {
-                let (x, y, _) = event_point_in_view(&state.view, event);
+                let (x, y, inside) = event_point_in_view(&state.view, event);
+                let dragging = event_type != NSEVENT_TYPE_MOUSE_MOVED;
+                if !reports_pointer_motion(inside, dragging, state.pointer_inside) {
+                    return;
+                }
+                state.pointer_inside = inside;
                 state.input.snapshot.modifiers = modifiers;
                 state.input.snapshot.mouse_x = x;
                 state.input.snapshot.mouse_y = y;
@@ -2116,6 +2127,12 @@ fn handle_event(event: *mut AnyObject) {
             waker.wake();
         }
     });
+}
+
+/// Whether pointer motion goes to the app: inside the view, while a button
+/// drags (a drag may leave the window), or the first move outside it.
+fn reports_pointer_motion(inside: bool, dragging: bool, was_inside: bool) -> bool {
+    inside || dragging || was_inside
 }
 
 fn point_in_view_bounds(bounds: CGRect, point_in_view: CGPoint) -> bool {
@@ -2507,6 +2524,18 @@ mod tests {
             bounds,
             CGPoint { x: -10.0, y: 360.0 }
         ));
+    }
+
+    #[test]
+    fn pointer_motion_elsewhere_on_screen_is_reported_once_then_dropped() {
+        // Inside the view, and any drag, always reach the app.
+        assert!(reports_pointer_motion(true, false, true));
+        assert!(reports_pointer_motion(true, false, false));
+        assert!(reports_pointer_motion(false, true, false));
+        // Leaving the view is reported once, so hover clears...
+        assert!(reports_pointer_motion(false, false, true));
+        // ...and further motion outside it wakes nothing.
+        assert!(!reports_pointer_motion(false, false, false));
     }
 
     #[test]
