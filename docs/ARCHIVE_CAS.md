@@ -125,6 +125,26 @@ The source is never changed by ingestion. Archive CAS has no automatic partial
 garbage collection; keep partials until a verified archive exists, then decide
 on cleanup as a separate, explicitly authorized maintenance operation.
 
+## Free space
+
+Every write keeps a floor of free space on its volume (2026-10-14; Jay: never reach the
+limit). Before an ingest copies a file, an add stores content, a compression writes its
+`.zst` copy, or a restore writes its destination, the tool checks that the write would
+still leave the larger of 10 GiB and 5% of that volume free. If it would not, the tool
+refuses and writes nothing: no partial file, no object, no restored file. The error names
+the free space, the volume's size and the floor.
+
+- `--min-free-gib N` on `archive_cas_ingest`, `archive_cas_add` and `archive_cas_restore`
+  sets another floor for that run.
+- `LOADNGO_CAS_MIN_FREE_GIB` replaces the default for every store a process opens. CI sets
+  it to 0 so the test suites do not depend on a hosted runner's disk.
+- A restore checks the destination's volume, not the CAS's. That is the internal disk for a
+  model restored into `~/.loadngo/models`.
+- An ingest needs room for its copy before the copy's hash is known, so a file already
+  stored still needs that room while it is checked.
+
+`data::disk` reads the free space: `statvfs` on Unix, `GetDiskFreeSpaceExW` on Windows.
+
 ## Compression
 
 Since 2026-09-30 an object may be stored compressed with zstd as

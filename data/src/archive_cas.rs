@@ -821,6 +821,9 @@ pub struct ArchiveCasStorage {
     buffer_bytes: usize,
     /// The zstd level new objects are compressed at, when this root compresses.
     compression_level: Option<i32>,
+    /// Free space a write must leave on a volume; `None`: [`crate::disk::default_floor`].
+    /// Starts from `LOADNGO_CAS_MIN_FREE_GIB` when that is set.
+    min_free: Option<u64>,
 }
 
 /// Why a compression attempt kept an object as it is.
@@ -892,6 +895,7 @@ impl ArchiveCasStorage {
             manifests,
             buffer_bytes,
             compression_level,
+            min_free: crate::disk::floor_from_env(),
         })
     }
 
@@ -926,6 +930,17 @@ impl ArchiveCasStorage {
 
     /// The zstd level new objects are compressed at, or `None` when this root stores
     /// them as they are.
+    /// Free space every write must leave on its volume, in bytes; `None` restores the
+    /// default floor (the larger of 10 GiB and 5% of the volume).
+    pub fn set_min_free(&mut self, floor: Option<u64>) {
+        self.min_free = floor;
+    }
+
+    /// Refuses a write of `bytes` into this root that would cross the floor.
+    fn ensure_room(&self, bytes: u64) -> Result<()> {
+        crate::disk::ensure_room(&self.root, bytes, self.min_free)
+    }
+
     pub fn compression_level(&self) -> Option<i32> {
         self.compression_level
     }
@@ -1115,6 +1130,8 @@ impl ArchiveCasStorage {
         if expected.size < MIN_COMPRESSED_OBJECT_BYTES {
             return Ok(Err(KeptRaw::Small));
         }
+        // The compressed copy is written next to the raw object before the raw one goes.
+        crate::disk::ensure_room(out, expected.size, self.min_free)?;
         let mut source =
             File::open(raw).with_context(|| format!("failed to open {}", raw.display()))?;
         if expected.size > COMPRESSION_SAMPLE_BYTES as u64 {
@@ -1340,6 +1357,7 @@ impl ArchiveCasStorage {
                 resumed_bytes: 0,
             });
         }
+        self.ensure_room(object.size)?;
 
         let temporary = self.partials.join(format!(
             ".content-{}-{}.partial",
@@ -1426,6 +1444,9 @@ impl ArchiveCasStorage {
                 &mut hasher,
             )?;
         }
+        // The copy is written before its hash is known, so a file already stored still
+        // needs the room for that copy while it is checked.
+        self.ensure_room(initial.size - partial_len)?;
 
         let mut partial_file = OpenOptions::new()
             .create(true)
@@ -1620,6 +1641,7 @@ impl ArchiveCasStorage {
                 parent.display()
             );
         }
+        crate::disk::ensure_room(parent, expected.size, self.min_free)?;
         let file_name = destination.file_name().ok_or_else(|| {
             anyhow!(
                 "restore destination has no file name: {}",
@@ -2494,6 +2516,62 @@ mod tests {
             .with_entries_replaced(vec![file("folder/c.txt", b"new c")], "x", "jay", 8)
             .unwrap();
         assert!(object_at(&partial, "folder/a.txt").is_some());
+    }
+
+    #[test]
+    fn a_write_below_the_free_space_floor_is_refused_and_leaves_nothing_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = ArchiveCasStorage::new(dir.path().join("cas")).unwrap();
+        let entries =
+            |path: &Path| -> usize { std::fs::read_dir(path).map_or(0, |listing| listing.count()) };
+        let content = vec![b'z'; 64 * 1024];
+        let source = dir.path().join("source.bin");
+        std::fs::write(&source, &content).unwrap();
+
+        // A floor above any disk: every write is refused before a byte reaches it.
+        store.set_min_free(Some(u64::MAX));
+        let refused = store.add_content(&content).unwrap_err().to_string();
+        assert!(refused.contains("not enough free space"), "{refused}");
+        let refused = store
+            .ingest_file(&source, "source")
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("not enough free space"), "{refused}");
+        assert_eq!(
+            entries(&store.partials),
+            0,
+            "a refused write left a partial file"
+        );
+        let object = ArchiveObject {
+            hash: CasHash::digest(&content),
+            size: content.len() as u64,
+        };
+        assert!(!store.has_object(object.hash));
+
+        // Under a floor of nothing the same writes go through.
+        store.set_min_free(Some(0));
+        assert!(store.add_content(&content).unwrap().inserted);
+        assert!(store.has_object(object.hash));
+
+        store.set_min_free(Some(u64::MAX));
+        let destination = dir.path().join("restored.bin");
+        let refused = store
+            .restore_object_to_path(object, &destination)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("not enough free space"), "{refused}");
+        assert!(!destination.exists());
+        let packed = dir.path().join("packed.zst");
+        let refused = store
+            .compress_to(&store.object_path(object.hash), object, 3, &packed)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("not enough free space"), "{refused}");
+        assert!(!packed.exists());
+
+        store.set_min_free(Some(0));
+        store.restore_object_to_path(object, &destination).unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), content);
     }
 
     #[test]

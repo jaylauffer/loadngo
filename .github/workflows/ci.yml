@@ -44,6 +44,10 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # The Archive CAS refuses writes that would leave less than its floor (the larger of
+  # 10 GiB and 5% of the volume) free; hosted runners can be near that after a workspace
+  # build, so the test suites run without it. data::disk's own tests cover the floor.
+  LOADNGO_CAS_MIN_FREE_GIB: 0
 
 jobs:
   check:

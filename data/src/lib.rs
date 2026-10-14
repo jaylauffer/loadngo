@@ -23,6 +23,7 @@ pub mod clipboard;
 pub mod config;
 pub mod crypto;
 pub mod data_object;
+pub mod disk;
 pub mod file_manager;
 pub mod listener;
 pub mod machine;

@@ -25,7 +25,8 @@ fn run() -> Result<()> {
         bail!("--source must name a directory: {}", args.source.display());
     }
 
-    let store = ArchiveCasStorage::new(&args.cas_root)?;
+    let mut store = ArchiveCasStorage::new(&args.cas_root)?;
+    store.set_min_free(args.min_free_gib.map(data::disk::gib));
     let mut journal = IngestJournal::open(&args.cas_root, &args.archive_id, &args.source_label)?;
     let mut entries = journal.entries.clone();
     let mut stats = IngestStats::default();
@@ -127,6 +128,7 @@ fn run() -> Result<()> {
 
 #[derive(Debug)]
 struct Args {
+    min_free_gib: Option<u64>,
     source: PathBuf,
     cas_root: PathBuf,
     archive_id: String,
@@ -141,6 +143,7 @@ impl Args {
         let mut archive_id = None;
         let mut source_label = None;
         let mut keep_zips = false;
+        let mut min_free_gib = None;
         let args = data::cli::read_args(&usage(), true);
         let mut args = args.into_iter();
 
@@ -151,6 +154,7 @@ impl Args {
                 "--archive-id" => archive_id = args.next(),
                 "--source-label" => source_label = args.next(),
                 "--keep-zips" => keep_zips = true,
+                "--min-free-gib" => min_free_gib = Some(data::disk::parse_gib(args.next())?),
                 other => return Err(anyhow!("unknown argument: {other}\n{}", usage().hint())),
             }
         }
@@ -158,6 +162,7 @@ impl Args {
         let archive_id =
             archive_id.ok_or_else(|| anyhow!("missing --archive-id <id>\n{}", usage().hint()))?;
         Ok(Self {
+            min_free_gib,
             source: source
                 .ok_or_else(|| anyhow!("missing --source <directory>\n{}", usage().hint()))?,
             cas_root: cas_root
@@ -194,6 +199,11 @@ fn usage() -> Usage {
         ArgDoc::switch(
             "--keep-zips",
             "store zips as single files instead of unpacking them (the default unpacks)",
+        ),
+        ArgDoc::optional(
+            "--min-free-gib",
+            "<gib>",
+            "free space every write must leave on its volume (default: the larger of 10 GiB and 5% of the volume)",
         ),
     ];
     const EXAMPLES: &[&str] = &[

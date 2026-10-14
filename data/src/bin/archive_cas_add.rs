@@ -21,7 +21,8 @@ fn main() {
 
 fn run() -> Result<()> {
     let args = Args::parse()?;
-    let store = ArchiveCasStorage::new(&args.cas_root)?;
+    let mut store = ArchiveCasStorage::new(&args.cas_root)?;
+    store.set_min_free(args.min_free_gib.map(data::disk::gib));
     let manifest_path = match (&args.manifest, &args.archive) {
         (Some(path), None) => path.clone(),
         (None, Some(id)) => newest_manifest(&store, id)?,
@@ -231,6 +232,7 @@ fn capture(
 
 #[derive(Debug)]
 struct Args {
+    min_free_gib: Option<u64>,
     cas_root: PathBuf,
     manifest: Option<PathBuf>,
     archive: Option<String>,
@@ -251,6 +253,7 @@ impl Args {
         let mut reason = None;
         let mut actor = None;
         let mut replace = false;
+        let mut min_free_gib = None;
         let mut args = data::cli::read_args(&usage(), true).into_iter();
         while let Some(arg) = args.next() {
             let mut value = || args.next().ok_or_else(|| anyhow!("{arg} requires a value"));
@@ -263,6 +266,7 @@ impl Args {
                 "--reason" => reason = Some(value()?),
                 "--actor" => actor = Some(value()?),
                 "--replace" => replace = true,
+                "--min-free-gib" => min_free_gib = Some(data::disk::parse_gib(Some(value()?))?),
                 other => return Err(anyhow!("unknown argument: {other}\n{}", usage().hint())),
             }
         }
@@ -276,6 +280,7 @@ impl Args {
             bail!("--reason and --actor must not be empty");
         }
         Ok(Self {
+            min_free_gib,
             cas_root: cas_root.ok_or_else(|| {
                 anyhow!("missing --cas-root <archive-directory>\n{}", usage().hint())
             })?,
@@ -330,6 +335,11 @@ fn usage() -> Usage {
         ArgDoc::switch(
             "--replace",
             "replace files already in the archive whose bytes differ, recorded as changed in the same version; files with the same bytes are left alone",
+        ),
+        ArgDoc::optional(
+            "--min-free-gib",
+            "<gib>",
+            "free space every write must leave on its volume (default: the larger of 10 GiB and 5% of the volume)",
         ),
     ];
     const EXAMPLES: &[&str] = &[

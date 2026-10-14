@@ -32,7 +32,8 @@ fn run() -> Result<()> {
         );
     }
 
-    let store = ArchiveCasStorage::new(&args.cas_root)?;
+    let mut store = ArchiveCasStorage::new(&args.cas_root)?;
+    store.set_min_free(args.min_free_gib.map(data::disk::gib));
     let manifest = store.read_manifest(&args.manifest)?;
     let manifest_bytes = manifest.canonical_bytes()?;
     let manifest_object = ArchiveObject {
@@ -103,6 +104,7 @@ fn run() -> Result<()> {
 
 #[derive(Debug)]
 struct Args {
+    min_free_gib: Option<u64>,
     cas_root: PathBuf,
     manifest: PathBuf,
     destination: PathBuf,
@@ -115,6 +117,7 @@ impl Args {
         let mut manifest = None;
         let mut destination = None;
         let mut paths = Vec::new();
+        let mut min_free_gib = None;
         let mut args = data::cli::read_args(&usage(), true).into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -127,6 +130,7 @@ impl Args {
                         .ok_or_else(|| anyhow!("missing value after --path"))?;
                     paths.push(path);
                 }
+                "--min-free-gib" => min_free_gib = Some(data::disk::parse_gib(args.next())?),
                 other => return Err(anyhow!("unknown argument: {other}\n{}", usage().hint())),
             }
         }
@@ -139,6 +143,7 @@ impl Args {
         paths.sort();
         paths.dedup();
         Ok(Self {
+            min_free_gib,
             cas_root: cas_root
                 .ok_or_else(|| anyhow!("missing --cas-root <directory>\n{}", usage().hint()))?,
             manifest: manifest
@@ -172,6 +177,11 @@ fn usage() -> Usage {
             "--path",
             "<relative-file-path>",
             "manifest-relative regular-file path to restore, or the name of an attachment (an old log the version keeps as unverified history)",
+        ),
+        ArgDoc::optional(
+            "--min-free-gib",
+            "<gib>",
+            "free space every write must leave on its volume (default: the larger of 10 GiB and 5% of the volume)",
         ),
     ];
     const EXAMPLES: &[&str] = &[
