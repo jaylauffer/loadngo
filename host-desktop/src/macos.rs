@@ -2439,8 +2439,11 @@ fn update_window_cursor(window: &Retained<AnyObject>) {
         let resize = CURSOR_RESIZE.with(|resize| *resize.borrow());
 
         let cursor: *mut AnyObject = if let Some(horizontal) = resize {
-            if horizontal { msg_send![class!(NSCursor), resizeLeftRightCursor] }
-            else { msg_send![class!(NSCursor), resizeUpDownCursor] }
+            if horizontal {
+                msg_send![class!(NSCursor), resizeLeftRightCursor]
+            } else {
+                msg_send![class!(NSCursor), resizeUpDownCursor]
+            }
         } else if (near_left || near_right) && inside_y {
             msg_send![class!(NSCursor), resizeLeftRightCursor]
         } else if (near_top || near_bottom) && inside_x {

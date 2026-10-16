@@ -222,7 +222,10 @@ async fn run(folder: Option<PathBuf>) {
         );
         loadngo_host_desktop::set_text_cursor_active(outcome.text_cursor);
         loadngo_host_desktop::set_resize_cursor_active(outcome.resize_cursor.map(|cursor| {
-            matches!(cursor, loadngo_code_editor::editor::ResizeCursor::Horizontal)
+            matches!(
+                cursor,
+                loadngo_code_editor::editor::ResizeCursor::Horizontal
+            )
         }));
         if let Some(menu_bar) = &outcome.menu_bar {
             loadngo_host_desktop::set_menu_bar(menu_bar);

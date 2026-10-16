@@ -3208,7 +3208,8 @@ impl Editor {
         if self.terminal_open {
             let height = panel_height.clamp(
                 BOTTOM_PANEL_MIN_HEIGHT.min((bottom - y).max(0.0)),
-                (bottom - y - EDITOR_MIN_HEIGHT).max(BOTTOM_PANEL_MIN_HEIGHT.min((bottom - y).max(0.0))),
+                (bottom - y - EDITOR_MIN_HEIGHT)
+                    .max(BOTTOM_PANEL_MIN_HEIGHT.min((bottom - y).max(0.0))),
             );
             self.bottom_panel_height = height;
             bottom -= height;
@@ -3224,7 +3225,8 @@ impl Editor {
         } else if self.problems_open || self.search_open {
             let height = panel_height.clamp(
                 BOTTOM_PANEL_MIN_HEIGHT.min((bottom - y).max(0.0)),
-                (bottom - y - EDITOR_MIN_HEIGHT).max(BOTTOM_PANEL_MIN_HEIGHT.min((bottom - y).max(0.0))),
+                (bottom - y - EDITOR_MIN_HEIGHT)
+                    .max(BOTTOM_PANEL_MIN_HEIGHT.min((bottom - y).max(0.0))),
             );
             self.bottom_panel_height = height;
             bottom -= height;
@@ -3476,15 +3478,19 @@ impl Editor {
         if let Some(drag) = self.panel_drag {
             if input.mouse_down {
                 match drag {
-                    ResizeCursor::Horizontal => self.tree_width = point.x.clamp(
-                        TREE_MIN_WIDTH,
-                        (self.layout.tabs.right() - EDITOR_MIN_WIDTH).max(TREE_MIN_WIDTH),
-                    ),
+                    ResizeCursor::Horizontal => {
+                        self.tree_width = point.x.clamp(
+                            TREE_MIN_WIDTH,
+                            (self.layout.tabs.right() - EDITOR_MIN_WIDTH).max(TREE_MIN_WIDTH),
+                        )
+                    }
                     ResizeCursor::Vertical => {
                         let content_bottom = self.layout.status.y;
                         let editor_min = EDITOR_MIN_HEIGHT;
-                        self.bottom_panel_height = (content_bottom - point.y)
-                            .clamp(BOTTOM_PANEL_MIN_HEIGHT, (content_bottom - editor_min).max(BOTTOM_PANEL_MIN_HEIGHT));
+                        self.bottom_panel_height = (content_bottom - point.y).clamp(
+                            BOTTOM_PANEL_MIN_HEIGHT,
+                            (content_bottom - editor_min).max(BOTTOM_PANEL_MIN_HEIGHT),
+                        );
                     }
                 }
             }
