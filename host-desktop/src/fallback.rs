@@ -354,6 +354,7 @@ pub fn app_data_dir(app_id: &str) -> Result<String, String> {
 }
 
 pub fn set_text_cursor_active(_active: bool) {}
+pub fn set_resize_cursor_active(_cursor: Option<bool>) {}
 
 pub fn read_clipboard_text() -> Result<Option<String>, String> {
     Ok(None)

@@ -314,6 +314,8 @@ struct Layout {
     /// With no file open, the choice in the editor area: make a new file.
     start_new: Option<Rect>,
     terminal: Option<Rect>,
+    tree_splitter: Option<Rect>,
+    bottom_splitter: Option<Rect>,
 }
 
 /// A `cargo check` the app should run (see `cargo_check::run`), replacing
@@ -343,18 +345,31 @@ struct Mark {
 
 const PROBLEMS_HEIGHT: f32 = 190.0;
 const PROBLEM_ROW_HEIGHT: f32 = 22.0;
+const TREE_MIN_WIDTH: f32 = 160.0;
+const EDITOR_MIN_WIDTH: f32 = 240.0;
+const BOTTOM_PANEL_MIN_HEIGHT: f32 = 96.0;
+const EDITOR_MIN_HEIGHT: f32 = 120.0;
+const SPLITTER_SIZE: f32 = 6.0;
 
 /// What a frame asks of the window.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FrameOutcome {
     /// Show the text (I-beam) pointer.
     pub text_cursor: bool,
+    /// Show a horizontal or vertical panel resize cursor.
+    pub resize_cursor: Option<ResizeCursor>,
     /// The menus changed (titles or enabled states): give them to the
     /// host's system menu bar. Only after [`Editor::set_native_menu`].
     pub menu_bar: Option<MenuBar>,
     /// The editor has finished: every save asked for is done and the
     /// session is written once the pending file work completes.
     pub quit: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResizeCursor {
+    Horizontal,
+    Vertical,
 }
 
 pub struct Editor {
@@ -448,6 +463,9 @@ pub struct Editor {
     file_drag_over: bool,
     terminal: TerminalPanel,
     terminal_open: bool,
+    tree_width: f32,
+    bottom_panel_height: f32,
+    panel_drag: Option<ResizeCursor>,
 }
 
 /// What a press can drag.
@@ -647,6 +665,9 @@ impl Editor {
             file_drag_over: false,
             terminal: TerminalPanel::default(),
             terminal_open: false,
+            tree_width: theme::TREE_WIDTH,
+            bottom_panel_height: PROBLEMS_HEIGHT,
+            panel_drag: None,
         };
         if let Some(root) = &root {
             editor.open_folder(root.clone());
@@ -1320,6 +1341,7 @@ impl Editor {
         self.update_hover(now);
         FrameOutcome {
             text_cursor: self.wants_text_cursor(),
+            resize_cursor: self.resize_cursor(),
             menu_bar: self.publish_menu(),
             quit: self.quitting,
         }
@@ -2961,6 +2983,23 @@ impl Editor {
                 .is_some_and(|goto| goto.prefers_text_cursor(pointer))
     }
 
+    fn resize_cursor(&self) -> Option<ResizeCursor> {
+        if self.panel_drag.is_some() {
+            return self.panel_drag;
+        }
+        if self
+            .layout
+            .tree_splitter
+            .is_some_and(|splitter| splitter.contains(self.pointer))
+        {
+            return Some(ResizeCursor::Horizontal);
+        }
+        self.layout
+            .bottom_splitter
+            .is_some_and(|splitter| splitter.contains(self.pointer))
+            .then_some(ResizeCursor::Vertical)
+    }
+
     /// Asks for the disk state of every open file (on regaining focus).
     fn check_disk(&mut self) {
         let paths: Vec<PathBuf> = self
@@ -3134,14 +3173,23 @@ impl Editor {
         }
         let body_top = top + theme::TOOLBAR_HEIGHT;
         let body_height = (layout.status.y - body_top).max(0.0);
-        let tree_width = theme::TREE_WIDTH.min(width * 0.4);
+        let tree_width = self.tree_width.clamp(
+            TREE_MIN_WIDTH.min(width),
+            (width - EDITOR_MIN_WIDTH).max(TREE_MIN_WIDTH.min(width)),
+        );
         layout.tree = Rect {
             x: 0.0,
             y: body_top,
-            width: tree_width,
+            width: (tree_width - SPLITTER_SIZE / 2.0).max(0.0),
             height: body_height,
         };
-        let right_x = tree_width + 1.0;
+        layout.tree_splitter = Some(Rect {
+            x: tree_width - SPLITTER_SIZE / 2.0,
+            y: body_top,
+            width: SPLITTER_SIZE,
+            height: body_height,
+        });
+        let right_x = tree_width + SPLITTER_SIZE / 2.0;
         let right_width = (width - right_x).max(0.0);
         layout.tabs = Rect {
             x: right_x,
@@ -3156,8 +3204,13 @@ impl Editor {
             layout.bar = Some(bar);
         }
         let mut bottom = layout.status.y;
+        let panel_height = self.bottom_panel_height;
         if self.terminal_open {
-            let height = ((bottom - y) * 0.42).max(160.0).min((bottom - y) * 0.8);
+            let height = panel_height.clamp(
+                BOTTOM_PANEL_MIN_HEIGHT.min((bottom - y).max(0.0)),
+                (bottom - y - EDITOR_MIN_HEIGHT).max(BOTTOM_PANEL_MIN_HEIGHT.min((bottom - y).max(0.0))),
+            );
+            self.bottom_panel_height = height;
             bottom -= height;
             let panel = Rect {
                 x: right_x,
@@ -3169,11 +3222,11 @@ impl Editor {
             self.terminal
                 .layout(panel, &|text: &str, size: u16| host.measure(text, size));
         } else if self.problems_open || self.search_open {
-            let height = if self.search_open {
-                (PROBLEMS_HEIGHT + 60.0).min((bottom - y) * 0.6)
-            } else {
-                PROBLEMS_HEIGHT.min((bottom - y) * 0.6)
-            };
+            let height = panel_height.clamp(
+                BOTTOM_PANEL_MIN_HEIGHT.min((bottom - y).max(0.0)),
+                (bottom - y - EDITOR_MIN_HEIGHT).max(BOTTOM_PANEL_MIN_HEIGHT.min((bottom - y).max(0.0))),
+            );
+            self.bottom_panel_height = height;
             bottom -= height;
             let panel = Rect {
                 x: right_x,
@@ -3206,6 +3259,14 @@ impl Editor {
             width: right_width,
             height: (bottom - y).max(0.0),
         };
+        if layout.terminal.is_some() || layout.problems.is_some() || layout.search.is_some() {
+            layout.bottom_splitter = Some(Rect {
+                x: right_x,
+                y: layout.editor.bottom() - SPLITTER_SIZE / 2.0,
+                width: right_width,
+                height: SPLITTER_SIZE,
+            });
+        }
         let lsp_diagnostics = self
             .lsp
             .as_ref()
@@ -3412,6 +3473,26 @@ impl Editor {
         }
         let moved = point != self.pointer;
         self.pointer = point;
+        if let Some(drag) = self.panel_drag {
+            if input.mouse_down {
+                match drag {
+                    ResizeCursor::Horizontal => self.tree_width = point.x.clamp(
+                        TREE_MIN_WIDTH,
+                        (self.layout.tabs.right() - EDITOR_MIN_WIDTH).max(TREE_MIN_WIDTH),
+                    ),
+                    ResizeCursor::Vertical => {
+                        let content_bottom = self.layout.status.y;
+                        let editor_min = EDITOR_MIN_HEIGHT;
+                        self.bottom_panel_height = (content_bottom - point.y)
+                            .clamp(BOTTOM_PANEL_MIN_HEIGHT, (content_bottom - editor_min).max(BOTTOM_PANEL_MIN_HEIGHT));
+                    }
+                }
+            }
+            if input.mouse_released || !input.mouse_down {
+                self.panel_drag = None;
+            }
+            return;
+        }
         if self.route_item_drag(input, point) {
             return;
         }
@@ -3893,6 +3974,24 @@ impl Editor {
         state: PointerState,
         host: &dyn EditorHost,
     ) {
+        if button == PointerButton::Primary {
+            if self
+                .layout
+                .tree_splitter
+                .is_some_and(|splitter| splitter.contains(point))
+            {
+                self.panel_drag = Some(ResizeCursor::Horizontal);
+                return;
+            }
+            if self
+                .layout
+                .bottom_splitter
+                .is_some_and(|splitter| splitter.contains(point))
+            {
+                self.panel_drag = Some(ResizeCursor::Vertical);
+                return;
+            }
+        }
         if let Some(popup) = &self.completion {
             let row = popup
                 .rows
@@ -4739,6 +4838,15 @@ impl Editor {
         if layout.terminal.is_some() {
             self.terminal
                 .paint(scene, self.focus == Focus::Terminal && self.window_focused);
+        }
+        if let Some(splitter) = layout.bottom_splitter {
+            draw::hline(
+                scene,
+                splitter.x,
+                splitter.y + splitter.height / 2.0,
+                splitter.width,
+                theme::BORDER,
+            );
         }
         self.paint_status(scene, &layout);
         self.paint_drags(scene, &layout);

@@ -35,7 +35,7 @@ use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, KeyCode, NamedKey, PhysicalKey};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use winit::window::{Icon, Window, WindowAttributes, WindowId};
+use winit::window::{CursorIcon, Icon, Window, WindowAttributes, WindowId};
 
 use crate::proactor_driver::HostProactor;
 
@@ -127,6 +127,7 @@ struct HostSharedState {
     running: bool,
     simulate_mouse_with_touch: bool,
     cursor_visible: bool,
+    resize_cursor: Option<bool>,
     clear_color: UiColor,
     commands: Vec<FrameCommand>,
     image_registry: ImageRegistry,
@@ -292,6 +293,7 @@ impl Default for HostSharedState {
             running: true,
             simulate_mouse_with_touch: false,
             cursor_visible: true,
+            resize_cursor: None,
             clear_color: UiColor::rgba(0, 0, 0, 0xff),
             commands: Vec::new(),
             image_registry: ImageRegistry::new(),
@@ -689,6 +691,12 @@ pub fn asset_exists(path: &str) -> bool {
 pub fn set_text_cursor_active(active: bool) {
     let mut state = lock_state();
     state.cursor_visible = !active;
+    state.pending_redraw = true;
+}
+
+pub fn set_resize_cursor_active(cursor: Option<bool>) {
+    let mut state = lock_state();
+    state.resize_cursor = cursor;
     state.pending_redraw = true;
 }
 
@@ -1194,6 +1202,12 @@ impl ApplicationHandler<WindowsUserEvent> for WindowsApp {
             }
             WindowEvent::RedrawRequested => {
                 if let (Some(window), Some(surface)) = (&self.window, &mut self.surface) {
+                    let resize_cursor = lock_state().resize_cursor;
+                    window.set_cursor(match resize_cursor {
+                        Some(true) => CursorIcon::ColResize,
+                        Some(false) => CursorIcon::RowResize,
+                        None => CursorIcon::Default,
+                    });
                     present(
                         surface,
                         window.inner_size(),
@@ -1232,6 +1246,15 @@ impl ApplicationHandler<WindowsUserEvent> for WindowsApp {
                 let (x, y) = logical_cursor_position(position, state.dpi_scale);
                 state.pending_input.mouse_x = x;
                 state.pending_input.mouse_y = y;
+                let resize_cursor = state.resize_cursor;
+                drop(state);
+                if let Some(window) = &self.window {
+                    window.set_cursor(match resize_cursor {
+                        Some(true) => CursorIcon::ColResize,
+                        Some(false) => CursorIcon::RowResize,
+                        None => CursorIcon::Default,
+                    });
+                }
                 should_publish_frame = true;
             }
             WindowEvent::MouseInput {

@@ -495,6 +495,7 @@ thread_local! {
     static MAC_PROACTOR: RefCell<Option<HostProactor<KqueuePort>>> = const { RefCell::new(None) };
     static TEXTURE_COUNTER: RefCell<u64> = const { RefCell::new(0) };
     static CURSOR_PREFERS_TEXT: RefCell<bool> = const { RefCell::new(false) };
+    static CURSOR_RESIZE: RefCell<Option<bool>> = const { RefCell::new(None) };
 }
 
 const NS_WINDOW_STYLE_MASK_TITLED: u64 = 1 << 0;
@@ -906,6 +907,15 @@ pub fn set_text_cursor_active(active: bool) {
     CURSOR_PREFERS_TEXT.with(|prefers_text| {
         *prefers_text.borrow_mut() = active;
     });
+    APP_STATE.with(|state| {
+        if let Some(state) = state.borrow().as_ref() {
+            update_window_cursor(&state.window);
+        }
+    });
+}
+
+pub fn set_resize_cursor_active(cursor: Option<bool>) {
+    CURSOR_RESIZE.with(|current| *current.borrow_mut() = cursor);
     APP_STATE.with(|state| {
         if let Some(state) = state.borrow().as_ref() {
             update_window_cursor(&state.window);
@@ -2426,8 +2436,12 @@ fn update_window_cursor(window: &Retained<AnyObject>) {
         let inside_x = mouse_location.x >= left && mouse_location.x <= right;
         let inside_y = mouse_location.y >= bottom && mouse_location.y <= top;
         let prefers_text = CURSOR_PREFERS_TEXT.with(|prefers_text| *prefers_text.borrow());
+        let resize = CURSOR_RESIZE.with(|resize| *resize.borrow());
 
-        let cursor: *mut AnyObject = if (near_left || near_right) && inside_y {
+        let cursor: *mut AnyObject = if let Some(horizontal) = resize {
+            if horizontal { msg_send![class!(NSCursor), resizeLeftRightCursor] }
+            else { msg_send![class!(NSCursor), resizeUpDownCursor] }
+        } else if (near_left || near_right) && inside_y {
             msg_send![class!(NSCursor), resizeLeftRightCursor]
         } else if (near_top || near_bottom) && inside_x {
             msg_send![class!(NSCursor), resizeUpDownCursor]
