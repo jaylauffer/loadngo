@@ -236,7 +236,11 @@ servers.
 - Opening a `.md` file automatically puts its editable source on the left
   and a read-only Markdown rendering on the right. The preview follows the
   same buffer and renders headings, paragraphs, lists, quotes and fenced
-  code blocks.
+  code blocks. The mouse wheel over the preview scrolls through the complete
+  rendered document independently of the source pane. Use the × control or
+  View > Hide Markdown Preview to close it; View > Show Markdown Preview
+  reopens it for the active Markdown file. Switching to a non-Markdown file
+  closes the preview so it cannot keep showing an older document.
 
 `CODE_EDITOR_STATE_DIR` puts a run's session and backups in another folder
 (test runs must not share the everyday ones).

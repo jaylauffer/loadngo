@@ -197,6 +197,7 @@ enum Command {
     FindInFiles,
     RunSearch,
     ToggleSplit,
+    ToggleMarkdownPreview,
     ToggleTerminal,
     NewTerminal,
     NewPage,
@@ -231,9 +232,10 @@ enum Command {
 
 impl Command {
     /// The commands a menu item can send.
-    const IN_MENUS: [Command; 28] = [
+    const IN_MENUS: [Command; 29] = [
         Command::NewPage,
         Command::ToggleSplit,
+        Command::ToggleMarkdownPreview,
         Command::ToggleTerminal,
         Command::NewTerminal,
         Command::FindInFiles,
@@ -311,6 +313,8 @@ struct Layout {
     status_check: Option<Rect>,
     /// The pane without focus, when split.
     other_pane: Option<Rect>,
+    /// Close control for the read-only Markdown preview, when visible.
+    markdown_preview_close: Option<Rect>,
     /// With no file open, the choice in the editor area: make a new file.
     start_new: Option<Rect>,
     terminal: Option<Rect>,
@@ -455,6 +459,10 @@ pub struct Editor {
     next_search_id: u64,
     /// The second pane, when the editor is split.
     split: Option<Split>,
+    /// Buffer whose read-only Markdown rendering occupies the second pane.
+    markdown_preview: Option<u64>,
+    /// Vertical offset of the read-only Markdown preview, in pixels.
+    markdown_preview_scroll: f32,
     /// The buffer active before the current one, for a new split.
     previous_active: Option<u64>,
     /// A press on a tree entry or a tab, which a move turns into a drag.
@@ -660,6 +668,8 @@ impl Editor {
             search_outbox: None,
             next_search_id: 1,
             split: None,
+            markdown_preview: None,
+            markdown_preview_scroll: 0.0,
             previous_active: None,
             item_drag: None,
             file_drag_over: false,
@@ -790,10 +800,56 @@ impl Editor {
     fn open_markdown_preview(&mut self, index: usize) {
         let buffer = &self.buffers[index];
         if is_markdown(&buffer.path) {
-            self.split = Some(Split {
-                other: buffer.id,
-                focused_right: false,
-            });
+            let id = buffer.id;
+            self.show_markdown_preview(id);
+        }
+    }
+
+    fn show_markdown_preview(&mut self, id: u64) {
+        self.markdown_preview = Some(id);
+        self.markdown_preview_scroll = 0.0;
+        self.split = Some(Split {
+            other: id,
+            focused_right: false,
+        });
+    }
+
+    fn hide_markdown_preview(&mut self) {
+        if let Some(id) = self.markdown_preview.take() {
+            if self.split.is_some_and(|split| split.other == id) {
+                self.split = None;
+            }
+        }
+        self.markdown_preview_scroll = 0.0;
+    }
+
+    fn toggle_markdown_preview(&mut self) {
+        if self.markdown_preview.is_some() {
+            self.hide_markdown_preview();
+        } else if let Some(id) = self
+            .active_buffer()
+            .filter(|buffer| is_markdown(&buffer.path))
+            .map(|buffer| buffer.id)
+        {
+            self.show_markdown_preview(id);
+        }
+    }
+
+    fn sync_markdown_preview_to_active(&mut self, id: u64, is_markdown: bool) {
+        let Some(preview_id) = self.markdown_preview else {
+            return;
+        };
+        if is_markdown {
+            if id != preview_id {
+                self.markdown_preview = Some(id);
+                self.markdown_preview_scroll = 0.0;
+                self.split = Some(Split {
+                    other: id,
+                    focused_right: false,
+                });
+            }
+        } else {
+            self.hide_markdown_preview();
         }
     }
 
@@ -805,7 +861,10 @@ impl Editor {
         if previous_id != Some(self.buffers[index].id) {
             self.previous_active = previous_id;
         }
+        let active_id = self.buffers[index].id;
+        let active_is_markdown = is_markdown(&self.buffers[index].path);
         self.active = Some(index);
+        self.sync_markdown_preview_to_active(active_id, active_is_markdown);
         self.focus = Focus::Editor;
         let path = self.buffers[index]
             .untitled
@@ -830,6 +889,9 @@ impl Editor {
 
     fn close(&mut self, index: usize) {
         let buffer = self.buffers.remove(index);
+        if self.markdown_preview == Some(buffer.id) {
+            self.hide_markdown_preview();
+        }
         if let Some(lsp) = &mut self.lsp {
             lsp.close_document(&buffer.path);
         }
@@ -2715,6 +2777,21 @@ impl Editor {
                     "View",
                     vec![
                         item(
+                            Command::ToggleMarkdownPreview,
+                            if self.markdown_preview.is_some() {
+                                "Hide Markdown Preview"
+                            } else {
+                                "Show Markdown Preview"
+                            },
+                        )
+                        .enabled(
+                            self.markdown_preview.is_some()
+                                || self
+                                    .active_buffer()
+                                    .is_some_and(|buffer| is_markdown(&buffer.path)),
+                        ),
+                        MenuItem::Separator,
+                        item(
                             Command::ToggleSplit,
                             if self.split.is_some() {
                                 "Unsplit Editor"
@@ -3318,13 +3395,22 @@ impl Editor {
                 width: whole.width - half - 1.0,
                 ..whole
             };
-            let (focused, other) = if split.focused_right {
+            let focused_right = split.focused_right && self.markdown_preview != Some(split.other);
+            let (focused, other) = if focused_right {
                 (right, left)
             } else {
                 (left, right)
             };
             layout.editor = focused;
             layout.other_pane = Some(other);
+            if self.markdown_preview == Some(split.other) {
+                layout.markdown_preview_close = Some(Rect {
+                    x: other.right() - 32.0,
+                    y: other.y + 6.0,
+                    width: 26.0,
+                    height: 26.0,
+                });
+            }
             if let Some(index) = self.buffer_index(split.other) {
                 if Some(index) != self.active {
                     let area = &mut self.buffers[index].area;
@@ -4005,6 +4091,14 @@ impl Editor {
         if button == PointerButton::Primary {
             if self
                 .layout
+                .markdown_preview_close
+                .is_some_and(|close| close.contains(point))
+            {
+                self.hide_markdown_preview();
+                return;
+            }
+            if self
+                .layout
                 .tree_splitter
                 .is_some_and(|splitter| splitter.contains(point))
             {
@@ -4148,6 +4242,9 @@ impl Editor {
             .other_pane
             .is_some_and(|pane| pane.contains(point))
         {
+            if self.markdown_preview.is_some() {
+                return;
+            }
             self.switch_pane();
             // The press then lands in the pane now focused.
             self.layout.editor = self.layout.other_pane.take().unwrap_or(self.layout.editor);
@@ -4234,6 +4331,26 @@ impl Editor {
             let last = self.shown_diagnostics().len().saturating_sub(1);
             self.problems_scroll =
                 (self.problems_scroll as isize + rows).clamp(0, last as isize) as usize;
+            return;
+        }
+        let preview_pane = self
+            .layout
+            .other_pane
+            .filter(|pane| pane.contains(point) && pane.x > self.layout.editor.x);
+        let preview_index = self
+            .split
+            .and_then(|split| self.buffer_index(split.other))
+            .filter(|index| is_markdown(&self.buffers[*index].path));
+        if let (Some(pane), Some(index)) = (preview_pane, preview_index) {
+            let delta = if input.mouse_wheel_precise {
+                -input.mouse_wheel_y
+            } else {
+                -input.mouse_wheel_y * theme::TREE_ROW_HEIGHT * 3.0
+            };
+            let content_height = markdown_preview_content_height(&self.buffers[index].area.text());
+            let max_scroll = (content_height - pane.height).max(0.0);
+            self.markdown_preview_scroll =
+                (self.markdown_preview_scroll + delta).clamp(0.0, max_scroll);
             return;
         }
         let row = theme::TREE_ROW_HEIGHT;
@@ -4491,6 +4608,7 @@ impl Editor {
                 self.terminal_open = false;
                 self.problems_scroll = 0;
             }
+            Command::ToggleMarkdownPreview => self.toggle_markdown_preview(),
             Command::CloseTab => {
                 if let Some(index) = self.active {
                     self.request_close(index);
@@ -4697,7 +4815,9 @@ impl Editor {
             }
             Command::RunSearch => self.run_search(),
             Command::ToggleSplit => {
-                if self.split.take().is_none() {
+                if self.markdown_preview.is_some() {
+                    self.hide_markdown_preview();
+                } else if self.split.take().is_none() {
                     if let Some(active) = self.active_buffer().map(|buffer| buffer.id) {
                         let other = self
                             .previous_active
@@ -4819,12 +4939,18 @@ impl Editor {
             self.split.and_then(|split| self.buffer_index(split.other)),
         ) {
             let buffer = &self.buffers[index];
-            if Some(index) == self.active
-                && pane.x > layout.editor.x
-                && is_markdown(&self.buffers[index].path)
-            {
+            if self.markdown_preview == Some(buffer.id) && pane.x > layout.editor.x {
                 if buffer.loaded {
-                    paint_markdown_preview(scene, pane, &buffer.area.text());
+                    let content_height = markdown_preview_content_height(&buffer.area.text());
+                    self.markdown_preview_scroll = self
+                        .markdown_preview_scroll
+                        .clamp(0.0, (content_height - pane.height).max(0.0));
+                    paint_markdown_preview(
+                        scene,
+                        pane,
+                        &buffer.area.text(),
+                        self.markdown_preview_scroll,
+                    );
                 } else {
                     self.paint_hint(scene, pane, "Loading…");
                 }
@@ -4836,15 +4962,11 @@ impl Editor {
                     &format!("{} is in the other pane.", buffer.title),
                 );
             } else if buffer.loaded {
-                if pane.x > layout.editor.x && is_markdown(&buffer.path) {
-                    paint_markdown_preview(scene, pane, &buffer.area.text());
-                } else {
-                    match &buffer.highlighter {
-                        Some(highlighter) => buffer
-                            .area
-                            .paint_with_runs(scene, &|line| highlighter.runs(line)),
-                        None => buffer.area.paint(scene),
-                    }
+                match &buffer.highlighter {
+                    Some(highlighter) => buffer
+                        .area
+                        .paint_with_runs(scene, &|line| highlighter.runs(line)),
+                    None => buffer.area.paint(scene),
                 }
             } else {
                 self.paint_hint(scene, pane, "Loading…");
@@ -4856,6 +4978,9 @@ impl Editor {
                 pane.height,
                 theme::BORDER,
             );
+            if let Some(close) = layout.markdown_preview_close {
+                draw::button(scene, close, "×", close.contains(self.pointer), true);
+            }
         }
         match self.active_buffer() {
             Some(buffer) if buffer.loaded => match &buffer.highlighter {
@@ -5521,14 +5646,14 @@ fn is_markdown(path: &Path) -> bool {
 
 /// Lightweight, read-only Markdown rendering for the secondary pane. The
 /// source buffer remains the editing surface; this view follows its text.
-fn paint_markdown_preview(scene: &mut Vec<PaintOp>, bounds: Rect, text: &str) {
+fn paint_markdown_preview(scene: &mut Vec<PaintOp>, bounds: Rect, text: &str, scroll_y: f32) {
     draw::fill(scene, bounds, theme::EDITOR_BACKGROUND);
-    let mut y = bounds.y + 16.0;
+    let mut y = bounds.y + 16.0 - scroll_y;
     let left = bounds.x + 20.0;
     let width = (bounds.width - 40.0).max(0.0);
     let mut fenced = false;
     for line in text.lines() {
-        if y + 22.0 > bounds.bottom() {
+        if y > bounds.bottom() {
             break;
         }
         let trimmed = line.trim();
@@ -5598,6 +5723,41 @@ fn paint_markdown_preview(scene: &mut Vec<PaintOp>, bounds: Rect, text: &str) {
             );
         }
         y += if size >= 21 { size as f32 + 14.0 } else { 25.0 };
+    }
+}
+
+/// Height of the rendered Markdown document, including top and bottom padding.
+fn markdown_preview_content_height(text: &str) -> f32 {
+    let mut height = 16.0 + 28.0;
+    let mut fenced = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            fenced = !fenced;
+            height += 8.0;
+        } else if !fenced && markdown_list_item(trimmed) {
+            height += 25.0;
+        } else {
+            let size = if !fenced && trimmed.starts_with("### ") {
+                18
+            } else if !fenced && (trimmed.starts_with("## ") || trimmed.starts_with("# ")) {
+                21
+            } else {
+                theme::CODE_FONT
+            };
+            height += if size >= 21 { size as f32 + 14.0 } else { 25.0 };
+        }
+    }
+    height
+}
+
+fn markdown_list_item(trimmed: &str) -> bool {
+    trimmed.starts_with("- ") || trimmed.starts_with("* ") || {
+        let digits = trimmed.bytes().take_while(u8::is_ascii_digit).count();
+        digits > 0
+            && trimmed
+                .get(digits..)
+                .is_some_and(|rest| rest.starts_with(". "))
     }
 }
 
@@ -6677,6 +6837,142 @@ mod tests {
         let request = rig.editor.take_check_request().expect("a check");
         assert_eq!(request.file, dir.path().join("src/lib.rs"));
         assert!(rig.editor.check_running.is_some());
+    }
+
+    #[test]
+    fn markdown_preview_wheel_scroll_reaches_the_end_of_a_long_document() {
+        let mut markdown = String::from("first marker\n");
+        for line in 0..100 {
+            markdown.push_str(&format!("section {line}\n"));
+        }
+        markdown.push_str("last marker\n");
+        let dir = workspace(&[("notes.md", &markdown)]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.editor.open_file(dir.path().join("notes.md"));
+        rig.settle();
+        let preview = rig.editor.layout.other_pane.expect("Markdown preview pane");
+        assert_eq!(rig.editor.markdown_preview_scroll, 0.0);
+
+        rig.frame(InputSnapshot {
+            mouse_x: preview.x + preview.width / 2.0,
+            mouse_y: preview.y + preview.height / 2.0,
+            mouse_wheel_y: -10_000.0,
+            ..InputSnapshot::default()
+        });
+
+        let max_scroll = (markdown_preview_content_height(&markdown) - preview.height).max(0.0);
+        assert!(max_scroll > 0.0, "the long document needs a scroll range");
+        assert_eq!(rig.editor.markdown_preview_scroll, max_scroll);
+    }
+
+    #[test]
+    fn markdown_preview_paints_the_document_tail_at_max_scroll() {
+        let markdown = "first marker\nsecond line\nlast marker\n";
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 400.0,
+            height: 60.0,
+        };
+        let max_scroll = (markdown_preview_content_height(markdown) - bounds.height).max(0.0);
+        let mut scene = Vec::new();
+
+        paint_markdown_preview(&mut scene, bounds, markdown, 0.0);
+        assert!(scene.iter().any(|op| matches!(
+            op,
+            PaintOp::Text { text, .. } if text == "first marker"
+        )));
+        assert!(!scene.iter().any(|op| matches!(
+            op,
+            PaintOp::Text { text, .. } if text == "last marker"
+        )));
+
+        scene.clear();
+        paint_markdown_preview(&mut scene, bounds, markdown, max_scroll);
+        assert!(scene.iter().any(|op| matches!(
+            op,
+            PaintOp::Text { text, .. } if text == "last marker"
+        )));
+        assert!(!scene.iter().any(|op| matches!(
+            op,
+            PaintOp::Text { text, .. } if text == "first marker"
+        )));
+    }
+
+    #[test]
+    fn markdown_preview_can_be_hidden_and_shown_from_the_view_menu_or_close_button() {
+        let dir = workspace(&[("notes.md", "Preview content\n")]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.editor.open_file(dir.path().join("notes.md"));
+        rig.settle();
+        assert!(rig.editor.markdown_preview.is_some());
+        assert!(rig.editor.layout.markdown_preview_close.is_some());
+        let view_menu = rig
+            .editor
+            .menu_bar()
+            .menus
+            .into_iter()
+            .find(|menu| menu.title == "View")
+            .expect("View menu");
+        assert!(view_menu.items.iter().any(|item| matches!(
+            item,
+            MenuItem::Command { command, title, enabled: true, .. }
+                if *command == Command::ToggleMarkdownPreview.menu_command()
+                    && title == "Hide Markdown Preview"
+        )));
+
+        rig.outcome(menu_input(Command::ToggleMarkdownPreview));
+        assert!(rig.editor.markdown_preview.is_none());
+        assert!(rig.editor.split.is_none());
+        assert!(rig.editor.menu_bar().menus.iter().any(|menu| {
+            menu.title == "View"
+                && menu.items.iter().any(|item| {
+                    matches!(
+                        item,
+                        MenuItem::Command { command, title, enabled: true, .. }
+                            if *command == Command::ToggleMarkdownPreview.menu_command()
+                                && title == "Show Markdown Preview"
+                    )
+                })
+        }));
+
+        rig.outcome(menu_input(Command::ToggleMarkdownPreview));
+        assert!(rig.editor.markdown_preview.is_some());
+        let close = rig
+            .editor
+            .layout
+            .markdown_preview_close
+            .expect("visible close button");
+        rig.click(Point {
+            x: close.x + close.width / 2.0,
+            y: close.y + close.height / 2.0,
+        });
+        assert!(rig.editor.markdown_preview.is_none());
+        assert!(rig.editor.split.is_none());
+    }
+
+    #[test]
+    fn opening_a_non_markdown_document_closes_the_previous_preview() {
+        let dir = workspace(&[
+            ("notes.md", "stale preview text\n"),
+            ("main.rs", "fn main() {}\n"),
+        ]);
+        let mut rig = Rig::new(None, Some(dir.path().to_path_buf()));
+        rig.editor.open_file(dir.path().join("notes.md"));
+        rig.settle();
+        assert!(rig.editor.markdown_preview.is_some());
+
+        rig.editor.open_file(dir.path().join("main.rs"));
+        rig.settle();
+        assert!(rig.editor.markdown_preview.is_none());
+        assert!(rig.editor.split.is_none());
+
+        let mut scene = Vec::new();
+        rig.editor.paint(&mut scene);
+        assert!(!scene.iter().any(|op| matches!(
+            op,
+            PaintOp::Text { text, .. } if text == "stale preview text"
+        )));
     }
 
     #[test]
