@@ -768,6 +768,7 @@ impl Editor {
             .position(|buffer| buffer.untitled.is_none() && buffer.path == path)
         {
             self.activate(index);
+            self.open_markdown_preview(index);
             return;
         }
         let id = self.next_id;
@@ -780,6 +781,19 @@ impl Editor {
         }
         if let Some(index) = self.buffer_index(id) {
             self.activate(index);
+            self.open_markdown_preview(index);
+        }
+    }
+
+    /// Markdown files open with their source on the left and a live rendered
+    /// view of the same buffer on the right.
+    fn open_markdown_preview(&mut self, index: usize) {
+        let buffer = &self.buffers[index];
+        if is_markdown(&buffer.path) {
+            self.split = Some(Split {
+                other: buffer.id,
+                focused_right: false,
+            });
         }
     }
 
@@ -1842,6 +1856,14 @@ impl Editor {
         let Some(split) = self.split else {
             return;
         };
+        if self
+            .active_buffer()
+            .is_some_and(|buffer| split.other == buffer.id && is_markdown(&buffer.path))
+        {
+            // The right side is a preview of the source pane, not a second
+            // editing surface.
+            return;
+        }
         let Some(other_index) = self.buffer_index(split.other) else {
             return;
         };
@@ -4797,7 +4819,16 @@ impl Editor {
             self.split.and_then(|split| self.buffer_index(split.other)),
         ) {
             let buffer = &self.buffers[index];
-            if Some(index) == self.active {
+            if Some(index) == self.active
+                && pane.x > layout.editor.x
+                && is_markdown(&self.buffers[index].path)
+            {
+                if buffer.loaded {
+                    paint_markdown_preview(scene, pane, &buffer.area.text());
+                } else {
+                    self.paint_hint(scene, pane, "Loading…");
+                }
+            } else if Some(index) == self.active {
                 // The same buffer in both panes: one view, drawn once.
                 self.paint_hint(
                     scene,
@@ -4805,11 +4836,15 @@ impl Editor {
                     &format!("{} is in the other pane.", buffer.title),
                 );
             } else if buffer.loaded {
-                match &buffer.highlighter {
-                    Some(highlighter) => buffer
-                        .area
-                        .paint_with_runs(scene, &|line| highlighter.runs(line)),
-                    None => buffer.area.paint(scene),
+                if pane.x > layout.editor.x && is_markdown(&buffer.path) {
+                    paint_markdown_preview(scene, pane, &buffer.area.text());
+                } else {
+                    match &buffer.highlighter {
+                        Some(highlighter) => buffer
+                            .area
+                            .paint_with_runs(scene, &|line| highlighter.runs(line)),
+                        None => buffer.area.paint(scene),
+                    }
                 }
             } else {
                 self.paint_hint(scene, pane, "Loading…");
@@ -5475,6 +5510,94 @@ impl Editor {
             theme::UI_FONT,
             HorizontalAlign::Left,
         );
+    }
+}
+
+fn is_markdown(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+}
+
+/// Lightweight, read-only Markdown rendering for the secondary pane. The
+/// source buffer remains the editing surface; this view follows its text.
+fn paint_markdown_preview(scene: &mut Vec<PaintOp>, bounds: Rect, text: &str) {
+    draw::fill(scene, bounds, theme::EDITOR_BACKGROUND);
+    let mut y = bounds.y + 16.0;
+    let left = bounds.x + 20.0;
+    let width = (bounds.width - 40.0).max(0.0);
+    let mut fenced = false;
+    for line in text.lines() {
+        if y + 22.0 > bounds.bottom() {
+            break;
+        }
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            fenced = !fenced;
+            y += 8.0;
+            continue;
+        }
+        let (content, size, color, indent) = if fenced {
+            (line, theme::CODE_FONT, theme::SYNTAX_STRING, 12.0)
+        } else if let Some(title) = trimmed.strip_prefix("### ") {
+            (title, 18, theme::TEXT, 0.0)
+        } else if let Some(title) = trimmed.strip_prefix("## ") {
+            (title, 21, theme::TEXT, 0.0)
+        } else if let Some(title) = trimmed.strip_prefix("# ") {
+            (title, 26, theme::TEXT, 0.0)
+        } else if let Some(quote) = trimmed.strip_prefix("> ") {
+            (quote, theme::CODE_FONT, theme::TEXT_DIM, 12.0)
+        } else if let Some(item) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+            .or_else(|| {
+                let digits = trimmed.bytes().take_while(u8::is_ascii_digit).count();
+                trimmed
+                    .get(digits..)
+                    .filter(|rest| digits > 0 && rest.starts_with(". "))
+                    .map(|rest| &rest[2..])
+            })
+        {
+            // Keep a visible bullet while removing Markdown list syntax.
+            let value = format!("• {item}");
+            let rect = Rect {
+                x: left,
+                y,
+                width,
+                height: 24.0,
+            };
+            draw::label_in(
+                scene,
+                &value,
+                rect,
+                bounds,
+                theme::TEXT,
+                theme::CODE_FONT,
+                HorizontalAlign::Left,
+            );
+            y += 25.0;
+            continue;
+        } else {
+            (trimmed, theme::CODE_FONT, theme::TEXT, 0.0)
+        };
+        if !content.is_empty() {
+            let rect = Rect {
+                x: left + indent,
+                y,
+                width: (width - indent).max(0.0),
+                height: size as f32 + 10.0,
+            };
+            draw::label_in(
+                scene,
+                content,
+                rect,
+                bounds,
+                color,
+                size,
+                HorizontalAlign::Left,
+            );
+        }
+        y += if size >= 21 { size as f32 + 14.0 } else { 25.0 };
     }
 }
 

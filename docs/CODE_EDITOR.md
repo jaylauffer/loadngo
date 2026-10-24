@@ -233,6 +233,10 @@ servers.
   the current one; a click focuses a pane, and tabs open in the focused one.
   Both panes on one file share its view (one caret and scroll), so the
   editor keeps them on different files when it can.
+- Opening a `.md` file automatically puts its editable source on the left
+  and a read-only Markdown rendering on the right. The preview follows the
+  same buffer and renders headings, paragraphs, lists, quotes and fenced
+  code blocks.
 
 `CODE_EDITOR_STATE_DIR` puts a run's session and backups in another folder
 (test runs must not share the everyday ones).
