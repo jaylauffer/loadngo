@@ -30,14 +30,18 @@ mod iocp;
 mod kqueue;
 #[cfg(unix)]
 mod sockaddr;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 mod uring;
 
 use deferred::DeferredQueue;
+#[cfg(not(target_has_atomic = "64"))]
+use portable_atomic::AtomicU64;
 use std::io;
 use std::net::SocketAddr;
+#[cfg(target_has_atomic = "64")]
+use std::sync::atomic::AtomicU64;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
 use std::time::{Duration, Instant};
@@ -63,7 +67,7 @@ pub use iocp::IocpPort;
     target_os = "dragonfly"
 ))]
 pub use kqueue::KqueuePort;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 pub use uring::IoUringPort;
 
 /// The `CompletionPort` implementation this platform actually uses.
@@ -80,8 +84,10 @@ pub use uring::IoUringPort;
 /// deliberately does not implement it, because IOCP has no readiness model
 /// for an anonymous pipe. Code that needs readiness must bound on
 /// [`ReadinessPort`] and provide a Windows path of its own.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 pub type PlatformPort = IoUringPort;
+#[cfg(all(target_os = "linux", not(target_pointer_width = "64")))]
+pub type PlatformPort = EpollPort;
 #[cfg(any(
     target_os = "macos",
     target_os = "ios",

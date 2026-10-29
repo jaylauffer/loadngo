@@ -39,12 +39,16 @@ use libc::{
     EFD_NONBLOCK, EPOLLERR, EPOLLHUP, EPOLLIN, EPOLLOUT, EPOLL_CLOEXEC, EPOLL_CTL_ADD,
     EPOLL_CTL_DEL, EPOLL_CTL_MOD,
 };
+#[cfg(not(target_has_atomic = "64"))]
+use portable_atomic::AtomicU64;
 use socket2::SockAddr;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::net::SocketAddr;
 use std::os::fd::RawFd;
-use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(target_has_atomic = "64")]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 

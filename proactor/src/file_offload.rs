@@ -54,7 +54,10 @@ pub(crate) fn blocks_without_readiness(fd: RawFd) -> bool {
     if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } != 0 {
         return false;
     }
-    let kind = unsafe { stat.assume_init() }.st_mode & libc::S_IFMT;
+    // st_mode is wider than mode_t on 32-bit Android (u32 against u16); the
+    // cast is a no-op elsewhere.
+    #[allow(clippy::unnecessary_cast)]
+    let kind = (unsafe { stat.assume_init() }.st_mode as libc::mode_t) & libc::S_IFMT;
     kind == libc::S_IFREG || kind == libc::S_IFBLK
 }
 

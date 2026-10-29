@@ -16,13 +16,22 @@ socket2 = "0.5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
-io-uring = "0.7"
 # Used only for its sockaddr_storage <-> std::net::SocketAddr conversion
 # (IoPort's accept/connect/recv_from/send_to) -- correct cross-platform
 # sockaddr packing (byte order, BSD's extra sin_len field, etc.) is easy
 # to get subtly wrong hand-rolled, and socket2 is the standard, minimal,
 # well-tested crate for exactly this.
 socket2 = "0.5"
+
+# AtomicU64 where the target has no 64-bit atomics (ARMv5, e.g. Debian armel);
+# portable-atomic uses the Linux kernel's atomic helpers there.
+[target.'cfg(not(target_has_atomic = "64"))'.dependencies]
+portable-atomic = "1"
+
+# io-uring ships prebuilt kernel bindings for 64-bit targets only; 32-bit Linux
+# (i686, ARM) uses epoll, as Android does.
+[target.'cfg(all(target_os = "linux", target_pointer_width = "64"))'.dependencies]
+io-uring = "0.7"
 
 [target.'cfg(target_os = "android")'.dependencies]
 libc = "0.2"

@@ -8,14 +8,17 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-/// A raw OS handle to operate on: `RawFd` on Unix, `RawSocket` on
+/// A raw OS handle to operate on: `RawFd` on Unix, a 64-bit handle value on
 /// Windows. Kept as a small platform-neutral alias rather than exposing
 /// `std::os::fd::RawFd` directly in this trait's signatures, since that
-/// type doesn't exist on Windows at all.
+/// type doesn't exist on Windows at all. On Windows it is `u64` on every
+/// target: `IocpPort::register` keeps a registration number in the upper 32
+/// bits, and `RawSocket` is only 32 bits wide on 32-bit Windows (it is `u64`
+/// on 64-bit Windows, so existing callers are unchanged there).
 #[cfg(unix)]
 pub type RawFdCompat = std::os::fd::RawFd;
 #[cfg(windows)]
-pub type RawFdCompat = std::os::windows::io::RawSocket;
+pub type RawFdCompat = u64;
 
 /// An owned, fixed-address buffer loaned to an in-flight `IoPort`
 /// operation. Deliberately not `Clone`: ownership transfers to the
