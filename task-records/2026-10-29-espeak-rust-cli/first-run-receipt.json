@@ -1,0 +1,14 @@
+{
+  "accepted": false,
+  "receipt": null,
+  "receipt_commitment_hex": null,
+  "reward": null,
+  "verification": {
+    "command": "git diff --quiet d300312ecc849cc51d494d915fa8b0f6e92c0abc -- verify.sh && bash verify.sh",
+    "exit_code": 1,
+    "stdout": "verify: ok: 1: 58b6319075dc5bf620367405024a159bd44b7c02 on origin/dev; espeak-ng-bin from rust_cli.c; src/espeak-ng.c unchanged\nverify: ok: 2: fmt, clippy (all targets; native host on macOS and Windows), generated sources\n",
+    "stdout_dropped_bytes": 0,
+    "stderr": "verify: FAIL: static: no parity summary\n",
+    "stderr_dropped_bytes": 0
+  }
+}

@@ -77,10 +77,14 @@ lane() {
     local objs
     objs=$(cd "$b/src/CMakeFiles/espeak-ng-bin.dir" && ls ./*.o | tr '\n' ' ')
     [ "$objs" = "./rust_cli.c.o " ] || fail "$name: espeak-ng-bin objects are '$objs', not rust_cli.c.o alone"
-    (cd "$b" && ctest -R '^rust_cli_parity$' --output-on-failure) >"$work/$name-ctest.log" 2>&1 \
+    # -V: ctest prints a passing test's output (the summary line) only when verbose,
+    # with a "<test number>: " prefix. The first run used --output-on-failure and
+    # was rejected for that alone.
+    (cd "$b" && ctest -R '^rust_cli_parity$' -V) >"$work/$name-ctest.log" 2>&1 \
         || { tail -20 "$work/$name-ctest.log" >&2; fail "$name: rust_cli_parity"; }
     local line
-    line=$(grep -m1 -E '^CLI parity: [0-9]+/[0-9]+ cases passed' "$work/$name-ctest.log")
+    line=$(grep -m1 -E '^([0-9]+: )?CLI parity: [0-9]+/[0-9]+ cases passed' "$work/$name-ctest.log" \
+        | sed -E 's/^[0-9]+: //')
     [[ $line =~ ^CLI\ parity:\ ([0-9]+)/([0-9]+) ]] || fail "$name: no parity summary"
     [ "${BASH_REMATCH[1]}" = "${BASH_REMATCH[2]}" ] && [ "${BASH_REMATCH[2]}" -ge 175 ] \
         || fail "$name: $line"
