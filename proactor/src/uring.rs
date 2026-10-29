@@ -153,7 +153,8 @@ pub struct IoUringPort {
 
 impl IoUringPort {
     pub fn new() -> io::Result<Self> {
-        let ring = IoUring::new(MAX_EVENTS as u32).map_err(|e| io::Error::other(e.to_string()))?;
+        // Keep the OS error: `LinuxPort` reads it to fall back to epoll.
+        let ring = IoUring::new(MAX_EVENTS as u32)?;
 
         let wake_fd = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
         if wake_fd == -1 {

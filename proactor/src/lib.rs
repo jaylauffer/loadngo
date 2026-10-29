@@ -15,6 +15,8 @@ mod error;
 ))]
 mod file_offload;
 mod io_port;
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+mod linux_port;
 mod persistent_log;
 pub use persistent_log::{LogFlush, PersistentLog, PersistentLogConfig, PersistentLogStatus};
 #[cfg(windows)]
@@ -68,15 +70,19 @@ pub use iocp::IocpPort;
 ))]
 pub use kqueue::KqueuePort;
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+pub use linux_port::LinuxPort;
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 pub use uring::IoUringPort;
 
 /// The `CompletionPort` implementation this platform actually uses.
 ///
-/// Every desktop/mobile target this workspace builds for has exactly one
-/// sensible backend, so callers that just want "the port for this machine"
-/// -- a camera capture loop, a host's I/O thread -- should name this instead
-/// of repeating the `cfg` ladder and silently getting it wrong on one
-/// platform. Code that deliberately targets a specific backend (benchmarks
+/// Callers that just want "the port for this machine" -- a camera capture
+/// loop, a host's I/O thread -- should name this instead of repeating the
+/// `cfg` ladder and silently getting it wrong on one platform. On 64-bit
+/// Linux it is [`LinuxPort`], which uses io_uring where the kernel allows it
+/// and epoll where it does not (qemu-user, Docker's default seccomp profile,
+/// `kernel.io_uring_disabled`); everywhere else it is the one backend that
+/// platform has. Code that deliberately targets a specific backend (benchmarks
 /// comparing two of them, backend-specific tests) should keep naming that
 /// backend directly.
 ///
@@ -85,7 +91,7 @@ pub use uring::IoUringPort;
 /// for an anonymous pipe. Code that needs readiness must bound on
 /// [`ReadinessPort`] and provide a Windows path of its own.
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-pub type PlatformPort = IoUringPort;
+pub type PlatformPort = LinuxPort;
 #[cfg(all(target_os = "linux", not(target_pointer_width = "64")))]
 pub type PlatformPort = EpollPort;
 #[cfg(any(
