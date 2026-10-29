@@ -1,0 +1,30 @@
+{
+  "accepted": true,
+  "receipt": {
+    "receipt_version": 2,
+    "request_id": 11248527064783442232,
+    "offer_id": 897524743089416508,
+    "assignment_id": 8593997964243420551,
+    "submitter_node_id": "jay-macmini",
+    "worker_node_id": "claude-code-macmini",
+    "summary": "espeak-ng-rs: the espeak-ng command-line program is Rust (finish Codex's 10-14 CLI stage: options, help, voice listing, input framing and WAV writing in Rust; the original CLI kept unchanged as the oracle; every parity case passes)",
+    "success_criteria": "task-records/2026-10-29-espeak-rust-cli/verify.sh at loadngo bf07abae (third run: the first was rejected by its own check, the second got a result without its commit line)",
+    "artifact_hint": "/Users/jay/pudding/reviews/2026-10-29-task-espeak-rust-cli/result.md",
+    "artifact_copy_path": "/Users/jay/pudding/loadngo/task-records/2026-10-29-espeak-rust-cli/result.md",
+    "artifact_hash_hex": "b85f0018b5514f38e0b416b92e83bb4350cdc688a22b0f0ddfc14d07a5a5abfb",
+    "result_note": "result delivered by Claude Code; see the artifact",
+    "accepted_at": 1793264355,
+    "submitted_at": 1793264283,
+    "reward": null
+  },
+  "receipt_commitment_hex": "461f2ee09b8adf9601d111274662e4af40dc8872d3a36201a1ef3eb9e2b5a42d",
+  "reward": null,
+  "verification": {
+    "command": "git diff --quiet bf07abae4863ca232cad623c6826a1095e0812e8 -- verify.sh && bash verify.sh",
+    "exit_code": 0,
+    "stdout": "verify: ok: 1: 58b6319075dc5bf620367405024a159bd44b7c02 on origin/dev; espeak-ng-bin from rust_cli.c; src/espeak-ng.c unchanged\nverify: ok: 2: fmt, clippy (all targets; native host on macOS and Windows), generated sources\nverify: ok: static: espeak-ng-bin from rust_cli.c.o; CLI parity: 175/175 cases passed; FIFO on; MBROLA compiler off; 7.4s\nverify: ok: 3: static synchronous lane\nverify: ok: shared: espeak-ng-bin from rust_cli.c.o; CLI parity: 178/178 cases passed; FIFO on; MBROLA compiler on; 9.3s\nverify: ok: 4: shared async MBROLA lane\nverify: ok: 5: Rust port workflow succeeded at 58b6319075dc5bf620367405024a159bd44b7c02\nverify: accepted\n",
+    "stdout_dropped_bytes": 0,
+    "stderr": "",
+    "stderr_dropped_bytes": 0
+  }
+}

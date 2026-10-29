@@ -1,0 +1,14 @@
+{
+  "accepted": false,
+  "receipt": null,
+  "receipt_commitment_hex": null,
+  "reward": null,
+  "verification": {
+    "command": "git diff --quiet bf07abae4863ca232cad623c6826a1095e0812e8 -- verify.sh && bash verify.sh",
+    "exit_code": 1,
+    "stdout": "",
+    "stdout_dropped_bytes": 0,
+    "stderr": "verify: FAIL: the result names no commit\n",
+    "stderr_dropped_bytes": 0
+  }
+}

@@ -1,0 +1,9 @@
+task_submitter_request_sent request_id=6635738830661672011 submitter_node_id=jay-macmini bytes=1458 expires_at=1793264218
+task_submitter_offer request_id=6635738830661672011 offer_id=4419353621221981730 worker_node_id=claude-code-macmini source=127.0.0.1:47951 estimated_duration_secs=14400 max_status_interval_secs=0 reward_schemes= note=Claude Code (Opus 5.5) in Jay's session on the Mac mini; works in the espeak-ng-rs checkout
+task_submitter_accept_sent assignment_id=5387736940578917631 request_id=6635738830661672011 offer_id=4419353621221981730 worker_node_id=claude-code-macmini reward=none
+task_submitter_status assignment_id=5387736940578917631 worker_node_id=claude-code-macmini source=127.0.0.1:47951 state=running next_check_in_by=1793264248 note=worker accepted assignment and started execution
+task_submitter_result assignment_id=5387736940578917631 worker_node_id=claude-code-macmini source=127.0.0.1:47951 artifact_hint=/Users/jay/pudding/reviews/2026-10-29-task-espeak-rust-cli/result.md note=result delivered by Claude Code; see the artifact
+task_submitter_verify_output assignment_id=5387736940578917631 stream=stderr line=verify: FAIL: the result names no commit
+task_submitter_verify assignment_id=5387736940578917631 success=false exit_code=1
+task_submitter_ack_sent assignment_id=5387736940578917631 accepted=false target=127.0.0.1:47951 reward=none
+Error: the task result did not pass verification

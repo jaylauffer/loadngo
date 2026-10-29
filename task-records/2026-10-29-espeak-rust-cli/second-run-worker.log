@@ -1,0 +1,5 @@
+task_worker_request request_id=6635738830661672011 submitter_node_id=jay-macmini source=127.0.0.1:47950 capabilities_match=true summary=espeak-ng-rs: the espeak-ng command-line program is Rust (finish Codex's 10-14 CLI stage: options, help, voice listing, input framing and WAV writing in Rust; the original CLI kept unchanged as the oracle; every parity case passes)
+task_worker_offer_sent request_id=6635738830661672011 offer_id=4419353621221981730 worker_node_id=claude-code-macmini targets=1 expires_at=1793264503
+task_worker_status assignment_id=5387736940578917631 state=running target=127.0.0.1:47950
+task_worker_result assignment_id=5387736940578917631 target=127.0.0.1:47950 status_success=true
+task_worker_ack assignment_id=5387736940578917631 source=127.0.0.1:47950 accepted=false reward=none note=verification failed (exit 1): verify: FAIL: the result names no commit
