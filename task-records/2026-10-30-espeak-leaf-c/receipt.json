@@ -1,0 +1,30 @@
+{
+  "accepted": true,
+  "receipt": {
+    "receipt_version": 2,
+    "request_id": 3085780417417739355,
+    "offer_id": 8750730383497792239,
+    "assignment_id": 4427840454047638222,
+    "submitter_node_id": "jay-macmini",
+    "worker_node_id": "claude-code-macmini",
+    "summary": "espeak-ng-rs: the leaf and tool files' C logic moves to Rust (common.c, error.c, spect.c, the MBROLA shims, rust_cli.c, langopts.c, compiledict.c and compiledata.c hold only bridges)",
+    "success_criteria": "task-records/2026-10-30-espeak-leaf-c/verify.sh at loadngo 159af89c",
+    "artifact_hint": "/Users/jay/pudding/reviews/2026-10-30-task-espeak-leaf-c/result.md",
+    "artifact_copy_path": "/Users/jay/pudding/loadngo/task-records/2026-10-30-espeak-leaf-c/result.md",
+    "artifact_hash_hex": "b04c4725caba59689598b9df3abc4e4cb20b93ad51a53ea825b97805ce361562",
+    "result_note": "result delivered by Claude Code; see the artifact",
+    "accepted_at": 1793323980,
+    "submitted_at": 1793323840,
+    "reward": null
+  },
+  "receipt_commitment_hex": "74cd8f566e98051fdc0ba34e51c39c7fd2dfac693a8002dcf4fbffdc4d023191",
+  "reward": null,
+  "verification": {
+    "command": "git diff --quiet 159af89c2c75856e4bbeaa67a1b6c350cf8d68b8 -- verify.sh && bash verify.sh",
+    "exit_code": 0,
+    "stdout": "verify: ok: 1: c2b9b18d1d9986afc4e64cb20523f880a02bf69c on origin/dev; HEAD contains it, tracked files unchanged\nverify: ok: 2: the nine files hold no C logic; 1126 lines in total\nverify: ok: 3: default build 100% tests passed out of 131; C oracle 100% tests passed out of 19\nverify: ok: 4: Rust port: run 40986003705 (7 jobs at 72a8c53b)\nverify: ok: 4: CI: run 40981175291 (57 jobs at 605ebbd4)\nverify: ok: 4: Windows: run 40981178645 (8 jobs at 605ebbd4)\nverify: ok: 4: windows-msbuild: run 40981182189 (2 jobs at 605ebbd4)\nverify: ok: 4: Android: run 40981185512 (3 jobs at 605ebbd4)\nverify: ok: 4: Dist: run 40981188919 (3 jobs at 605ebbd4)\nverify: ok: 4: C oracle: run 40986003686 (2 jobs at 72a8c53b)\nverify: accepted\n",
+    "stdout_dropped_bytes": 0,
+    "stderr": "",
+    "stderr_dropped_bytes": 0
+  }
+}

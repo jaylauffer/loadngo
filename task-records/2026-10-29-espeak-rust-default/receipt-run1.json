@@ -1,0 +1,14 @@
+{
+  "accepted": false,
+  "receipt": null,
+  "receipt_commitment_hex": null,
+  "reward": null,
+  "verification": {
+    "command": "git diff --quiet 5737eee107c3944a8e836ee015942337df06f8c9 -- verify.sh && bash verify.sh",
+    "exit_code": 1,
+    "stdout": "",
+    "stdout_dropped_bytes": 0,
+    "stderr": "verify: FAIL: USE_RUST_CORE is turned off elsewhere: 605ebbd411e21cb1c7200f85ca21efb6a1249905:cmake/rust.cmake:1:# Native Rust replacements; the legacy C build (-DUSE_RUST_CORE=OFF) remains\n605ebbd411e21cb1c7200f85ca21efb6a1249905:cmake/rust.cmake:7:    \"To build the C engine instead, configure with -DUSE_RUST_CORE=OFF.\")\n",
+    "stderr_dropped_bytes": 0
+  }
+}
