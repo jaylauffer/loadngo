@@ -1,0 +1,30 @@
+{
+  "accepted": true,
+  "receipt": {
+    "receipt_version": 2,
+    "request_id": 4348511166028248462,
+    "offer_id": 5562992569897190617,
+    "assignment_id": 15320412636075613978,
+    "submitter_node_id": "jay-macmini",
+    "worker_node_id": "claude-code-macmini",
+    "summary": "espeak-ng-rs: a live MBROLA test in CI, the Rust engine against the C oracle",
+    "success_criteria": "task-records/2026-10-30-espeak-live-mbrola/verify.sh at loadngo 9ad5652c",
+    "artifact_hint": "/Users/jay/pudding/reviews/2026-10-30-task-espeak-live-mbrola/result.md",
+    "artifact_copy_path": "/Users/jay/pudding/loadngo/task-records/2026-10-30-espeak-live-mbrola/result.md",
+    "artifact_hash_hex": "bbb758ccfcceab5bd3a4ba1145bd42057cae0548cecc7d3e326977c4c7003410",
+    "result_note": "result delivered by Claude Code; see the artifact",
+    "accepted_at": 1793337283,
+    "submitted_at": 1793337234,
+    "reward": null
+  },
+  "receipt_commitment_hex": "3f07193964ea76cdd8b2e52d72dc7bd7af6bd8565ff31094229d50663134475d",
+  "reward": null,
+  "verification": {
+    "command": "git diff --quiet 9ad5652cc3aba502b4f808c9f82a42493d2e5707 -- verify.sh && bash verify.sh",
+    "exit_code": 0,
+    "stdout": "verify: ok: 1: cb9b86671041d5dfd3338f6d33e4c2c6750e4f42 on origin/dev; HEAD contains it, tracked files unchanged\nverify: ok: 2: without mbrola, the required test fails: no, and ESPEAK_REQUIRE_MBROLA=1\nverify: ok: 3: live MBROLA, Rust engine: run 41002781460 job 123890782876 at 5cc8ce38; C engine: run 41002781402 job 123890782602 at 5cc8ce38\nverify: ok: 4: Rust port: run 41002781460 (7 jobs at 5cc8ce38)\nverify: ok: 4: CI: run 41002808976 (57 jobs at 5cc8ce38)\nverify: ok: 4: Windows: run 41002811873 (8 jobs at 5cc8ce38)\nverify: ok: 4: windows-msbuild: run 41002814815 (2 jobs at 5cc8ce38)\nverify: ok: 4: Android: run 41002817446 (3 jobs at 5cc8ce38)\nverify: ok: 4: Dist: run 41002820516 (3 jobs at 5cc8ce38)\nverify: ok: 4: C oracle: run 41002781402 (2 jobs at 5cc8ce38)\nverify: accepted\n",
+    "stdout_dropped_bytes": 0,
+    "stderr": "",
+    "stderr_dropped_bytes": 0
+  }
+}

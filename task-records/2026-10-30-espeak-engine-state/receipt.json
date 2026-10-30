@@ -1,0 +1,30 @@
+{
+  "accepted": true,
+  "receipt": {
+    "receipt_version": 2,
+    "request_id": 6307524289042268855,
+    "offer_id": 5010689476196582938,
+    "assignment_id": 1507676215817697996,
+    "submitter_node_id": "jay-macmini",
+    "worker_node_id": "claude-code-macmini",
+    "summary": "espeak-ng-rs: the engine's mutable state moves from C to Rust, and the shared library exports only the public API",
+    "success_criteria": "task-records/2026-10-30-espeak-engine-state/verify.sh at loadngo 4ca9ca80",
+    "artifact_hint": "/Users/jay/pudding/reviews/2026-10-30-task-espeak-engine-state/result.md",
+    "artifact_copy_path": "/Users/jay/pudding/loadngo/task-records/2026-10-30-espeak-engine-state/result.md",
+    "artifact_hash_hex": "e17361037c69e784a134a71ff2d84169adca7cc0b51e529c5ec01470c5cffe6b",
+    "result_note": "result delivered by Claude Code; see the artifact",
+    "accepted_at": 1793337422,
+    "submitted_at": 1793337234,
+    "reward": null
+  },
+  "receipt_commitment_hex": "5df86bb3eae204e7d0dda14e6e2d3f5f135acdaaa002bffbe51add3457674d1a",
+  "reward": null,
+  "verification": {
+    "command": "git diff --quiet 4ca9ca8039aea5b2236a45af4eb6fda3346378e4 -- verify.sh && bash verify.sh",
+    "exit_code": 0,
+    "stdout": "verify: ok: 1: 5cc8ce385967bfc0d9a7be9ebc2b921ff3e4af4e on origin/dev; HEAD contains it, tracked files unchanged\nverify: ok: 2: no writable data in the library's or CLI's C objects, and no C logic, in either configuration\nverify: ok: 3: the shared library exports the C engine's API and the CLI entry (      73 symbols)\nverify: ok: 4: default build 100% tests passed out of 131; C oracle 100% tests passed out of 19\nverify: ok: 5: Rust port: run 41002781460 (7 jobs at 5cc8ce38)\nverify: ok: 5: CI: run 41002808976 (57 jobs at 5cc8ce38)\nverify: ok: 5: Windows: run 41002811873 (8 jobs at 5cc8ce38)\nverify: ok: 5: windows-msbuild: run 41002814815 (2 jobs at 5cc8ce38)\nverify: ok: 5: Android: run 41002817446 (3 jobs at 5cc8ce38)\nverify: ok: 5: Dist: run 41002820516 (3 jobs at 5cc8ce38)\nverify: ok: 5: C oracle: run 41002781402 (2 jobs at 5cc8ce38)\nverify: accepted\n",
+    "stdout_dropped_bytes": 0,
+    "stderr": "",
+    "stderr_dropped_bytes": 0
+  }
+}
