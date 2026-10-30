@@ -1,0 +1,30 @@
+{
+  "accepted": true,
+  "receipt": {
+    "receipt_version": 2,
+    "request_id": 12291844300134529034,
+    "offer_id": 17986239635625294228,
+    "assignment_id": 9267267737291004816,
+    "submitter_node_id": "jay-macmini",
+    "worker_node_id": "claude-code-macmini",
+    "summary": "espeak-ng-rs: readclause.c and ssml.c's C logic moves to Rust (the clause reader's state and callbacks, and the SSML tag host)",
+    "success_criteria": "task-records/2026-10-30-espeak-clause-ssml/verify.sh at loadngo 159af89c",
+    "artifact_hint": "/Users/jay/pudding/reviews/2026-10-30-task-espeak-clause-ssml/result.md",
+    "artifact_copy_path": "/Users/jay/pudding/loadngo/task-records/2026-10-30-espeak-clause-ssml/result.md",
+    "artifact_hash_hex": "51674e16f2953dff4f757dd3ae891de43f1fcfe2c2bb80c91e15d452781b1b0b",
+    "result_note": "result delivered by Claude Code; see the artifact",
+    "accepted_at": 1793331910,
+    "submitted_at": 1793331758,
+    "reward": null
+  },
+  "receipt_commitment_hex": "3e39206c6853987901a8b845b18f7652bcc2593a7e78fa146e525379e21b4263",
+  "reward": null,
+  "verification": {
+    "command": "git diff --quiet 159af89c2c75856e4bbeaa67a1b6c350cf8d68b8 -- verify.sh && bash verify.sh",
+    "exit_code": 0,
+    "stdout": "verify: ok: 1: 7512cf2ded6597f793130e3b50329db78c42a8bc on origin/dev; HEAD contains it, tracked files unchanged\nverify: ok: 2: readclause.c and ssml.c hold no C logic; 929 lines in total\nverify: ok: 3: default build 100% tests passed out of 131; C oracle 100% tests passed out of 19\nverify: ok: 4: Rust port: run 40986003705 (7 jobs at 72a8c53b)\nverify: ok: 4: CI: run 40986003637 (57 jobs at 72a8c53b)\nverify: ok: 4: Windows: run 40986006896 (8 jobs at 72a8c53b)\nverify: ok: 4: windows-msbuild: run 40986009939 (2 jobs at 72a8c53b)\nverify: ok: 4: Android: run 40986012640 (3 jobs at 72a8c53b)\nverify: ok: 4: Dist: run 40986015445 (3 jobs at 72a8c53b)\nverify: ok: 4: C oracle: run 40986003686 (2 jobs at 72a8c53b)\nverify: accepted\n",
+    "stdout_dropped_bytes": 0,
+    "stderr": "",
+    "stderr_dropped_bytes": 0
+  }
+}

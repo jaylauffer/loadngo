@@ -1,0 +1,30 @@
+{
+  "accepted": true,
+  "receipt": {
+    "receipt_version": 2,
+    "request_id": 500705050407829539,
+    "offer_id": 14554088642112494578,
+    "assignment_id": 17599278780544101989,
+    "submitter_node_id": "jay-macmini",
+    "worker_node_id": "claude-code-macmini",
+    "summary": "espeak-ng-rs: numbers.c and dictionary.c's C logic moves to Rust (the number, letter, Roman numeral, phoneme, rule, match and list hosts' callbacks, LoadDictionary and RemoveEnding)",
+    "success_criteria": "task-records/2026-10-30-espeak-numbers-dictionary/verify.sh at loadngo 159af89c",
+    "artifact_hint": "/Users/jay/pudding/reviews/2026-10-30-task-espeak-numbers-dictionary/result.md",
+    "artifact_copy_path": "/Users/jay/pudding/loadngo/task-records/2026-10-30-espeak-numbers-dictionary/result.md",
+    "artifact_hash_hex": "8acb39b1e8343ed89cbb1c4c5fd3e11fe426a2e200b791473572e6ce40bce7ef",
+    "result_note": "result delivered by Claude Code; see the artifact",
+    "accepted_at": 1793324156,
+    "submitted_at": 1793324010,
+    "reward": null
+  },
+  "receipt_commitment_hex": "1f23e66bbd0d26e43163dd38d2ef765b413dcab837220ea54872a73c27c2a892",
+  "reward": null,
+  "verification": {
+    "command": "git diff --quiet 159af89c2c75856e4bbeaa67a1b6c350cf8d68b8 -- verify.sh && bash verify.sh",
+    "exit_code": 0,
+    "stdout": "verify: ok: 1: f6a73ed49537ece7a048f88a392419dfb2ef916e on origin/dev; HEAD contains it, tracked files unchanged\nverify: ok: 2: numbers.c and dictionary.c hold no C logic; 1126 lines in total\nverify: ok: 3: default build 100% tests passed out of 131; C oracle 100% tests passed out of 19\nverify: ok: 4: Rust port: run 40986003705 (7 jobs at 72a8c53b)\nverify: ok: 4: CI: run 40981175291 (57 jobs at 605ebbd4)\nverify: ok: 4: Windows: run 40981178645 (8 jobs at 605ebbd4)\nverify: ok: 4: windows-msbuild: run 40981182189 (2 jobs at 605ebbd4)\nverify: ok: 4: Android: run 40981185512 (3 jobs at 605ebbd4)\nverify: ok: 4: Dist: run 40981188919 (3 jobs at 605ebbd4)\nverify: ok: 4: C oracle: run 40986003686 (2 jobs at 72a8c53b)\nverify: accepted\n",
+    "stdout_dropped_bytes": 0,
+    "stderr": "",
+    "stderr_dropped_bytes": 0
+  }
+}
