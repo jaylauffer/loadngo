@@ -1,0 +1,30 @@
+{
+  "accepted": true,
+  "receipt": {
+    "receipt_version": 2,
+    "request_id": 13204822769561968432,
+    "offer_id": 13058945095990074294,
+    "assignment_id": 14181307584696255948,
+    "submitter_node_id": "jay-macmini",
+    "worker_node_id": "claude-code-macmini",
+    "summary": "espeak-ng-rs: the Rust core is the default build (CMake default ON; Visual Studio solution, Android and all upstream workflows build Rust; the C engine kept as the oracle under its own workflow)",
+    "success_criteria": "task-records/2026-10-29-espeak-rust-default/verify.sh at loadngo 5737eee1",
+    "artifact_hint": "/Users/jay/pudding/reviews/2026-10-29-task-espeak-rust-default/result.md",
+    "artifact_copy_path": "/Users/jay/pudding/loadngo/task-records/2026-10-29-espeak-rust-default/result.md",
+    "artifact_hash_hex": "96058c2df95bfa6be9aba2ec89d22772b51c3434286024b0be697c56ce0c9b04",
+    "result_note": "result delivered by Claude Code; see the artifact",
+    "accepted_at": 1793332772,
+    "submitted_at": 1793332631,
+    "reward": null
+  },
+  "receipt_commitment_hex": "efbdd00316da68a2007487da9c707d24b3e78c683182a75d0f643e3241497ea6",
+  "reward": null,
+  "verification": {
+    "command": "git diff --quiet 5737eee107c3944a8e836ee015942337df06f8c9 -- verify.sh && bash verify.sh",
+    "exit_code": 0,
+    "stdout": "verify: ok: 1: 72a8c53b9f0b13363d330965da7b195fe210e797 on origin/dev; USE_RUST_CORE defaults ON; only c-oracle.yml turns it off\nverify: ok: 2: the Visual Studio projects build and link the Rust core and the Rust CLI\nverify: ok: 3: default build is the Rust core; espeak-ng-bin from rust_cli.c.o; 100% tests passed out of 131\nverify: ok: 4: C oracle build; 100% tests passed out of 19\nverify: ok: 5: Rust port: run 40986003705 (7 jobs at 72a8c53b)\nverify: ok: 5: CI: run 40986003637 (57 jobs at 72a8c53b)\nverify: ok: 5: Windows: run 40986006896 (8 jobs at 72a8c53b)\nverify: ok: 5: windows-msbuild: run 40986009939 (2 jobs at 72a8c53b)\nverify: ok: 5: Android: run 40986012640 (3 jobs at 72a8c53b)\nverify: ok: 5: Dist: run 40986015445 (3 jobs at 72a8c53b)\nverify: ok: 5: C oracle: run 40986003686 (2 jobs at 72a8c53b)\nverify: accepted\n",
+    "stdout_dropped_bytes": 0,
+    "stderr": "",
+    "stderr_dropped_bytes": 0
+  }
+}
