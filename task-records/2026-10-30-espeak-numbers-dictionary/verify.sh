@@ -20,11 +20,17 @@
 #  2. At the commit, c_inventory over a fresh measured configuration reports 0 lines of
 #     C or mixed logic in numbers.c and dictionary.c, and at most 1,126 in total (the
 #     logic left the C sources; it did not move to another C file).
-#  3. A fresh default build passes every CTest (at least 133), and a fresh
+#  3. A fresh default build passes every CTest (at least 131), and a fresh
 #     -DUSE_RUST_CORE=OFF build (the C oracle) passes every CTest.
 #  4. On GitHub's dev, for the commit or a later commit containing it, each workflow has
 #     a successful run with at least this many successful jobs: "Rust port" 7, "CI" 57,
 #     "Windows" 8, "windows-msbuild" 2, "Android" 3, "Dist" 3, "C oracle" 2.
+#
+# Revised on 2026-10-30, and pushed before this Task's result is checked again: the
+# first version required at least 133 CTests of the default build. That count was the
+# MBROLA-on gate build's; this Mac's default build has USE_MBROLA off and runs 131 (no
+# mbrola or rust_mbrola_host test), and Task 11's first result was rejected on it.
+# Nothing else changed.
 set -u
 repo=/Users/jay/pudding/espeak-ng-rs
 fail() { echo "verify: FAIL: $*" >&2; exit 1; }
@@ -75,7 +81,7 @@ build() {
 }
 s=$(build default) || exit 1
 n=$(sed -E 's/.* out of ([0-9]+).*/\1/' <<<"$s")
-[ "$n" -ge 133 ] || fail "default build ran $n CTests, fewer than 133"
+[ "$n" -ge 131 ] || fail "default build ran $n CTests, fewer than 131"
 s2=$(build c-oracle -DUSE_RUST_CORE=OFF) || exit 1
 pass "3: default build $s; C oracle $s2"
 
