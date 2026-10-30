@@ -17,9 +17,8 @@
 # Once Rust defines them, a shared library on Linux would export names such as "voice" and
 # "translator" (a Rust static archive's symbols have default visibility), and a program that
 # defines the same name would take over the engine's copy. So the shared library must export
-# only the public API: espeak_* and espeak_ng_* functions (an upper-case letter after the
-# prefix), the text decoder functions of espeak-ng/encoding.h, and espeak_rs_cli_main for
-# the command-line program.
+# only the public API: what the C engine's own objects export (ESPEAK_API and ESPEAK_NG_API),
+# and espeak_rs_cli_main for the command-line program.
 #
 # What the result must name:
 #   commit: <40 hex>   the last espeak-ng-rs commit of the work
@@ -32,14 +31,26 @@
 #     (__DATA,__data, __DATA,__bss, __DATA,__common or common), and c_inventory still
 #     reports 0 lines of C or mixed logic in both.
 #  3. At the commit, a fresh shared build (-DBUILD_SHARED_LIBS=ON -DUSE_ASYNC=ON
-#     -DUSE_MBROLA=ON) gives a libespeak-ng.dylib that exports only the public API above,
-#     the CLI built against it runs (--version), and the "Rust port" workflow checks the
-#     exports of libespeak-ng.so on Linux.
+#     -DUSE_MBROLA=ON) gives a libespeak-ng.dylib whose exports are exactly the symbols the
+#     espeak-ng library's C objects define with default visibility in a fresh
+#     -DUSE_RUST_CORE=OFF build of the same configuration, plus espeak_rs_cli_main; the CLI
+#     built against it runs (--version); and the "Rust port" workflow checks the exports of
+#     libespeak-ng.so on Linux.
 #  4. A fresh default build passes every CTest (at least 131), and a fresh
 #     -DUSE_RUST_CORE=OFF build (the C oracle) passes every CTest.
 #  5. On GitHub's dev, for the commit or a later commit containing it, each workflow has
 #     a successful run with at least this many successful jobs: "Rust port" 7, "CI" 57,
 #     "Windows" 8, "windows-msbuild" 2, "Android" 3, "Dist" 3, "C oracle" 2.
+#
+# Revised on 2026-10-30, and pushed before this Task's result was handed over: the first
+# version allowed the shared library to export espeak_*, espeak_ng_* and text decoder names
+# and espeak_rs_cli_main only. The C engine also exports GetFileLength, strncpy0 and
+# utf8_in (src/espeak-ng.c, the reference CLI the tests build, declares and calls them),
+# LoadSpectSeq, SpectSeqCreate, SpectSeqDestroy and param_defaults; a library without them
+# failed the reference CLI's link. Criterion 3 now compares with the C engine's own exports
+# instead of a name pattern. (The C oracle's library also exports the bundled ucd-tools and
+# speechPlayer code; neither has an installed header, and the comparison leaves them out.)
+# Nothing else changed.
 set -u
 repo=/Users/jay/pudding/espeak-ng-rs
 fail() { echo "verify: FAIL: $*" >&2; exit 1; }
@@ -89,20 +100,30 @@ for spec in "measured:-DUSE_ASYNC=OFF -DUSE_MBROLA=OFF" "async-mbrola:-DUSE_ASYN
 done
 pass "2: no writable data in the library's or CLI's C objects, and no C logic, in either configuration"
 
-b="$work/shared"
-cmake -S "$work/src" -B "$b" -DUSE_RUST_CORE=ON -DBUILD_SHARED_LIBS=ON -DUSE_ASYNC=ON -DUSE_MBROLA=ON \
-    -DUSE_LIBSONIC=OFF -DUSE_LIBPCAUDIO=OFF >"$b.log" 2>&1 || fail "shared: configure (log $b.log)"
-cmake --build "$b" -j 4 --target espeak-ng espeak-ng-bin >>"$b.log" 2>&1 || fail "shared: build (log $b.log)"
-lib=$(find "$b/src/libespeak-ng" -maxdepth 1 -name 'libespeak-ng*.dylib' -type f | head -1)
+# The symbols a build's library objects define with default visibility.
+api() {
+    find "$1/src" -name '*.c.o' -path '*espeak-ng.dir*' | sort | while read -r o; do
+        nm -m "$o" | awk '!/undefined/ && / external / && !/private external/ {print $NF}'
+    done | sort -u
+}
+for spec in "shared:-DUSE_RUST_CORE=ON" "shared-c:-DUSE_RUST_CORE=OFF"; do
+    name=${spec%%:*}; b="$work/$name"
+    cmake -S "$work/src" -B "$b" ${spec#*:} -DBUILD_SHARED_LIBS=ON -DUSE_ASYNC=ON -DUSE_MBROLA=ON \
+        -DUSE_LIBSONIC=OFF -DUSE_LIBPCAUDIO=OFF >"$b.log" 2>&1 || fail "$name: configure (log $b.log)"
+    cmake --build "$b" -j 4 --target espeak-ng espeak-ng-bin >>"$b.log" 2>&1 || fail "$name: build (log $b.log)"
+done
+lib=$(find "$work/shared/src/libespeak-ng" -maxdepth 1 -name 'libespeak-ng*.dylib' -type f | head -1)
 [ -n "$lib" ] || fail "shared: no libespeak-ng dylib"
-exports=$(nm -gU "$lib" | awk '{print $3}')
-[ "$(wc -l <<<"$exports")" -ge 50 ] || fail "shared: only $(wc -l <<<"$exports") exports; the public API is missing"
-extra=$(grep -vE '^_(espeak_[A-Z]|espeak_ng_[A-Z]|create_text_decoder$|destroy_text_decoder$|text_decoder_[a-z_]+$|espeak_rs_cli_main$)' <<<"$exports")
-[ -z "$extra" ] || fail "shared: the dylib exports more than the public API: $(head -20 <<<"$extra" | tr '\n' ' ')"
-"$b/src/espeak-ng" --version >"$b.version" 2>&1 || fail "shared: the CLI does not run against the library ($(head -3 "$b.version" | tr '\n' ' '))"
+nm -gU "$lib" | awk '{print $3}' | sort -u >"$work/exports.txt"
+{ api "$work/shared-c"; echo _espeak_rs_cli_main; } | sort -u >"$work/c-api.txt"
+[ "$(wc -l <"$work/c-api.txt")" -ge 50 ] || fail "the C engine exports only $(wc -l <"$work/c-api.txt") symbols"
+diff "$work/c-api.txt" "$work/exports.txt" >"$work/exports.diff" \
+    || fail "shared: the dylib's exports differ from the C engine's API (< missing, > extra): $(head -20 "$work/exports.diff" | tr '\n' ' ')"
+"$work/shared/src/espeak-ng" --version >"$work/shared.version" 2>&1 \
+    || fail "shared: the CLI does not run against the library ($(head -3 "$work/shared.version" | tr '\n' ' '))"
 grep -q 'nm -D --defined-only' "$work/src/.github/workflows/rust.yml" \
     || fail "the Rust port workflow does not check the Linux library's exports"
-pass "3: the shared library exports only the public API ($(wc -l <<<"$exports") symbols)"
+pass "3: the shared library exports the C engine's API and the CLI entry ($(wc -l <"$work/exports.txt") symbols)"
 
 build() {
     local name=$1; shift
