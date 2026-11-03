@@ -1,0 +1,6 @@
+Chrome 156.0.8078.80 (headless, own instance)
+FAIL  E16  a 'bitmaprenderer' canvas smaller than its bitmap: the texture holds the whole image (scaled), not a crop of its corner
+pass  E16c  control: an 8x8 canvas with its own 8x8 bitmap shows the whole image
+passed 1 of 2; page errors 0
+browser and server stopped
+exit 0

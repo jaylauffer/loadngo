@@ -6,18 +6,18 @@
           "name": "X8 a representable fraction on a handle is refused; o + 2^-30 is o itself for every object handle (2^24 and up)",
           "pass": false,
           "detail": {
-            "spare": 894635379523586,
+            "spare": 325193583034370,
             "spareBelow2To23": false,
             "sparePlusTinyRepresentable": false,
             "destroySparePlusTiny": {
               "threw": false
             },
-            "object": 894635782176769,
+            "object": 325193985687553,
             "objectPlusTinyIsObject": true,
             "smallestObjectHandle": 16777217,
             "setVisibleObjectPlusHalf": {
               "threw": true,
-              "message": "web3d: 894635782176769.5 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: 325193985687553.5 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
             },
             "x8Value": true,
             "spareStillLive": false
@@ -122,13 +122,13 @@
               null
             ],
             "handles": {
-              "oA": 155192737660929,
-              "oB": 155227097399297,
+              "oA": 676515868049409,
+              "oB": 676550227787777,
               "same": false
             },
             "staleHandleOnB": {
               "threw": true,
-              "message": "web3d: 155192737660929 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 676515868049409 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             "pixelAfter": [
               56,
@@ -142,7 +142,7 @@
           "pass": true,
           "detail": {
             "valid": {
-              "handle": 155227768487937
+              "handle": 676550898876417
             },
             "oneFloatPastTheEnd": {
               "refused": "mesh refused: an array's pointer and length do not lie inside one staging allocation"
@@ -160,7 +160,7 @@
               "refused": "mesh refused: an index is past the last vertex"
             },
             "afterWrongLengthFree": {
-              "handle": 155227768487938
+              "handle": 676550898876418
             },
             "afterFree": {
               "refused": "mesh refused: an array's pointer and length do not lie inside one staging allocation"
@@ -174,7 +174,7 @@
             "hugeAlloc": 0,
             "publicCreateAfter": {
               "threw": false,
-              "value": 155228171141121
+              "value": 676551301529601
             },
             "pixel": [
               56,
@@ -220,7 +220,7 @@
             "glErrorBefore": 0,
             "resizedInGetter": {
               "threw": false,
-              "value": 155230050189313
+              "value": 676553180577793
             },
             "glErrorAfterResize": 0
           }
@@ -248,7 +248,7 @@
             "glErrorBefore": 0,
             "resizedInGetter": {
               "threw": false,
-              "value": 155230050189313
+              "value": 676553180577793
             },
             "glErrorAfterResize": 0
           }
@@ -257,10 +257,10 @@
           "name": "L5 one failed fetch, then the same URL loads; two creates sharing one failed fetch both fail and the next one loads",
           "pass": true,
           "detail": {
-            "first": "web3d: fetching the wasm failed: 503 http://127.0.0.1:5588/flaky/once.wasm",
+            "first": "web3d: fetching the wasm failed: 503 http://127.0.0.1:5641/flaky/once.wasm",
             "second": "created",
-            "raceA": "web3d: fetching the wasm failed: 503 http://127.0.0.1:5588/flaky/race.wasm",
-            "raceB": "web3d: fetching the wasm failed: 503 http://127.0.0.1:5588/flaky/race.wasm",
+            "raceA": "web3d: fetching the wasm failed: 503 http://127.0.0.1:5641/flaky/race.wasm",
+            "raceB": "web3d: fetching the wasm failed: 503 http://127.0.0.1:5641/flaky/race.wasm",
             "third": "created",
             "serverRequests": {
               "once": 2,
@@ -293,7 +293,7 @@
             "memoryBytes": 2148663296,
             "create": {
               "threw": false,
-              "value": 958850911961089
+              "value": 96242164039681
             },
             "nextStagingAt": 2148537056,
             "frame": {

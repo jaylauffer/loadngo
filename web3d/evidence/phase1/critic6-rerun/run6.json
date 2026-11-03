@@ -13,23 +13,23 @@
         "claim": "WEB3D.md \"no handle is issued twice in a page\"; the serial counter is \"shared by every copy of the module\": a same-origin iframe's renderer must not issue a handle the top renderer accepts",
         "pass": true,
         "detail": {
-          "topSerial": 11226,
-          "frameSerial": 11227,
+          "topSerial": 112689,
+          "frameSerial": 112690,
           "top": {
-            "mesh": 12053959933953,
-            "material": 12054228369409,
-            "object": 12054362587137
+            "mesh": 120999026622465,
+            "material": 120999295057921,
+            "object": 120999429275649
           },
           "frame": {
-            "serial": 11227,
-            "mesh": 12055033675777,
-            "material": 12055302111233,
-            "object": 12055436328961
+            "serial": 112690,
+            "mesh": 121000100364289,
+            "material": 121000368799745,
+            "object": 121000503017473
           },
           "sameNumber": false,
           "hideWithTheirs": {
             "threw": true,
-            "message": "web3d: 12055436328961 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            "message": "web3d: 121000503017473 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
           },
           "pixelAfter": [
             56,
@@ -39,7 +39,7 @@
           ],
           "destroyWithTheirMaterial": {
             "threw": true,
-            "message": "web3d: 12055302111233 is not a valid material handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            "message": "web3d: 121000368799745 is not a valid material handle: not live in this renderer (destroyed, never created, or another renderer's)"
           }
         }
       },
@@ -48,38 +48,38 @@
         "claim": "slots.rs: a handle is serial << 33 | kind << 30 | generation << 16 | (index + 1), an exact double below 2^53",
         "pass": false,
         "detail": {
-          "serial": 11228,
+          "serial": 112691,
           "decoded": {
             "mesh": {
-              "serial": 1403,
-              "kind": 4,
+              "serial": 14086,
+              "kind": 3,
               "generation": 2048,
               "index": 1
             },
             "tex": {
-              "serial": 1403,
-              "kind": 4,
+              "serial": 14086,
+              "kind": 3,
               "generation": 4096,
               "index": 1
             },
             "material": {
-              "serial": 1403,
-              "kind": 4,
+              "serial": 14086,
+              "kind": 3,
               "generation": 6144,
               "index": 1
             },
             "object": {
-              "serial": 1403,
-              "kind": 4,
+              "serial": 14086,
+              "kind": 3,
               "generation": 8192,
               "index": 1
             }
           },
           "handles": {
-            "mesh": 12056107417601,
-            "tex": 12056241635329,
-            "material": 12056375853057,
-            "object": 12056510070785
+            "mesh": 121001174106113,
+            "tex": 121001308323841,
+            "material": 121001442541569,
+            "object": 121001576759297
           }
         }
       },
@@ -88,8 +88,8 @@
         "claim": "WEB3D.md \"Handles must be whole numbers from 1 to 2^53-1 ... anything else [is refused] by the Rust side\": every forged value is refused and the object stays drawn",
         "pass": true,
         "detail": {
-          "o": 12057583812609,
-          "ulp": 0.001953125,
+          "o": 121002650501121,
+          "ulp": 0.015625,
           "wrapper": {
             "0": {
               "threw": true,
@@ -97,23 +97,23 @@
             },
             "o + 0.5": {
               "threw": true,
-              "message": "web3d: 12057583812609.5 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: 121002650501121.5 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
             },
             "o - 0.5": {
               "threw": true,
-              "message": "web3d: 12057583812608.5 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: 121002650501120.5 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
             },
             "o + ulp (a fraction a double holds here)": {
               "threw": true,
-              "message": "web3d: 12057583812609.002 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: 121002650501121.02 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
             },
             "o - ulp": {
               "threw": true,
-              "message": "web3d: 12057583812608.998 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: 121002650501120.98 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
             },
             "-o": {
               "threw": true,
-              "message": "web3d: -12057583812609 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: -121002650501121 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
             },
             "-0": {
               "threw": true,
@@ -141,11 +141,11 @@
             },
             "o + 2^53": {
               "threw": true,
-              "message": "web3d: 9019256838553600 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: 9128201905242112 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
             },
             "2o": {
               "threw": true,
-              "message": "web3d: 24115167625218 is not a valid object handle"
+              "message": "web3d: 242005301002242 is not a valid object handle"
             },
             "1e308": {
               "threw": true,
@@ -161,59 +161,59 @@
             },
             "o + 2^33 (next serial)": {
               "threw": true,
-              "message": "web3d: 12066173747201 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 121011240435713 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             "o - 2^33 (previous serial)": {
               "threw": true,
-              "message": "web3d: 12048993878017 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 120994060566529 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             "o + 2^30 (kind 5)": {
               "threw": true,
-              "message": "web3d: 12058657554433 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 121003724242945 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             "o + 2^31 (kind 6)": {
               "threw": true,
-              "message": "web3d: 12059731296257 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 121004797984769 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             "o + 3 * 2^30 (kind 7)": {
               "threw": true,
-              "message": "web3d: 12060805038081 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 121005871726593 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             "o - 4 * 2^30 (kind 0)": {
               "threw": true,
-              "message": "web3d: 12053288845313 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 120998355533825 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             "o - 2^30 (a material handle)": {
               "threw": true,
-              "message": "web3d: 12056510070785 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 121001576759297 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             "mesh handle": {
               "threw": true,
-              "message": "web3d: 12057181159425 is not a valid object handle: it is a mesh handle"
+              "message": "web3d: 121002247847937 is not a valid object handle: it is a mesh handle"
             },
             "o + 2^16 (next generation)": {
               "threw": true,
-              "message": "web3d: 12057583878145 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 121002650566657 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             "o - 1 (index 0)": {
               "threw": true,
-              "message": "web3d: 12057583812608 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 121002650501120 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             "o + 0xfffe (index 65535)": {
               "threw": true,
-              "message": "web3d: 12057583878143 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 121002650566655 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             "o2 + 2^16": {
               "threw": true,
-              "message": "web3d: 12057583878146 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 121002650566658 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             "fround(o)": {
               "threw": true,
-              "message": "web3d: 12057583812608 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 121002650501120 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             "String(o)": {
               "threw": true,
-              "message": "web3d: \"12057583812609\" is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: \"121002650501121\" is not a valid object handle (a whole number from 1 to 2^50 - 1)"
             },
             "new Number(o)": {
               "threw": true,
@@ -221,7 +221,7 @@
             },
             "BigInt(o)": {
               "threw": true,
-              "message": "web3d: 12057583812609n is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: 121002650501121n is not a valid object handle (a whole number from 1 to 2^50 - 1)"
             },
             "[o]": {
               "threw": true,
@@ -283,7 +283,7 @@
           "rawMaterial": {
             "texture NaN": 0,
             "texture 0.5": 0,
-            "texture -0 (read as none)": 12057449594882,
+            "texture -0 (read as none)": 121002516283394,
             "object of mesh + 0.5": 0
           },
           "pixel2": [
@@ -300,40 +300,40 @@
         "pass": true,
         "detail": {
           "a": [
-            12058254901249,
-            12058523336705,
-            12058657554433
+            121003321589761,
+            121003590025217,
+            121003724242945
           ],
           "b": [
-            12059328643073,
-            12059597078529,
-            12059731296257
+            121004395331585,
+            121004663767041,
+            121004797984769
           ],
           "aOnB": [
             {
               "threw": true,
-              "message": "web3d: 12058657554433 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 121003724242945 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             {
               "threw": true,
-              "message": "web3d: 12058523336705 is not a valid material handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 121003590025217 is not a valid material handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             {
               "threw": true,
-              "message": "web3d: 12058254901249 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 121003321589761 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
             }
           ],
           "bOnA": [
             {
               "threw": true,
-              "message": "web3d: 12059731296257 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 121004797984769 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             {
               "threw": true,
-              "message": "web3d: 12059328643073 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 121004395331585 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
             }
           ],
-          "churnMs": 543,
+          "churnMs": 467,
           "churnHandles": 1200,
           "twice": 0,
           "accepted": 0,
@@ -353,8 +353,8 @@
             ]
           ],
           "serials": [
-            11230,
-            11231
+            112693,
+            112694
           ]
         }
       },
@@ -364,21 +364,21 @@
         "pass": true,
         "detail": {
           "serials": [
-            11532,
-            11533
+            112995,
+            112996
           ],
           "copiesDiffer": true,
           "handles": [
-            12382524932097,
-            12383598673921
+            121327591620609,
+            121328665362433
           ],
           "crossMesh": {
             "threw": true,
-            "message": "web3d: 12382524932097 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            "message": "web3d: 121327591620609 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
           },
           "sameCanvasOtherCopy": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)",
           "otherCopyMismatch": "web3d: this canvas's WebGL context has antialias false (ask for antialias: false); a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit",
-          "reloadedSerial": 11535
+          "reloadedSerial": 112998
         }
       },
       {
@@ -485,7 +485,7 @@
           },
           "colourProxy": {
             "threw": false,
-            "value": 12387088334850
+            "value": 121332155023362
           },
           "colourReads": [
             "length",
@@ -496,7 +496,7 @@
           ],
           "meshProxy": {
             "threw": false,
-            "value": 12386819899394
+            "value": 121331886587906
           },
           "fieldReads": [
             "positions",
@@ -834,7 +834,7 @@
           "oldAntialias": true,
           "lostEvent": "lost",
           "attributesWhileLost": null,
-          "createDuringLoss": "web3d: the canvas's WebGL context is lost; create the renderer again once it is restored (this call's onContextRestored is called then)",
+          "createDuringLoss": "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore",
           "restoredEvent": "restored",
           "attributesAfterRestore": true,
           "createAfterRestore": "created",
@@ -847,7 +847,7 @@
         "claim": "WEB3D.md \"A failed create leaves nothing behind ... removes the shim's context-loss listeners, releases the canvas and puts its size back\", for a context lost during instantiation; the error should say the context is lost",
         "pass": true,
         "detail": {
-          "result": "web3d: the canvas's WebGL context is lost; create the renderer again once it is restored (this call's onContextRestored is called then)",
+          "result": "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore",
           "size": [
             20,
             10
@@ -900,18 +900,18 @@
             "10": 16
           },
           "lastOfSlot2": {
-            "serial": 1444,
-            "kind": 2,
+            "serial": 14127,
+            "kind": 1,
             "generation": 10239,
             "index": 2
           },
           "firstRefused": {
             "threw": true,
-            "message": "web3d: 12406549905410 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            "message": "web3d: 121351616593922 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
           },
           "lastOfSlot2Refused": {
             "threw": true,
-            "message": "web3d: 12406684057602 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            "message": "web3d: 121351750746114 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
           },
           "pixel": [
             56,
@@ -958,7 +958,7 @@
             true
           ],
           "createOnDroppedDefault": "web3d: this canvas's WebGL context has antialias false (ask for antialias: false); a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit",
-          "createOnDroppedFalse": "web3d: the canvas's WebGL context is lost; create the renderer again once it is restored (this call's onContextRestored is called then)",
+          "createOnDroppedFalse": "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore",
           "hookAfterFailedCreates": 0,
           "freshAfter": "created"
         }

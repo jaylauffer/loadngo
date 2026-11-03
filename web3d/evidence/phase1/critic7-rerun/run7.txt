@@ -3,7 +3,7 @@ pass  LC2 A lost renderer cannot change the canvas that a new renderer (made bes
 pass  LC3 A loss whose event arrives while the module instantiates: the create says lost, the canvas is restorable and the next create draws
 pass  LC3b A create that fails does not call the page's onContextLost hook (it has no renderer to dispose)
 pass  LC4 A loss during init: the create says lost (not a shader failure), the canvas is restorable, the next create draws with getError 0
-pass  LC5 A loss whose event is still pending when the renderer is disposed stays restorable (one preventDefault), and the one-shot listener does not outlive it
+FAIL  LC5 A loss whose event is still pending when the renderer is disposed stays restorable (one preventDefault), and the one-shot listener does not outlive it
 pass  LC6 Dispose while lost, then restore: a new renderer draws, getError 0
 pass  LC7 Once the context is lost (isContextLost true, before the event), frame() returns false, as WEB3D.md says, consistent with r.lost and the creates
 pass  LC8 After a loss and restore, a new renderer's first texture is accepted and draws
@@ -22,5 +22,5 @@ pass  H2 A slot serves 2,048 generations then retires; no handle is issued twice
 pass  W1 The wasm option takes another realm's Module, URL, Response, bytes and ArrayBuffer, and draws
 pass  W2 Anything else is refused before it is used (no toString runs): an object with toString, a String object, a Proxy over a Response, a Promise, a Blob, a symbol, a number
 seconds 1.6
-23 passed; failed: []; renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); console messages 24
+22 passed; failed: ["LC5"]; renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); console messages 18
 browser and servers stopped

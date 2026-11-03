@@ -27,4 +27,9 @@ The runner takes two ports, the one given and the next.
 
 ## Results
 
-All 23 probes pass: LC1-LC8 (LC3b included), D1, D2, T1-T5, S1-S3, H1, H2, W1 and W2 (`run7.txt`).
+After the eighth critic's round, 22 of the 23 probes pass (`run7.txt`). LC5 fails on one detail,
+by design now: it expects a second loss on the canvas not to be cancelled ("the one-shot listener
+does not outlive it"). Since the eighth round, one loss controller a canvas cancels every lost event
+for the canvas's life, so that a canvas lost while no renderer holds it can still be restored
+(`docs/WEB3D.md`, the loss controller). The rest of LC5 holds: the create during the loss says
+"lost", the default was prevented, the restore worked, a new renderer drew, `getError` was 0.

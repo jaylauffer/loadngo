@@ -68,5 +68,5 @@ EDGES:
   resize to 2^31+ (u32 > i32): viewport import received undefined 
 stats, cpu timing off: [null,2.5,4,1,1,0,0,0]
 clock readings in a frame with timing off: 0
-clock readings in a frame with timing on: 2 stats [0.003124999999997158,2.5,6,1,1,0,0,0]
+clock readings in a frame with timing on: 2 stats [0.004457999999999629,2.5,6,1,1,0,0,0]
 destroy made: {"vertex_array_delete":2,"buffer_delete":9,"program_delete":3,"query_delete":8}

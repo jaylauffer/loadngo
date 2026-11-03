@@ -8,7 +8,7 @@ pass  X6 a renderer on a canvas another renderer used draws as on a fresh canvas
 pass  X7 an argument whose valueOf disposes the renderer does not run the export on the freed renderer
 FAIL  X8 odd handle values are all refused by the wrapper, and the object stays drawn
 unknown parameter: accepted; wrong type for a real flag: refused: cdpSession.send: Protocol error (HeapProfiler.startSampling): Invalid parameters
-cputime=1, with the flags: 601 frames, page scripts 178.1 sampled bytes a frame (gate limit 1)
+cputime=1, with the flags: 601 frames, page scripts 175.97 sampled bytes a frame (gate limit 1)
 cputime=1, without the flags: 601 frames, page scripts 0 sampled bytes a frame (gate limit 1)
-cputime=1, with the flags again: 601 frames, page scripts 22.92 sampled bytes a frame (gate limit 1)
+cputime=1, with the flags again: 601 frames, page scripts 20.57 sampled bytes a frame (gate limit 1)
 browser and server stopped

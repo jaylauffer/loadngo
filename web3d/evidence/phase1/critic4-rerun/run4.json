@@ -7,14 +7,14 @@
         "pass": true,
         "detail": {
           "handles": {
-            "left": 116905922789377,
-            "right": 116905922789378,
-            "red": 116906191224833,
-            "green": 116906191224834
+            "left": 410348825870337,
+            "right": 410348825870338,
+            "red": 410349094305793,
+            "green": 410349094305794
           },
           "swappedCreateObject": {
             "threw": true,
-            "message": "web3d: 116906191224834 is not a valid mesh handle: it is a material handle"
+            "message": "web3d: 410349094305794 is not a valid mesh handle: it is a material handle"
           },
           "rightHalfAfterSwap": [
             0,
@@ -28,15 +28,15 @@
           ],
           "destroyMaterialWithMeshHandle": {
             "threw": true,
-            "message": "web3d: 116905922789378 is not a valid material handle: it is a mesh handle"
+            "message": "web3d: 410348825870338 is not a valid material handle: it is a mesh handle"
           },
           "greenStillUsable": {
             "threw": false,
-            "value": 116906325442561
+            "value": 410349228523521
           },
           "setVisibleWithMeshHandle": {
             "threw": true,
-            "message": "web3d: 116905922789377 is not a valid object handle: it is a mesh handle"
+            "message": "web3d: 410348825870337 is not a valid object handle: it is a mesh handle"
           },
           "rightHalfAfterHide": [
             0,
@@ -49,7 +49,7 @@
         "name": "X2 a handle from another renderer is refused",
         "pass": true,
         "detail": {
-          "ownObjectHandle": 116907399184385,
+          "ownObjectHandle": 410350302265345,
           "setVisible": {
             "threw": true,
             "message": "web3d: undefined is not a valid object handle (a whole number from 1 to 2^50 - 1)"
@@ -145,7 +145,7 @@
         "name": "X5 a failed wasm fetch does not poison every later create",
         "pass": true,
         "detail": {
-          "first": "web3d: fetching the wasm failed: 404 http://127.0.0.1:5587/web3d/pkg/missing.wasm",
+          "first": "web3d: fetching the wasm failed: 404 http://127.0.0.1:5639/web3d/pkg/missing.wasm",
           "second": "created"
         }
       },
@@ -208,7 +208,7 @@
           },
           "bigint": {
             "threw": true,
-            "message": "web3d: 116918136602625n is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            "message": "web3d: 410361039683585n is not a valid object handle (a whole number from 1 to 2^50 - 1)"
           },
           "boolean": {
             "threw": true,
@@ -224,7 +224,7 @@
           },
           "string": {
             "threw": true,
-            "message": "web3d: \"116918136602625\" is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            "message": "web3d: \"410361039683585\" is not a valid object handle (a whole number from 1 to 2^50 - 1)"
           },
           "nearlyWhole": {
             "threw": false
@@ -235,7 +235,7 @@
           },
           "overInt32": {
             "threw": true,
-            "message": "web3d: 116920284086273 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            "message": "web3d: 410363187167233 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
           },
           "infinity": {
             "threw": true,
@@ -261,7 +261,7 @@
       "label": "with the flags",
       "flags": true,
       "frames": 601,
-      "pageScriptBytesPerFrame": 178.1
+      "pageScriptBytesPerFrame": 175.97
     },
     {
       "label": "without the flags",
@@ -273,7 +273,7 @@
       "label": "with the flags again",
       "flags": true,
       "frames": 601,
-      "pageScriptBytesPerFrame": 22.92
+      "pageScriptBytesPerFrame": 20.57
     }
   ]
 }

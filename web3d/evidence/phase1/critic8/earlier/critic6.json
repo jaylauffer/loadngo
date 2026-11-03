@@ -1,0 +1,1013 @@
+{
+  "browser": "156.0.8078.80",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+  "served": {
+    "/count/mod.wasm": 1,
+    "/count/garbage.wasm": 2,
+    "/count/resp.wasm": 1
+  },
+  "result": {
+    "probes": [
+      {
+        "id": "G6",
+        "claim": "WEB3D.md \"no handle is issued twice in a page\"; the serial counter is \"shared by every copy of the module\": a same-origin iframe's renderer must not issue a handle the top renderer accepts",
+        "pass": true,
+        "detail": {
+          "topSerial": 54951,
+          "frameSerial": 54952,
+          "top": {
+            "mesh": 59003321188353,
+            "material": 59003589623809,
+            "object": 59003723841537
+          },
+          "frame": {
+            "serial": 54952,
+            "mesh": 59004394930177,
+            "material": 59004663365633,
+            "object": 59004797583361
+          },
+          "sameNumber": false,
+          "hideWithTheirs": {
+            "threw": true,
+            "message": "web3d: 59004797583361 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+          },
+          "pixelAfter": [
+            56,
+            255,
+            56,
+            255
+          ],
+          "destroyWithTheirMaterial": {
+            "threw": true,
+            "message": "web3d: 59004663365633 is not a valid material handle: not live in this renderer (destroyed, never created, or another renderer's)"
+          }
+        }
+      },
+      {
+        "id": "G1",
+        "claim": "slots.rs: a handle is serial << 33 | kind << 30 | generation << 16 | (index + 1), an exact double below 2^53",
+        "pass": false,
+        "detail": {
+          "serial": 54953,
+          "decoded": {
+            "mesh": {
+              "serial": 6869,
+              "kind": 1,
+              "generation": 2048,
+              "index": 1
+            },
+            "tex": {
+              "serial": 6869,
+              "kind": 1,
+              "generation": 4096,
+              "index": 1
+            },
+            "material": {
+              "serial": 6869,
+              "kind": 1,
+              "generation": 6144,
+              "index": 1
+            },
+            "object": {
+              "serial": 6869,
+              "kind": 1,
+              "generation": 8192,
+              "index": 1
+            }
+          },
+          "handles": {
+            "mesh": 59005468672001,
+            "tex": 59005602889729,
+            "material": 59005737107457,
+            "object": 59005871325185
+          }
+        }
+      },
+      {
+        "id": "G2",
+        "claim": "WEB3D.md \"Handles must be whole numbers from 1 to 2^53-1 ... anything else [is refused] by the Rust side\": every forged value is refused and the object stays drawn",
+        "pass": true,
+        "detail": {
+          "o": 59006945067009,
+          "ulp": 0.0078125,
+          "wrapper": {
+            "0": {
+              "threw": true,
+              "message": "web3d: 0 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "o + 0.5": {
+              "threw": true,
+              "message": "web3d: 59006945067009.5 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "o - 0.5": {
+              "threw": true,
+              "message": "web3d: 59006945067008.5 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "o + ulp (a fraction a double holds here)": {
+              "threw": true,
+              "message": "web3d: 59006945067009.01 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "o - ulp": {
+              "threw": true,
+              "message": "web3d: 59006945067008.99 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "-o": {
+              "threw": true,
+              "message": "web3d: -59006945067009 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "-0": {
+              "threw": true,
+              "message": "web3d: -0 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "NaN": {
+              "threw": true,
+              "message": "web3d: NaN is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "Infinity": {
+              "threw": true,
+              "message": "web3d: Infinity is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "-Infinity": {
+              "threw": true,
+              "message": "web3d: -Infinity is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "2^53": {
+              "threw": true,
+              "message": "web3d: 9007199254740992 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "2^53 + 2": {
+              "threw": true,
+              "message": "web3d: 9007199254740994 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "o + 2^53": {
+              "threw": true,
+              "message": "web3d: 9066206199808000 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "2o": {
+              "threw": true,
+              "message": "web3d: 118013890134018 is not a valid object handle"
+            },
+            "1e308": {
+              "threw": true,
+              "message": "web3d: 1e+308 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "2^-1074": {
+              "threw": true,
+              "message": "web3d: 5e-324 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "MAX_SAFE_INTEGER": {
+              "threw": true,
+              "message": "web3d: 9007199254740991 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "o + 2^33 (next serial)": {
+              "threw": true,
+              "message": "web3d: 59015535001601 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            },
+            "o - 2^33 (previous serial)": {
+              "threw": true,
+              "message": "web3d: 58998355132417 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            },
+            "o + 2^30 (kind 5)": {
+              "threw": true,
+              "message": "web3d: 59008018808833 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            },
+            "o + 2^31 (kind 6)": {
+              "threw": true,
+              "message": "web3d: 59009092550657 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            },
+            "o + 3 * 2^30 (kind 7)": {
+              "threw": true,
+              "message": "web3d: 59010166292481 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            },
+            "o - 4 * 2^30 (kind 0)": {
+              "threw": true,
+              "message": "web3d: 59002650099713 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            },
+            "o - 2^30 (a material handle)": {
+              "threw": true,
+              "message": "web3d: 59005871325185 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            },
+            "mesh handle": {
+              "threw": true,
+              "message": "web3d: 59006542413825 is not a valid object handle: it is a mesh handle"
+            },
+            "o + 2^16 (next generation)": {
+              "threw": true,
+              "message": "web3d: 59006945132545 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            },
+            "o - 1 (index 0)": {
+              "threw": true,
+              "message": "web3d: 59006945067008 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            },
+            "o + 0xfffe (index 65535)": {
+              "threw": true,
+              "message": "web3d: 59006945132543 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            },
+            "o2 + 2^16": {
+              "threw": true,
+              "message": "web3d: 59006945132546 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            },
+            "fround(o)": {
+              "threw": true,
+              "message": "web3d: 59006945067008 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            },
+            "String(o)": {
+              "threw": true,
+              "message": "web3d: \"59006945067009\" is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "new Number(o)": {
+              "threw": true,
+              "message": "web3d: an object is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "BigInt(o)": {
+              "threw": true,
+              "message": "web3d: 59006945067009n is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "[o]": {
+              "threw": true,
+              "message": "web3d: an Array is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "{ valueOf }": {
+              "threw": true,
+              "message": "web3d: an object is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "fround(o) equals o": false
+          },
+          "pixel": [
+            56,
+            255,
+            56,
+            255
+          ],
+          "glError": 0
+        }
+      },
+      {
+        "id": "G3",
+        "claim": "web.rs handle_in: a raw export refuses every number that is not a whole number from 1 to below 2^53 naming a live handle",
+        "pass": true,
+        "detail": {
+          "raw": {
+            "0": 1,
+            "o + 0.5": 1,
+            "o - 0.5": 1,
+            "o + ulp (a fraction a double holds here)": 1,
+            "o - ulp": 1,
+            "-o": 1,
+            "-0": 1,
+            "NaN": 1,
+            "Infinity": 1,
+            "-Infinity": 1,
+            "2^53": 1,
+            "2^53 + 2": 1,
+            "o + 2^53": 1,
+            "2o": 1,
+            "1e308": 1,
+            "2^-1074": 1,
+            "MAX_SAFE_INTEGER": 1,
+            "o + 2^33 (next serial)": 1,
+            "o - 2^33 (previous serial)": 1,
+            "o + 2^30 (kind 5)": 1,
+            "o + 2^31 (kind 6)": 1,
+            "o + 3 * 2^30 (kind 7)": 1,
+            "o - 4 * 2^30 (kind 0)": 1,
+            "o - 2^30 (a material handle)": 1,
+            "mesh handle": 1,
+            "o + 2^16 (next generation)": 1,
+            "o - 1 (index 0)": 1,
+            "o + 0xfffe (index 65535)": 1,
+            "o2 + 2^16": 1,
+            "fround(o)": 1,
+            "control": 0
+          },
+          "rawMaterial": {
+            "texture NaN": 0,
+            "texture 0.5": 0,
+            "texture -0 (read as none)": 59006810849282,
+            "object of mesh + 0.5": 0
+          },
+          "pixel2": [
+            56,
+            255,
+            56,
+            255
+          ]
+        }
+      },
+      {
+        "id": "G4",
+        "claim": "WEB3D.md \"another renderer's handle, live or disposed, is refused\"; \"no two renderers in a page issue the same handle\": two live renderers refuse each other's handles, and 1,200 handles from 300 disposed renderers are issued once each and refused by both",
+        "pass": true,
+        "detail": {
+          "a": [
+            59007616155649,
+            59007884591105,
+            59008018808833
+          ],
+          "b": [
+            59008689897473,
+            59008958332929,
+            59009092550657
+          ],
+          "aOnB": [
+            {
+              "threw": true,
+              "message": "web3d: 59008018808833 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            },
+            {
+              "threw": true,
+              "message": "web3d: 59007884591105 is not a valid material handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            },
+            {
+              "threw": true,
+              "message": "web3d: 59007616155649 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            }
+          ],
+          "bOnA": [
+            {
+              "threw": true,
+              "message": "web3d: 59009092550657 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            },
+            {
+              "threw": true,
+              "message": "web3d: 59008689897473 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            }
+          ],
+          "churnMs": 463,
+          "churnHandles": 1200,
+          "twice": 0,
+          "accepted": 0,
+          "acceptedSamples": [],
+          "pixels": [
+            [
+              56,
+              255,
+              56,
+              255
+            ],
+            [
+              56,
+              255,
+              56,
+              255
+            ]
+          ],
+          "serials": [
+            54955,
+            54956
+          ]
+        }
+      },
+      {
+        "id": "G5",
+        "claim": "WEB3D.md: the serial comes from \"a page-wide counter, shared by every copy of the module, that never repeats\"; canvas ownership and context settings are shared too",
+        "pass": true,
+        "detail": {
+          "serials": [
+            55257,
+            55258
+          ],
+          "copiesDiffer": true,
+          "handles": [
+            59331886186497,
+            59332959928321
+          ],
+          "crossMesh": {
+            "threw": true,
+            "message": "web3d: 59331886186497 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
+          },
+          "sameCanvasOtherCopy": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)",
+          "otherCopyMismatch": "web3d: this canvas's WebGL context has antialias false (ask for antialias: false); a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit",
+          "reloadedSerial": 55260
+        }
+      },
+      {
+        "id": "G7",
+        "claim": "WEB3D.md \"an Array's length and each of its elements is read once\"; \"no valueOf runs\"; re-entrancy refused; non-finite values refused by the Rust side",
+        "pass": true,
+        "detail": {
+          "proxy": {
+            "threw": false
+          },
+          "proxyReads": [
+            "length",
+            "0",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "10",
+            "11",
+            "12",
+            "13",
+            "14",
+            "15"
+          ],
+          "proxyReadsExact": true,
+          "accessor": {
+            "threw": false
+          },
+          "accessorReads": 1,
+          "hole": {
+            "threw": true,
+            "message": "web3d: matrix[7] must be a number, not undefined"
+          },
+          "elementCallsFrame": {
+            "threw": true,
+            "message": "web3d: a renderer method was called while the renderer was reading another call's arguments (from a getter, valueOf or a Proxy); call it afterwards"
+          },
+          "elementDisposes": {
+            "threw": true,
+            "message": "web3d: a renderer method was called while the renderer was reading another call's arguments (from a getter, valueOf or a Proxy); call it afterwards"
+          },
+          "liveAfterDispose": true,
+          "elementThrows": {
+            "threw": true,
+            "message": "boom"
+          },
+          "usableAfterThrow": {
+            "threw": false
+          },
+          "nanElement": {
+            "threw": true,
+            "message": "web3d: transform refused: every element must be finite"
+          },
+          "bigElement": {
+            "threw": true,
+            "message": "web3d: transform refused: every element must be finite"
+          },
+          "lookAtNaN": {
+            "threw": true,
+            "message": "web3d: camera refused: eye, target and up must be finite"
+          },
+          "colourNaN": {
+            "threw": true,
+            "message": "web3d: material refused: every value must be finite"
+          },
+          "colourHuge": {
+            "threw": true,
+            "message": "web3d: material refused: every value must be finite"
+          },
+          "keyHuge": {
+            "threw": true,
+            "message": "web3d: light refused: colour and intensity must be finite"
+          },
+          "ambientNaN": {
+            "threw": true,
+            "message": "web3d: light refused: colours and intensity must be finite"
+          },
+          "clearInf": {
+            "threw": true,
+            "message": "web3d: clear colour refused: every component must be finite"
+          },
+          "float64": {
+            "threw": false
+          },
+          "int32": {
+            "threw": false
+          },
+          "bigint": {
+            "threw": true,
+            "message": "web3d: matrix must hold 16 numbers, not BigInt64Array of 16"
+          },
+          "detached": {
+            "threw": true,
+            "message": "web3d: matrix must hold 16 numbers, not Float32Array of 0"
+          },
+          "arrayLike": {
+            "threw": true,
+            "message": "web3d: matrix must be an Array or typed array of 16 numbers, not an object"
+          },
+          "colourProxy": {
+            "threw": false,
+            "value": 59336449589250
+          },
+          "colourReads": [
+            "length",
+            "0",
+            "1",
+            "2",
+            "3"
+          ],
+          "meshProxy": {
+            "threw": false,
+            "value": 59336181153794
+          },
+          "fieldReads": [
+            "positions",
+            "normals",
+            "uvs",
+            "indices",
+            "joints",
+            "weights",
+            "morphTargets"
+          ],
+          "targetReads": [
+            "length",
+            "0"
+          ],
+          "pixel": [
+            56,
+            255,
+            56,
+            255
+          ],
+          "glError": 0
+        }
+      },
+      {
+        "id": "G8a",
+        "claim": "createTexture: plain images, ImageData, closed bitmaps, broken and cross-origin images are uploaded or refused cleanly (no GL error)",
+        "pass": false,
+        "detail": {
+          "srcset": {
+            "naturalWidth": 4,
+            "naturalHeight": 4,
+            "label": "img srcset 2x, 8x8 bitmap",
+            "create": "web3d: an <img> is not accepted as a texture source, because its reported size can differ from the pixels WebGL uploads; decode it first with createImageBitmap(source, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })",
+            "errorAfterCreate": 0
+          },
+          "plainImage": {
+            "naturalWidth": 8,
+            "label": "img 8x8",
+            "create": "web3d: an <img> is not accepted as a texture source, because its reported size can differ from the pixels WebGL uploads; decode it first with createImageBitmap(source, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })",
+            "errorAfterCreate": 0
+          },
+          "videoFrameLarger": {
+            "displayWidth": 8,
+            "codedWidth": 4,
+            "label": "VideoFrame coded 4x4, display 8x8",
+            "create": "created",
+            "errorAfterCreate": 0,
+            "quadrants": [
+              [
+                255,
+                56,
+                56
+              ],
+              [
+                56,
+                255,
+                56
+              ],
+              [
+                56,
+                56,
+                255
+              ],
+              [
+                255,
+                255,
+                255
+              ]
+            ],
+            "errorAfterFrame": 0
+          },
+          "videoFrameSmaller": {
+            "displayWidth": 2,
+            "codedWidth": 4,
+            "label": "VideoFrame coded 4x4, display 2x2",
+            "create": "created",
+            "errorAfterCreate": 0,
+            "quadrants": [
+              [
+                255,
+                56,
+                56
+              ],
+              [
+                56,
+                255,
+                56
+              ],
+              [
+                56,
+                56,
+                255
+              ],
+              [
+                255,
+                255,
+                255
+              ]
+            ],
+            "errorAfterFrame": 0
+          },
+          "videoFrame": {
+            "label": "VideoFrame 4x4",
+            "create": "created",
+            "errorAfterCreate": 0,
+            "quadrants": [
+              [
+                255,
+                56,
+                56
+              ],
+              [
+                56,
+                255,
+                56
+              ],
+              [
+                56,
+                56,
+                255
+              ],
+              [
+                255,
+                255,
+                255
+              ]
+            ],
+            "errorAfterFrame": 0
+          },
+          "closedBitmap": {
+            "label": "closed ImageBitmap",
+            "create": "web3d: texture is 0x0; this GPU allows 1 to 16384 pixels a side (resize it first, for example with createImageBitmap's resizeWidth)",
+            "errorAfterCreate": 0
+          },
+          "brokenImage": {
+            "label": "broken image",
+            "create": "web3d: an <img> is not accepted as a texture source, because its reported size can differ from the pixels WebGL uploads; decode it first with createImageBitmap(source, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })",
+            "errorAfterCreate": 0
+          },
+          "imageData": {
+            "label": "ImageData 4x4",
+            "create": "created",
+            "errorAfterCreate": 0,
+            "quadrants": [
+              [
+                255,
+                56,
+                56
+              ],
+              [
+                56,
+                255,
+                56
+              ],
+              [
+                56,
+                56,
+                255
+              ],
+              [
+                255,
+                255,
+                255
+              ]
+            ],
+            "errorAfterFrame": 0
+          },
+          "crossOrigin": {
+            "label": "cross-origin image, no CORS",
+            "create": "web3d: an <img> is not accepted as a texture source, because its reported size can differ from the pixels WebGL uploads; decode it first with createImageBitmap(source, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })",
+            "errorAfterCreate": 0
+          }
+        }
+      },
+      {
+        "id": "G8b",
+        "claim": "web3d.js header and WEB3D.md: a texture is made at the size the wrapper reads, so the upload fits it; an <img> with a srcset density: naturalWidth against the bitmap WebGL uploads",
+        "pass": true,
+        "detail": {
+          "naturalWidth": 4,
+          "naturalHeight": 4,
+          "label": "img srcset 2x, 8x8 bitmap",
+          "create": "web3d: an <img> is not accepted as a texture source, because its reported size can differ from the pixels WebGL uploads; decode it first with createImageBitmap(source, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })",
+          "errorAfterCreate": 0
+        }
+      },
+      {
+        "id": "G8c",
+        "claim": "the same for a VideoFrame whose display size is not its coded size (displayWidth is what the wrapper reads)",
+        "pass": true,
+        "detail": {
+          "larger": {
+            "displayWidth": 8,
+            "codedWidth": 4,
+            "label": "VideoFrame coded 4x4, display 8x8",
+            "create": "created",
+            "errorAfterCreate": 0,
+            "quadrants": [
+              [
+                255,
+                56,
+                56
+              ],
+              [
+                56,
+                255,
+                56
+              ],
+              [
+                56,
+                56,
+                255
+              ],
+              [
+                255,
+                255,
+                255
+              ]
+            ],
+            "errorAfterFrame": 0
+          },
+          "smaller": {
+            "displayWidth": 2,
+            "codedWidth": 4,
+            "label": "VideoFrame coded 4x4, display 2x2",
+            "create": "created",
+            "errorAfterCreate": 0,
+            "quadrants": [
+              [
+                255,
+                56,
+                56
+              ],
+              [
+                56,
+                255,
+                56
+              ],
+              [
+                56,
+                56,
+                255
+              ],
+              [
+                255,
+                255,
+                255
+              ]
+            ],
+            "errorAfterFrame": 0
+          },
+          "same": {
+            "label": "VideoFrame 4x4",
+            "create": "created",
+            "errorAfterCreate": 0,
+            "quadrants": [
+              [
+                255,
+                56,
+                56
+              ],
+              [
+                56,
+                255,
+                56
+              ],
+              [
+                56,
+                56,
+                255
+              ],
+              [
+                255,
+                255,
+                255
+              ]
+            ],
+            "errorAfterFrame": 0
+          }
+        }
+      },
+      {
+        "id": "G9a",
+        "claim": "WEB3D.md (A frame, step 2 and Shading): opaque draws rely on a depth buffer; a page-made context without one should be refused like one with the wrong antialias, or the depth test silently does nothing",
+        "pass": true,
+        "detail": {
+          "pageDepth": false,
+          "noDepth": "web3d: this canvas's WebGL context has no depth buffer (web3d needs one); a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit",
+          "webgl": {
+            "first": "web3d: WebGL2 is not available here, or this canvas already has another kind of context",
+            "second": "web3d: WebGL2 is not available here, or this canvas already has another kind of context",
+            "size": [
+              20,
+              10
+            ]
+          },
+          "2d": {
+            "first": "web3d: WebGL2 is not available here, or this canvas already has another kind of context",
+            "second": "web3d: WebGL2 is not available here, or this canvas already has another kind of context",
+            "size": [
+              20,
+              10
+            ]
+          }
+        }
+      },
+      {
+        "id": "G9b",
+        "claim": "a page-made WebGL1 or 2d context is refused with a clear message, the canvas is not left claimed, and its size is kept",
+        "pass": true,
+        "detail": {
+          "webgl": {
+            "first": "web3d: WebGL2 is not available here, or this canvas already has another kind of context",
+            "second": "web3d: WebGL2 is not available here, or this canvas already has another kind of context",
+            "size": [
+              20,
+              10
+            ]
+          },
+          "2d": {
+            "first": "web3d: WebGL2 is not available here, or this canvas already has another kind of context",
+            "second": "web3d: WebGL2 is not available here, or this canvas already has another kind of context",
+            "size": [
+              20,
+              10
+            ]
+          }
+        }
+      },
+      {
+        "id": "G9c",
+        "claim": "WEB3D.md Context loss: \"every create throws\" while lost, and \"create a new one after onContextRestored\": with the default antialias, a create during the loss must say the context is lost, and the documented recovery must then work",
+        "pass": true,
+        "detail": {
+          "oldAntialias": true,
+          "lostEvent": "lost",
+          "attributesWhileLost": null,
+          "createDuringLoss": "web3d: the canvas's WebGL context is lost; create the renderer again once it is restored (this call's onContextRestored is called then)",
+          "restoredEvent": "restored",
+          "attributesAfterRestore": true,
+          "createAfterRestore": "created",
+          "thenAskingFalse": "web3d: this canvas's WebGL context has antialias true (ask for antialias: true); a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit",
+          "thenAskingTrue": "created"
+        }
+      },
+      {
+        "id": "G10",
+        "claim": "WEB3D.md \"A failed create leaves nothing behind ... removes the shim's context-loss listeners, releases the canvas and puts its size back\", for a context lost during instantiation; the error should say the context is lost",
+        "pass": true,
+        "detail": {
+          "result": "web3d: the canvas's WebGL context is lost; create the renderer again once it is restored (this call's onContextRestored is called then)",
+          "size": [
+            20,
+            10
+          ],
+          "hookCallsAfterRealLoss": 0,
+          "hookCallsAfterSyntheticEvent": 0,
+          "laterCreate": "created",
+          "errorSaysLost": true
+        }
+      },
+      {
+        "id": "G11",
+        "claim": "WEB3D.md \"The compiled module is cached per URL, and a failure is not cached\": one fetch for a URL used three times (one spelt differently); a module that fails to compile is fetched again",
+        "pass": true,
+        "detail": {
+          "before": {},
+          "first": "created",
+          "second": "created",
+          "sameHref": "created",
+          "garbage1": "WebAssembly.compileStreaming(): expected magic word 00 61 73 6d, found 6e 6f 74 20 @+0",
+          "garbage2": "WebAssembly.compileStreaming(): expected magic word 00 61 73 6d, found 6e 6f 74 20 @+0",
+          "object": "web3d: the wasm option must be a URL (a string or URL), a Response, bytes or a WebAssembly.Module, not an object",
+          "toStringCalls": 0,
+          "response1": "created",
+          "response2": "Failed to execute 'compile' on 'WebAssembly': Cannot compile WebAssembly.Module from an already read Response",
+          "after": {
+            "/count/mod.wasm": 1,
+            "/count/garbage.wasm": 2,
+            "/count/resp.wasm": 1
+          }
+        }
+      },
+      {
+        "id": "G12",
+        "claim": "slots.rs: \"Each slot serves 16,384 values before it retires\"; no handle is issued twice; a retired slot's handles stay refused",
+        "pass": false,
+        "detail": {
+          "ms": 7,
+          "issued": 16400,
+          "twice": 0,
+          "byIndex": {
+            "2": 2048,
+            "3": 2048,
+            "4": 2048,
+            "5": 2048,
+            "6": 2048,
+            "7": 2048,
+            "8": 2048,
+            "9": 2048,
+            "10": 16
+          },
+          "lastOfSlot2": {
+            "serial": 6909,
+            "kind": 7,
+            "generation": 10239,
+            "index": 2
+          },
+          "firstRefused": {
+            "threw": true,
+            "message": "web3d: 59355911159810 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+          },
+          "lastOfSlot2Refused": {
+            "threw": true,
+            "message": "web3d: 59356045312002 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+          },
+          "pixel": [
+            56,
+            255,
+            56,
+            255
+          ],
+          "keptLive": true
+        }
+      },
+      {
+        "id": "G13",
+        "claim": "no limit of live renderers but the browser's: 24 live renderers are all created; the live ones draw; failed creates on a dropped context leave no listener; a new canvas works afterwards",
+        "pass": true,
+        "detail": {
+          "created": 24,
+          "lost": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "errors": [],
+          "drawnLive": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "createOnDroppedDefault": "web3d: this canvas's WebGL context has antialias false (ask for antialias: false); a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit",
+          "createOnDroppedFalse": "web3d: the canvas's WebGL context is lost; create the renderer again once it is restored (this call's onContextRestored is called then)",
+          "hookAfterFailedCreates": 0,
+          "freshAfter": "created"
+        }
+      }
+    ],
+    "passed": 14,
+    "failed": [
+      "G1",
+      "G8a",
+      "G12"
+    ]
+  },
+  "messages": [
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost."
+  ]
+}

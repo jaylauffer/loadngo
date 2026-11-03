@@ -5,7 +5,7 @@ to WebAssembly, and drawing through WebGL2. It is built for small scenes with sk
 morph-targeted characters, on GPUs as slow as a Raspberry Pi 5's V3D 7.1, at 30 fps. The application
 loads its data with three.js, so matrices and light units follow three.js r180.
 
-**Status:** phase 1 of 5, the skeleton, is built (2026-11-03) and has been through seven critic
+**Status:** phase 1 of 5, the skeleton, is built (2026-11-03) and has been through eight critic
 rounds. It draws a procedural test scene and reports fps, GPU ms and CPU ms.
 
 **Sources.** Each figure below names where it comes from:
@@ -90,7 +90,7 @@ JS (`web3d.js`). Colours are linear, matrices column-major.
 | --- | --- |
 | `createRenderer(canvas, { width, height, antialias, cpuTiming, wasm, onContextLost, onContextRestored })` | One renderer per canvas: a second is refused while the first is live, since both would share one WebGL context. A canvas keeps its first WebGL context and that context's antialias setting, whoever made it, so a renderer must ask for the antialias the context has, or is refused |
 | `createMesh({ positions, normals, uvs, indices, joints, weights, morphTargets })` | One glTF primitive |
-| `createTexture(source, { srgb, mipmaps, wrapS, wrapT })` | From an `ImageBitmap`, canvas, `OffscreenCanvas`, `ImageData` or `VideoFrame`, each sized through built-in getters (a `VideoFrame` by its visible rectangle, turned by its rotation). An `<img>` or `<video>` is refused, since its reported size can differ from the pixels WebGL uploads: decode it with `createImageBitmap`, which also decodes WebP and JPEG. A source whose pixels still do not fit the size it reports (a canvas with a `bitmaprenderer` context) is refused by the check after the upload. Wrap modes `'repeat'`, `'clamp'` or `'mirror'` |
+| `createTexture(source, { srgb, mipmaps, wrapS, wrapT })` | From an `ImageBitmap`, canvas, `OffscreenCanvas`, `ImageData` or `VideoFrame`, each sized through built-in getters (a `VideoFrame` by its visible rectangle, turned by its rotation). An `<img>` or `<video>` is refused, since its reported size can differ from the pixels WebGL uploads: decode it with `createImageBitmap`, which also decodes WebP and JPEG. A canvas with a `bitmaprenderer` context is refused too, since the bitmap it shows need not be its size: pass the `ImageBitmap` itself. (Telling it apart asks the canvas for a `2d` context, then a `bitmaprenderer` one; neither changes a canvas that has a context, and a canvas with none gets a blank `2d` one, which uploads the same transparent pixels.) Wrap modes `'repeat'`, `'clamp'` or `'mirror'` |
 | `createMaterial({ baseColor, texture, alphaMode, alphaCutoff, doubleSided, roughness, metallic })` | `alphaMode` `'opaque'`, `'mask'` or `'blend'` |
 | `createObject(mesh, material, matrix)`, `setTransform`, `setVisible` | A mesh placed with a material |
 | `setCamera(view, projection)`, `setCameraLookAt(eye, target, fovY, near, far)` | three.js's `matrixWorldInverse` and `projectionMatrix`, or a look-at |
@@ -111,15 +111,15 @@ built-ins or reaches into a renderer's private fields is out of scope; a caller'
   built-in `TypedArray.prototype.set`, which reads the source's own storage.
 - **A caller's object is read once.** Each field of a descriptor or options bag, and an Array's
   `length` and each of its elements, is read once into a local before anything is checked or staged
-  (probe C). `createTexture` reads its options first and the source's size after them, and the shim
+  (probe AR). `createTexture` reads its options first and the source's size after them, and the shim
   checks the size again just before the upload, refusing a source that has changed (probe T).
 - **Numbers must be numbers,** in arguments and in the elements of a matrix, vector or colour given
-  as an Array. Nothing is converted, so no `valueOf` runs (probes C and U).
+  as an Array. Nothing is converted, so no `valueOf` runs (probes AR and U).
 - **Re-entrancy is refused.** A getter or Proxy trap that runs while a method reads its arguments,
   and calls the renderer (`dispose` included), gets "a renderer method was called while the renderer
   was reading another call's arguments", so no export ever runs on a freed renderer (probe U).
 - **Handles** must be whole numbers from 1 to 2⁵⁰−1, and cross into wasm as exact doubles. A
-  fraction, a string or a Number object is refused here, anything else by the Rust side (probe H).
+  fraction, a string or a Number object is refused here, anything else by the Rust side (probes HF and H7).
   Below 2⁵⁰ a number still holds halves and quarters, so a handle plus 0.5 stays a fraction and is
   refused, instead of rounding to another handle.
 - **Floats** must be `Float32Array` where floats are meant: positions, normals, uvs, morph deltas.
@@ -161,7 +161,7 @@ directly).
   serial and never repeats, so it allows 2²⁰−1 renderers. Every copy of the module in a window and
   its same-origin frames shares one counter, kept on the top window. A worker or a cross-origin
   frame cannot reach it and keeps its own, so two such counters can give the same serial by chance:
-  for two that each make k renderers, about 2k in a million (probe R; the sixth critic's G6);
+  for two that each make k renderers, about 2k in a million (probe RM; the sixth critic's G6);
 - **kind** (3 bits): mesh, texture, material or object, never 0, so a bare small number is no handle;
 - **generation** (11 bits) and **index** (16 bits: up to 65,535 live values a kind).
 
@@ -177,12 +177,11 @@ renderer.
 
 **A failed create leaves nothing behind** (probes Y, Y2 and K3). Sizes and options are checked before
 the WebGL context is made. A failure after that (a module that is not this one, an init that fails,
-a context lost meanwhile) destroys the renderer, removes the shim's context-loss listeners, releases
-the canvas and puts its size back. A context lost so recently that its event has not been
-dispatched yet is still allowed a restore. A create that fails because of a loss does not call
-`onContextLost`: it throws "the context is lost".
+a context lost meanwhile) destroys the renderer, releases the canvas and puts its size back. A create
+that fails because of a loss does not call `onContextLost`: it throws "the context is lost", and its
+`onContextRestored` is called on the restore (see the loss controller below).
 
-**The canvas's context must suit web3d** (probes G, Y2 and K2). A lost context (between a loss and
+**The canvas's context must suit web3d** (probes CX, Y2 and K2). A lost context (between a loss and
 its restore, or one the browser dropped) is refused as lost, and nothing is recorded from it. A
 context, made by the page or by web3d, without a depth buffer, or with another antialias setting
 than the one asked for, is refused.
@@ -193,23 +192,39 @@ option must be a string, a URL, a Response, bytes (a `DataView`'s too) or a `Web
 from another realm too), each recognised by a built-in check; anything else is refused before it is
 used.
 
-**A texture upload is checked once** (probes G and T3). Errors left pending by earlier calls are
+**A texture upload is checked once** (probes CX and TU). Errors left pending by earlier calls are
 cleared first and reported as pending, in a console warning, so a page's own error is neither taken
-for the upload's nor refuses a good texture. Then `getError()` after the upload says whether the
-source's pixels fitted the texture made for them; if not, the texture is freed and the create
-refused.
+for the upload's nor refuses a good texture. Then `getError()` after the upload says whether WebGL
+refused the upload; if it did, the texture is freed and the create refused. Every source taken is
+sized as WebGL uploads it (above), so this check is a safety net, not the size check. The rendered
+check fails on any pending error a probe did not raise on purpose.
 
 **Context loss.** Once the WebGL context is lost:
 
-- `frame()` returns false from that moment, before the lost event arrives too, and every create and
-  `resize` throws, `createRenderer` too, with "the context is lost";
+- `frame()` returns false from that moment on, for good, before the lost event arrives too and after
+  a restore; every create and `resize` throws, `createRenderer` too, with "the context is lost";
 - the renderer is finished, because its objects belonged to the lost context, and a new renderer may
   take the canvas once the context is restored, so the old one can no longer resize it;
 - dispose it, in `onContextLost` or later, and create a new one when `onContextRestored` comes, with
-  the same options as before. The hook comes for a renderer disposed while lost, and for a create
-  that failed because of the loss, too (probes K2 and K4, which follow this exactly);
+  the same options as before (probes K2 and K4 follow this exactly);
 - disposing the old renderer sends nothing into the restored context; its shim only forgets its
   handles.
+
+**The loss controller** (`js/web3d.js`, `controllerFor`; probes LE, K2, K3 and K4). web3d puts
+exactly two listeners on a canvas, the first time it takes a context from it, and keeps them for the
+canvas's life, in one controller a canvas shared by every copy of the module:
+- on `webglcontextlost` it cancels the event, so the context can always be restored, whoever made it
+  and whether or not a renderer holds the canvas; it counts the loss, which finishes every renderer
+  made before it; and it calls the live renderer's `onContextLost`;
+- on `webglcontextrestored` it calls `onContextRestored` for the renderer that was live at the loss,
+  for every renderer disposed while the context was lost, and for every create that failed because
+  of the loss, one function once however often it was given. Then no renderer is live until a new one
+  is created, so a lost renderer left undisposed hears no later loss or restore.
+
+Each hook runs in its own `try`; what it throws is reported with `reportError`, and the other hooks
+still run. A create that failed because of a loss whose restore came before the create gave up gets
+its hook as soon as it has failed. A context lost before web3d first used the canvas can be restored
+only if the page cancelled that lost event; the create says so.
 
 Two loss-and-restore cycles on one canvas keep `getError()` at 0
 (`web3d/evidence/phase1/critic2-rerun/run-critic.txt`, K1 and K2). Chrome allows `restoreContext()`
@@ -244,7 +259,7 @@ if they differ from its std140 packing.
 
 - **Rust.** The unit test `a_frame_allocates_nothing` counts allocations with a counting global
   allocator across 30 frames of moving camera, objects and light: zero (`src/renderer.rs`).
-- **JS.** With CPU timing and the readout off, the page's scripts allocated **0 sampled bytes a
+- **JS.** With CPU timing and the readout off, the page's scripts allocated **0.16 sampled bytes a
   frame** at steady state, over 601 frames, while the camera and three objects moved, their matrices
   and vectors plain Arrays as three.js holds them
   (`web3d/evidence/phase1/rendered-check.json`, `allocation`). The check fails:
@@ -253,11 +268,11 @@ if they differ from its std140 packing.
   - **if the profiler is blind.** Chrome accepts an unknown sampling parameter silently, so the
     "objects already collected" flags cannot be trusted by the call succeeding. A positive-control
     window has the demo make one short-lived Array of 8 numbers a frame, and the check fails unless
-    the profiler reports at least 40 sampled bytes a frame from it. It read 88.6. With the flags
-    left out (`--blind`) it read 0.6 and the check failed (`evidence/phase1/blind-control/`).
-- **Cold frames differ.** In the first 10 s the module's call wrappers showed 261.2 sampled bytes a
-  frame, `web3d.js` 31.9 (copying Array elements one by one boxes them until V8 optimises the loop)
-  and `gl.js` 2.7 (same file).
+    the profiler reports at least 40 sampled bytes a frame from it. It read 90.6. With the flags
+    left out (`--blind`) it read 0.5 and the check failed (`evidence/phase1/blind-control/`).
+- **Cold frames differ.** In the first 10 s the module's call wrappers showed 263.3 sampled bytes a
+  frame, `web3d.js` 30.1 (copying Array elements one by one boxes them until V8 optimises the loop)
+  and `gl.js` 2.3 (same file).
 - **CPU timing costs boxed numbers:** its two `performance.now()` readings, 20.8 sampled bytes a frame
   in isolation (`web3d/evidence/phase1/cpu-timing-allocation/on.txt`; that line is absent from
   `off.txt`). In the demo, the check's timing window reads more (`rendered-check.json`, reported,
@@ -302,7 +317,7 @@ shader chunks. It first checks that all 20 transcribed lines are in three 0.180.
 (`web3d/evidence/phase1/gates.txt`). Its output, `tools/three-reference.txt`, is checked three ways:
 
 - the Rust test `shading_matches_three_js_r180`;
-- the probes in `demo/probe.js` (group R);
+- the probes in `demo/probe.js` (R1 to R4);
 - a real three.js `WebGLRenderer`, within 2/255 on 7 cases once web3d's environment stand-in (below)
   is added to three's pixel; without it, four cases differ by more: the two metal cases by up to 8
   levels, the oblique glossy one by 4 and the grazing one by 3
@@ -385,14 +400,14 @@ on, 10 s at 60 fps after a 3 s warm-up (`web3d/evidence/phase1/rendered-check.js
 
 | Canvas | GPU ms mean | p50 | p95 | CPU ms p50 (p95) | Draws | Triangles |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1024x576, MSAA 4x | 0.869 | 0.865 | 0.889 | 0.15 (0.225) | 64 | 320,000 |
-| 1366x768, MSAA 4x | 1.05 | 1.048 | 1.067 | 0.165 (0.24) | 64 | 320,000 |
-| 1024x576, no MSAA | 0.585 | 0.582 | 0.607 | 0.07 (0.18) | 64 | 320,000 |
+| 1024x576, MSAA 4x | 0.843 | 0.841 | 0.858 | 0.035 (0.05) | 64 | 320,000 |
+| 1366x768, MSAA 4x | 1.021 | 1.02 | 1.027 | 0.035 (0.05) | 64 | 320,000 |
+| 1024x576, no MSAA | 0.568 | 0.567 | 0.578 | 0.035 (0.045) | 64 | 320,000 |
 
-- Each p95 is within 4.3% of its median, so the GPU was not shared during the run.
+- Each p95 is within 2.0% of its median, so the GPU was not shared during the run.
 - Every frame took 16.67 ms, the display's 60 Hz, so GPU time is the capacity measure.
 - The clear colour read exactly (33, 36, 43), and the centre was lit, in every run.
-- All **66** probes passed, with `getError` 0 and no `INVALID_OPERATION` (same file, `probes`).
+- All **67** probes passed, with `getError` 0 and no `INVALID_OPERATION` (same file, `probes`).
 - The critics' scripts pass on this code:
 
   | Critic | Result | Evidence |
@@ -403,7 +418,8 @@ on, 10 s at 60 fps after a 3 s warm-up (`web3d/evidence/phase1/rendered-check.js
   | Fourth | X1 to X7 pass; X8 refuses 10 of 11 values, and the eleventh is the handle itself (`o + 2^-30` rounds to `o`) | `critic4-rerun/` (its README) |
   | Fifth | C1, C2, H5, R1, R2, T1, T2, L5, Y5 and B1 pass. X8, K1 and E1 assume the earlier 30-bit handles: X8's fraction rounds to the handle, there is no longer a 32-renderer limit to refuse, and the object table now issues 134,213,633 handles, then refuses cleanly | `critic5-rerun/` (its README) |
   | Sixth | G2-G7, G8b, G8c, G9a-c, G10, G11, G13 and G16 pass. G1, G12, G8a and G14 test what changed: the handle layout (now below 2⁵⁰), 2,048 generations a slot, `<img>` refused, a counter that goes round | `critic6-rerun/` (its README) |
-  | Seventh | LC1-LC8, D1, D2, T1-T5, S1-S3, H1, H2, W1 and W2 pass, with every earlier critic's intent | `critic7-rerun/` (its README) |
+  | Seventh | LC1-LC4, LC6-LC8, D1, D2, T1-T5, S1-S3, H1, H2, W1 and W2 pass; LC5 holds but for one detail, a later loss now cancelled by design (the loss controller) | `critic7-rerun/` (its README) |
+  | Eighth | E1-E3, E5-E15 pass. Its E4 probe reads the previous round's internal map of waiting hooks, which the loss controller replaced; E16 expects `bitmaprenderer` canvases uploaded, which are now refused | `critic8-rerun/` (its README) |
 
 **dolores.** A Raspberry Pi 5 with Chromium 156 on V3D 7.1, with **the demo's earlier load**, before
 it was given its present one (`web3d/evidence/phase1-dolores/README.md`):
@@ -451,19 +467,22 @@ It uses two textures, the canvas label and the grille's mask. Its query paramete
 `aa=0`, `still=1`, `cputime=0`, `hud=0`, `arrays=1` (matrices and vectors as plain Arrays, as three.js
 holds them; the allocation run uses it), `knots`, `tubular` and `radial`.
 
-**The probes** (`demo/probe.html`, 66 of them) cover:
+**The probes** (`demo/probe.html`, 67 of them, each with its own id) cover:
 
 - pixel-exact rendering, primitive restart, and lighting against three.js r180;
 - refusals, forged handles, and use after dispose;
 - a second renderer on one canvas;
 - context loss and recovery;
 - the boundary: lying typed arrays and the Rust staging check (Q), handles of another kind or
-  renderer (W), handles across 102 renderers (H6), Array elements and lengths (C), texture sizes
+  renderer (W), handles across 102 renderers (H6), Array elements and lengths (AR), texture sizes
   (T), the compile cache (L), failed creates and context settings (Y, Y2), re-entrancy (U), the
   recovery from a loss with default options and a loss during a create (K2, K3), contexts without
-  depth and texture sources by upload size (G), another realm's serials (R, with
-  `demo/probe-frame.html`), the largest serial (H7), the recovery exactly as documented (K4), and
-  pending errors, turned frames and `DataView` bytes (T3).
+  depth and texture sources by upload size (CX), another realm's serials (RM, with
+  `demo/probe-frame.html`), the largest serial (H7), the recovery exactly as documented (K4),
+  pending errors, turned frames, `bitmaprenderer` canvases and `DataView` bytes (TU), and the loss
+  controller: a throwing hook, one hook given twice, a lost renderer left undisposed, a loss during a
+  create on a page-made context, a canvas lost with no renderer, and a loss and restore inside a
+  create (LE).
 
 **The rendered check** serves `web3d/` cross-origin isolated, for 5 µs timers. It uses a port it
 refuses to share and its own headless Chrome, and aborts on a software renderer. It **fails** unless
@@ -499,15 +518,16 @@ That step cannot run here, since GitHub Actions runs only on a push. It was chec
   - the fourth's: `critic4/run4.mjs`;
   - the fifth's: `critic5/run5.mjs`;
   - the sixth's: `critic6/run6.mjs` (and `extra.html`);
-  - the seventh's: `critic7/run7.mjs`.
+  - the seventh's: `critic7/run7.mjs`;
+  - the eighth's: `critic8/run8.mjs`.
 
 **Sizes** (`web3d/evidence/phase1/gates.txt`):
 
 | File | Bytes | gzip -9 |
 | --- | --- | --- |
 | `pkg/loadngo_web3d.wasm` | 69,232 | 31,678 |
-| `pkg/gl.js` | 15,381 | 5,216 |
-| `pkg/web3d.js` | 44,472 | 13,725 |
+| `pkg/gl.js` | 14,578 | 4,984 |
+| `pkg/web3d.js` | 47,632 | 14,710 |
 
 ## Limits of phase 1
 

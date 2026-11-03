@@ -1,0 +1,6 @@
+Chrome 156.0.8078.80 (headless, own instance)
+pass  E13  a 'bitmaprenderer' canvas whose bitmap does not fit its reported size is refused (WEB3D.md: "refused by the check after the upload"), never made and partly filled
+pass  E14  restoreContext() inside the lost event does not restore; after the dispatch it does
+pass  E15  the documented recovery works twice in a row on one canvas
+passed 3 of 3; page errors 0
+browser and server stopped

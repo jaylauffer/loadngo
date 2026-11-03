@@ -72,6 +72,7 @@ const MIN_FRAME_SHARE = 0.9;
 // 90 a frame, all of it collected by the next minor GC. Below this the profiler is blind.
 const CONTROL_MIN = 40;
 const SOFTWARE = /SwiftShader|llvmpipe|softpipe|software|Basic Render/i;
+const PENDING_ERROR = /was pending before a texture upload/;
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -199,6 +200,9 @@ try {
     if (!pixels.centreIsLit) problems.push(`the centre pixel ${centre} is not a lit object`);
     if (glError !== 0) problems.push(`getError ${glError}`);
     if (messages.some((m) => m.startsWith('error') || m.startsWith('pageerror'))) problems.push('page errors');
+    // A GL error drained as "pending" before a texture upload was raised by an earlier call, the
+    // demo's or web3d's: the demo raises none on purpose, so any is a failure.
+    if (messages.some((m) => PENDING_ERROR.test(m))) problems.push('a WebGL error was pending before a texture upload');
     record.problems = problems;
     if (problems.length) {
       failed = true;
@@ -218,13 +222,19 @@ try {
     const probe = await page.evaluate(() => window.__probe.done);
     if (SOFTWARE.test(probe.info?.renderer ?? '')) throw new Error(`WebGL is software-rendered here (${probe.info.renderer})`);
     const invalid = messages.filter((m) => /INVALID_OPERATION|does not belong/.test(m));
+    // Pending GL errors drained before an upload: only those a probe raised on purpose, as many as it
+    // declared (probe.expectedPending); any other was raised by web3d or a probe by mistake.
+    const pending = messages.filter((m) => PENDING_ERROR.test(m));
+    const pendingOk = pending.length === (probe.expectedPending ?? 0);
     const failedProbes = [...(probe.failed ?? []), ...(probe.error ? [probe.error] : [])];
-    report.probes = { ...probe, invalidOperationWarnings: invalid, messages };
-    console.log(`probes: ${probe.passed} passed, ${failedProbes.length} failed; INVALID_OPERATION warnings: ${invalid.length}`);
+    report.probes = { ...probe, invalidOperationWarnings: invalid, pendingErrorWarnings: pending, messages };
+    console.log(
+      `probes: ${probe.passed} passed, ${failedProbes.length} failed; INVALID_OPERATION warnings: ${invalid.length}; pending GL errors: ${pending.length} (${probe.expectedPending ?? 0} raised on purpose)`,
+    );
     for (const t of probe.tests ?? []) console.log(`  ${t.pass ? 'pass' : 'FAIL'}  ${t.name}`);
-    if (failedProbes.length || invalid.length || messages.some((m) => m.startsWith('pageerror'))) {
+    if (failedProbes.length || invalid.length || !pendingOk || messages.some((m) => m.startsWith('pageerror'))) {
       failed = true;
-      console.log(`  FAILED: ${[...failedProbes, ...invalid].join('; ')}`);
+      console.log(`  FAILED: ${[...failedProbes, ...invalid, ...(pendingOk ? [] : pending)].join('; ')}`);
     }
     await context.close();
   }

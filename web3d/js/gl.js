@@ -7,7 +7,8 @@
 // Once the context is lost, this shim is finished for good, even after the browser restores the
 // context: its objects belonged to the lost one. Creating returns 0 (WebGL itself hands out objects
 // while lost), and deleting only forgets the handle, so disposing the old renderer after a restore
-// sends nothing into the restored context, which a new renderer then owns.
+// sends nothing into the restored context, which a new renderer then owns. The shim listens for no
+// events: web3d.js keeps one loss controller a canvas, which says when this shim's context was lost.
 //
 // Byte data arrives as a pointer and a length into the wasm module's memory and is read in place
 // through one cached Uint8Array view (WebGL2's `bufferSubData(target, offset, view, srcOffset,
@@ -45,16 +46,13 @@ class Table {
   }
 }
 
-// The built-in listener methods, so that a canvas's own properties are never what is called.
-const ADD_LISTENER = EventTarget.prototype.addEventListener;
-const REMOVE_LISTENER = EventTarget.prototype.removeEventListener;
-
 /**
- * The import object for the wasm module, over `gl`, a WebGL2 context of `canvas` that web3d.js
- * made. `hooks.onContextLost` / `hooks.onContextRestored` are called on those events until
- * `dispose()` removes the listeners.
+ * The import object for the wasm module, over `gl`, a WebGL2 context web3d.js took from a canvas.
+ * `lostSince()` says whether the context has been lost since this shim was made (web3d.js's loss
+ * controller counts the canvas's losses), so a loss and restore that both fell between two checks
+ * still finish the shim.
  */
-export function createGl(canvas, gl, hooks = {}) {
+export function createGl(gl, lostSince) {
   const timer = gl.getExtension('EXT_disjoint_timer_query_webgl2');
   // Lets the driver compile the programs in parallel; the link check then waits for them.
   gl.getExtension('KHR_parallel_shader_compile');
@@ -70,7 +68,7 @@ export function createGl(canvas, gl, hooks = {}) {
   const state = { staged: null, stagedSize: null, lost: false, lastLog: '' };
   /** True from the moment the context is lost, and for good: the event can lag isContextLost(). */
   const gone = () => {
-    if (!state.lost && gl.isContextLost()) state.lost = true;
+    if (!state.lost && (gl.isContextLost() || lostSince())) state.lost = true;
     return state.lost;
   };
   let memory = null;
@@ -89,17 +87,6 @@ export function createGl(canvas, gl, hooks = {}) {
     else if (level === 1) console.warn(message);
     else console.info(message);
   };
-
-  let lostEventSeen = false;
-  const onLost = (event) => {
-    event.preventDefault(); // allow a restore
-    lostEventSeen = true;
-    state.lost = true;
-    hooks.onContextLost?.();
-  };
-  const onRestored = () => hooks.onContextRestored?.();
-  ADD_LISTENER.call(canvas, 'webglcontextlost', onLost);
-  ADD_LISTENER.call(canvas, 'webglcontextrestored', onRestored);
 
   const compile = (type, source) => {
     const shader = gl.createShader(type);
@@ -347,15 +334,7 @@ export function createGl(canvas, gl, hooks = {}) {
         samples: gl.getParameter(gl.SAMPLES),
       };
     },
-    dispose() {
-      REMOVE_LISTENER.call(canvas, 'webglcontextlost', onLost);
-      REMOVE_LISTENER.call(canvas, 'webglcontextrestored', onRestored);
-      // A context lost so recently that its event has not been dispatched yet must still be allowed
-      // a restore, or the canvas could never draw again: one call to preventDefault on that event,
-      // and nothing else (no hook).
-      if (!lostEventSeen && gl.isContextLost()) {
-        ADD_LISTENER.call(canvas, 'webglcontextlost', (event) => event.preventDefault(), { once: true });
-      }
-    },
+    /** Nothing to release: the shim holds no listeners, and its GL objects go with the renderer. */
+    dispose() {},
   };
 }

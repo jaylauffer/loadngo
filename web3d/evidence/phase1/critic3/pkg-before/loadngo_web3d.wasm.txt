@@ -1,0 +1,6 @@
+loadngo_web3d.wasm as the third critic found it (from loadngo 284194b6), removed on 2026-11-03
+because it held the builder's home directory in three panic-location strings (its rustup
+toolchain's library sources; build.sh now remaps them).
+
+bytes  64826
+sha256 251fd0480fcc77bff650ddf59e4c2984ce8b0178c62dbec10f60a93b5f9d6832

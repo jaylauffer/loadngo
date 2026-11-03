@@ -106,8 +106,8 @@ async function rendering(r) {
   const br = read(0.5, -0.5);
   const lo = byte(0.04 / 1.04);
   const mid = byte((lin(128) + 0.04) / 1.04);
-  log('B texture upright: top-left red, top-right green, bottom-left blue', close(tl, [255, lo, lo], 3) && close(tr, [lo, 255, lo], 3) && close(bl, [lo, lo, 255], 3), { tl, tr, bl, lo });
-  log('B the sRGB texture is decoded (128 is linear 0.216)', close(br, [mid, mid, mid], 3), { got: br, expected: mid });
+  log('B1 texture upright: top-left red, top-right green, bottom-left blue', close(tl, [255, lo, lo], 3) && close(tr, [lo, 255, lo], 3) && close(bl, [lo, lo, 255], 3), { tl, tr, bl, lo });
+  log('B2 the sRGB texture is decoded (128 is linear 0.216)', close(br, [mid, mid, mid], 3), { got: br, expected: mid });
 
   // C: alpha mask over a red quad behind: the left half (alpha 0) is discarded.
   r.setAmbient(1, 1, 1, 1, 1, 1, PI);
@@ -201,13 +201,14 @@ async function rendering(r) {
     show(o);
     r.frame();
     const px = read(0, 0);
-    log(`P a ${n.toLocaleString('en')}-vertex mesh draws its triangle on vertex ${(n - 1).toLocaleString('en')}`, px[0] > 200, { pixel: px });
+    log(`P${n - 65534} a ${n.toLocaleString('en')}-vertex mesh draws its triangle on vertex ${(n - 1).toLocaleString('en')}`, px[0] > 200, { pixel: px });
   }
 
   // R: lighting against three.js r180 (tools/three-reference.txt, computed from three's chunks).
   // The cases that face the camera: normal and view +Z at the centre pixel.
   {
     const text = await (await fetch('../tools/three-reference.txt')).text();
+    let lightingCase = 0;
     const cases = text
       .split('\n')
       .filter((l) => l && !l.startsWith('#'))
@@ -232,9 +233,9 @@ async function rendering(r) {
         const env = (f0 * (0.5 * v[17 + c] + 0.5 * v[20 + c])) / PI;
         return byte(v[23 + c] + env);
       });
-      log(`R lighting matches three.js r180: ${name}`, close(got, expected, 2), { got, expected, threeRadiance: v.slice(23) });
+      log(`R${++lightingCase} lighting matches three.js r180: ${name}`, close(got, expected, 2), { got, expected, threeRadiance: v.slice(23) });
     }
-    if (cases.length < 4) log('R lighting reference cases found', false, { cases: cases.length });
+    if (cases.length < 4) log('R0 lighting reference cases found', false, { cases: cases.length });
   }
 
   // M: the GPU timer.
@@ -247,10 +248,11 @@ async function rendering(r) {
   // I: refusals, and what is accepted.
   const tri = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
   const triIdx = new Uint16Array([0, 1, 2]);
+  let refusal = 0;
   const check = (name, fn, want, pattern) => {
     const x = attempt(fn);
     const ok = want === 'throw' ? x.threw && (!pattern || pattern.test(x.message)) : !x.threw;
-    log(`I ${name}`, ok, x);
+    log(`I${++refusal} ${name}`, ok, x);
   };
   check('an index past the end is refused', () => r.createMesh({ positions: new Float32Array(9), indices: new Uint32Array([0, 1, 3]) }), 'throw', /past the last vertex/);
   check('positions not a multiple of 3 are refused', () => r.createMesh({ positions: new Float32Array(8), indices: triIdx }), 'throw');
@@ -304,7 +306,7 @@ async function rendering(r) {
       attempt(() => r.createMaterial({ texture: texB + 2 ** 32 })),
       attempt(() => r.destroyMesh(full + 2 ** 32)),
     ];
-    log('H forged handles (plus 2^32, fractional, a string, out of range) are refused, and the object stays drawn', refused && others.every((t) => t.threw) && still[0] > 200, { tries, others, pixel: still });
+    log('HF forged handles (plus 2^32, fractional, a string, out of range) are refused, and the object stays drawn', refused && others.every((t) => t.threw) && still[0] > 200, { tries, others, pixel: still });
   }
   out.mainGlError = r.gl.getError();
   log('Z no GL error on the main renderer', out.mainGlError === 0, { getError: out.mainGlError });
@@ -406,9 +408,9 @@ async function contextLoss() {
   k.errorAfterFrame = fresh.gl.getError();
   out.contextLoss = k;
   const createsRefused = ['createMesh', 'createTexture', 'createMaterial', 'createObject'].every((n) => k[n].threw && /context is lost/.test(k[n].message));
-  log('K loss: frame() returns false and every create throws "context is lost", a new renderer too', k.lostEvent === 'lost' && k.lostFlag && k.frame.value === false && createsRefused && !k.setTransformWhileLost.threw && /context is lost/.test(k.createRendererWhileLost), k);
-  log('K restore: the old renderer stays finished; a new one draws', k.restoredEvent === 'restored' && k.oldStillLost && k.pixelBefore[1] > 200 && k.pixelAfter[1] > 200, k);
-  log('K disposing the old renderer sends nothing into the restored context (getError stays 0)', k.errorBeforeOldDispose === 0 && k.errorAfterOldDispose === 0 && k.errorAfterFrame === 0, k);
+  log('KL loss: frame() returns false and every create throws "context is lost", a new renderer too', k.lostEvent === 'lost' && k.lostFlag && k.frame.value === false && createsRefused && !k.setTransformWhileLost.threw && /context is lost/.test(k.createRendererWhileLost), k);
+  log('KR restore: the old renderer stays finished; a new one draws', k.restoredEvent === 'restored' && k.oldStillLost && k.pixelBefore[1] > 200 && k.pixelAfter[1] > 200, k);
+  log('KD disposing the old renderer sends nothing into the restored context (getError stays 0)', k.errorBeforeOldDispose === 0 && k.errorAfterOldDispose === 0 && k.errorAfterFrame === 0, k);
   fresh.dispose();
 }
 
@@ -705,7 +707,7 @@ async function arrays() {
   r.dispose();
   const refused = (t) => t.threw && /must be a number/.test(t.message);
   log(
-    'C Array matrices, vectors and colours must hold numbers (no valueOf runs) and their length is read once; plain number Arrays work',
+    'AR Array matrices, vectors and colours must hold numbers (no valueOf runs) and their length is read once; plain number Arrays work',
     !d.plainArray.threw && refused(d.strings) && refused(d.valueOfs) && d.valueOfCalls === 0 && refused(d.lookAtStrings) &&
       refused(d.booleans) && refused(d.nulls) && refused(d.colourString) && !d.lyingLength.threw && d.lengthReads === 1 &&
       d.pixel[1] > 200 && d.glError === 0,
@@ -946,7 +948,7 @@ async function contextAndSources() {
   d.glError = r.gl.getError();
   r.dispose();
   log(
-    'G a context without depth is refused; an <img> is refused (decode it first); a VideoFrame is sized by its visible rectangle and fills the texture',
+    'CX a context without depth is refused; an <img> is refused (decode it first); a VideoFrame is sized by its visible rectangle and fills the texture',
     /no depth buffer/.test(d.noDepth) && d.image.threw && /decode it first/.test(d.image.message) && !d.frame.threw && d.errorAfterFrame === 0 &&
       d.pixels.every((p) => p[1] > 200 && p[0] < 60) && d.glError === 0,
     d,
@@ -1026,6 +1028,7 @@ async function uploadsAndBytes() {
   try {
     r.gl.enable(0x1234); // INVALID_ENUM, left pending by "the page"
     r.gl.lineWidth(-1); // and INVALID_VALUE (one flag a kind of error)
+    out.expectedPending = (out.expectedPending ?? 0) + 2; // check.mjs allows exactly these
     const bitmap = await bitmap4(0, 255, 0);
     d.withPending = attempt(() => r.createTexture(bitmap));
   } finally {
@@ -1045,19 +1048,35 @@ async function uploadsAndBytes() {
     turned.close();
   }
   d.errorAfterTurned = r.gl.getError();
-  // (A bitmaprenderer canvas, whose size is not its bitmap's, is refused by the upload check; the
-  // browser logs an INVALID_OPERATION for it, which this page's check counts as a failure, so the
-  // seventh critic's T3 probe covers it instead.)
+  // A bitmaprenderer canvas, smaller and larger than its bitmap: refused before any upload.
+  const small = document.createElement('canvas');
+  small.width = 2;
+  small.height = 2;
+  small.getContext('bitmaprenderer').transferFromImageBitmap(await bitmap4(255, 0, 0));
+  d.bitmaprendererSmaller = attempt(() => r.createTexture(small));
+  const large = new OffscreenCanvas(16, 16);
+  large.getContext('bitmaprenderer').transferFromImageBitmap(await bitmap4(255, 0, 0));
+  d.bitmaprendererLarger = attempt(() => r.createTexture(large));
+  // A canvas with no context yet gets a blank 2d one and uploads.
+  d.blankCanvas = attempt(() => r.createTexture(new OffscreenCanvas(4, 4)));
+  d.errorAfterCanvases = r.gl.getError();
   r.dispose();
   // The module's bytes as a DataView.
   const bytes = await (await fetch('../pkg/loadngo_web3d.wasm')).arrayBuffer();
   const viaView = await settle(createRenderer(document.getElementById('dataview'), { width: 16, height: 16, antialias: false, wasm: new DataView(bytes) }));
   d.dataView = viaView.ok ? 'created' : viaView.message;
   if (viaView.ok) viaView.r.dispose();
+  const gone = new ArrayBuffer(8);
+  const goneView = new DataView(gone);
+  structuredClone(gone, { transfer: [gone] }); // detaches it
+  const detached = await settle(createRenderer(document.getElementById('dataview'), { width: 16, height: 16, antialias: false, wasm: goneView }));
+  d.detached = detached.ok ? 'created' : detached.message;
   log(
-    'T3 pending page errors are reported as pending and do not refuse a good texture; a turned VideoFrame uploads at its turned size; a DataView of the module compiles',
+    'TU pending page errors are reported as pending and do not refuse a good texture; a turned VideoFrame uploads at its turned size; bitmaprenderer canvases are refused, a blank canvas uploads; a DataView of the module compiles, a detached one is refused',
     !d.withPending.threw && d.warnings.filter((w) => /was pending before a texture upload/.test(w)).length === 2 && d.errorAfter === 0 &&
-      (d.turned ? !d.turned.threw : true) && d.errorAfterTurned === 0 && d.dataView === 'created',
+      (d.turned ? !d.turned.threw : true) && d.errorAfterTurned === 0 &&
+      [d.bitmaprendererSmaller, d.bitmaprendererLarger].every((t) => t.threw && /bitmaprenderer/.test(t.message) && /ImageBitmap itself/.test(t.message)) &&
+      !d.blankCanvas.threw && d.errorAfterCanvases === 0 && d.dataView === 'created' && /detached/.test(d.detached),
     d,
   );
 }
@@ -1067,6 +1086,175 @@ const bitmap4 = (r, g, b) => {
   for (let i = 0; i < 16; i++) data.set([r, g, b, 255], i * 4);
   return createImageBitmap(new ImageData(data, 4, 4), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
 };
+
+/**
+ * LE: the loss controller, one a canvas. E1, a throwing restore hook does not stop the others; E4b,
+ * one function given twice runs once; E6, a lost renderer left undisposed hears no later loss or
+ * restore; E11, a loss during a create on a page-made context can be restored; E12, a canvas lost
+ * while no renderer holds it can be restored; ET, a loss and restore that both fall inside a create
+ * call that create's hook once, after it fails.
+ */
+async function lossController() {
+  const d = {};
+  const lose = (gl) => gl.getExtension('WEBGL_lose_context');
+  const event = (c, type) => new Promise((res) => c.addEventListener(type, () => setTimeout(() => res(type), 0), { once: true }));
+  const opts = { width: 16, height: 16, antialias: false };
+  // A hook that throws on purpose: reported through reportError, which this listener cancels so the
+  // page does not count it as an error.
+  const PURPOSE = 'web3d probe: a restore hook that throws on purpose';
+  const quiet = (e) => {
+    if (e.error?.message === PURPOSE) e.preventDefault();
+  };
+  window.addEventListener('error', quiet);
+  try {
+    // E1: A disposed while lost (its hook throws), then a create that fails as lost: both hooks run.
+    {
+      const c = document.getElementById('le1');
+      const calls = { a: 0, b: 0 };
+      const a = await createRenderer(c, { ...opts, onContextRestored: () => (calls.a++, (() => { throw new Error(PURPOSE); })()) });
+      const lc = lose(a.gl);
+      const lost = event(c, 'webglcontextlost');
+      lc.loseContext();
+      await lost;
+      a.dispose();
+      d.e1Create = (await settle(createRenderer(c, { ...opts, onContextRestored: () => calls.b++ }))).message;
+      const restored = event(c, 'webglcontextrestored');
+      lc.restoreContext();
+      await restored;
+      d.e1 = calls;
+    }
+    // E4b: one function, given to a live renderer and to a create that fails on its lost canvas.
+    {
+      const c = document.getElementById('le4');
+      let calls = 0;
+      const hook = () => calls++;
+      const r = await createRenderer(c, { ...opts, onContextRestored: hook });
+      const lc = lose(r.gl);
+      const lost = event(c, 'webglcontextlost');
+      lc.loseContext();
+      await lost;
+      d.e4bCreate = (await settle(createRenderer(c, { ...opts, onContextRestored: hook }))).message;
+      const restored = event(c, 'webglcontextrestored');
+      lc.restoreContext();
+      await restored;
+      d.e4b = calls;
+      r.dispose();
+    }
+    // E6: a lost renderer left undisposed, then a new one on the restored canvas, then a second loss.
+    {
+      const c = document.getElementById('le6');
+      const old = { lost: 0, restored: 0 };
+      const now = { lost: 0, restored: 0 };
+      const first = await createRenderer(c, { ...opts, onContextLost: () => old.lost++, onContextRestored: () => old.restored++ });
+      const lc = lose(first.gl);
+      let second = null;
+      for (const round of [1, 2]) {
+        if (round === 2) {
+          d.e6Second = await createRenderer(c, { ...opts, onContextLost: () => now.lost++, onContextRestored: () => now.restored++ }).then(
+            (r) => ((second = r), 'created'),
+            (e) => e.message,
+          );
+        }
+        const lost = event(c, 'webglcontextlost');
+        lc.loseContext();
+        await lost;
+        const restored = event(c, 'webglcontextrestored');
+        lc.restoreContext();
+        await restored;
+      }
+      d.e6 = { old, now };
+      second?.dispose();
+      first.dispose();
+    }
+    // E11: a page-made context, lost while a create instantiates the module.
+    {
+      const c = document.getElementById('le11');
+      const gl = c.getContext('webgl2', { antialias: false });
+      const lc = lose(gl);
+      const real = WebAssembly.instantiate;
+      WebAssembly.instantiate = async (...args) => {
+        const result = await real.apply(WebAssembly, args);
+        lc.loseContext();
+        return result;
+      };
+      let calls = 0;
+      try {
+        d.e11Create = (await settle(createRenderer(c, { ...opts, onContextRestored: () => calls++ }))).message;
+      } finally {
+        WebAssembly.instantiate = real;
+      }
+      await timeout(50);
+      const restored = event(c, 'webglcontextrestored');
+      d.e11RestoreThrew = attempt(() => lc.restoreContext()).threw;
+      d.e11Restored = await Promise.race([restored, timeout(2000)]);
+      d.e11Calls = calls;
+      const again = await settle(createRenderer(c, opts));
+      d.e11Again = again.ok ? 'created' : again.message;
+      if (again.ok) again.r.dispose();
+    }
+    // E12: a canvas web3d used, then left with no renderer, lost and restored.
+    {
+      const c = document.getElementById('le12');
+      const r = await createRenderer(c, opts);
+      const gl = r.gl;
+      r.dispose();
+      const lc = lose(gl);
+      const lost = event(c, 'webglcontextlost');
+      lc.loseContext();
+      await lost;
+      const restored = event(c, 'webglcontextrestored');
+      d.e12RestoreThrew = attempt(() => lc.restoreContext()).threw;
+      d.e12Restored = await Promise.race([restored, timeout(2000)]);
+      const again = await settle(createRenderer(c, opts));
+      d.e12Again = again.ok ? 'created' : again.message;
+      if (again.ok) again.r.dispose();
+    }
+    // ET: a loss and its restore both inside the create's instantiation.
+    {
+      const c = document.getElementById('let');
+      const r0 = await createRenderer(c, opts); // the canvas has a controller and a context
+      const gl = r0.gl;
+      r0.dispose();
+      const lc = lose(gl);
+      const real = WebAssembly.instantiate;
+      WebAssembly.instantiate = async (...args) => {
+        const result = await real.apply(WebAssembly, args);
+        const lost = event(c, 'webglcontextlost');
+        lc.loseContext();
+        await lost;
+        const restored = event(c, 'webglcontextrestored');
+        lc.restoreContext();
+        await restored;
+        return result;
+      };
+      let calls = 0;
+      try {
+        d.etCreate = (await settle(createRenderer(c, { ...opts, onContextRestored: () => calls++ }))).message;
+      } finally {
+        WebAssembly.instantiate = real;
+      }
+      d.etCallsAtOnce = calls;
+      await timeout(20);
+      d.etCalls = calls;
+      const again = await settle(createRenderer(c, opts));
+      d.etAgain = again.ok ? 'created' : again.message;
+      if (again.ok) again.r.dispose();
+    }
+  } finally {
+    window.removeEventListener('error', quiet);
+  }
+  const lostMessage = (m) => /context is lost/.test(m ?? '');
+  log(
+    'LE one loss controller a canvas: a throwing hook does not stop the next (E1); one function runs once (E4b); a lost renderer left undisposed hears no later loss (E6); a page-made context lost during a create, and a canvas lost with no renderer, are restored (E11, E12); a loss and restore inside a create call its hook once, after (ET)',
+    lostMessage(d.e1Create) && d.e1.a === 1 && d.e1.b === 1 &&
+      lostMessage(d.e4bCreate) && d.e4b === 1 &&
+      d.e6Second === 'created' && d.e6.old.lost === 1 && d.e6.old.restored === 1 && d.e6.now.lost === 1 && d.e6.now.restored === 1 &&
+      lostMessage(d.e11Create) && !d.e11RestoreThrew && d.e11Restored === 'webglcontextrestored' && d.e11Calls === 1 && d.e11Again === 'created' &&
+      !d.e12RestoreThrew && d.e12Restored === 'webglcontextrestored' && d.e12Again === 'created' &&
+      lostMessage(d.etCreate) && d.etCallsAtOnce === 0 && d.etCalls === 1 && d.etAgain === 'created',
+    d,
+  );
+}
 
 /** H7: at the largest serial, handles stay below 2^50, where a handle plus a half is still a fraction. */
 async function largestSerial() {
@@ -1115,7 +1303,7 @@ async function realms() {
   ours.dispose();
   iframe.remove();
   log(
-    'R a same-origin iframe\'s renderer takes the next serial from the shared counter, and its handle is refused here',
+    'RM a same-origin iframe\'s renderer takes the next serial from the shared counter, and its handle is refused here',
     d.ourSerial === (d.theirSerial % (2 ** 20 - 1)) + 1 && d.ourObject !== d.theirObject && d.theirsOnOurs.threw && d.pixel[1] > 200,
     d,
   );
@@ -1144,6 +1332,7 @@ async function main() {
   await realms();
   await lossAsDocumented();
   await uploadsAndBytes();
+  await lossController();
   await largestSerial();
   out.passed = out.tests.filter((t) => t.pass).length;
   out.failed = out.tests.filter((t) => !t.pass).map((t) => t.name);

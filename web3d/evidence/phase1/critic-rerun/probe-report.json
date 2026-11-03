@@ -174,7 +174,7 @@
         "name": "M GPU timer reading present",
         "pass": true,
         "detail": {
-          "gpuMs": 2.237625
+          "gpuMs": 0.056333
         }
       },
       {
@@ -238,7 +238,7 @@
         "pass": true,
         "detail": {
           "threw": true,
-          "message": "web3d: 790750858051592 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
+          "message": "web3d: 913168163405832 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
         }
       },
       {
@@ -262,7 +262,7 @@
         "pass": true,
         "detail": {
           "threw": false,
-          "value": 790750858117128
+          "value": 913168163471368
         }
       },
       {
@@ -278,7 +278,7 @@
         "pass": true,
         "detail": {
           "threw": false,
-          "value": 790750858051593
+          "value": 913168163405833
         }
       },
       {
@@ -390,7 +390,7 @@
       {
         "name": "stale mesh handle is refused",
         "threw": true,
-        "message": "web3d: 790750858051592 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
+        "message": "web3d: 913168163405832 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
       },
       {
         "name": "NaN position refused",
@@ -405,7 +405,7 @@
       {
         "name": "Uint8 normalised weights (255 = 1.0) are dequantised and accepted",
         "threw": false,
-        "value": 790750858117128
+        "value": 913168163471368
       },
       {
         "name": "weights summing to 7 per vertex are refused",
@@ -415,7 +415,7 @@
       {
         "name": "joint index 65535 with no skeleton is accepted until phase 3 has skeletons",
         "threw": false,
-        "value": 790750858051593
+        "value": 913168163405833
       },
       {
         "name": "morph deltas of the wrong length are refused",
@@ -496,11 +496,11 @@
     "triangles": 320000,
     "culled": 0,
     "gpu": {
-      "n": 121,
-      "mean": 7.522,
-      "p50": 7.567,
-      "p95": 11.259,
-      "max": 11.845
+      "n": 122,
+      "mean": 0.985,
+      "p50": 1.021,
+      "p95": 1.027,
+      "max": 2.997
     },
     "glError": 0,
     "msgs": []
@@ -511,11 +511,11 @@
     "triangles": 320000,
     "culled": 0,
     "gpu": {
-      "n": 121,
-      "mean": 4.698,
-      "p50": 5.036,
-      "p95": 6.68,
-      "max": 7.633
+      "n": 122,
+      "mean": 0.637,
+      "p50": 0.634,
+      "p95": 0.662,
+      "max": 0.674
     },
     "glError": 0,
     "msgs": []
@@ -525,31 +525,32 @@
     "cold": {
       "frames": 480,
       "bytesPerFrameByFile": {
-        "(native)": 72.9,
-        "/probe/game-path.js": 93.5,
-        "/web3d/pkg/web3d.js": 37.8,
-        "/web3d/pkg/loadngo_web3d.wasm": 193.5,
-        "/web3d/pkg/gl.js": 2.4
+        "(native)": 74.8,
+        "/probe/game-path.js": 97.6,
+        "/web3d/pkg/web3d.js": 39,
+        "/web3d/pkg/loadngo_web3d.wasm": 194.6,
+        "/web3d/pkg/gl.js": 1.8
       },
       "topFunctions": {
-        "/web3d/pkg/loadngo_web3d.wasm:1 js-to-wasm:i:": 92868,
-        "/probe/game-path.js:20 tick": 44880,
-        "/web3d/pkg/web3d.js:670 _put": 17040,
-        "/web3d/pkg/gl.js:308 query_begin": 340,
-        "/web3d/pkg/web3d.js:929 setCamera": 300,
-        "/web3d/pkg/web3d.js:657 _statsView": 220,
-        "/web3d/pkg/web3d.js:899 setTransform": 212,
-        "/web3d/pkg/web3d.js:1022 frame": 196
+        "/web3d/pkg/loadngo_web3d.wasm:1 js-to-wasm:i:": 93416,
+        "/probe/game-path.js:20 tick": 46856,
+        "/web3d/pkg/web3d.js:721 _put": 17724,
+        "/web3d/pkg/web3d.js:1120 readStats": 268,
+        "/web3d/pkg/web3d.js:980 setCamera": 220,
+        "/web3d/pkg/web3d.js:708 _statsView": 220,
+        "/web3d/pkg/gl.js:295 query_begin": 212,
+        "/web3d/pkg/web3d.js:1073 frame": 164
       }
     },
     "steady": {
       "frames": 600,
       "bytesPerFrameByFile": {
-        "(native)": 32.8,
-        "/probe/game-path.js": 11.4
+        "(native)": 33.1,
+        "/probe/game-path.js": 13.2
       },
       "topFunctions": {
-        "/probe/game-path.js:20 tick": 6864
+        "/probe/game-path.js:20 tick": 7872,
+        "/probe/game-path.js:18 frames": 56
       }
     }
   }

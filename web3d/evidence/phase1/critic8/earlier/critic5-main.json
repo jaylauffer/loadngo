@@ -1,0 +1,385 @@
+{
+  "groups": {
+    "x8": {
+      "tests": [
+        {
+          "name": "X8 a representable fraction on a handle is refused; o + 2^-30 is o itself for every object handle (2^24 and up)",
+          "pass": false,
+          "detail": {
+            "spare": 681601780416514,
+            "spareBelow2To23": false,
+            "sparePlusTinyRepresentable": false,
+            "destroySparePlusTiny": {
+              "threw": false
+            },
+            "object": 681602183069697,
+            "objectPlusTinyIsObject": true,
+            "smallestObjectHandle": 16777217,
+            "setVisibleObjectPlusHalf": {
+              "threw": true,
+              "message": "web3d: 681602183069697.5 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            "x8Value": true,
+            "spareStillLive": false
+          }
+        }
+      ],
+      "messages": []
+    },
+    "main": {
+      "tests": [
+        {
+          "name": "C1 non-numbers inside a matrix or vector Array are refused and no valueOf runs (WEB3D.md \"Nothing is converted, so no valueOf runs\")",
+          "pass": true,
+          "detail": {
+            "createObjectWithStringMatrix": {
+              "threw": true,
+              "message": "web3d: matrix[0] must be a number, not \"1\""
+            },
+            "setTransformWithValueOfElements": {
+              "threw": true,
+              "message": "web3d: matrix[0] must be a number, not an object"
+            },
+            "valueOfCalls": 0,
+            "lookAtWithStrings": {
+              "threw": true,
+              "message": "web3d: eye[0] must be a number, not \"0\""
+            },
+            "setCameraWithBooleans": {
+              "threw": true,
+              "message": "web3d: view[0] must be a number, not true"
+            },
+            "setCameraWithNulls": {
+              "threw": true,
+              "message": "web3d: view[1] must be a number, not null"
+            },
+            "pixel": [
+              56,
+              255,
+              56
+            ],
+            "glError": 0
+          }
+        },
+        {
+          "name": "C2 an Array argument's length is read once (WEB3D.md \"Each field ... is read into a local before anything is checked or staged\")",
+          "pass": true,
+          "detail": {
+            "setTransform": {
+              "threw": false
+            },
+            "lengthReadsSetTransform": 1,
+            "setCameraProjection": {
+              "threw": false
+            },
+            "lengthReadsProjection": 1,
+            "later": {
+              "threw": false,
+              "value": true
+            },
+            "pixel": [
+              56,
+              255,
+              56
+            ]
+          }
+        },
+        {
+          "name": "H5 another (disposed) renderer's handle is refused, also once its salt is reused (WEB3D.md \"another renderer's handle, is refused\"; \"never reissued\")",
+          "pass": true,
+          "detail": {
+            "between": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "handles": {
+              "oA": 1054670558593025,
+              "oB": 1054704918331393,
+              "same": false
+            },
+            "staleHandleOnB": {
+              "threw": true,
+              "message": "web3d: 1054670558593025 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            },
+            "pixelAfter": [
+              56,
+              255,
+              56
+            ]
+          }
+        },
+        {
+          "name": "R1 Rust refuses staged arrays that run past, are misaligned, lie outside staging or were freed; frees of anything else are ignored",
+          "pass": true,
+          "detail": {
+            "valid": {
+              "handle": 1054705589420033
+            },
+            "oneFloatPastTheEnd": {
+              "refused": "mesh refused: an array's pointer and length do not lie inside one staging allocation"
+            },
+            "misaligned": {
+              "refused": "mesh refused: an array's pointer and length do not lie inside one staging allocation"
+            },
+            "ioArea": {
+              "refused": "mesh refused: an array's pointer and length do not lie inside one staging allocation"
+            },
+            "lengthOverflow": {
+              "refused": "mesh refused: an array's pointer and length do not lie inside one staging allocation"
+            },
+            "indicesFromThePositionsAllocation": {
+              "refused": "mesh refused: an index is past the last vertex"
+            },
+            "afterWrongLengthFree": {
+              "handle": 1054705589420034
+            },
+            "afterFree": {
+              "refused": "mesh refused: an array's pointer and length do not lie inside one staging allocation"
+            },
+            "realloc": {
+              "p": 1118128,
+              "p2": 1118672,
+              "sameBlock": false,
+              "zeroed": true
+            },
+            "hugeAlloc": 0,
+            "publicCreateAfter": {
+              "threw": false,
+              "value": 1054705992073217
+            },
+            "pixel": [
+              56,
+              255,
+              56
+            ],
+            "glError": 0
+          }
+        },
+        {
+          "name": "R2 300 creates that throw after staging (about 5 MiB each) leave memory where it was",
+          "pass": true,
+          "detail": {
+            "thrown": 300,
+            "memoryBefore": 1179648,
+            "memoryAfter": 2293760,
+            "frame": {
+              "threw": false,
+              "value": true
+            }
+          }
+        },
+        {
+          "name": "T1 a texture option getter that calls the renderer is refused, and one that throws leaves it usable",
+          "pass": true,
+          "detail": {
+            "getterCallsFrame": {
+              "threw": true,
+              "message": "web3d: a renderer method was called while the renderer was reading another call's arguments (from a getter, valueOf or a Proxy); call it afterwards"
+            },
+            "getterDisposes": {
+              "threw": true,
+              "message": "web3d: a renderer method was called while the renderer was reading another call's arguments (from a getter, valueOf or a Proxy); call it afterwards"
+            },
+            "getterThrows": {
+              "threw": true,
+              "message": "boom"
+            },
+            "afterThrow": {
+              "threw": false,
+              "value": true
+            },
+            "glErrorBefore": 0,
+            "resizedInGetter": {
+              "threw": false,
+              "value": 1054707871121409
+            },
+            "glErrorAfterResize": 0
+          }
+        },
+        {
+          "name": "T2 a texture option getter that resizes the source after its size was read: refused, or no GL error (WEB3D.md \"read once ... before anything is checked\")",
+          "pass": true,
+          "detail": {
+            "getterCallsFrame": {
+              "threw": true,
+              "message": "web3d: a renderer method was called while the renderer was reading another call's arguments (from a getter, valueOf or a Proxy); call it afterwards"
+            },
+            "getterDisposes": {
+              "threw": true,
+              "message": "web3d: a renderer method was called while the renderer was reading another call's arguments (from a getter, valueOf or a Proxy); call it afterwards"
+            },
+            "getterThrows": {
+              "threw": true,
+              "message": "boom"
+            },
+            "afterThrow": {
+              "threw": false,
+              "value": true
+            },
+            "glErrorBefore": 0,
+            "resizedInGetter": {
+              "threw": false,
+              "value": 1054707871121409
+            },
+            "glErrorAfterResize": 0
+          }
+        },
+        {
+          "name": "L5 one failed fetch, then the same URL loads; two creates sharing one failed fetch both fail and the next one loads",
+          "pass": true,
+          "detail": {
+            "first": "web3d: fetching the wasm failed: 503 http://127.0.0.1:5484/flaky/once.wasm",
+            "second": "created",
+            "raceA": "web3d: fetching the wasm failed: 503 http://127.0.0.1:5484/flaky/race.wasm",
+            "raceB": "web3d: fetching the wasm failed: 503 http://127.0.0.1:5484/flaky/race.wasm",
+            "third": "created",
+            "serverRequests": {
+              "once": 2,
+              "race": 2
+            }
+          }
+        },
+        {
+          "name": "Y5 a renderer that asks for antialias on a canvas whose context lacks it is refused (WEB3D.md \"must ask for the same, or is refused\")",
+          "pass": true,
+          "detail": {
+            "pageContextAntialias": false,
+            "create": "web3d: this canvas's WebGL context has antialias false (ask for antialias: false); a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit"
+          }
+        }
+      ],
+      "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+      "messages": [
+        "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+        "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+      ]
+    },
+    "heap": {
+      "tests": [
+        {
+          "name": "B1 with the heap past 2 GiB, a mesh staged above 2 GiB draws",
+          "pass": true,
+          "detail": {
+            "big": 1118128,
+            "memoryBytes": 2148663296,
+            "create": {
+              "threw": false,
+              "value": 392952463491073
+            },
+            "nextStagingAt": 2148537056,
+            "frame": {
+              "threw": false,
+              "value": true
+            },
+            "pixel": [
+              56,
+              255,
+              56
+            ],
+            "errorText": "mesh refused: positions must hold x, y, z for at least one vertex",
+            "glError": 0
+          }
+        }
+      ],
+      "messages": []
+    },
+    "cap": {
+      "tests": [
+        {
+          "name": "K1 a 33rd live renderer is refused, its failed create leaves no listener, and a slot freed by dispose is usable",
+          "pass": false,
+          "detail": {
+            "lostEvents": 0,
+            "salts": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "distinctSalts": 1,
+            "thirtyThird": "created",
+            "afterOneDisposed": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)",
+            "failedCreatesHookCalls": 0
+          }
+        }
+      ],
+      "messages": [
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      ]
+    }
+  },
+  "browser": "156.0.8078.80"
+}

@@ -28,8 +28,9 @@
 // Page code that patches built-ins, or reaches into a renderer's private fields, is out of scope.
 //
 // After `dispose()` every call throws "web3d: renderer disposed". When the WebGL context is lost,
-// `frame()` returns false, creating anything throws, and the renderer is finished: dispose it, then
-// create a new one after the context is restored (`onContextRestored`) and upload everything again.
+// `frame()` returns false for good, creating anything throws, and the renderer is finished: dispose
+// it, then create a new one when `onContextRestored` is called and upload everything again. One loss
+// controller a canvas (`controllerFor`) cancels every lost event and calls the hooks.
 //
 // BSD-3-Clause; see the repository's LICENSE.
 
@@ -48,7 +49,9 @@ const DISPOSED = 'web3d: renderer disposed';
 const LOST =
   'web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again';
 const LOST_AT_CREATE =
-  "web3d: the canvas's WebGL context is lost; create the renderer again once it is restored (this call's onContextRestored is called then)";
+  "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore";
+const LOST_BEFORE_WEB3D =
+  "web3d: the canvas's WebGL context was lost before web3d first used this canvas; it can be restored only if the page cancelled the lost event, and then this call's onContextRestored is called";
 const SHARED =
   'web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)';
 const REENTRANT =
@@ -182,9 +185,11 @@ function morphList(targets) {
 
 // The image sources taken, each sized through built-in getters, so a source's own properties are
 // never read, and recognised by whichever getter accepts it. A VideoFrame uploads its visible
-// rectangle, turned by its rotation, not its display size. One case reports a size its pixels need
-// not have: a canvas with a 'bitmaprenderer' context shows a bitmap of its own size. Its upload, if it
-// does not fit, is refused by the shim's check after the upload.
+// rectangle, turned by its rotation, not its display size. A canvas with a 'bitmaprenderer' context
+// shows a bitmap of any size at its own, so WebGL would crop or fail on it: it is refused, and the
+// ImageBitmap itself is the source to pass. It is found by asking for a '2d' context, then a
+// 'bitmaprenderer' one: neither call changes a canvas that has a context, and a canvas with none gets
+// a blank '2d' one, which uploads the same transparent pixels it would have.
 const sizeBy = (name, w, h) => {
   const proto = globalThis[name]?.prototype;
   const gw = proto && getter(proto, w);
@@ -196,10 +201,28 @@ const RECT_W = RECT && getter(RECT, 'width');
 const RECT_H = RECT && getter(RECT, 'height');
 const VISIBLE_RECT = globalThis.VideoFrame && getter(globalThis.VideoFrame.prototype, 'visibleRect');
 const ROTATION = globalThis.VideoFrame && getter(globalThis.VideoFrame.prototype, 'rotation');
+const BITMAPRENDERER =
+  "web3d: a canvas with a 'bitmaprenderer' context is not accepted as a texture source, because the bitmap it shows need not be its size; pass the ImageBitmap itself";
+/** A canvas kind: sized as the others, but refused when its context is a 'bitmaprenderer'. */
+const canvasBy = (name) => {
+  const size = sizeBy(name, 'width', 'height');
+  const getContext = globalThis[name]?.prototype.getContext;
+  if (!size || !getContext) return null;
+  return (source) => {
+    const wh = size(source); // throws for another kind
+    try {
+      if (getContext.call(source, '2d') === null && getContext.call(source, 'bitmaprenderer') !== null) return BITMAPRENDERER;
+    } catch {
+      // A canvas whose control was transferred to an OffscreenCanvas has nothing here to upload.
+      return 'web3d: this canvas cannot be read here (its control was transferred to an OffscreenCanvas)';
+    }
+    return wh;
+  };
+};
 const IMAGE_KINDS = [
   sizeBy('ImageBitmap', 'width', 'height'),
-  sizeBy('HTMLCanvasElement', 'width', 'height'),
-  sizeBy('OffscreenCanvas', 'width', 'height'),
+  canvasBy('HTMLCanvasElement'),
+  canvasBy('OffscreenCanvas'),
   sizeBy('ImageData', 'width', 'height'),
   VISIBLE_RECT && RECT_W
     ? (frame) => {
@@ -224,11 +247,14 @@ const INEXACT_KINDS = [
 function imageSize(source) {
   if (typeof source === 'object' && source !== null) {
     for (const size of IMAGE_KINDS) {
+      let wh;
       try {
-        return size(source);
+        wh = size(source);
       } catch {
-        // not this kind
+        continue; // not this kind
       }
+      if (typeof wh === 'string') throw new Error(wh);
+      return wh;
     }
     for (const [g, what] of INEXACT_KINDS) {
       try {
@@ -300,7 +326,7 @@ const HOME = (() => {
 const SHARED_STATE = (HOME[SHARED_KEY] ??= {});
 SHARED_STATE.owners ??= new WeakMap();
 SHARED_STATE.contexts ??= new WeakMap();
-SHARED_STATE.restores ??= new WeakMap();
+SHARED_STATE.controllers ??= new WeakMap();
 // Each home (a top window with its same-origin frames, a worker, a cross-origin frame) starts at a
 // random serial, so two homes collide only by chance; within one, serials never repeat.
 SHARED_STATE.serials ??= { next: 1 + (crypto.getRandomValues(new Uint32Array(1))[0] % (SERIALS - 1)), made: 0 };
@@ -360,7 +386,11 @@ const DV_OFFSET = getter(DV, 'byteOffset');
 const DV_LENGTH = getter(DV, 'byteLength');
 function asBytes(source) {
   if (!ArrayBuffer.isView(source) || typedKind(source) !== undefined) return source;
-  return new Uint8Array(DV_BUFFER.call(source), DV_OFFSET.call(source), DV_LENGTH.call(source));
+  try {
+    return new Uint8Array(DV_BUFFER.call(source), DV_OFFSET.call(source), DV_LENGTH.call(source));
+  } catch {
+    throw new Error("web3d: the wasm option's DataView has no bytes to compile (its buffer is detached)");
+  }
 }
 
 // Brand checks through built-ins, which also hold for objects from another realm (an iframe's).
@@ -436,7 +466,8 @@ function readOptions(canvas, options) {
  *
  * options: width, height (drawing-buffer pixels, whole numbers from 0 to 32768; default the
  * canvas's), antialias (default true, as three's WebGLRenderer is usually created), cpuTiming
- * (default false; see setCpuTiming), wasm (see compile), onContextLost, onContextRestored.
+ * (default false; see setCpuTiming), wasm (see compile), onContextLost and onContextRestored (see
+ * controllerFor for when each is called).
  *
  * A canvas keeps the WebGL context it first had, with that context's settings, whoever made it: a
  * renderer must ask for the antialias the context has, or it is refused. Everything is checked
@@ -475,12 +506,17 @@ async function build(canvas, o) {
   };
   const gl = WEBGL2 ? o.kind.getContext.call(canvas, 'webgl2', attributes) : null;
   if (!gl) throw new Error('web3d: WebGL2 is not available here, or this canvas already has another kind of context');
+  // From the first use of a canvas on, its loss controller cancels every lost event, so the context
+  // can always be restored, and calls the hooks.
+  const known = SHARED_STATE.controllers.has(canvas);
+  const controller = controllerFor(canvas);
+  const losses = controller.losses;
   // A lost context (between a loss and its restore, or one the browser dropped) reports no
   // attributes, so nothing is read or recorded from it.
   const attrs = gl.isContextLost() ? null : gl.getContextAttributes();
   if (!attrs) {
-    awaitRestore(canvas, o.onContextRestored);
-    throw new Error(LOST_AT_CREATE);
+    waitForRestore(controller, o.onContextRestored);
+    throw new Error(known ? LOST_AT_CREATE : LOST_BEFORE_WEB3D);
   }
   // The context the canvas now has, which the page may have made first with other settings. Every
   // setting that does not suit is named at once.
@@ -494,13 +530,8 @@ async function build(canvas, o) {
       `web3d: this canvas's WebGL context has ${unsuited.join(' and ')}; a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit`,
     );
   }
-  // The page's hooks belong to a renderer, so they are called only once the create has succeeded: a
-  // loss during the create makes it fail with "lost", not call onContextLost.
-  let created = false;
-  const shim = createGl(canvas, gl, {
-    onContextLost: () => created && o.onContextLost?.(),
-    onContextRestored: () => created && o.onContextRestored?.(),
-  });
+  // The shim is finished by any loss from now on, even one restored before it next looks.
+  const shim = createGl(gl, () => controller.losses !== losses);
   const size = [o.kind.width.call(canvas), o.kind.height.call(canvas)];
   let x = null;
   let w = 0;
@@ -522,17 +553,20 @@ async function build(canvas, o) {
       throw new Error(shim.lost() ? LOST_AT_CREATE : `web3d: ${errorText(x, w, shim)}`);
     }
     if (o.cpuTiming) x.web3d_set_cpu_timing(w, 1);
-    const renderer = new Renderer(canvas, o.kind, gl, shim, x, w, serial, o.onContextRestored);
-    created = true;
+    const renderer = new Renderer(canvas, o.kind, gl, shim, x, w, serial);
+    // Only now do the page's hooks belong to the canvas: a loss during the create makes it fail with
+    // "lost", and does not call onContextLost.
+    controller.current = { renderer, onLost: o.onContextLost, onRestored: o.onContextRestored };
     return renderer;
   } catch (error) {
-    // Leave nothing behind: the renderer's GL objects, the shim's listeners, the canvas's size. A
-    // serial taken is spent, never reused. A create that failed because the context was lost still
-    // hears of the restore, through this call's onContextRestored.
+    // Leave nothing behind: the renderer's GL objects, the canvas's size. A serial taken is spent,
+    // never reused. A create that failed because the context was lost still hears of the restore,
+    // through this call's onContextRestored; if the restore came while it failed, at once.
     if (w !== 0) x.web3d_destroy(w);
     const lost = shim.lost();
     shim.dispose();
-    if (lost) afterLoss(canvas, gl, o.onContextRestored);
+    if (lost && gl.isContextLost()) waitForRestore(controller, o.onContextRestored);
+    else if (lost && typeof o.onContextRestored === 'function') setTimeout(() => callHook(o.onContextRestored), 0);
     if (o.kind.width.call(canvas) !== size[0]) o.kind.setWidth.call(canvas, size[0]);
     if (o.kind.height.call(canvas) !== size[1]) o.kind.setHeight.call(canvas, size[1]);
     throw error;
@@ -544,38 +578,56 @@ function contextMismatch(antialias) {
 }
 
 /**
- * For a create that failed because the context was lost: the hook runs on the restore, or, if the
- * context was restored while the create was failing, as soon as this task is done.
+ * The loss controller of a canvas, one a canvas, made the first time web3d takes a context from it,
+ * and kept for the canvas's life. Its two listeners are the only ones web3d puts on a canvas:
+ * - on `webglcontextlost` it cancels the event, so the context can always be restored, counts the
+ *   loss (which finishes every renderer made before it), and calls the live renderer's
+ *   `onContextLost`;
+ * - on `webglcontextrestored` it calls, once each (one function once, however often it was given),
+ *   the `onContextRestored` of the renderer that was live at the loss and of every renderer disposed
+ *   while lost and every create that failed because of the loss. Then no renderer is live until a new
+ *   one is created, so a lost renderer left undisposed hears no later loss or restore.
+ * Each hook runs in its own `try`; what it throws is reported (`reportError`) and the rest still run.
  */
-function afterLoss(canvas, gl, hook) {
-  if (gl.isContextLost()) awaitRestore(canvas, hook);
-  else if (typeof hook === 'function') setTimeout(hook, 0);
+function controllerFor(canvas) {
+  let c = SHARED_STATE.controllers.get(canvas);
+  if (c) return c;
+  c = { losses: 0, current: null, waiting: new Set() };
+  ADD_LISTENER.call(canvas, 'webglcontextlost', (event) => {
+    event.preventDefault();
+    c.losses++;
+    const hook = c.current?.onLost;
+    if (typeof hook === 'function') callHook(hook);
+  });
+  ADD_LISTENER.call(canvas, 'webglcontextrestored', () => {
+    const hooks = new Set(c.waiting);
+    c.waiting.clear();
+    const restored = c.current?.onRestored;
+    if (typeof restored === 'function') hooks.add(restored);
+    c.current = null;
+    for (const hook of hooks) callHook(hook);
+  });
+  SHARED_STATE.controllers.set(canvas, c);
+  return c;
 }
 
-/**
- * Calls `hook` once when the canvas's context is restored: for a renderer disposed while its context
- * was lost, and for a create that failed because it was lost, so the recovery the LOST messages
- * describe (dispose, then create again on onContextRestored) gets its signal. One listener a canvas,
- * and each hook once however often it is asked for.
- */
-function awaitRestore(canvas, hook) {
-  if (typeof hook !== 'function') return;
-  const waiting = SHARED_STATE.restores.get(canvas);
-  if (waiting) {
-    waiting.add(hook);
-    return;
+const ADD_LISTENER = EventTarget.prototype.addEventListener;
+
+function waitForRestore(controller, hook) {
+  if (typeof hook === 'function') controller.waiting.add(hook);
+}
+
+/** Calls a page hook; what it throws is reported, not passed on, so one hook cannot stop another. */
+function callHook(hook) {
+  try {
+    hook();
+  } catch (error) {
+    if (typeof reportError === 'function') reportError(error);
+    else
+      setTimeout(() => {
+        throw error;
+      });
   }
-  const hooks = new Set([hook]);
-  SHARED_STATE.restores.set(canvas, hooks);
-  EventTarget.prototype.addEventListener.call(
-    canvas,
-    'webglcontextrestored',
-    () => {
-      SHARED_STATE.restores.delete(canvas);
-      for (const h of hooks) h();
-    },
-    { once: true },
-  );
 }
 
 function errorText(x, w, shim) {
@@ -589,7 +641,7 @@ function errorText(x, w, shim) {
 
 /** Made only by createRenderer. */
 export class Renderer {
-  constructor(canvas, kind, gl, shim, exports, w, serial, onContextRestored) {
+  constructor(canvas, kind, gl, shim, exports, w, serial) {
     this.canvas = canvas;
     this._kind = kind;
     this._gl = gl;
@@ -597,7 +649,6 @@ export class Renderer {
     this._x = exports;
     this._w = w;
     this._serial = serial;
-    this._onRestored = onContextRestored;
     this._busy = false;
     this._ioPtr = exports.web3d_io(w) >>> 0;
     this._statsPtr = exports.web3d_stats(w) >>> 0;
@@ -1089,12 +1140,15 @@ export class Renderer {
     if (this._busy) throw new Error(REENTRANT);
     this._x.web3d_destroy(this._w);
     this._w = 0;
-    const lost = this._shim.lost();
     this._shim.dispose();
-    // Disposed while lost, as the LOST message says to: onContextRestored still comes, so the page
-    // knows when to create the next renderer. (If the restore came while this renderer was live, its
-    // hook has run already.)
-    if (lost && this._gl.isContextLost()) awaitRestore(this.canvas, this._onRestored);
+    // If this is the canvas's live renderer, its hooks leave it now; disposed while the context is
+    // lost, as the LOST message says to, its onContextRestored still comes on the restore, so the page
+    // knows when to create the next renderer.
+    const controller = SHARED_STATE.controllers.get(this.canvas);
+    if (controller?.current?.renderer === this) {
+      if (this._gl.isContextLost()) waitForRestore(controller, controller.current.onRestored);
+      controller.current = null;
+    }
     if (OWNERS.get(this.canvas) === this) OWNERS.delete(this.canvas);
   }
 }

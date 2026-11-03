@@ -60,7 +60,7 @@
         "pass": true,
         "detail": {
           "hook": 0,
-          "first": "web3d: the canvas's WebGL context is lost; create the renderer again once it is restored (this call's onContextRestored is called then)",
+          "first": "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore",
           "size": [
             16,
             16
@@ -89,7 +89,7 @@
         "claim": "A loss during init: the create says lost (not a shader failure), the canvas is restorable, the next create draws with getError 0",
         "pass": true,
         "detail": {
-          "first": "web3d: the canvas's WebGL context is lost; create the renderer again once it is restored (this call's onContextRestored is called then)",
+          "first": "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore",
           "checks": 2,
           "restoreThrew": false,
           "restored": "restored",
@@ -105,9 +105,9 @@
       {
         "id": "LC5",
         "claim": "A loss whose event is still pending when the renderer is disposed stays restorable (one preventDefault), and the one-shot listener does not outlive it",
-        "pass": true,
+        "pass": false,
         "detail": {
-          "createDuring": "web3d: the canvas's WebGL context is lost; create the renderer again once it is restored (this call's onContextRestored is called then)",
+          "createDuring": "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore",
           "defaultPrevented": true,
           "restoreThrew": false,
           "restored": "restored",
@@ -118,7 +118,7 @@
             56
           ],
           "glError": 0,
-          "secondLossPrevented": false
+          "secondLossPrevented": true
         }
       },
       {
@@ -263,12 +263,12 @@
         "detail": {
           "first": {
             "threw": false,
-            "value": 78359799267329
+            "value": 1020162375417857
           },
           "errorAfterFirst": 0,
           "second": {
             "threw": false,
-            "value": 78359799267330
+            "value": 1020162375417858
           },
           "secondDraw": {
             "topLeft": [
@@ -296,15 +296,15 @@
         "detail": {
           "a": {
             "threw": false,
-            "value": 78360873009153
+            "value": 1020163449159681
           },
           "b": {
             "threw": false,
-            "value": 78360873009154
+            "value": 1020163449159682
           },
           "c": {
             "threw": false,
-            "value": 78360873009155
+            "value": 1020163449159683
           },
           "after": 0
         }
@@ -319,7 +319,7 @@
               300,
               150
             ],
-            "create": "web3d: the browser refused the texture upload (the console has the reason: a cross-origin image, a closed ImageBitmap, a lost context, or a source whose pixels do not fit the size it reports or changed size)\nweb3d: the texture upload raised WebGL error 0x502: the source's pixels do not fit the 300x150 texture made for it",
+            "create": "web3d: a canvas with a 'bitmaprenderer' context is not accepted as a texture source, because the bitmap it shows need not be its size; pass the ImageBitmap itself",
             "glError": 0
           },
           "offscreenBitmaprenderer": {
@@ -327,7 +327,7 @@
               64,
               32
             ],
-            "create": "web3d: the browser refused the texture upload (the console has the reason: a cross-origin image, a closed ImageBitmap, a lost context, or a source whose pixels do not fit the size it reports or changed size)\nweb3d: the texture upload raised WebGL error 0x502: the source's pixels do not fit the 64x32 texture made for it",
+            "create": "web3d: a canvas with a 'bitmaprenderer' context is not accepted as a texture source, because the bitmap it shows need not be its size; pass the ImageBitmap itself",
             "glError": 0
           },
           "placeholder": {
@@ -335,50 +335,16 @@
               8,
               8
             ],
-            "create": "created",
-            "glError": 0,
-            "draw": {
-              "topLeft": [
-                56,
-                255,
-                56
-              ],
-              "centre": [
-                56,
-                255,
-                56
-              ],
-              "bottomRight": [
-                56,
-                255,
-                56
-              ]
-            }
+            "create": "web3d: this canvas cannot be read here (its control was transferred to an OffscreenCanvas)",
+            "glError": 0
           },
           "placeholderLarger": {
             "reported": [
               32,
               32
             ],
-            "create": "created",
-            "glError": 0,
-            "draw": {
-              "topLeft": [
-                56,
-                255,
-                56
-              ],
-              "centre": [
-                56,
-                255,
-                56
-              ],
-              "bottomRight": [
-                56,
-                255,
-                56
-              ]
-            }
+            "create": "web3d: this canvas cannot be read here (its control was transferred to an OffscreenCanvas)",
+            "glError": 0
           }
         }
       },
@@ -465,7 +431,7 @@
             "glError": 0
           },
           "svgImage": "web3d: a texture source must be an ImageBitmap, canvas, OffscreenCanvas, ImageData or VideoFrame, not an object",
-          "transferredOffscreen": "web3d: texture is 0x0; this GPU allows 1 to 16384 pixels a side (resize it first, for example with createImageBitmap's resizeWidth)",
+          "transferredOffscreen": "web3d: this canvas cannot be read here (its control was transferred to an OffscreenCanvas)",
           "glError": 0
         }
       },
@@ -474,19 +440,19 @@
         "claim": "A same-origin frame shares the top window's counter (its serial follows ours, one more renderer counted); a frame nested in a cross-origin frame, back at this origin, shares it too",
         "pass": true,
         "detail": {
-          "ourSerial": 72983,
+          "ourSerial": 950105,
           "same": {
             "topShared": "on top",
             "ownShared": false,
-            "serial": 72984,
-            "object": 78366510153729,
+            "serial": 950106,
+            "object": 1020169086304257,
             "made": 23
           },
           "nested": {
             "topShared": "on top",
             "ownShared": false,
-            "serial": 72985,
-            "object": 78367583895553,
+            "serial": 950107,
+            "object": 1020170160046081,
             "made": 24
           },
           "madeBefore": 21,
@@ -499,19 +465,19 @@
         "pass": true,
         "detail": {
           "cross": {
-            "serial": 239819,
+            "serial": 605249,
             "topShared": "unreachable",
-            "object": 257504227360769
+            "object": 649881702105089
           },
           "worker": {
-            "object": 121543816380417,
+            "object": 364975046524929,
             "pixel": [
               56,
               255,
               56,
               255
             ],
-            "serial": 113196,
+            "serial": 339909,
             "ownShared": true,
             "made": 1
           },
@@ -820,10 +786,12 @@
         }
       }
     ],
-    "firstSerial": 72962,
-    "passed": 23,
-    "failed": [],
-    "messages": 24
+    "firstSerial": 950084,
+    "passed": 22,
+    "failed": [
+      "LC5"
+    ],
+    "messages": 18
   },
   "messages": [
     "warning: web3d: the WebGL context was lost while the shader programs were compiled",
@@ -834,21 +802,15 @@
     "warning: web3d: WebGL error 0x500 was pending before a texture upload; an earlier call raised it, not the upload",
     "warning: web3d: WebGL error 0x501 was pending before a texture upload; an earlier call raised it, not the upload",
     "warning: web3d: WebGL error 0x502 was pending before a texture upload; an earlier call raised it, not the upload",
-    "warning: WebGL: INVALID_OPERATION: texSubImage2D: source sub-rectangle specified via pixel unpack parameters is invalid",
-    "error: web3d: the texture upload raised WebGL error 0x502: the source's pixels do not fit the 300x150 texture made for it",
-    "warning: WebGL: INVALID_OPERATION: texSubImage2D: source sub-rectangle specified via pixel unpack parameters is invalid",
-    "error: web3d: the texture upload raised WebGL error 0x502: the source's pixels do not fit the 64x32 texture made for it",
-    "warning: [.WebGL-0x124000da400] GL_INVALID_OPERATION: glDrawArrays: It is undefined behaviour to have a used but unbound uniform buffer.",
-    "warning: [.WebGL-0x124000da400] GL_INVALID_VALUE: glLineWidth: Invalid width.",
+    "warning: [.WebGL-0x13c000da400] GL_INVALID_OPERATION: glDrawArrays: It is undefined behaviour to have a used but unbound uniform buffer.",
+    "warning: [.WebGL-0x13c000da400] GL_INVALID_VALUE: glLineWidth: Invalid width.",
     "warning: WebGL: INVALID_VALUE: texSubImage2D: The source data has been detached.",
     "error: web3d: the texture upload raised WebGL error 0x501: the source's pixels do not fit the 4x4 texture made for it",
     "warning: WebGL: INVALID_ENUM: enable: invalid capability",
     "warning: WebGL: INVALID_ENUM: getParameter: invalid parameter name",
     "warning: WebGL: INVALID_ENUM: bindBuffer: invalid target",
-    "warning: WebGL: INVALID_OPERATION: texSubImage2D: source sub-rectangle specified via pixel unpack parameters is invalid",
-    "warning: WebGL: INVALID_OPERATION: texSubImage2D: source sub-rectangle specified via pixel unpack parameters is invalid",
-    "warning: [.WebGL-0x124000da400] GL_INVALID_OPERATION: glDrawArrays: It is undefined behaviour to have a used but unbound uniform buffer.",
-    "warning: [.WebGL-0x124000da400] GL_INVALID_VALUE: glLineWidth: Invalid width.",
+    "warning: [.WebGL-0x13c000da400] GL_INVALID_OPERATION: glDrawArrays: It is undefined behaviour to have a used but unbound uniform buffer.",
+    "warning: [.WebGL-0x13c000da400] GL_INVALID_VALUE: glLineWidth: Invalid width.",
     "warning: WebGL: INVALID_VALUE: texSubImage2D: The source data has been detached."
   ]
 }

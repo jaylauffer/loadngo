@@ -40,11 +40,16 @@ export interface RendererOptions {
   cpuTiming?: boolean;
   /** Where the wasm is: a URL, a Response, bytes (a DataView too) or a compiled module (default: beside web3d.js). */
   wasm?: string | URL | Response | BufferSource | WebAssembly.Module;
-  /** Called when this renderer's context is lost; not for a create that fails because of a loss. */
+  /**
+   * Called when the canvas's context is lost while this renderer is the canvas's live one; not for a
+   * create that fails because of a loss, and never again once the context has been restored.
+   */
   onContextLost?: () => void;
   /**
-   * Called when the context is restored: for a live renderer, for one disposed while lost, and for a
-   * create that failed because the context was lost. Create the next renderer then.
+   * Called once when the context is restored after a loss of this renderer's: whether it was still
+   * live, disposed while lost, or a create that failed because of the loss. Create the next renderer
+   * then. web3d keeps one loss controller a canvas, which cancels every lost event so the context can
+   * be restored, and runs each hook once in its own try.
    */
   onContextRestored?: () => void;
 }
@@ -79,8 +84,8 @@ export interface MeshData {
 /**
  * Sources sized through built-in getters (a VideoFrame by its visible rectangle, turned by its
  * rotation). An <img> or <video> is refused (its reported size can differ from the pixels WebGL
- * uploads): decode it first with createImageBitmap. An upload that still does not fit, such as a
- * 'bitmaprenderer' canvas whose bitmap is not the canvas's size, is refused.
+ * uploads): decode it first with createImageBitmap. A canvas with a 'bitmaprenderer' context is
+ * refused too (its bitmap need not be its size): pass the ImageBitmap itself.
  */
 export type TextureSource = ImageBitmap | HTMLCanvasElement | OffscreenCanvas | ImageData | VideoFrame;
 
@@ -149,7 +154,7 @@ export class Renderer {
   setClearColor(r: number, g: number, b: number): void;
   /** Times frames on the CPU; off by default (two boxed numbers a frame in V8). */
   setCpuTiming(on: boolean): void;
-  /** Draws a frame; false while the context is lost. */
+  /** Draws a frame; false from the context's loss on, for good: after a restore, create a new renderer. */
   frame(): boolean;
   /** [cpuMs, gpuMs or NaN, GPU frame, draws, triangles, culled, program binds, material binds]; `out` holds at least 8. */
   readStats(out: Float64Array): Float64Array;

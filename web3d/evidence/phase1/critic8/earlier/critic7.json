@@ -1,0 +1,854 @@
+{
+  "browser": "156.0.8078.80",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+  "served": {},
+  "result": {
+    "probes": [
+      {
+        "id": "LC1",
+        "claim": "Following the LOST message literally (\"dispose this renderer, then create a new one once the context is restored (onContextRestored)\") reaches onContextRestored",
+        "pass": true,
+        "detail": {
+          "lostHook": 1,
+          "restoredHook": 1,
+          "pageRestoredEvent": 1,
+          "restoreThrew": false,
+          "again": "created"
+        }
+      },
+      {
+        "id": "LC2",
+        "claim": "A lost renderer cannot change the canvas that a new renderer (made beside it after the restore) now owns",
+        "pass": true,
+        "detail": {
+          "restored": "restored",
+          "before": {
+            "size": [
+              32,
+              32
+            ],
+            "topRight": [
+              56,
+              255,
+              56
+            ]
+          },
+          "oldResize": {
+            "threw": true,
+            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
+          },
+          "oldSetClear": {
+            "threw": false
+          },
+          "after": {
+            "size": [
+              32,
+              32
+            ],
+            "topRight": [
+              56,
+              255,
+              56
+            ],
+            "glError": 0
+          }
+        }
+      },
+      {
+        "id": "LC3",
+        "claim": "A loss whose event arrives while the module instantiates: the create says lost, the canvas is restorable and the next create draws",
+        "pass": true,
+        "detail": {
+          "hook": 0,
+          "first": "web3d: the canvas's WebGL context is lost; create the renderer again once it is restored (this call's onContextRestored is called then)",
+          "size": [
+            16,
+            16
+          ],
+          "restoreThrew": false,
+          "restored": "restored",
+          "again": "created",
+          "pixel": [
+            56,
+            255,
+            56
+          ],
+          "glError": 0
+        }
+      },
+      {
+        "id": "LC3b",
+        "claim": "A create that fails does not call the page's onContextLost hook (it has no renderer to dispose)",
+        "pass": true,
+        "detail": {
+          "hook": 0
+        }
+      },
+      {
+        "id": "LC4",
+        "claim": "A loss during init: the create says lost (not a shader failure), the canvas is restorable, the next create draws with getError 0",
+        "pass": true,
+        "detail": {
+          "first": "web3d: the canvas's WebGL context is lost; create the renderer again once it is restored (this call's onContextRestored is called then)",
+          "checks": 2,
+          "restoreThrew": false,
+          "restored": "restored",
+          "again": "created",
+          "pixel": [
+            56,
+            255,
+            56
+          ],
+          "glError": 0
+        }
+      },
+      {
+        "id": "LC5",
+        "claim": "A loss whose event is still pending when the renderer is disposed stays restorable (one preventDefault), and the one-shot listener does not outlive it",
+        "pass": true,
+        "detail": {
+          "createDuring": "web3d: the canvas's WebGL context is lost; create the renderer again once it is restored (this call's onContextRestored is called then)",
+          "defaultPrevented": true,
+          "restoreThrew": false,
+          "restored": "restored",
+          "again": "created",
+          "pixel": [
+            56,
+            255,
+            56
+          ],
+          "glError": 0,
+          "secondLossPrevented": false
+        }
+      },
+      {
+        "id": "LC6",
+        "claim": "Dispose while lost, then restore: a new renderer draws, getError 0",
+        "pass": true,
+        "detail": {
+          "frameWhileLost": {
+            "threw": false,
+            "value": false
+          },
+          "restored": "restored",
+          "errorAfterRestore": 0,
+          "again": "created",
+          "pixel": [
+            56,
+            255,
+            56
+          ],
+          "glError": 0
+        }
+      },
+      {
+        "id": "LC7",
+        "claim": "Once the context is lost (isContextLost true, before the event), frame() returns false, as WEB3D.md says, consistent with r.lost and the creates",
+        "pass": true,
+        "detail": {
+          "isContextLost": true,
+          "frame": {
+            "threw": false,
+            "value": false
+          },
+          "lostGetter": true,
+          "frameAfterGetter": {
+            "threw": false,
+            "value": false
+          },
+          "create": {
+            "threw": true,
+            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
+          },
+          "frameAfterEvent": {
+            "threw": false,
+            "value": false
+          }
+        }
+      },
+      {
+        "id": "LC8",
+        "claim": "After a loss and restore, a new renderer's first texture is accepted and draws",
+        "pass": true,
+        "detail": {
+          "restored": "restored",
+          "texture": "created",
+          "draw": {
+            "topLeft": [
+              56,
+              255,
+              56
+            ],
+            "centre": [
+              56,
+              255,
+              56
+            ],
+            "bottomRight": [
+              56,
+              255,
+              56
+            ]
+          },
+          "glError": 0
+        }
+      },
+      {
+        "id": "D1",
+        "claim": "A page-made context without depth is refused for depth, every time, with the size kept",
+        "pass": true,
+        "detail": {
+          "noDepth": [
+            "web3d: this canvas's WebGL context has no depth buffer (web3d needs one); a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit",
+            "web3d: this canvas's WebGL context has no depth buffer (web3d needs one); a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit"
+          ],
+          "sizeKept": true,
+          "noDepthNoAA": [
+            "web3d: this canvas's WebGL context has antialias false (ask for antialias: false) and no depth buffer (web3d needs one); a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit",
+            "web3d: this canvas's WebGL context has no depth buffer (web3d needs one); a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit"
+          ],
+          "otherAttributes": "created",
+          "otherPixel": [
+            56,
+            255,
+            56
+          ],
+          "otherAttrs": {
+            "alpha": true,
+            "antialias": true,
+            "depth": true,
+            "desynchronized": false,
+            "failIfMajorPerformanceCaveat": false,
+            "powerPreference": "default",
+            "premultipliedAlpha": false,
+            "preserveDrawingBuffer": true,
+            "stencil": true,
+            "xrCompatible": false
+          }
+        }
+      },
+      {
+        "id": "D2",
+        "claim": "A page context with other attributes (stencil, alpha, unpremultiplied, preserved) but depth and matching antialias is accepted and draws near over far",
+        "pass": true,
+        "detail": {
+          "otherAttributes": "created",
+          "pixel": [
+            56,
+            255,
+            56
+          ],
+          "attrs": {
+            "alpha": true,
+            "antialias": true,
+            "depth": true,
+            "desynchronized": false,
+            "failIfMajorPerformanceCaveat": false,
+            "powerPreference": "default",
+            "premultipliedAlpha": false,
+            "preserveDrawingBuffer": true,
+            "stencil": true,
+            "xrCompatible": false
+          },
+          "noDepthNoAA": [
+            "web3d: this canvas's WebGL context has antialias false (ask for antialias: false) and no depth buffer (web3d needs one); a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit",
+            "web3d: this canvas's WebGL context has no depth buffer (web3d needs one); a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit"
+          ]
+        }
+      },
+      {
+        "id": "T1",
+        "claim": "A good texture is not refused for a GL error that was already pending in the context (an error the page left), and that error is not swallowed",
+        "pass": true,
+        "detail": {
+          "first": {
+            "threw": false,
+            "value": 781867926159361
+          },
+          "errorAfterFirst": 0,
+          "second": {
+            "threw": false,
+            "value": 781867926159362
+          },
+          "secondDraw": {
+            "topLeft": [
+              56,
+              255,
+              56
+            ],
+            "centre": [
+              56,
+              255,
+              56
+            ],
+            "bottomRight": [
+              56,
+              255,
+              56
+            ]
+          }
+        }
+      },
+      {
+        "id": "T2",
+        "claim": "Pending GL errors from before the upload are not reported as the upload's",
+        "pass": true,
+        "detail": {
+          "a": {
+            "threw": false,
+            "value": 781868999901185
+          },
+          "b": {
+            "threw": false,
+            "value": 781868999901186
+          },
+          "c": {
+            "threw": false,
+            "value": 781868999901187
+          },
+          "after": 0
+        }
+      },
+      {
+        "id": "T3",
+        "claim": "Every canvas source is sized by what WebGL uploads (WEB3D: \"sources whose upload size is exactly knowable\"): a texture either fills with the source or is refused",
+        "pass": true,
+        "detail": {
+          "bitmaprenderer": {
+            "reported": [
+              300,
+              150
+            ],
+            "create": "web3d: the browser refused the texture upload (the console has the reason: a cross-origin image, a closed ImageBitmap, a lost context, or a source whose pixels do not fit the size it reports or changed size)\nweb3d: the texture upload raised WebGL error 0x502: the source's pixels do not fit the 300x150 texture made for it",
+            "glError": 0
+          },
+          "offscreenBitmaprenderer": {
+            "reported": [
+              64,
+              32
+            ],
+            "create": "web3d: the browser refused the texture upload (the console has the reason: a cross-origin image, a closed ImageBitmap, a lost context, or a source whose pixels do not fit the size it reports or changed size)\nweb3d: the texture upload raised WebGL error 0x502: the source's pixels do not fit the 64x32 texture made for it",
+            "glError": 0
+          },
+          "placeholder": {
+            "reported": [
+              8,
+              8
+            ],
+            "create": "created",
+            "glError": 0,
+            "draw": {
+              "topLeft": [
+                56,
+                255,
+                56
+              ],
+              "centre": [
+                56,
+                255,
+                56
+              ],
+              "bottomRight": [
+                56,
+                255,
+                56
+              ]
+            }
+          },
+          "placeholderLarger": {
+            "reported": [
+              32,
+              32
+            ],
+            "create": "created",
+            "glError": 0,
+            "draw": {
+              "topLeft": [
+                56,
+                255,
+                56
+              ],
+              "centre": [
+                56,
+                255,
+                56
+              ],
+              "bottomRight": [
+                56,
+                255,
+                56
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "T4",
+        "claim": "A VideoFrame is sized by its visible rectangle and uploads exactly that region (offset rect, rotation), or is refused cleanly",
+        "pass": true,
+        "detail": {
+          "offset": {
+            "visible": [
+              4,
+              4
+            ],
+            "display": [
+              4,
+              4
+            ],
+            "create": "created",
+            "glError": 0,
+            "draw": {
+              "topLeft": [
+                56,
+                255,
+                56
+              ],
+              "centre": [
+                56,
+                255,
+                56
+              ],
+              "bottomRight": [
+                56,
+                255,
+                56
+              ]
+            }
+          },
+          "rotated": {
+            "rotation": 90,
+            "visible": [
+              4,
+              2
+            ],
+            "display": [
+              2,
+              4
+            ],
+            "create": "created",
+            "glError": 0,
+            "draw": {
+              "topLeft": [
+                56,
+                255,
+                56
+              ],
+              "centre": [
+                56,
+                255,
+                56
+              ],
+              "bottomRight": [
+                56,
+                255,
+                56
+              ]
+            }
+          },
+          "closed": "web3d: texture is 0x0; this GPU allows 1 to 16384 pixels a side (resize it first, for example with createImageBitmap's resizeWidth)",
+          "finalError": 0
+        }
+      },
+      {
+        "id": "T5",
+        "claim": "An <img> from another realm, a detached ImageData, an SVG <image> and a transferred OffscreenCanvas are refused cleanly (no handle, getError 0)",
+        "pass": true,
+        "detail": {
+          "foreignImg": "web3d: an <img> is not accepted as a texture source, because its reported size can differ from the pixels WebGL uploads; decode it first with createImageBitmap(source, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })",
+          "detachedImageData": {
+            "reported": [
+              4,
+              4
+            ],
+            "create": "web3d: the browser refused the texture upload (the console has the reason: a cross-origin image, a closed ImageBitmap, a lost context, or a source whose pixels do not fit the size it reports or changed size)\nweb3d: the texture upload raised WebGL error 0x501: the source's pixels do not fit the 4x4 texture made for it",
+            "glError": 0
+          },
+          "svgImage": "web3d: a texture source must be an ImageBitmap, canvas, OffscreenCanvas, ImageData or VideoFrame, not an object",
+          "transferredOffscreen": "web3d: texture is 0x0; this GPU allows 1 to 16384 pixels a side (resize it first, for example with createImageBitmap's resizeWidth)",
+          "glError": 0
+        }
+      },
+      {
+        "id": "S1",
+        "claim": "A same-origin frame shares the top window's counter (its serial follows ours, one more renderer counted); a frame nested in a cross-origin frame, back at this origin, shares it too",
+        "pass": true,
+        "detail": {
+          "ourSerial": 728176,
+          "same": {
+            "topShared": "on top",
+            "ownShared": false,
+            "serial": 728177,
+            "object": 781874637045761,
+            "made": 23
+          },
+          "nested": {
+            "topShared": "on top",
+            "ownShared": false,
+            "serial": 728178,
+            "object": 781875710787585,
+            "made": 24
+          },
+          "madeBefore": 21,
+          "madeAfter": 24
+        }
+      },
+      {
+        "id": "S2",
+        "claim": "A cross-origin frame and a worker keep their own counters (random starts) and draw; every foreign handle is refused by our renderer, which still draws",
+        "pass": true,
+        "detail": {
+          "cross": {
+            "serial": 411983,
+            "topShared": "unreachable",
+            "object": 442363914747905
+          },
+          "worker": {
+            "object": 180151866359809,
+            "pixel": [
+              56,
+              255,
+              56,
+              255
+            ],
+            "serial": 167779,
+            "ownShared": true,
+            "made": 1
+          },
+          "refused": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "pixel": [
+            56,
+            255,
+            56
+          ]
+        }
+      },
+      {
+        "id": "S3",
+        "claim": "The counter goes round (2^20 - 1, then 1), refuses once it has made 2^20 - 1 renderers, and the refusal leaves the canvas usable",
+        "pass": true,
+        "detail": {
+          "a": 1048575,
+          "b": 1,
+          "madeNow": 1048575,
+          "refused": "web3d: this page has made 1048575 renderers, the most it may",
+          "sizeKept": true,
+          "afterReset": 2
+        }
+      },
+      {
+        "id": "H1",
+        "claim": "At the largest serial, handles are whole numbers below 2^50; every fraction a double holds there (halves, quarters, eighths) is refused, by the wrapper and by the raw export; the object stays drawn",
+        "pass": true,
+        "detail": {
+          "serial": 1048575,
+          "o": {
+            "serial": 1048575,
+            "kind": 4,
+            "generation": 0,
+            "index": 1
+          },
+          "o2": {
+            "serial": 1048575,
+            "kind": 4,
+            "generation": 0,
+            "index": 2
+          },
+          "largestPossible": 1125899504189439,
+          "largestBelow250": true,
+          "fractions": [
+            {
+              "add": 0.5,
+              "value": 1125899369971713.5,
+              "isWhole": false,
+              "refused": true,
+              "msg": "web3d: 1125899369971713.5 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            {
+              "add": -0.5,
+              "value": 1125899369971712.5,
+              "isWhole": false,
+              "refused": true,
+              "msg": "web3d: 1125899369971712.5 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            {
+              "add": 0.25,
+              "value": 1125899369971713.2,
+              "isWhole": false,
+              "refused": true,
+              "msg": "web3d: 1125899369971713.2 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            {
+              "add": -0.25,
+              "value": 1125899369971712.8,
+              "isWhole": false,
+              "refused": true,
+              "msg": "web3d: 1125899369971712.8 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            {
+              "add": 0.125,
+              "value": 1125899369971713.1,
+              "isWhole": false,
+              "refused": true,
+              "msg": "web3d: 1125899369971713.1 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            {
+              "add": -0.125,
+              "value": 1125899369971712.9,
+              "isWhole": false,
+              "refused": true,
+              "msg": "web3d: 1125899369971712.9 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            {
+              "add": 0.375,
+              "value": 1125899369971713.4,
+              "isWhole": false,
+              "refused": true,
+              "msg": "web3d: 1125899369971713.4 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            {
+              "add": 0.1,
+              "value": 1125899369971713.1,
+              "isWhole": false,
+              "refused": true,
+              "msg": "web3d: 1125899369971713.1 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            },
+            {
+              "add": 0.9,
+              "value": 1125899369971713.9,
+              "isWhole": false,
+              "refused": true,
+              "msg": "web3d: 1125899369971713.9 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+            }
+          ],
+          "roundsToNext": {
+            "add": 0.9375,
+            "equalsO2": true
+          },
+          "pixel": [
+            56,
+            255,
+            56
+          ],
+          "raw": [
+            {
+              "v": "1125899369971713.5",
+              "status": 1
+            },
+            {
+              "v": "1125899369971712.9",
+              "status": 1
+            },
+            {
+              "v": "0",
+              "status": 1
+            },
+            {
+              "v": "NaN",
+              "status": 1
+            },
+            {
+              "v": "Infinity",
+              "status": 1
+            },
+            {
+              "v": "1125899906842624",
+              "status": 1
+            },
+            {
+              "v": "2251799276814337",
+              "status": 1
+            },
+            {
+              "v": "-1125899369971713",
+              "status": 1
+            },
+            {
+              "v": "1125900443713537",
+              "status": 1
+            },
+            {
+              "v": "1125899235753985",
+              "status": 1
+            },
+            {
+              "v": "1125899370037249",
+              "status": 1
+            }
+          ],
+          "pixelAfterRaw": [
+            56,
+            255,
+            56
+          ],
+          "wrap": {
+            "first": {
+              "serial": 1048575,
+              "kind": 3,
+              "generation": 0,
+              "index": 2
+            },
+            "last": {
+              "serial": 1048575,
+              "kind": 3,
+              "generation": 2047,
+              "index": 2
+            },
+            "next": {
+              "serial": 1048575,
+              "kind": 3,
+              "generation": 0,
+              "index": 3
+            },
+            "distinct": 2048,
+            "nextIsNew": true,
+            "firstRefused": true,
+            "lastRefused": true
+          },
+          "exhaust": {
+            "live": 65535,
+            "extra": "web3d: too many objects",
+            "ms": 10,
+            "pixel": [
+              56,
+              255,
+              56
+            ],
+            "reuse": {
+              "serial": 1048575,
+              "kind": 4,
+              "generation": 1,
+              "index": 103
+            },
+            "oldRefused": true
+          },
+          "glError": 0
+        }
+      },
+      {
+        "id": "H2",
+        "claim": "A slot serves 2,048 generations then retires; no handle is issued twice; 65,535 live values then a clean refusal; a freed slot is reused with a new generation; getError 0",
+        "pass": true,
+        "detail": {
+          "wrap": {
+            "first": {
+              "serial": 1048575,
+              "kind": 3,
+              "generation": 0,
+              "index": 2
+            },
+            "last": {
+              "serial": 1048575,
+              "kind": 3,
+              "generation": 2047,
+              "index": 2
+            },
+            "next": {
+              "serial": 1048575,
+              "kind": 3,
+              "generation": 0,
+              "index": 3
+            },
+            "distinct": 2048,
+            "nextIsNew": true,
+            "firstRefused": true,
+            "lastRefused": true
+          },
+          "exhaust": {
+            "live": 65535,
+            "extra": "web3d: too many objects",
+            "ms": 10,
+            "pixel": [
+              56,
+              255,
+              56
+            ],
+            "reuse": {
+              "serial": 1048575,
+              "kind": 4,
+              "generation": 1,
+              "index": 103
+            },
+            "oldRefused": true
+          },
+          "glError": 0
+        }
+      },
+      {
+        "id": "W1",
+        "claim": "The wasm option takes another realm's Module, URL, Response, bytes and ArrayBuffer, and draws",
+        "pass": true,
+        "detail": {
+          "foreignModule": "created, draws",
+          "foreignURL": "created, draws",
+          "foreignResponse": "created, draws",
+          "foreignBytes": "created, draws",
+          "foreignArrayBuffer": "created, draws",
+          "dataView": "created, draws",
+          "toStringObject": "web3d: the wasm option must be a URL (a string or URL), a Response, bytes or a WebAssembly.Module, not an object",
+          "toStringCalls": 0,
+          "stringObject": "web3d: the wasm option must be a URL (a string or URL), a Response, bytes or a WebAssembly.Module, not an object",
+          "proxyResponse": "web3d: the wasm option must be a URL (a string or URL), a Response, bytes or a WebAssembly.Module, not an object",
+          "promise": "web3d: the wasm option must be a URL (a string or URL), a Response, bytes or a WebAssembly.Module, not an object",
+          "blob": "web3d: the wasm option must be a URL (a string or URL), a Response, bytes or a WebAssembly.Module, not an object",
+          "symbol": "web3d: the wasm option must be a URL (a string or URL), a Response, bytes or a WebAssembly.Module, not a symbol",
+          "number": "web3d: the wasm option must be a URL (a string or URL), a Response, bytes or a WebAssembly.Module, not 7",
+          "usedResponse": "Failed to execute 'compile' on 'WebAssembly': Cannot compile WebAssembly.Module from an already read Response",
+          "lyingOkResponse": "WebAssembly.compile(): expected magic word 00 61 73 6d, found 6e 6f 70 65 @+0"
+        }
+      },
+      {
+        "id": "W2",
+        "claim": "Anything else is refused before it is used (no toString runs): an object with toString, a String object, a Proxy over a Response, a Promise, a Blob, a symbol, a number",
+        "pass": true,
+        "detail": {
+          "toStringObject": "web3d: the wasm option must be a URL (a string or URL), a Response, bytes or a WebAssembly.Module, not an object",
+          "stringObject": "web3d: the wasm option must be a URL (a string or URL), a Response, bytes or a WebAssembly.Module, not an object",
+          "proxyResponse": "web3d: the wasm option must be a URL (a string or URL), a Response, bytes or a WebAssembly.Module, not an object",
+          "promise": "web3d: the wasm option must be a URL (a string or URL), a Response, bytes or a WebAssembly.Module, not an object",
+          "blob": "web3d: the wasm option must be a URL (a string or URL), a Response, bytes or a WebAssembly.Module, not an object",
+          "symbol": "web3d: the wasm option must be a URL (a string or URL), a Response, bytes or a WebAssembly.Module, not a symbol",
+          "number": "web3d: the wasm option must be a URL (a string or URL), a Response, bytes or a WebAssembly.Module, not 7",
+          "toStringCalls": 0,
+          "usedResponse": "Failed to execute 'compile' on 'WebAssembly': Cannot compile WebAssembly.Module from an already read Response",
+          "lyingOkResponse": "WebAssembly.compile(): expected magic word 00 61 73 6d, found 6e 6f 70 65 @+0"
+        }
+      }
+    ],
+    "firstSerial": 728155,
+    "passed": 23,
+    "failed": [],
+    "messages": 24
+  },
+  "messages": [
+    "warning: web3d: the WebGL context was lost while the shader programs were compiled",
+    "warning: WebGL: INVALID_ENUM: enable: invalid capability",
+    "warning: web3d: WebGL error 0x500 was pending before a texture upload; an earlier call raised it, not the upload",
+    "warning: WebGL: INVALID_ENUM: getParameter: invalid parameter name",
+    "warning: WebGL: INVALID_ENUM: bindBuffer: invalid target",
+    "warning: web3d: WebGL error 0x500 was pending before a texture upload; an earlier call raised it, not the upload",
+    "warning: web3d: WebGL error 0x501 was pending before a texture upload; an earlier call raised it, not the upload",
+    "warning: web3d: WebGL error 0x502 was pending before a texture upload; an earlier call raised it, not the upload",
+    "warning: WebGL: INVALID_OPERATION: texSubImage2D: source sub-rectangle specified via pixel unpack parameters is invalid",
+    "error: web3d: the texture upload raised WebGL error 0x502: the source's pixels do not fit the 300x150 texture made for it",
+    "warning: WebGL: INVALID_OPERATION: texSubImage2D: source sub-rectangle specified via pixel unpack parameters is invalid",
+    "error: web3d: the texture upload raised WebGL error 0x502: the source's pixels do not fit the 64x32 texture made for it",
+    "warning: [.WebGL-0x12c000d9800] GL_INVALID_OPERATION: glDrawArrays: It is undefined behaviour to have a used but unbound uniform buffer.",
+    "warning: [.WebGL-0x12c000d9800] GL_INVALID_VALUE: glLineWidth: Invalid width.",
+    "warning: WebGL: INVALID_VALUE: texSubImage2D: The source data has been detached.",
+    "error: web3d: the texture upload raised WebGL error 0x501: the source's pixels do not fit the 4x4 texture made for it",
+    "warning: WebGL: INVALID_ENUM: enable: invalid capability",
+    "warning: WebGL: INVALID_ENUM: getParameter: invalid parameter name",
+    "warning: WebGL: INVALID_ENUM: bindBuffer: invalid target",
+    "warning: WebGL: INVALID_OPERATION: texSubImage2D: source sub-rectangle specified via pixel unpack parameters is invalid",
+    "warning: WebGL: INVALID_OPERATION: texSubImage2D: source sub-rectangle specified via pixel unpack parameters is invalid",
+    "warning: [.WebGL-0x12c000d9800] GL_INVALID_OPERATION: glDrawArrays: It is undefined behaviour to have a used but unbound uniform buffer.",
+    "warning: [.WebGL-0x12c000d9800] GL_INVALID_VALUE: glLineWidth: Invalid width.",
+    "warning: WebGL: INVALID_VALUE: texSubImage2D: The source data has been detached."
+  ]
+}

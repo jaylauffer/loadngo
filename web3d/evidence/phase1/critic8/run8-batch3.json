@@ -1,0 +1,151 @@
+{
+  "started": "2026-11-03T05:55:44.364Z",
+  "console": [],
+  "pageErrors": [],
+  "browser": "Chrome 156.0.8078.80 (headless, own instance)",
+  "probes": [
+    {
+      "id": "E16",
+      "claim": "a 'bitmaprenderer' canvas smaller than its bitmap: the texture holds the whole image (scaled), not a crop of its corner",
+      "pass": false,
+      "detail": {
+        "element 4x4, bitmap 8x8": {
+          "reported": [
+            4,
+            4
+          ],
+          "leftTop": [
+            56,
+            255,
+            56
+          ],
+          "rightTop": [
+            56,
+            255,
+            56
+          ],
+          "leftBottom": [
+            56,
+            255,
+            56
+          ],
+          "rightBottom": [
+            56,
+            255,
+            56
+          ]
+        },
+        "offscreen 4x4, bitmap 8x8": {
+          "reported": [
+            4,
+            4
+          ],
+          "leftTop": [
+            56,
+            255,
+            56
+          ],
+          "rightTop": [
+            56,
+            255,
+            56
+          ],
+          "leftBottom": [
+            56,
+            255,
+            56
+          ],
+          "rightBottom": [
+            56,
+            255,
+            56
+          ]
+        },
+        "element 4x8, bitmap 8x8": {
+          "reported": [
+            4,
+            8
+          ],
+          "leftTop": [
+            56,
+            255,
+            56
+          ],
+          "rightTop": [
+            56,
+            255,
+            56
+          ],
+          "leftBottom": [
+            56,
+            189,
+            56
+          ],
+          "rightBottom": [
+            56,
+            189,
+            56
+          ]
+        },
+        "element 8x8, bitmap 8x8 (control)": {
+          "reported": [
+            8,
+            8
+          ],
+          "leftTop": [
+            56,
+            255,
+            56
+          ],
+          "rightTop": [
+            255,
+            56,
+            56
+          ],
+          "leftBottom": [
+            56,
+            189,
+            56
+          ],
+          "rightBottom": [
+            189,
+            56,
+            56
+          ]
+        }
+      }
+    },
+    {
+      "id": "E16c",
+      "claim": "control: an 8x8 canvas with its own 8x8 bitmap shows the whole image",
+      "pass": true,
+      "detail": {
+        "reported": [
+          8,
+          8
+        ],
+        "leftTop": [
+          56,
+          255,
+          56
+        ],
+        "rightTop": [
+          255,
+          56,
+          56
+        ],
+        "leftBottom": [
+          56,
+          189,
+          56
+        ],
+        "rightBottom": [
+          189,
+          56,
+          56
+        ]
+      }
+    }
+  ],
+  "passed": 1
+}
