@@ -1,0 +1,20 @@
+$ cargo fmt --check
+>>> exit 0
+$ cargo clippy --locked --workspace --all-targets --all-features --exclude loadngo-gfx-dx12 --exclude gui-win32 --exclude proactor-harness -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.48s
+>>> exit 0
+$ cargo clippy --locked -p loadngo-web3d --target wasm32-unknown-unknown --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s
+>>> exit 0
+$ cargo test --locked -p loadngo-web3d
+running 75 tests
+test result: ok. 75 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+>>> exit 0
+$ cargo test --locked -p loadngo-web3d --release
+running 75 tests
+test result: ok. 75 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+>>> exit 0

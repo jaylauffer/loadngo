@@ -1,0 +1,14 @@
+FAIL  X8 a representable fraction on a handle is refused; o + 2^-30 is o itself for every object handle (2^24 and up)
+pass  C1 non-numbers inside a matrix or vector Array are refused and no valueOf runs (WEB3D.md "Nothing is converted, so no valueOf runs")
+pass  C2 an Array argument's length is read once (WEB3D.md "Each field ... is read into a local before anything is checked or staged")
+pass  H5 another (disposed) renderer's handle is refused, also once its salt is reused (WEB3D.md "another renderer's handle, is refused"; "never reissued")
+pass  R1 Rust refuses staged arrays that run past, are misaligned, lie outside staging or were freed; frees of anything else are ignored
+pass  R2 300 creates that throw after staging (about 5 MiB each) leave memory where it was
+pass  T1 a texture option getter that calls the renderer is refused, and one that throws leaves it usable
+pass  T2 a texture option getter that resizes the source after its size was read: refused, or no GL error (WEB3D.md "read once ... before anything is checked")
+pass  L5 one failed fetch, then the same URL loads; two creates sharing one failed fetch both fail and the next one loads
+pass  Y5 a renderer that asks for antialias on a canvas whose context lacks it is refused (WEB3D.md "must ask for the same, or is refused")
+pass  B1 with the heap past 2 GiB, a mesh staged above 2 GiB draws
+FAIL  K1 a 33rd live renderer is refused, its failed create leaves no listener, and a slot freed by dispose is usable
+browser and server stopped
+>>> exit 0

@@ -96,6 +96,55 @@ export function createGl(gl, lostSince) {
     return shader;
   };
 
+  /**
+   * Whether polygons are drawn as lines: one triangle far larger than a 1x1 framebuffer covers its
+   * one pixel when filled, and leaves it empty as lines, whose edges all lie outside. Runs once a
+   * renderer, after the rest of the reset (so nothing else the page left can hide the triangle),
+   * with objects of its own that it deletes, and raises no WebGL error. Skipped where the browser
+   * has no WEBGL_polygon_mode, since then no page can have changed the mode.
+   */
+  const drawsLines = () => {
+    if (!gl.getSupportedExtensions()?.includes('WEBGL_polygon_mode')) return false;
+    const program = gl.createProgram();
+    const vs = compile(gl.VERTEX_SHADER, '#version 300 es\nvoid main() {\n  vec2 p[3] = vec2[3](vec2(-4.0, -4.0), vec2(8.0, -4.0), vec2(-4.0, 8.0));\n  gl_Position = vec4(p[gl_VertexID], 0.0, 1.0);\n}\n');
+    const fs = compile(gl.FRAGMENT_SHADER, '#version 300 es\nprecision mediump float;\nout vec4 o;\nvoid main() { o = vec4(1.0); }\n');
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+    const vao = gl.createVertexArray();
+    const texture = gl.createTexture();
+    const framebuffer = gl.createFramebuffer();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, 1, 1);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+    let lines = false;
+    if (gl.getProgramParameter(program, gl.LINK_STATUS) && gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+      gl.viewport(0, 0, 1, 1);
+      for (const cap of [gl.BLEND, gl.CULL_FACE, gl.DEPTH_TEST]) gl.disable(cap);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.useProgram(program);
+      gl.bindVertexArray(vao);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      const px = new Uint8Array(4);
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      lines = px[0] === 0;
+    }
+    gl.bindVertexArray(null);
+    gl.useProgram(null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.deleteFramebuffer(framebuffer);
+    gl.deleteTexture(texture);
+    gl.deleteVertexArray(vao);
+    gl.deleteProgram(program);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+    return lines;
+  };
+
   const imports = {
     get_integer: (pname) => gl.getParameter(pname) | 0,
     timer_query_supported: () => (timer ? 1 : 0),
@@ -239,8 +288,9 @@ export function createGl(gl, lostSince) {
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, texture);
         gl.texStorage2D(gl.TEXTURE_2D, levels, internalFormat, width, height);
-        // glTF's convention: the image's first row is v = 0. No premultiplying, no colour
-        // management (ImageBitmaps take these from createImageBitmap's options instead).
+        // glTF's convention: the image's first row is v = 0. No premultiplying, and no colour
+        // conversion: the source's bytes as they are (unpackColorSpace is 'srgb', set when the
+        // renderer was initialised; ImageBitmaps take the rest from createImageBitmap's options).
         gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
         gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
         gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
@@ -282,7 +332,7 @@ export function createGl(gl, lostSince) {
     depth_mask: (write) => gl.depthMask(write !== 0),
     blend_func_separate: (a, b, c, d) => gl.blendFuncSeparate(a, b, c, d),
     // WebGL 2's default state, put back when a renderer is initialised (Renderer::init in
-    // src/renderer.rs says which, and why), so state a page left on its context reaches nothing.
+    // src/renderer.rs says which, and why; docs/WEB3D.md what is left alone).
     color_mask: (r, g, b, a) => gl.colorMask(r !== 0, g !== 0, b !== 0, a !== 0),
     depth_func: (func) => gl.depthFunc(func),
     depth_range: (near, far) => gl.depthRange(near, far),
@@ -307,11 +357,22 @@ export function createGl(gl, lostSince) {
     end_query_on(target) {
       if (gl.getQuery(target, gl.CURRENT_QUERY)) gl.endQuery(target);
     },
-    // State that WebGL 2 extensions add, for each the browser has: getExtension returns the page's
-    // object if it enabled one, and enabling one here changes no state. Not WEBGL_polygon_mode:
-    // Chrome prints a console warning whenever it is enabled, and whether the page enabled it
-    // cannot be asked without enabling it (docs/WEB3D.md says so).
-    reset_extension_state() {
+    // What WebGL and its extensions add to OpenGL ES's state, put back last (Renderer::init in
+    // src/renderer.rs calls this at the end of its reset). First the colour spaces of uploads and of
+    // the drawing buffer, and the drawing buffer's format: three.js r180's WebGLRenderer sets the
+    // two colour spaces on every context it uses, and a page may have stored an sRGB or float
+    // buffer, into which web3d's own sRGB encoding would be encoded again. drawingBufferStorage
+    // needs a context with alpha (on one without, the format is the one it was made with), and the
+    // format survives a canvas resize, so setting it once holds. Then, for each extension the
+    // browser has (getExtension returns the page's object where it enabled one, and enabling one here
+    // changes no state): EXT_clip_control's origin and depth mode, EXT_depth_clamp, and the clip
+    // distances.
+    reset_webgl_state() {
+      if ('unpackColorSpace' in gl) gl.unpackColorSpace = 'srgb';
+      if ('drawingBufferColorSpace' in gl) gl.drawingBufferColorSpace = 'srgb';
+      if (typeof gl.drawingBufferStorage === 'function' && gl.getContextAttributes()?.alpha && gl.drawingBufferFormat !== gl.RGBA8) {
+        gl.drawingBufferStorage(gl.RGBA8, gl.drawingBufferWidth, gl.drawingBufferHeight);
+      }
       const clip = gl.getExtension('EXT_clip_control');
       if (clip) clip.clipControlEXT(clip.LOWER_LEFT_EXT, clip.NEGATIVE_ONE_TO_ONE_EXT);
       const clamp = gl.getExtension('EXT_depth_clamp');
@@ -320,6 +381,18 @@ export function createGl(gl, lostSince) {
       if (distances) {
         const n = Math.min(gl.getParameter(distances.MAX_CLIP_DISTANCES_WEBGL) | 0, 32);
         for (let i = 0; i < n; i++) gl.disable(distances.CLIP_DISTANCE0_WEBGL + i);
+      }
+      // WEBGL_polygon_mode: a page that enabled it may have left polygons drawn as lines. Its mode
+      // cannot be read where the page did not enable it (getParameter raises INVALID_ENUM there),
+      // and enabling it to ask would print Chrome's warning about the extension on a page that never
+      // used it. So a test draw asks: only if it finds lines is the extension taken (the page's,
+      // already enabled) and polygons filled again.
+      if (drawsLines()) {
+        const mode = gl.getExtension('WEBGL_polygon_mode');
+        if (mode) {
+          mode.polygonModeWEBGL(gl.FRONT_AND_BACK, mode.FILL_WEBGL);
+          gl.disable(mode.POLYGON_OFFSET_LINE_WEBGL);
+        }
       }
     },
     viewport: (x, y, width, height) => gl.viewport(x, y, width, height),
@@ -343,7 +416,7 @@ export function createGl(gl, lostSince) {
 
     log: (level, ptr, len) => note(level, `web3d: ${text(ptr, len)}`),
     // performance.now, bound to performance. Each reading still comes back as a number V8 boxes
-    // (20.8 sampled bytes a frame for the two, evidence/phase1/cpu-timing-allocation/on.txt): that
+    // (22 sampled bytes a frame for the two, evidence/phase1/critic10-rerun/cpu-timing/): that
     // is why CPU timing is off unless asked for.
     now: performance.now.bind(performance),
   };

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>web3d probe: a same-origin child under a top of another origin</title>
+  <link rel="icon" href="data:,">
+</head>
+<body>
+  <!-- probe-xorigin.html's child, of its origin: its own copy of web3d and its own canvas. -->
+  <canvas id="c" width="16" height="16"></canvas>
+  <script type="module">
+    import { createRenderer } from '../pkg/web3d.js';
+    window.__child = { createRenderer, canvas: document.getElementById('c'), state: () => parent[Symbol.for('loadngo-web3d')] };
+  </script>
+</body>
+</html>

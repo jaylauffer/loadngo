@@ -1,0 +1,81 @@
+{
+  "page": "notop",
+  "browser": "Chrome 156.0.8078.80 (headless, own instance)",
+  "console": [
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed",
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed"
+  ],
+  "pageErrors": [],
+  "out": {
+    "sharedStateBefore": false,
+    "r1Drawn": [
+      56,
+      255,
+      56
+    ],
+    "r1Prevented": false,
+    "r1Listeners": {
+      "webglcontextlost": 1,
+      "webglcontextrestored": 1
+    },
+    "r1Create": "web3d: the canvas's WebGL context was lost after the window whose copy of web3d watched this canvas went away; it is restored if its lost event is cancelled, which web3d now does if that event is still to come, and then this call's onContextRestored is called",
+    "r2Drawn": [
+      56,
+      255,
+      56
+    ],
+    "r2Listeners": {
+      "webglcontextlost": 1,
+      "webglcontextrestored": 1
+    },
+    "r2Prevented": true,
+    "r2Restored": "webglcontextrestored",
+    "r2Calls": {
+      "lost": 1,
+      "restored": 1
+    },
+    "r3Drawn": [
+      56,
+      255,
+      56
+    ],
+    "r3TopInstall": "function",
+    "r3Prevented": false,
+    "r3Listeners": {
+      "webglcontextlost": 1,
+      "webglcontextrestored": 1
+    },
+    "r3Restored": "no restore within 1.5 s",
+    "r3Calls": {
+      "lost": 0,
+      "restored": 0
+    },
+    "r3Lost": true,
+    "r3Next": "web3d: the canvas's WebGL context was lost after the window whose copy of web3d watched this canvas went away; it is restored if its lost event is cancelled, which web3d now does if that event is still to come, and then this call's onContextRestored is called",
+    "r3DisposedPrevented": false,
+    "r3DisposedRestored": "no restore within 1.5 s",
+    "r3bPrevented": true,
+    "r3bRestored": "webglcontextrestored",
+    "r3bNext": [
+      56,
+      255,
+      56
+    ],
+    "r4Drawn": [
+      56,
+      255,
+      56
+    ],
+    "r4Prevented": true,
+    "r4Restored": "webglcontextrestored",
+    "r4Calls": {
+      "lost": 1,
+      "restored": 1
+    },
+    "r4Listeners": {
+      "webglcontextlost": 1,
+      "webglcontextrestored": 1
+    }
+  },
+  "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)"
+}

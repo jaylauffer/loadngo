@@ -4,7 +4,9 @@
 // Opaque torus knots overlap in depth across a grid; one sphere wears a generated canvas texture;
 // a masked, double-sided grille and a blended, double-sided glass pane exercise the other alpha
 // modes; two shiny spheres show the specular. The camera orbits, and three objects move each
-// frame. Nothing on the per-frame path allocates; the readout's text is rebuilt once a second.
+// frame. Nothing on the demo's per-frame path allocates (it holds the moving objects' handles in
+// constants: read from an Array, a handle would be boxed at each call); the readout's text is
+// rebuilt once a second.
 //
 // window.__web3d (for scripted checks): ready (a promise of the renderer's info), measure(ms)
 // (a promise of frame-time, CPU and GPU statistics over the next ms of frames), pixels(points) (a

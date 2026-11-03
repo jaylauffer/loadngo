@@ -1,0 +1,31 @@
+<!doctype html><meta charset="utf-8"><title>unpack parameters and image sources</title><link rel="icon" href="data:,"><body>
+<!-- Does UNPACK_ROW_LENGTH, UNPACK_IMAGE_HEIGHT with UNPACK_SKIP_IMAGES, or UNPACK_ALIGNMENT, left on a
+     page-made context, change what a 2x2 upload from an ImageBitmap, ImageData or 2d canvas gives? Run
+     against a web3d that does not reset them (994f9bc8), so the page's values are in effect. Each line:
+     the setting, the source, and the texture's top-left, top-right and bottom-left as drawn (a texel t
+     reads encode(t + 0.04): 255 and 56), with getError after. -->
+<script type="module">
+import { createRenderer } from '/pkg/web3d.js';
+const IDENT = new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]); const ORTHO = new Float32Array([1,0,0,0,0,1,0,0,0,0,-2/9.9,0,0,0,-10.1/9.9,1]);
+const quad = { positions: new Float32Array([-1,-1,-5,1,-1,-5,1,1,-5,-1,1,-5]), normals: new Float32Array([0,0,1,0,0,1,0,0,1,0,0,1]), uvs: new Float32Array([0,1,1,1,1,0,0,0]), indices: new Uint32Array([0,1,2,0,2,3]) };
+const out = [];
+for (const [name, set] of [['none', () => {}], ['ROW_LENGTH 1', (gl) => gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 1)], ['ROW_LENGTH 3', (gl) => gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 3)], ['ROW_LENGTH 4', (gl) => gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 4)], ['ROW_LENGTH 8', (gl) => gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 8)], ['IMAGE_HEIGHT 1 + SKIP_IMAGES 1', (gl) => (gl.pixelStorei(gl.UNPACK_IMAGE_HEIGHT, 1), gl.pixelStorei(gl.UNPACK_SKIP_IMAGES, 1))], ['ALIGNMENT 8', (gl) => gl.pixelStorei(gl.UNPACK_ALIGNMENT, 8)]]) {
+  for (const kind of ['bitmap', 'imagedata', 'canvas2d']) {
+    const c = document.createElement('canvas'); document.body.append(c);
+    const gl = c.getContext('webgl2', { antialias: false }); set(gl);
+    const r = await createRenderer(c, { width: 16, height: 16, antialias: false });
+    const data = new Uint8ClampedArray([255,0,0,255, 0,255,0,255, 0,0,255,255, 255,255,255,255]);
+    let src = new ImageData(data, 2, 2);
+    if (kind === 'bitmap') src = await createImageBitmap(src, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+    if (kind === 'canvas2d') { const k = document.createElement('canvas'); k.width = 2; k.height = 2; k.getContext('2d').putImageData(src, 0, 0); src = k; }
+    r.setCamera(IDENT, ORTHO); r.setKeyLight(0,0,1,0,0,0,0); r.setAmbient(1,1,1,1,1,1,Math.PI); r.setClearColor(0,0,0);
+    let res;
+    try { const t = r.createTexture(src, { mipmaps: false, wrapS: 'clamp', wrapT: 'clamp' }); r.createObject(r.createMesh(quad), r.createMaterial({ texture: t })); r.frame();
+      const px = (x, y) => { const p = new Uint8Array(4); gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, p); return [p[0], p[1], p[2]]; };
+      res = { tl: px(2, 13), tr: px(13, 13), bl: px(2, 2), err: gl.getError() };
+    } catch (e) { res = String(e.message).slice(0, 60); }
+    out.push([name, kind, res]); r.dispose(); gl.getExtension('WEBGL_lose_context').loseContext();
+  }
+}
+window.__done = out;
+</script>

@@ -95,12 +95,15 @@ const server = http.createServer(async (req, res) => {
   }
   try {
     const body = await readFile(file);
-    // Cross-origin isolation gives performance.now() 5 us resolution instead of 100 us.
+    // Cross-origin isolation gives performance.now() 5 us resolution instead of 100 us. The same
+    // files serve a second origin too, localhost against 127.0.0.1, which probe XR embeds under the
+    // probe page: CORP lets an isolated page embed it.
     res.writeHead(200, {
       'Content-Type': TYPES[path.extname(file)] ?? 'application/octet-stream',
       'Cache-Control': 'no-store',
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'require-corp',
+      'Cross-Origin-Resource-Policy': 'cross-origin',
     });
     res.end(body);
   } catch {
@@ -221,8 +224,8 @@ try {
     page.on('console', (m) => messages.push(`${m.type()}: ${m.text()}`));
     page.on('pageerror', (e) => messages.push(`pageerror: ${e.message}`));
     // window.__listeners(id): a canvas's event listeners counted by type, through the DevTools
-    // protocol (DOMDebugger.getEventListeners), so probe RF can see that a canvas keeps exactly one
-    // listener of each kind after web3d puts them back.
+    // protocol (DOMDebugger.getEventListeners), so probe XR can see that a canvas web3d refused has
+    // no listener of web3d's.
     const cdp = await context.newCDPSession(page);
     await page.exposeFunction('__listeners', async (id) => {
       const { result } = await cdp.send('Runtime.evaluate', { expression: `document.getElementById(${JSON.stringify(String(id))})` });

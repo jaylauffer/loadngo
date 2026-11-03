@@ -1,0 +1,4 @@
+?bare=1 bytes/frame by function: {"/:13 ":12.1,"/:18 window.__status":1.5} status {"frames":7799,"frame":25,"setCamera":25,"setTransform":25,"readStats":25,"put":41,"tick":25}
+browser and server stopped
+?bare=1&cpu=1 bytes/frame by function: {"/:13 ":11.8,"/web3d/pkg/web3d.js:1115 frame":21.8,"/:18 window.__status":1.4} status {"frames":7800,"frame":25,"setCamera":25,"setTransform":25,"readStats":25,"put":41,"tick":25}
+browser and server stopped

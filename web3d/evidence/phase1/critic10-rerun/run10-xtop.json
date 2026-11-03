@@ -1,0 +1,18 @@
+{
+  "page": "xtop",
+  "browser": "Chrome 156.0.8078.80 (headless, own instance)",
+  "console": [],
+  "pageErrors": [],
+  "out": {
+    "topCrossOrigin": true,
+    "sharedStateSame": false,
+    "aFirst": [
+      56,
+      255,
+      56
+    ],
+    "secondCreate": "web3d: this canvas belongs to another realm (another window's document, or an OffscreenCanvas of another window or worker); web3d drives a canvas only from a copy of web3d loaded in the canvas's own realm, so load web3d there",
+    "sharedStateAfter": false
+  },
+  "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)"
+}

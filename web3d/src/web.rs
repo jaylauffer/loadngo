@@ -85,7 +85,7 @@ mod import {
         pub fn vertex_attrib_default(location: u32, x: f32, y: f32, z: f32, w: f32);
         pub fn end_transform_feedback();
         pub fn end_query_on(target: u32);
-        pub fn reset_extension_state();
+        pub fn reset_webgl_state();
         pub fn viewport(x: i32, y: i32, width: u32, height: u32);
         pub fn clear_color(r: f32, g: f32, b: f32, a: f32);
         pub fn clear(mask: u32);
@@ -101,8 +101,8 @@ mod import {
         pub fn gpu_disjoint() -> u32;
         pub fn log(level: u32, message: *const u8, len: usize);
         /// `performance.now`, bound to `performance`. Each reading is still a number V8 boxes
-        /// (measured: 20.8 sampled bytes a frame for the two, `evidence/phase1/cpu-timing-allocation/`),
-        /// which is why CPU timing is off by default.
+        /// (measured: 22 sampled bytes a frame for the two,
+        /// `evidence/phase1/critic10-rerun/cpu-timing/`), which is why CPU timing is off by default.
         pub fn now() -> f64;
     }
 }
@@ -268,8 +268,8 @@ impl Gl for WebGl {
     fn end_query_on(&mut self, target: u32) {
         unsafe { import::end_query_on(target) }
     }
-    fn reset_extension_state(&mut self) {
-        unsafe { import::reset_extension_state() }
+    fn reset_webgl_state(&mut self) {
+        unsafe { import::reset_webgl_state() }
     }
     fn viewport(&mut self, x: i32, y: i32, width: u32, height: u32) {
         unsafe { import::viewport(x, y, width, height) }
@@ -483,9 +483,9 @@ pub extern "C" fn web3d_free(ptr: *mut u8, len: usize) {
 
 /// A renderer that has made no GL calls yet; call [`web3d_init`] next. Every handle it issues
 /// carries `serial` (below 2^20). `js/web3d.js` gives each renderer its own, never twice under one
-/// counter (a window and its same-origin frames share one), so renderers refuse each other's handles
-/// and never issue the same one; a raw caller that passes nothing gets serial 0. Null if the serial
-/// is out of range.
+/// counter (the copies with one home share one: `HOME` there), so renderers refuse each other's
+/// handles and never issue the same one; a raw caller that passes nothing gets serial 0. Null if
+/// the serial is out of range.
 #[unsafe(no_mangle)]
 pub extern "C" fn web3d_create(serial: u32) -> *mut Web3d {
     install_panic_hook();

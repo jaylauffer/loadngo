@@ -1309,8 +1309,9 @@ async function realms() {
   );
 }
 
-// The tenth round's probes: the ninth critic's findings N1 (LR), N8 (PS), N10 (RF) and N11 (NC),
-// and its notes N7b' and N21 (MS). Each makes its own canvases, and releases their contexts when it
+// The tenth and eleventh rounds' probes: the ninth critic's findings N1 (LR), N8 (PS) and N11 (NC),
+// and its notes N7b' and N21 (MS); the tenth critic's F1 and F3 (XR, which replaced the tenth
+// round's RF), F2 and F4 (in PS). Each makes its own canvases, and releases their contexts when it
 // is done, so Chrome's limit on live contexts drops none of the others.
 
 /** A canvas in the document with an id (the check counts its listeners by id). */
@@ -1378,6 +1379,15 @@ async function pageState() {
   const opts = { width: 16, height: 16, antialias: false };
   const rgbw = () => bitmap(2, 2, [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255]);
   const greenRed = () => bitmap(2, 1, [0, 255, 0, 255, 255, 0, 0, 255]);
+  const RGBW = [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255];
+  const rgbwData = async () => new ImageData(new Uint8ClampedArray(RGBW), 2, 2);
+  const rgbwCanvas = async () => {
+    const k = document.createElement('canvas');
+    k.width = 2;
+    k.height = 2;
+    k.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(RGBW), 2, 2), 0, 0);
+    return k;
+  };
   // Draws for a case; returns what to check. Bitmaps are made before, so this runs in one task.
   const draw = {
     green: (r, gl) => {
@@ -1385,6 +1395,24 @@ async function pageState() {
       r.createObject(r.createMesh(quad(-1, -1, 1, 1, -5)), r.createMaterial({ baseColor: [0, 1, 0, 1] }));
       r.frame();
       return { pixel: canvasPixel(gl, 0, 0), ok: (px) => isGreen(px) };
+    },
+    // Off the quad's diagonal, which its two triangles share: drawn as lines, only the edges and the
+    // diagonal would be green.
+    offDiagonal: (r, gl) => {
+      flat(r);
+      r.createObject(r.createMesh(quad(-1, -1, 1, 1, -5)), r.createMaterial({ baseColor: [0, 1, 0, 1] }));
+      r.frame();
+      const a = canvasPixel(gl, 0.5, -0.5);
+      const b = canvasPixel(gl, -0.5, 0.5);
+      return { pixel: { a, b }, ok: () => isGreen(a) && isGreen(b) };
+    },
+    // Exactly encode(0.04, 1.04, 0.04): an sRGB drawing buffer would encode web3d's encoded output
+    // again (56 would read about 130).
+    exact: (r, gl) => {
+      flat(r);
+      r.createObject(r.createMesh(quad(-1, -1, 1, 1, -5)), r.createMaterial({ baseColor: [0, 1, 0, 1] }));
+      r.frame();
+      return { pixel: canvasPixel(gl, 0, 0), ok: (px) => close(px, [56, 255, 56]) };
     },
     // An opaque material of alpha 0: drawn whole, unless alpha-to-coverage turns its alpha into no samples.
     alpha0: (r, gl) => {
@@ -1425,12 +1453,13 @@ async function pageState() {
       const t = r.createTexture(b, { mipmaps: false, wrapS: 'clamp', wrapT: 'clamp' });
       r.createObject(r.createMesh(quad(-1, -1, 1, 1, -5)), r.createMaterial({ texture: t }));
       r.frame();
-      // Inside the edge texels, which clamping keeps pure under linear filtering.
+      // Inside the edge texels, which clamping keeps pure under linear filtering. Exact, within 2
+      // levels: a texel t comes out as encode(t + 0.04), so 255 and 56 (a converted colour space
+      // would move them).
       const tl = canvasPixel(gl, -0.75, 0.75);
       const tr = canvasPixel(gl, 0.75, 0.75);
       const bl = canvasPixel(gl, -0.75, -0.75);
-      const only = (px, c) => px.every((v, i) => (i === c ? v > 200 : v < 70));
-      return { pixel: { tl, tr, bl }, ok: () => only(tl, 0) && only(tr, 1) && only(bl, 2) };
+      return { pixel: { tl, tr, bl }, ok: () => close(tl, [255, 56, 56]) && close(tr, [56, 255, 56]) && close(bl, [56, 56, 255]) };
     },
   };
   const cases = [
@@ -1518,10 +1547,54 @@ async function pageState() {
     ['a pixel pack buffer bound and PACK_SKIP_PIXELS 3 (the readback here would fail)', {}, (gl) => (gl.bindBuffer(gl.PIXEL_PACK_BUFFER, gl.createBuffer()), gl.pixelStorei(gl.PACK_SKIP_PIXELS, 3))],
     ['UNPACK_SKIP_PIXELS 1, an upload', {}, (gl) => gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 1), 'upload', rgbw],
     ['UNPACK_SKIP_ROWS 1, an upload', {}, (gl) => gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 1), 'upload', rgbw],
-    ['UNPACK_ROW_LENGTH 1, an upload', {}, (gl) => gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 1), 'upload', rgbw],
     ['a pixel unpack buffer left bound, an upload', {}, (gl) => gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, gl.createBuffer()), 'upload', rgbw],
     ['UNPACK_FLIP_Y_WEBGL and UNPACK_PREMULTIPLY_ALPHA_WEBGL on, an upload', {}, (gl) => (gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true), gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true)), 'upload', rgbw],
+    // The colour spaces and drawing-buffer format WebGL adds (the tenth critic's F2). three.js r180's
+    // WebGLRenderer sets the two colour spaces on every context it uses.
+    ["unpackColorSpace 'display-p3', an ImageBitmap upload", {}, (gl) => (gl.unpackColorSpace = 'display-p3'), 'upload', rgbw],
+    ["unpackColorSpace 'display-p3', an ImageData upload", {}, (gl) => (gl.unpackColorSpace = 'display-p3'), 'upload', rgbwData],
+    ["unpackColorSpace 'display-p3', a 2d canvas upload", {}, (gl) => (gl.unpackColorSpace = 'display-p3'), 'upload', rgbwCanvas],
+    [
+      'drawingBufferStorage(SRGB8_ALPHA8): an sRGB drawing buffer',
+      {},
+      (gl, keep) => {
+        gl.drawingBufferStorage(gl.SRGB8_ALPHA8, 16, 16);
+        keep.check = () => gl.drawingBufferFormat === gl.RGBA8;
+      },
+      'exact',
+    ],
+    [
+      'drawingBufferStorage(RGBA16F): a float drawing buffer',
+      {},
+      (gl, keep) => {
+        gl.getExtension('EXT_color_buffer_half_float'); // RGBA16F drawing buffers need it
+        gl.drawingBufferStorage(gl.RGBA16F, 16, 16);
+        keep.check = () => gl.drawingBufferFormat === gl.RGBA8;
+      },
+      'exact',
+    ],
+    [
+      "drawingBufferColorSpace 'display-p3' (the same bytes, shown as other colours)",
+      {},
+      (gl, keep) => {
+        gl.drawingBufferColorSpace = 'display-p3';
+        keep.check = () => gl.drawingBufferColorSpace === 'srgb';
+      },
+      'exact',
+    ],
     // State WebGL 2 extensions add, where the browser has the extension (else the case is skipped).
+    [
+      'WEBGL_polygon_mode: lines, with POLYGON_OFFSET_LINE on (the tenth critic\'s F4)',
+      {},
+      (gl, keep) => {
+        const x = gl.getExtension('WEBGL_polygon_mode');
+        if (!x) return (keep.unsupported = true);
+        x.polygonModeWEBGL(gl.FRONT_AND_BACK, x.LINE_WEBGL);
+        gl.enable(x.POLYGON_OFFSET_LINE_WEBGL);
+        keep.check = () => gl.getParameter(x.POLYGON_MODE_WEBGL) === x.FILL_WEBGL && !gl.isEnabled(x.POLYGON_OFFSET_LINE_WEBGL);
+      },
+      'offDiagonal',
+    ],
     [
       'EXT_clip_control: an upper-left origin and depth from 0 to 1',
       {},
@@ -1657,169 +1730,76 @@ async function listenerOrder() {
 }
 
 /**
- * RF: removed and navigated frames (the ninth critic's N10 and N10e). A same-origin frame's copy of
- * web3d takes a context from a canvas of this document. With this window's copy loaded, as here, the
- * listeners are this copy's, and removing the frame changes nothing (a). Without one (simulated by
- * taking the installer out of the shared state, as on a page whose top window has no copy): the
- * frame's copy makes them; a create here after the frame is removed puts them back (b); a create
- * here while it is still there moves them (c); a navigated frame counts as gone (d). The documented
- * limit: a loss after the frame is removed and before any create is not cancelled, and the next
- * create says so (e). A frame's renderer left live when the frame goes still holds the canvas until a
- * window that holds it disposes it (f). After each reinstall the canvas holds one listener of each
- * kind.
+ * XR: one realm drives a canvas (the tenth critic's F1 and F3, by the supported model). A copy of
+ * web3d refuses a canvas of another realm before it touches it: a same-origin frame's copy given a
+ * canvas of this document, or an OffscreenCanvas made here; this window's copy given the frame's
+ * canvas, or an OffscreenCanvas the frame made. The refused canvases keep no context and no
+ * listener. Under a top window of another origin (probe-xorigin.html, served from localhost while
+ * this page is 127.0.0.1): a same-origin child's copy, loaded before its parent's, is refused the
+ * parent's canvas, before and after the parent draws there; the two copies share one home, the
+ * parent (their serials follow one another); the parent's copy is refused the child's canvas; and
+ * the parent's renderer, once the child has gone, recovers from a loss with its hooks once each.
  */
-async function removedFrames() {
-  const st = globalThis[Symbol.for('loadngo-web3d')];
+async function crossRealm() {
   const opts = { width: 16, height: 16, antialias: false };
   const d = {};
-  const frame = async () => {
-    const iframe = document.createElement('iframe');
-    iframe.src = './probe-frame.html';
-    document.body.append(iframe);
-    await new Promise((res) => iframe.addEventListener('load', res, { once: true }));
-    for (let i = 0; i < 50 && !iframe.contentWindow.__frame; i++) await timeout(20);
-    return iframe;
-  };
+  const foreign = (m) => /belongs to another realm/.test(m ?? '');
   const listeners = async (c) => (typeof window.__listeners === 'function' ? window.__listeners(c.id) : 'no driver');
-  const one = (l) => l?.webglcontextlost === 1 && l?.webglcontextrestored === 1;
-  /** A loss and restore with a renderer of this window's: whether the loss was cancelled, and its hooks. */
-  const recovery = async (c) => {
-    const calls = { lost: 0, restored: 0 };
-    const r = await createRenderer(c, { ...opts, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++ });
-    const out = { drawn: greenOn(r), listeners: await listeners(c) };
-    const lc = r.gl.getExtension('WEBGL_lose_context');
-    let prevented = null;
-    c.addEventListener('webglcontextlost', (e) => (prevented = e.defaultPrevented), { once: true }); // after web3d's
-    const lost = eventOf(c, 'webglcontextlost');
-    lc.loseContext();
-    await lost;
-    out.prevented = prevented;
-    r.dispose();
-    const restored = eventOf(c, 'webglcontextrestored');
-    lc.restoreContext();
-    out.restored = await Promise.race([restored, timeout(2000)]);
-    await timeout(20);
-    out.calls = calls;
-    const next = await settle(createRenderer(c, opts));
-    out.next = next.ok ? greenOn(next.r) : next.message;
-    if (next.ok) next.r.dispose();
-    release(r.gl);
-    return out;
+  const untouched = (c) => {
+    // A canvas with no context gets a 2d one now; one with a WebGL context would answer null.
+    const two = c.getContext('2d');
+    return two !== null;
   };
-  const recovered = (x) => isGreen(x.drawn) && one(x.listeners) && x.prevented === true && x.restored === 'webglcontextrestored' && x.calls.lost === 1 && x.calls.restored === 1 && isGreen(x.next);
-  // a) This window's copy is loaded: the frame's renderer is left live when the frame is removed.
+  const iframe = document.createElement('iframe');
+  iframe.src = './probe-frame.html';
+  document.body.append(iframe);
+  await new Promise((res) => iframe.addEventListener('load', res, { once: true }));
+  for (let i = 0; i < 50 && !iframe.contentWindow.__frame; i++) await timeout(20);
+  const f = iframe.contentWindow.__frame;
   {
-    const c = canvasFor('rf-a');
-    const iframe = await frame();
-    const theirs = await iframe.contentWindow.__frame.createRenderer(c, opts);
-    d.aTheirs = greenOn(theirs);
-    iframe.remove();
-    await timeout(50);
-    const lc = c.getContext('webgl2').getExtension('WEBGL_lose_context');
-    let prevented = null;
-    c.addEventListener('webglcontextlost', (e) => (prevented = e.defaultPrevented), { once: true });
-    const lost = eventOf(c, 'webglcontextlost');
-    lc.loseContext();
-    await lost;
-    d.aPrevented = prevented;
-    const restored = eventOf(c, 'webglcontextrestored');
-    lc.restoreContext();
-    d.aRestored = await Promise.race([restored, timeout(2000)]);
-    d.a = await recovery(c); // the frame's renderer is lost, so the canvas is free
+    const c = canvasFor('xr-top');
+    d.frameOnTop = (await settle(f.createRenderer(c, opts))).message ?? 'created';
+    d.frameOnTopListeners = await listeners(c);
+    d.frameOnTopUntouched = untouched(c);
   }
-  // f) The frame's renderer is left live when the frame goes: it still holds the canvas (any window
-  // that holds it can still use it), so a create here is refused until this window disposes it.
+  d.topOnFrame = (await settle(createRenderer(f.canvas, opts))).message ?? 'created';
+  d.topOnFrameUntouched = untouched(f.canvas);
+  d.frameOnTopOffscreen = (await settle(f.createRenderer(new OffscreenCanvas(16, 16), opts))).message ?? 'created';
+  d.topOnFrameOffscreen = (await settle(createRenderer(new iframe.contentWindow.OffscreenCanvas(16, 16), opts))).message ?? 'created';
+  // The supported cases beside them: each copy on a canvas of its own realm.
   {
-    const c = canvasFor('rf-f');
-    const iframe = await frame();
-    const theirs = await iframe.contentWindow.__frame.createRenderer(c, opts);
-    iframe.remove();
-    await timeout(50);
-    d.fRefused = (await settle(createRenderer(c, opts))).message;
-    d.fDispose = attempt(() => theirs.dispose());
-    d.f = await recovery(c);
+    const theirs = await settle(f.createRenderer(iframe.contentDocument.createElement('canvas'), opts));
+    d.frameOnOwn = theirs.ok ? greenOn(theirs.r) : theirs.message;
+    if (theirs.ok) theirs.r.dispose();
+    const ours = await settle(createRenderer(canvasFor('xr-own'), opts));
+    d.topOnOwn = ours.ok ? greenOn(ours.r) : ours.message;
+    if (ours.ok) ours.r.dispose();
   }
-  const installer = st.install;
-  delete st.install; // as on a page whose top window has no copy of web3d
-  try {
-    // b) The frame's copy made the listeners and the frame is removed; a create here puts them back.
-    {
-      const c = canvasFor('rf-b');
-      const iframe = await frame();
-      const theirs = await iframe.contentWindow.__frame.createRenderer(c, opts);
-      d.bTheirs = greenOn(theirs);
-      theirs.dispose();
-      iframe.remove();
-      await timeout(50);
-      d.b = await recovery(c);
-    }
-    // c) A create here while the frame is still there moves the listeners; then the frame goes.
-    {
-      const c = canvasFor('rf-c');
-      const iframe = await frame();
-      const theirs = await iframe.contentWindow.__frame.createRenderer(c, opts);
-      theirs.dispose();
-      const calls = { lost: 0, restored: 0 };
-      const ours = await createRenderer(c, { ...opts, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++ });
-      iframe.remove();
-      await timeout(50);
-      const lc = ours.gl.getExtension('WEBGL_lose_context');
-      let prevented = null;
-      c.addEventListener('webglcontextlost', (e) => (prevented = e.defaultPrevented), { once: true });
-      const lost = eventOf(c, 'webglcontextlost');
-      lc.loseContext();
-      await lost;
-      ours.dispose();
-      const restored = eventOf(c, 'webglcontextrestored');
-      lc.restoreContext();
-      d.c = { prevented, restored: await Promise.race([restored, timeout(2000)]) };
-      await timeout(20);
-      d.c.calls = calls;
-      d.c.listeners = await listeners(c);
-      release(ours.gl);
-    }
-    // d) The frame navigates away instead of going: its listeners stop just the same.
-    {
-      const c = canvasFor('rf-d');
-      const iframe = await frame();
-      const theirs = await iframe.contentWindow.__frame.createRenderer(c, opts);
-      theirs.dispose();
-      const navigated = new Promise((res) => iframe.addEventListener('load', res, { once: true }));
-      iframe.src = 'about:blank';
-      await navigated;
-      await timeout(50);
-      d.d = await recovery(c);
-      iframe.remove();
-    }
-    // e) The documented limit: the frame is removed and the loss comes before any create here.
-    {
-      const c = canvasFor('rf-e');
-      const iframe = await frame();
-      const theirs = await iframe.contentWindow.__frame.createRenderer(c, opts);
-      theirs.dispose();
-      iframe.remove();
-      await timeout(50);
-      let prevented = null;
-      c.addEventListener('webglcontextlost', (e) => (prevented = e.defaultPrevented), { once: true });
-      const lost = eventOf(c, 'webglcontextlost');
-      c.getContext('webgl2').getExtension('WEBGL_lose_context').loseContext();
-      await lost;
-      let calls = 0;
-      const after = await settle(createRenderer(c, { ...opts, onContextRestored: () => calls++ }));
-      // No restoreContext: Chrome refuses it for a loss nobody cancelled.
-      d.e = { prevented, create: after.ok ? 'created' : after.message, listeners: await listeners(c), calls };
-    }
-  } finally {
-    st.install = installer;
-  }
+  iframe.remove();
+  // Under a top of another origin.
+  const reply = new Promise((res) => {
+    const on = (e) => {
+      if (e.data?.web3dXorigin) {
+        window.removeEventListener('message', on);
+        res(e.data.web3dXorigin);
+      }
+    };
+    window.addEventListener('message', on);
+  });
+  const x = document.createElement('iframe');
+  x.src = `http://localhost:${location.port}/demo/probe-xorigin.html`;
+  document.body.append(x);
+  d.xorigin = await Promise.race([reply, timeout(15000)]);
+  x.remove();
+  const xo = typeof d.xorigin === 'object' ? d.xorigin : {};
   log(
-    "RF a frame's copy of web3d took a context from this document's canvas, then the frame went: with this window's copy loaded the loss is cancelled and recovered (a); without it, a create here puts the listeners back (b), one made while the frame is there moves them (c), and a navigated frame counts as gone (d), each cancelling the next loss and calling its hooks once, with one listener of each kind; a loss before any such create is not cancelled, and the create says why (e); a frame's renderer left live holds the canvas until this window disposes it (f)",
-    isGreen(d.aTheirs) && d.aPrevented === true && d.aRestored === 'webglcontextrestored' && recovered(d.a) &&
-      isGreen(d.bTheirs) && recovered(d.b) &&
-      d.c.prevented === true && d.c.restored === 'webglcontextrestored' && d.c.calls.lost === 1 && d.c.calls.restored === 1 && one(d.c.listeners) &&
-      recovered(d.d) &&
-      d.e.prevented === false && /after the window whose copy of web3d watched this canvas went away/.test(d.e.create) && one(d.e.listeners) && d.e.calls === 0 &&
-      /already has a live renderer/.test(d.fRefused) && !d.fDispose.threw && recovered(d.f),
+    "XR one realm drives a canvas: a frame's copy is refused a canvas of this document and an OffscreenCanvas made here, this window's copy the frame's canvas and the frame's OffscreenCanvas, each leaving it untouched, while each copy draws on its own; under a top of another origin a same-origin child's copy, loaded first, is refused its parent's canvas before and after the parent draws there, the two share one home (serials in sequence), the parent is refused the child's canvas, and the parent recovers from a loss once the child has gone",
+    foreign(d.frameOnTop) && d.frameOnTopUntouched && (d.frameOnTopListeners === 'no driver' || Object.keys(d.frameOnTopListeners).length === 0) &&
+      foreign(d.topOnFrame) && d.topOnFrameUntouched && foreign(d.frameOnTopOffscreen) && foreign(d.topOnFrameOffscreen) &&
+      isGreen(d.frameOnOwn) && isGreen(d.topOnOwn) &&
+      xo.topReachable === false && foreign(xo.childOnOurs) && isGreen(xo.childDraw) && xo.childHomeIsThisWindow === true &&
+      xo.ourSerial === (xo.childSerial % (2 ** 20 - 1)) + 1 && isGreen(xo.ourDraw) && foreign(xo.childAgain) && foreign(xo.oursOnChild) &&
+      xo.prevented === true && xo.restored === 'webglcontextrestored' && xo.calls?.lost === 1 && xo.calls?.restored === 1 && isGreen(xo.next),
     d,
   );
 }
@@ -1973,7 +1953,7 @@ async function main() {
   for (const [id, probe] of [
     ['PS', pageState],
     ['LR', listenerOrder],
-    ['RF', removedFrames],
+    ['XR', crossRealm],
     ['NC', contextlessCanvases],
     ['MS', refusalMessages],
   ]) {

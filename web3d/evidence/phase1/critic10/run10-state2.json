@@ -1,0 +1,158 @@
+{
+  "page": "state2",
+  "browser": "Chrome 156.0.8078.80 (headless, own instance)",
+  "console": [
+    "warning: WebGL: this extension has very low support on mobile devices; do not rely on it for rendering effects without implementing a fallback path: WEBGL_polygon_mode",
+    "info: MARK polygon-mode context 0",
+    "info: MARK polygon-mode context 1",
+    "info: MARK polygon-mode context 2",
+    "info: MARK polygon-mode end"
+  ],
+  "pageErrors": [],
+  "out": {
+    "cases": {
+      "polygonLine": {
+        "pixels": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            56,
+            255,
+            56
+          ]
+        ],
+        "glError": 0
+      },
+      "polygonControl": {
+        "pixels": [
+          [
+            56,
+            255,
+            56
+          ],
+          [
+            56,
+            255,
+            56
+          ],
+          [
+            56,
+            255,
+            56
+          ]
+        ],
+        "glError": 0
+      },
+      "unpackP3-canvas": {
+        "pixels": [
+          194,
+          118,
+          84
+        ],
+        "glError": 0
+      },
+      "unpackControl-canvas": {
+        "pixels": [
+          206,
+          114,
+          76
+        ],
+        "glError": 0
+      },
+      "unpackP3-bitmap": {
+        "pixels": [
+          194,
+          118,
+          84
+        ],
+        "glError": 0
+      },
+      "unpackControl-bitmap": {
+        "pixels": [
+          206,
+          114,
+          76
+        ],
+        "glError": 0
+      },
+      "unpackP3-imageData": {
+        "pixels": [
+          194,
+          118,
+          84
+        ],
+        "glError": 0
+      },
+      "unpackControl-imageData": {
+        "pixels": [
+          206,
+          114,
+          76
+        ],
+        "glError": 0
+      },
+      "storageControl": {
+        "pixels": [
+          134,
+          134,
+          134
+        ],
+        "glError": 0
+      },
+      "storageSrgb": {
+        "pixels": [
+          192,
+          192,
+          192
+        ],
+        "glError": 0
+      },
+      "storageFloat": {
+        "pixels": [
+          134,
+          134,
+          134
+        ],
+        "glError": 0
+      },
+      "spaceControl": {
+        "pixels": [
+          209,
+          111,
+          69
+        ],
+        "glError": 0
+      },
+      "spaceP3": {
+        "pixels": [
+          209,
+          111,
+          69
+        ],
+        "glError": 0
+      }
+    },
+    "spaceP3After": "display-p3"
+  },
+  "screen": {
+    "space-control": [
+      209,
+      111,
+      69
+    ],
+    "space-p3": [
+      224,
+      104,
+      57
+    ]
+  },
+  "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)"
+}

@@ -1,0 +1,849 @@
+{
+  "started": "2026-11-03T17:28:53.901Z",
+  "console": [
+    "warning: WebGL: INVALID_ENUM: enable: invalid capability",
+    "warning: WebGL: INVALID_OPERATION: drawArrays: no valid shader program in use",
+    "warning: WebGL: INVALID_ENUM: enable: invalid capability",
+    "warning: WebGL: INVALID_OPERATION: drawArrays: no valid shader program in use",
+    "warning: web3d: WebGL error 0x500 was pending before a texture upload; an earlier call raised it, not the upload",
+    "warning: web3d: WebGL error 0x502 was pending before a texture upload; an earlier call raised it, not the upload",
+    "warning: web3d: WebGL error 0x501 was pending before a texture upload; an earlier call raised it, not the upload",
+    "warning: web3d: WebGL error 0x506 was pending before a texture upload; an earlier call raised it, not the upload"
+  ],
+  "pageErrors": [],
+  "browser": "Chrome 156.0.8078.80 (headless, own instance)",
+  "probes": [
+    {
+      "id": "E1",
+      "claim": "a failed create's onContextRestored is called on the restore even when another renderer's hook on that canvas throws",
+      "pass": true,
+      "detail": {
+        "calls": {
+          "a": 1,
+          "b": 1
+        },
+        "bCreate": "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore",
+        "expectedErrors": 1
+      }
+    },
+    {
+      "id": "E2",
+      "claim": "a lost renderer disposed after isContextLost() turns false but before webglcontextrestored is dispatched still gets its hook (or there is no such window)",
+      "pass": true,
+      "detail": {
+        "ticks": 1,
+        "windowSeen": false,
+        "disposedIn": null,
+        "calls": {
+          "a": 1
+        },
+        "restoredSeen": true
+      }
+    },
+    {
+      "id": "E3",
+      "claim": "renderers created inside the restore hooks: one draws, the other is refused as shared; getError 0",
+      "pass": true,
+      "detail": {
+        "failedCreate": "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore",
+        "first": "created",
+        "second": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)",
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "getError": 0
+      }
+    },
+    {
+      "id": "manyOnOneCanvas",
+      "claim": "probe threw",
+      "pass": false,
+      "detail": "TypeError: Cannot read properties of undefined (reading 'has')\n    at manyOnOneCanvas (http://127.0.0.1:5670/c/probe8.js:172:121)\n    at async main (http://127.0.0.1:5670/c/probe8.js:468:7)\n    at async <anonymous>:396:30"
+    },
+    {
+      "id": "E5",
+      "claim": "disposed before or after the lost event: the hook comes once, and a new renderer draws",
+      "pass": true,
+      "detail": {
+        "before-event": {
+          "calls": 1,
+          "restored": "webglcontextrestored",
+          "restoreError": 37442,
+          "next": "created",
+          "pixel": [
+            56,
+            255,
+            56
+          ]
+        },
+        "after-event": {
+          "calls": 1,
+          "restored": "webglcontextrestored",
+          "restoreError": 37442,
+          "next": "created",
+          "pixel": [
+            56,
+            255,
+            56
+          ]
+        }
+      }
+    },
+    {
+      "id": "E6",
+      "claim": "a finished (lost, undisposed) renderer's hooks are not called for the next renderer's loss and restore",
+      "pass": true,
+      "detail": {
+        "afterFirstCycle": {
+          "aLost": 1,
+          "aRestored": 1,
+          "bLost": 0,
+          "bRestored": 0
+        },
+        "afterSecondCycle": {
+          "aLost": 1,
+          "aRestored": 1,
+          "bLost": 1,
+          "bRestored": 1
+        }
+      }
+    },
+    {
+      "id": "E7",
+      "claim": "the drain bound of 16 covers every error Chrome holds at once, and a good texture is made despite them",
+      "pass": true,
+      "detail": {
+        "errorsChromeHeld": [
+          "0x500",
+          "0x502",
+          "0x501",
+          "0x506"
+        ],
+        "texture": "created",
+        "pendingWarnings": 4,
+        "pageGetErrorAfter": 0
+      }
+    },
+    {
+      "id": "E7b",
+      "claim": "note only: the page's own pending errors are consumed by createTexture (getError after it)",
+      "pass": true,
+      "detail": {
+        "pageGetErrorAfter": 0
+      }
+    },
+    {
+      "id": "E8",
+      "claim": "every VideoFrame web3d accepts fills its whole texture (none made and only partly filled)",
+      "pass": true,
+      "detail": {
+        "display 4x4 of visible 8x8": {
+          "visible": "8x8",
+          "display": "4x4",
+          "rotation": 0,
+          "raw": {
+            "8x8": 0,
+            "8x8 texels": {
+              "x0y0": [
+                0,
+                255,
+                0,
+                255
+              ],
+              "xMaxY0": [
+                255,
+                0,
+                0,
+                255
+              ],
+              "x0yMax": [
+                0,
+                255,
+                0,
+                255
+              ],
+              "xMaxYMax": [
+                255,
+                0,
+                0,
+                255
+              ]
+            },
+            "4x4": 1281,
+            "4x4 texels": {
+              "x0y0": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "xMaxY0": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "x0yMax": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "xMaxYMax": [
+                0,
+                0,
+                0,
+                0
+              ]
+            }
+          },
+          "web3d": {
+            "texture": "created",
+            "quadrants": {
+              "leftTop": [
+                56,
+                255,
+                56
+              ],
+              "rightTop": [
+                255,
+                56,
+                56
+              ],
+              "leftBottom": [
+                56,
+                255,
+                56
+              ],
+              "rightBottom": [
+                255,
+                56,
+                56
+              ]
+            },
+            "getError": 0
+          }
+        },
+        "display 16x16 of visible 8x8": {
+          "visible": "8x8",
+          "display": "16x16",
+          "rotation": 0,
+          "raw": {
+            "8x8": 0,
+            "8x8 texels": {
+              "x0y0": [
+                0,
+                255,
+                0,
+                255
+              ],
+              "xMaxY0": [
+                255,
+                0,
+                0,
+                255
+              ],
+              "x0yMax": [
+                0,
+                255,
+                0,
+                255
+              ],
+              "xMaxYMax": [
+                255,
+                0,
+                0,
+                255
+              ]
+            },
+            "16x16": 0,
+            "16x16 texels": {
+              "x0y0": [
+                0,
+                255,
+                0,
+                255
+              ],
+              "xMaxY0": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "x0yMax": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "xMaxYMax": [
+                0,
+                0,
+                0,
+                0
+              ]
+            }
+          },
+          "web3d": {
+            "texture": "created",
+            "quadrants": {
+              "leftTop": [
+                56,
+                255,
+                56
+              ],
+              "rightTop": [
+                255,
+                56,
+                56
+              ],
+              "leftBottom": [
+                56,
+                255,
+                56
+              ],
+              "rightBottom": [
+                255,
+                56,
+                56
+              ]
+            },
+            "getError": 0
+          }
+        },
+        "display 4x8 of visible 8x8 (non-square pixels)": {
+          "visible": "8x8",
+          "display": "4x8",
+          "rotation": 0,
+          "raw": {
+            "8x8": 0,
+            "8x8 texels": {
+              "x0y0": [
+                0,
+                255,
+                0,
+                255
+              ],
+              "xMaxY0": [
+                255,
+                0,
+                0,
+                255
+              ],
+              "x0yMax": [
+                0,
+                255,
+                0,
+                255
+              ],
+              "xMaxYMax": [
+                255,
+                0,
+                0,
+                255
+              ]
+            },
+            "4x8": 1281,
+            "4x8 texels": {
+              "x0y0": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "xMaxY0": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "x0yMax": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "xMaxYMax": [
+                0,
+                0,
+                0,
+                0
+              ]
+            }
+          },
+          "web3d": {
+            "texture": "created",
+            "quadrants": {
+              "leftTop": [
+                56,
+                255,
+                56
+              ],
+              "rightTop": [
+                255,
+                56,
+                56
+              ],
+              "leftBottom": [
+                56,
+                255,
+                56
+              ],
+              "rightBottom": [
+                255,
+                56,
+                56
+              ]
+            },
+            "getError": 0
+          }
+        },
+        "rotation 90, 4x2": {
+          "visible": "4x2",
+          "display": "2x4",
+          "rotation": 90,
+          "raw": {
+            "2x4": 0,
+            "2x4 texels": {
+              "x0y0": [
+                0,
+                255,
+                0,
+                255
+              ],
+              "xMaxY0": [
+                0,
+                255,
+                0,
+                255
+              ],
+              "x0yMax": [
+                255,
+                0,
+                0,
+                255
+              ],
+              "xMaxYMax": [
+                255,
+                0,
+                0,
+                255
+              ]
+            },
+            "4x2": 1281,
+            "4x2 texels": {
+              "x0y0": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "xMaxY0": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "x0yMax": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "xMaxYMax": [
+                0,
+                0,
+                0,
+                0
+              ]
+            }
+          },
+          "web3d": {
+            "texture": "created",
+            "quadrants": {
+              "leftTop": [
+                56,
+                255,
+                56
+              ],
+              "rightTop": [
+                56,
+                255,
+                56
+              ],
+              "leftBottom": [
+                255,
+                56,
+                56
+              ],
+              "rightBottom": [
+                255,
+                56,
+                56
+              ]
+            },
+            "getError": 0
+          }
+        },
+        "rotation 270, 4x2": {
+          "visible": "4x2",
+          "display": "2x4",
+          "rotation": 270,
+          "raw": {
+            "2x4": 0,
+            "2x4 texels": {
+              "x0y0": [
+                255,
+                0,
+                0,
+                255
+              ],
+              "xMaxY0": [
+                255,
+                0,
+                0,
+                255
+              ],
+              "x0yMax": [
+                0,
+                255,
+                0,
+                255
+              ],
+              "xMaxYMax": [
+                0,
+                255,
+                0,
+                255
+              ]
+            },
+            "4x2": 1281,
+            "4x2 texels": {
+              "x0y0": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "xMaxY0": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "x0yMax": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "xMaxYMax": [
+                0,
+                0,
+                0,
+                0
+              ]
+            }
+          },
+          "web3d": {
+            "texture": "created",
+            "quadrants": {
+              "leftTop": [
+                255,
+                56,
+                56
+              ],
+              "rightTop": [
+                255,
+                56,
+                56
+              ],
+              "leftBottom": [
+                56,
+                255,
+                56
+              ],
+              "rightBottom": [
+                56,
+                255,
+                56
+              ]
+            },
+            "getError": 0
+          }
+        },
+        "rotation 180, 4x2": {
+          "visible": "4x2",
+          "display": "4x2",
+          "rotation": 180,
+          "raw": {
+            "4x2": 0,
+            "4x2 texels": {
+              "x0y0": [
+                255,
+                0,
+                0,
+                255
+              ],
+              "xMaxY0": [
+                0,
+                255,
+                0,
+                255
+              ],
+              "x0yMax": [
+                255,
+                0,
+                0,
+                255
+              ],
+              "xMaxYMax": [
+                0,
+                255,
+                0,
+                255
+              ]
+            }
+          },
+          "web3d": {
+            "texture": "created",
+            "quadrants": {
+              "leftTop": [
+                255,
+                56,
+                56
+              ],
+              "rightTop": [
+                56,
+                255,
+                56
+              ],
+              "leftBottom": [
+                255,
+                56,
+                56
+              ],
+              "rightBottom": [
+                56,
+                255,
+                56
+              ]
+            },
+            "getError": 0
+          }
+        },
+        "rotation 90 with display 1x2, 4x2": {
+          "visible": "4x2",
+          "display": "2x1",
+          "rotation": 90,
+          "raw": {
+            "2x4": 0,
+            "2x4 texels": {
+              "x0y0": [
+                0,
+                255,
+                0,
+                255
+              ],
+              "xMaxY0": [
+                0,
+                255,
+                0,
+                255
+              ],
+              "x0yMax": [
+                255,
+                0,
+                0,
+                255
+              ],
+              "xMaxYMax": [
+                255,
+                0,
+                0,
+                255
+              ]
+            },
+            "1x2": 1281,
+            "1x2 texels": {
+              "x0y0": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "xMaxY0": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "x0yMax": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "xMaxYMax": [
+                0,
+                0,
+                0,
+                0
+              ]
+            }
+          },
+          "web3d": {
+            "texture": "created",
+            "quadrants": {
+              "leftTop": [
+                56,
+                255,
+                56
+              ],
+              "rightTop": [
+                56,
+                255,
+                56
+              ],
+              "leftBottom": [
+                255,
+                56,
+                56
+              ],
+              "rightBottom": [
+                255,
+                56,
+                56
+              ]
+            },
+            "getError": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "E9",
+      "claim": "DataView bytes compile from a sub-range and another realm",
+      "pass": true,
+      "detail": {
+        "sub-range DataView": "created",
+        "sub-range DataView pixel": [
+          56,
+          255,
+          56
+        ],
+        "another realm DataView": "created",
+        "another realm DataView pixel": [
+          56,
+          255,
+          56
+        ],
+        "detached DataView": "web3d: the wasm option's DataView has no bytes to compile (its buffer is detached)",
+        "detached DataView canvas usable after": true,
+        "detached DataView size after": [
+          16,
+          16
+        ],
+        "crossOriginIsolated": true,
+        "shared DataView": "created",
+        "shared DataView pixel": [
+          56,
+          255,
+          56
+        ],
+        "shared Uint8Array": "created",
+        "shared Uint8Array pixel": [
+          56,
+          255,
+          56
+        ]
+      }
+    },
+    {
+      "id": "E9b",
+      "claim": "a detached or shared buffer is refused with a web3d message and leaves the canvas usable",
+      "pass": true,
+      "detail": {
+        "sub-range DataView": "created",
+        "sub-range DataView pixel": [
+          56,
+          255,
+          56
+        ],
+        "another realm DataView": "created",
+        "another realm DataView pixel": [
+          56,
+          255,
+          56
+        ],
+        "detached DataView": "web3d: the wasm option's DataView has no bytes to compile (its buffer is detached)",
+        "detached DataView canvas usable after": true,
+        "detached DataView size after": [
+          16,
+          16
+        ],
+        "crossOriginIsolated": true,
+        "shared DataView": "created",
+        "shared DataView pixel": [
+          56,
+          255,
+          56
+        ],
+        "shared Uint8Array": "created",
+        "shared Uint8Array pixel": [
+          56,
+          255,
+          56
+        ]
+      }
+    },
+    {
+      "id": "E10",
+      "claim": "right after a loss, before its event: frame() is false, resize and creates throw \"lost\", the canvas keeps its size",
+      "pass": true,
+      "detail": {
+        "frame": {
+          "threw": false,
+          "value": false
+        },
+        "resize": {
+          "threw": true,
+          "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
+        },
+        "size": [
+          32,
+          32
+        ],
+        "create": {
+          "threw": true,
+          "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
+        }
+      }
+    },
+    {
+      "id": "E11",
+      "claim": "WEB3D.md: \"A context lost so recently that its event has not been dispatched yet is still allowed a restore\" (a loss during the create, page-made context)",
+      "pass": true,
+      "detail": {
+        "create": "web3d: the canvas's WebGL context was lost before web3d first used this canvas; it is restored if its lost event is cancelled, which web3d now does if that event is still to come (one already dispatched only the page could have cancelled), and then this call's onContextRestored is called",
+        "restoreError": "0x0",
+        "restored": "webglcontextrestored",
+        "hookCalls": 1
+      }
+    },
+    {
+      "id": "E12",
+      "claim": "note: a canvas lost while no renderer holds it is never restored; the create message still promises onContextRestored",
+      "pass": true,
+      "detail": {
+        "create": "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore",
+        "restoreError": "0x0",
+        "restored": "webglcontextrestored",
+        "hookCalls": 1
+      }
+    }
+  ],
+  "passed": 13
+}

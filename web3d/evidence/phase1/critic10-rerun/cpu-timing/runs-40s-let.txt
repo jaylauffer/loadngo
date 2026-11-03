@@ -1,0 +1,2 @@
+?bare=1&held=let bytes/frame by function: {"/:27 window.__status":1.1} status {"frames":3001,"frame":25,"setCamera":25,"setTransform":25,"readStats":25,"put":41,"tick":25}
+browser and server stopped

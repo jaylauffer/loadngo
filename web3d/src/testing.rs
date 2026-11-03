@@ -77,7 +77,7 @@ pub enum Call {
     VertexAttribDefault(u32, [f32; 4]),
     EndTransformFeedback,
     EndQueryOn(u32),
-    ResetExtensionState,
+    ResetWebglState,
 }
 
 /// Records every call (unless `record` is off) and plays a configurable driver.
@@ -367,8 +367,8 @@ impl Gl for MockGl {
         self.push(|| Call::EndQueryOn(target));
     }
 
-    fn reset_extension_state(&mut self) {
-        self.push(|| Call::ResetExtensionState);
+    fn reset_webgl_state(&mut self) {
+        self.push(|| Call::ResetWebglState);
     }
 
     fn viewport(&mut self, _x: i32, _y: i32, width: u32, height: u32) {

@@ -888,27 +888,28 @@ impl<G: Gl> Renderer<G> {
         self.resize(width, height)
     }
 
-    /// Puts back WebGL 2's default value of the context state that would change what the
-    /// renderer draws or uploads and that it does not set itself, so a context the page made, and
-    /// left with its own state, draws as a new one would. First what would make later calls fail:
-    /// transform feedback left active, and queries left running (the GPU timer's target among
-    /// them). Then: the canvas's own framebuffer, drawn into and read from (`BACK`); what WebGL 2
-    /// extensions add (clip origin and depth mode, depth clamp, clip distances); the
-    /// scissor, stencil, polygon-offset, alpha-to-coverage, sample-coverage and rasterizer-discard
-    /// switches off, dithering on; all four colour channels written; depth `LESS` over the range 0
-    /// to 1, cleared to 1; back faces culled when culling is on; blending by addition; the hints at
-    /// `DONT_CARE`; no pixel unpack or pack buffer, and every unpack and pack parameter at its
-    /// default; no vertex array; no sampler object on any texture unit; and every generic vertex
-    /// attribute at (0, 0, 0, 1), the value an attribute whose array is off reads.
+    /// Puts the context's state back to its defaults before the renderer uses it, so state a page
+    /// left on a context it made does not reach what the renderer draws, uploads or reads back.
+    /// First what would make later calls fail: transform feedback left active, and queries left
+    /// running (the GPU timer's target among them). Then OpenGL ES 3.0's state: the canvas's own
+    /// framebuffer, drawn into and read from (`BACK`); the scissor, stencil, polygon-offset,
+    /// alpha-to-coverage, sample-coverage and rasterizer-discard switches off, dithering on; all four
+    /// colour channels written; depth `LESS` over the range 0 to 1, cleared to 1; back faces culled
+    /// when culling is on; blending by addition; the hints at `DONT_CARE`; no pixel unpack or pack
+    /// buffer, and every unpack and pack parameter at its default; no vertex array; no sampler
+    /// object on any texture unit; and every generic vertex attribute at (0, 0, 0, 1), the value an
+    /// attribute whose array is off reads. Last what WebGL adds ([`Gl::reset_webgl_state`]: colour
+    /// spaces, the drawing buffer's format, extension state), whose polygon-mode test draw needs the
+    /// rest at its defaults.
     ///
     /// The renderer sets the rest itself: the viewport and clear colour on its first frame; the
     /// depth test, the blend function, and the depth-write, blend and cull switches and the front
     /// face (through the state cache, which starts unknown); the program, textures, vertex arrays
     /// and uniform-buffer ranges it uses; and, at each texture upload, the WebGL unpack settings
     /// (flip, premultiply, colour conversion). What has no effect while its switch is off (the
-    /// scissor box, the stencil function, operations and masks, the polygon offset, the coverage
-    /// value) is left as it was, and so are the blend colour and line width, which no draw uses.
-    /// The page's own objects are not deleted, only unbound.
+    /// scissor box, the stencil function, operations and masks, the polygon offset and its clamp,
+    /// the coverage value) is left as it was, and so are the blend colour and line width, which no
+    /// draw uses. The page's own objects are not deleted, only unbound.
     fn reset_context_state(&mut self) {
         /// Loops over GL limits stop here, whatever a driver reports.
         const MOST: u32 = 256;
@@ -925,7 +926,6 @@ impl<G: Gl> Renderer<G> {
             gl.end_query_on(gl::TIME_ELAPSED_EXT);
         }
         gl.use_default_framebuffer();
-        gl.reset_extension_state();
         for cap in [
             gl::SCISSOR_TEST,
             gl::STENCIL_TEST,
@@ -958,6 +958,7 @@ impl<G: Gl> Renderer<G> {
         for location in 0..limit(gl.get_integer(gl::MAX_VERTEX_ATTRIBS)) {
             gl.vertex_attrib_default(location, [0.0, 0.0, 0.0, 1.0]);
         }
+        gl.reset_webgl_state();
         self.state = StateCache::unknown();
         self.state.vao = 0;
     }
@@ -1977,7 +1978,6 @@ mod tests {
         );
         let mut expected = vec![
             Call::UseDefaultFramebuffer,
-            Call::ResetExtensionState,
             Call::Disable(gl::SCISSOR_TEST),
             Call::Disable(gl::STENCIL_TEST),
             Call::Disable(gl::POLYGON_OFFSET_FILL),
@@ -2000,6 +2000,8 @@ mod tests {
         expected.push(Call::VaoBind(0));
         expected.extend((0..32).map(Call::UnbindSampler));
         expected.extend((0..16).map(|l| Call::VertexAttribDefault(l, [0.0, 0.0, 0.0, 1.0])));
+        // What WebGL adds comes last: its polygon-mode test draw needs the rest at its defaults.
+        expected.push(Call::ResetWebglState);
         assert_eq!(
             reset[5..],
             expected[..],

@@ -1,0 +1,70 @@
+{
+  "started": "2026-11-03T17:29:02.362Z",
+  "console": [
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed"
+  ],
+  "pageErrors": [],
+  "browser": "Chrome 156.0.8078.80 (headless, own instance)",
+  "probes": [
+    {
+      "id": "N10C",
+      "claim": "the probe ran to its end",
+      "pass": false,
+      "detail": "Error: web3d: this canvas belongs to another realm (another window's document, or an OffscreenCanvas of another window or worker); web3d drives a canvas only from a copy of web3d loaded in the canvas's own realm, so load web3d there\n    at canvasKind (http://127.0.0.1:5670/web3d/pkg/web3d.js:318:60)\n    at readOptions (http://127.0.0.1:5670/web3d/pkg/web3d.js:478:16)\n    at Object.createRenderer (http://127.0.0.1:5670/web3d/pkg/web3d.js:518:13)\n    at n10c (http://127.0.0.1:5670/c/batch2.js:56:53)\n    at async main (http://127.0.0.1:5670/c/batch2.js:157:7)"
+    },
+    {
+      "id": "N10E",
+      "claim": "the probe ran to its end",
+      "pass": false,
+      "detail": "Error: web3d: this canvas belongs to another realm (another window's document, or an OffscreenCanvas of another window or worker); web3d drives a canvas only from a copy of web3d loaded in the canvas's own realm, so load web3d there\n    at canvasKind (http://127.0.0.1:5670/web3d/pkg/web3d.js:318:60)\n    at readOptions (http://127.0.0.1:5670/web3d/pkg/web3d.js:478:16)\n    at Object.createRenderer (http://127.0.0.1:5670/web3d/pkg/web3d.js:518:13)\n    at n10e (http://127.0.0.1:5670/c/batch2.js:81:53)\n    at async main (http://127.0.0.1:5670/c/batch2.js:157:7)"
+    },
+    {
+      "id": "N7b'",
+      "claim": "a page-made context lost in the same task as the create (its event not yet dispatched): the create's message says it 'can be restored only if the page cancelled the lost event'; the page cancelled nothing",
+      "pass": true,
+      "detail": {
+        "create": "web3d: the canvas's WebGL context was lost before web3d first used this canvas; it is restored if its lost event is cancelled, which web3d now does if that event is still to come (one already dispatched only the page could have cancelled), and then this call's onContextRestored is called",
+        "restored": "timeout",
+        "calls": 0
+      }
+    },
+    {
+      "id": "N13",
+      "claim": "a worker's copy: an OffscreenCanvas draws, is lost, its renderer disposed while lost gets onContextRestored once, a new renderer draws",
+      "pass": true,
+      "detail": {
+        "first": [
+          56,
+          255,
+          56
+        ],
+        "restored": "webglcontextrestored",
+        "calls": {
+          "lost": 1,
+          "restored": 1
+        },
+        "next": [
+          56,
+          255,
+          56
+        ]
+      }
+    },
+    {
+      "id": "N21",
+      "claim": "texture sources that cannot be read are refused with a message that names their state",
+      "pass": true,
+      "detail": {
+        "placeholder": {
+          "threw": true,
+          "message": "web3d: this canvas cannot be read here (its control was transferred to an OffscreenCanvas)"
+        },
+        "detachedOffscreen": {
+          "threw": true,
+          "message": "web3d: this OffscreenCanvas cannot be read (it was transferred elsewhere, so it is detached)"
+        }
+      }
+    }
+  ],
+  "passed": 3
+}

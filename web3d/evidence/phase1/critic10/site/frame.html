@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>critic10 frame copy</title><link rel="icon" href="data:,"></head>
+<body>
+<!-- A same-origin frame with its own copy of web3d.js. -->
+<canvas id="own" width="16" height="16"></canvas>
+<script type="module">
+  import { createRenderer } from '/web3d/pkg/web3d.js';
+  window.__frame = { createRenderer, state: () => globalThis[Symbol.for('loadngo-web3d')] };
+</script>
+</body></html>

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>web3d probe: a window under a top of another origin</title>
+  <link rel="icon" href="data:,">
+</head>
+<body>
+  <!-- Probe XR's page of another origin than the probe page (localhost against 127.0.0.1). Its top
+       window is out of reach, so it is the home of its same-origin child. The child loads web3d
+       first and tries this window's canvas; then this window loads web3d, draws on its canvas and
+       recovers from a loss. The results go to the probe page by postMessage. -->
+  <canvas id="c" width="16" height="16"></canvas>
+  <script type="module" src="./probe-xorigin.js"></script>
+</body>
+</html>

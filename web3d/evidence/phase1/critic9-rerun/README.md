@@ -1,7 +1,6 @@
 # The ninth critic's findings, fixed, and every critic's probes rerun (2026-11-03)
 
-The tenth builder round, on loadngo `web3d-phase1` after `994f9bc8` (uncommitted when this was
-written). Chrome 156.0.8078.80 headless (`channel: 'chrome'`, ANGLE over Metal, Apple M4 Pro);
+The tenth builder round, on loadngo `web3d-phase1` after `994f9bc8`, committed as `d924345f`. Chrome 156.0.8078.80 headless (`channel: 'chrome'`, ANGLE over Metal, Apple M4 Pro);
 rustc 1.99.0, wasm-opt 133. The Mac's GPU was claimed for the runs.
 
 ## What changed
@@ -14,9 +13,11 @@ rustc 1.99.0, wasm-opt 133. The Mac's GPU was claimed for the runs.
    and resets the colour mask, depth function, range and clear value, cull face, blend equation,
    hints, pixel unpack and pack buffers and parameters, vertex array, sampler objects and generic
    vertex attributes. The unit test `init_puts_back_webgl_default_state_before_anything_else` checks
-   the calls in order. `WEBGL_polygon_mode` is left out on purpose: Chrome prints a console warning
-   whenever that extension is enabled, and there is no way to ask whether the page enabled it without
-   enabling it (`docs/WEB3D.md` says so). The upload failure's text no longer blames the source.
+   the calls in order. `WEBGL_polygon_mode` was left out, for two reasons the tenth critic found false
+   (its F4): Chrome prints its warning once a page, not at every enable, and the mode can be told
+   without enabling the extension, by a test draw. The eleventh round fills polygons when that test
+   draw finds lines (`../critic10-rerun/README.md`). The upload failure's text no longer blames the
+   source.
 2. **`dispose()` queues `onContextRestored` when the renderer's shim is lost** (finding 2, N1), not
    when `isContextLost()` is true: the controller clears its live renderer only when it handles the
    restore, so a renderer still live and finished has not had its hook, even once the context is
@@ -50,9 +51,11 @@ rustc 1.99.0, wasm-opt 133. The Mac's GPU was claimed for the runs.
 `build-before-fix.sh` builds `994f9bc8`'s web3d as a standalone crate; `probes-against.mjs` serves
 the current `demo/` with that `pkg/` and runs the probe page (`before-fix.json`, summarised in
 `before-fix.txt`). 68 of 72 pass: PS, LR, RF and MS fail, as they should. PS fails in 27 of its 30
-states: every one of the ninth critic's, and every other one but three that the old code already
-handled (a page's vertex array, `UNPACK_ROW_LENGTH`, and the WebGL flip and premultiply flags, which
-are set at each upload); those three stand as regression guards. LR shows `onContextRestored` 0 for
+states: every one of the ninth critic's, and every other one but three. Two the old code already
+handled (a page's vertex array, and the WebGL flip and premultiply flags, which are set at each
+upload), so they stand as regression guards. The third, `UNPACK_ROW_LENGTH` 1, guards nothing: as the
+tenth critic found, and `../critic10-rerun/unpack-params/` measured, no row length changes an upload
+from these sources; the eleventh round dropped it. LR shows `onContextRestored` 0 for
 the renderer disposed in the page's restored listener. RF stops at its first case, the ninth critic's
 N10: the loss is not cancelled, so the context is never restored. NC passes, since finding 4 is
 documentation. With the fixes, all 72 pass (`../rendered-check.json`).

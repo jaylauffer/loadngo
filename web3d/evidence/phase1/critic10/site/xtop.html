@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>critic10 cross-origin top</title><link rel="icon" href="data:,"></head>
+<body>
+<!-- Served from the second origin: it embeds the first origin's nest-host.html, as an LMS page
+     embeds a game. No copy of web3d here. -->
+<script>
+  const f = document.createElement('iframe');
+  f.src = new URLSearchParams(location.search).get('host') + '/c/nest-host.html';
+  f.width = 400; f.height = 300;
+  document.body.append(f);
+</script>
+</body></html>

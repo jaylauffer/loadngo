@@ -1,0 +1,97 @@
+== critic1-run: node ../critic/run.mjs 5670 ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/earlier/critic1
+ }
+}
+>>> exit 0
+== critic1-loss: node ../critic/run-loss.mjs 5670
+}
+browser and server stopped
+>>> exit 0
+== critic1-wasm-edge: node ../critic/wasm-edge.mjs
+non-zero bytes written into the first 4 KiB of linear memory (stack bottom): 0
+material handle before: 402653185, after 1024 create/destroy cycles: 469762049; stale 402653185 now destroys the new material -> refused: 402653185 is not a valid material handle: not live in this renderer (destroyed, never created, or another renderer's)
+>>> exit 0
+== critic2-run: node ../critic2/run-critic.mjs 5670 ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/earlier/critic2
+14 passed, 0 failed; INVALID_OPERATION warnings 0; renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)
+browser and server stopped
+>>> exit 0
+== critic2-abi-edge: node ../critic2/abi-edge.mjs
+clock readings in a frame with timing on: 2 stats [0.018208000000001334,2.5,6,1,1,0,0,0]
+destroy made: {"vertex_array_delete":2,"buffer_delete":9,"program_delete":3,"query_delete":8}
+>>> exit 0
+== critic3-run: node ../critic3/run3.mjs 5670 ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/earlier/critic3.json
+renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); error none; messages 1
+browser and server stopped
+>>> exit 0
+== critic4-run: node ../critic4/run4.mjs 5670 ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/earlier/critic4.json
+cputime=1, with the flags again: 601 frames, page scripts 20.91 sampled bytes a frame (gate limit 1)
+browser and server stopped
+>>> exit 0
+== critic5-main: node ../critic5/run5.mjs 5670 ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/earlier/critic5-main.json x8 main heap cap
+FAIL  K1 a 33rd live renderer is refused, its failed create leaves no listener, and a slot freed by dispose is usable
+browser and server stopped
+>>> exit 0
+== critic5-exhaust: node ../critic5/run5.mjs 5670 ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/earlier/critic5-exhaust.json exhaust
+FAIL  E1 an object table issues 32,767 x 128 handles in its life (here 1 kept + 32,766 x 128), none twice, then refuses cleanly and keeps drawing
+browser and server stopped
+>>> exit 0
+== critic6-main: node ../critic6/run6.mjs 5670 ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/earlier/critic6.json
+14 passed; failed: ["G1","G8a","G12"]; renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); console messages 37
+browser and servers stopped
+>>> exit 0
+== critic6-extra: node ../critic6/run6.mjs 5670 ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/earlier/critic6-extra.json extra.html
+2 passed; failed: ["G14"]; renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); console messages 0
+browser and servers stopped
+>>> exit 0
+== critic7-main: node ../critic7/run7.mjs 5670 ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/earlier/critic7.json
+22 passed; failed: ["LC5"]; renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); console messages 18
+browser and servers stopped
+>>> exit 0
+== critic8-main: node ../critic8/run8.mjs 5670 ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/earlier/critic8.json
+passed 13 of 14; page errors 0
+browser and server stopped
+>>> exit 0
+== critic8-batch2: node ../critic8/run8.mjs 5670 ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/earlier/critic8-batch2.json batch2.html
+passed 3 of 3; page errors 0
+browser and server stopped
+>>> exit 0
+== critic8-batch3: node ../critic8/run8.mjs 5670 ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/earlier/critic8-batch3.json batch3.html
+passed undefined of 1; page errors 0
+browser and server stopped
+>>> exit 0
+== critic9-main: node ../critic9/run9.mjs 5670 ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/run9.json
+passed 12 of 15; page errors 0
+browser and server stopped
+>>> exit 0
+== critic9-batch2: node ../critic9/run9.mjs 5670 ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/run9-batch2.json batch2.html
+passed 3 of 5; page errors 0
+browser and server stopped
+>>> exit 0
+== critic9-frame-first: node ../critic9/run9.mjs 5670 ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/run9-frame-first.json frame-first.html
+passed 1 of 1; page errors 0
+browser and server stopped
+>>> exit 0
+== critic10-state: node ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/run10-copy.mjs 5670 5671 state
+== state: Chrome 156.0.8078.80 (headless, own instance); gpu ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); page errors 0
+browsers and servers stopped
+>>> exit 0
+== critic10-state2: node ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/run10-copy.mjs 5670 5671 state2
+== state2: Chrome 156.0.8078.80 (headless, own instance); gpu ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); page errors 0
+browsers and servers stopped
+>>> exit 0
+== critic10-pm: node ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/run10-copy.mjs 5670 5671 pm
+== pm: Chrome 156.0.8078.80 (headless, own instance); gpu ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); page errors 0
+browsers and servers stopped
+>>> exit 0
+== critic10-notop: node ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/run10-copy.mjs 5670 5671 notop
+== notop: Chrome 156.0.8078.80 (headless, own instance); gpu ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); page errors 0
+browsers and servers stopped
+>>> exit 0
+== critic10-xtop: node ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/run10-copy.mjs 5670 5671 xtop
+== xtop: Chrome 156.0.8078.80 (headless, own instance); gpu ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); page errors 0
+browsers and servers stopped
+>>> exit 0
+== critic10-bf: node ~/pudding/loadngo/web3d/evidence/phase1/critic10-rerun/run10-copy.mjs 5670 5671 bf
+== bf: Chrome 156.0.8078.80 (headless, own instance); gpu ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); page errors 0
+browsers and servers stopped
+>>> exit 0
+all done

@@ -1,0 +1,86 @@
+{
+  "started": "2026-11-03T16:48:02.008Z",
+  "console": [],
+  "pageErrors": [],
+  "browser": "Chrome 156.0.8078.80 (headless, own instance)",
+  "probes": [
+    {
+      "id": "N10c",
+      "claim": "N10's control: the frame that first took the canvas's context is kept; the top window's renderer's loss is cancelled and its hooks run",
+      "pass": true,
+      "detail": {
+        "theirs": [
+          56,
+          255,
+          56
+        ],
+        "afterLoss": {
+          "lost": 1,
+          "restored": 0
+        },
+        "restored": "webglcontextrestored",
+        "calls": {
+          "lost": 1,
+          "restored": 1
+        }
+      }
+    },
+    {
+      "id": "N10e",
+      "claim": "after the frame that first used the canvas is gone, a canvas web3d disposed from is still restorable after a loss",
+      "pass": true,
+      "detail": {
+        "restored": "webglcontextrestored",
+        "create": "created"
+      }
+    },
+    {
+      "id": "N7b'",
+      "claim": "a page-made context lost in the same task as the create (its event not yet dispatched): the create's message says it 'can be restored only if the page cancelled the lost event'; the page cancelled nothing",
+      "pass": true,
+      "detail": {
+        "create": "web3d: the canvas's WebGL context was lost before web3d first used this canvas; it is restored if its lost event is cancelled, which web3d now does if that event is still to come (one already dispatched only the page could have cancelled), and then this call's onContextRestored is called",
+        "restored": "webglcontextrestored",
+        "calls": 1
+      }
+    },
+    {
+      "id": "N13",
+      "claim": "a worker's copy: an OffscreenCanvas draws, is lost, its renderer disposed while lost gets onContextRestored once, a new renderer draws",
+      "pass": true,
+      "detail": {
+        "first": [
+          56,
+          255,
+          56
+        ],
+        "restored": "webglcontextrestored",
+        "calls": {
+          "lost": 1,
+          "restored": 1
+        },
+        "next": [
+          56,
+          255,
+          56
+        ]
+      }
+    },
+    {
+      "id": "N21",
+      "claim": "texture sources that cannot be read are refused with a message that names their state",
+      "pass": true,
+      "detail": {
+        "placeholder": {
+          "threw": true,
+          "message": "web3d: this canvas cannot be read here (its control was transferred to an OffscreenCanvas)"
+        },
+        "detachedOffscreen": {
+          "threw": true,
+          "message": "web3d: this OffscreenCanvas cannot be read (it was transferred elsewhere, so it is detached)"
+        }
+      }
+    }
+  ],
+  "passed": 5
+}

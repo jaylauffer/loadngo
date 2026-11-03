@@ -177,11 +177,13 @@ pub trait Gl {
     fn end_transform_feedback(&mut self);
     /// Ends the query active on `target`, if there is one.
     fn end_query_on(&mut self, target: u32);
-    /// Puts back the defaults of the state WebGL 2 extensions add, for each extension the browser
-    /// has (a page may have enabled it): `EXT_clip_control`'s lower-left origin and -1 to 1 depth,
-    /// and `EXT_depth_clamp`'s and `WEBGL_clip_cull_distance`'s switches off. Not
-    /// `WEBGL_polygon_mode`'s: enabling it to ask makes Chrome warn in the console.
-    fn reset_extension_state(&mut self);
+    /// Puts back the defaults of the state WebGL and its extensions add to OpenGL ES's: the
+    /// `'srgb'` colour spaces of uploads and of the drawing buffer, and an `RGBA8` drawing buffer;
+    /// then, for each extension the browser has, `EXT_clip_control`'s lower-left origin and -1 to 1
+    /// depth, `EXT_depth_clamp` and the clip distances off, and filled polygons if a test draw finds
+    /// a page left `WEBGL_polygon_mode` drawing lines. Call it after the rest of the reset: the test
+    /// draw needs the default state.
+    fn reset_webgl_state(&mut self);
     fn blend_func_separate(&mut self, src_rgb: u32, dst_rgb: u32, src_alpha: u32, dst_alpha: u32);
     fn viewport(&mut self, x: i32, y: i32, width: u32, height: u32);
     fn clear_color(&mut self, r: f32, g: f32, b: f32, a: f32);

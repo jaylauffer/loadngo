@@ -1,0 +1,60 @@
+# loadngo d924345f (web3d-phase1); rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+== build 1: the workspace's target/
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+== cargo rustc (target dir: <home>/pudding/loadngo/target)
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           108113  gzip   38785
+pkg/loadngo_web3d.wasm                70221  gzip   32166
+pkg/gl.js                             16916  gzip    5777
+pkg/web3d.js                          52132  gzip   16050
+>>> exit 0
+1983aa7ea7f283fc53c9e6380cc8d073124063c5d40200a329d3418145b21f3f  web3d/pkg/gl.js
+979484a79da14af4c02102228a740f6995701da666d1dde0c2c9c0d6afe768c6  web3d/pkg/loadngo_web3d.wasm
+ffad3d634f8d0b757d6940b7c0d9ae6bfd111746cfeaea1cb131207ee8c9056d  web3d/pkg/web3d.d.ts
+197631a8bfe13435ae146e75fef018dad4f3410b42953d559061f0eb2ccdac23  web3d/pkg/web3d.js
+== build 2: the workspace's target/
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+== cargo rustc (target dir: <home>/pudding/loadngo/target)
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           108113  gzip   38785
+pkg/loadngo_web3d.wasm                70221  gzip   32166
+pkg/gl.js                             16916  gzip    5777
+pkg/web3d.js                          52132  gzip   16050
+>>> exit 0
+1983aa7ea7f283fc53c9e6380cc8d073124063c5d40200a329d3418145b21f3f  web3d/pkg/gl.js
+979484a79da14af4c02102228a740f6995701da666d1dde0c2c9c0d6afe768c6  web3d/pkg/loadngo_web3d.wasm
+ffad3d634f8d0b757d6940b7c0d9ae6bfd111746cfeaea1cb131207ee8c9056d  web3d/pkg/web3d.d.ts
+197631a8bfe13435ae146e75fef018dad4f3410b42953d559061f0eb2ccdac23  web3d/pkg/web3d.js
+== build 3: an empty target directory (0 entries)
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+== cargo rustc (target dir: <tmp>
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           108113  gzip   38785
+pkg/loadngo_web3d.wasm                70221  gzip   32166
+pkg/gl.js                             16916  gzip    5777
+pkg/web3d.js                          52132  gzip   16050
+>>> exit 0
+1983aa7ea7f283fc53c9e6380cc8d073124063c5d40200a329d3418145b21f3f  web3d/pkg/gl.js
+979484a79da14af4c02102228a740f6995701da666d1dde0c2c9c0d6afe768c6  web3d/pkg/loadngo_web3d.wasm
+ffad3d634f8d0b757d6940b7c0d9ae6bfd111746cfeaea1cb131207ee8c9056d  web3d/pkg/web3d.d.ts
+197631a8bfe13435ae146e75fef018dad4f3410b42953d559061f0eb2ccdac23  web3d/pkg/web3d.js
+== the three builds are byte-identical
+== local paths in pkg/ (strings -n 4, then grep -a): expect none
+web3d/pkg/gl.js:0
+web3d/pkg/loadngo_web3d.wasm:0
+web3d/pkg/web3d.d.ts:0
+web3d/pkg/web3d.js:0
+== imports and exports of the module
+imports 58 modules web3d_gl
+exports 29 functions 28 memory:memory
+== sizes
+web3d/pkg/loadngo_web3d.wasm      70221 gzip -9   32166
+web3d/pkg/gl.js                   16916 gzip -9    5777
+web3d/pkg/web3d.js                52132 gzip -9   16050
+== three-reference --check
+three 0.180.0: 20 transcribed lines found verbatim
+<home>/pudding/loadngo/web3d/tools/three-reference.txt matches three 0.180.0 exactly
+>>> exit 0

@@ -1,0 +1,10 @@
+?bare=1 bytes/frame by function: {"/:20 ":12,"/:25 window.__status":1.2} status {"frames":2998,"frame":25,"setCamera":25,"setTransform":25,"readStats":25,"put":41,"tick":25}
+browser and server stopped
+?bare=1&cpu=1 bytes/frame by function: {"/:20 ":34.2,"/:25 window.__status":1.6} status {"frames":3001,"frame":25,"setCamera":25,"setTransform":25,"readStats":25,"put":41,"tick":25}
+browser and server stopped
+?bare=1&held=property bytes/frame by function: {"/:19 ":11.3,"/:25 window.__status":1.3} status {"frames":3000,"frame":25,"setCamera":25,"setTransform":25,"readStats":25,"put":41,"tick":25}
+browser and server stopped
+?bare=1&held=const bytes/frame by function: {"/:25 window.__status":1.5} status {"frames":2999,"frame":25,"setCamera":25,"setTransform":25,"readStats":25,"put":41,"tick":25}
+browser and server stopped
+?bare=1&held=const&cpu=1 bytes/frame by function: {"/:17 ":22,"/:25 window.__status":1.1} status {"frames":3000,"frame":25,"setCamera":25,"setTransform":25,"readStats":25,"put":41,"tick":25}
+browser and server stopped

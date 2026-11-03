@@ -20,9 +20,13 @@ export type Vector3 = Numbers;
 declare const brand: unique symbol;
 /**
  * Handles are whole numbers below 2^50 that name one kind of thing in one renderer, and no handle is
- * issued twice in a window and its same-origin frames (a worker or a cross-origin frame counts its
- * own, from a random start): the Rust side refuses a handle of another kind or from another
- * renderer, live or disposed. The brands let TypeScript catch a swapped argument.
+ * issued twice by the copies of web3d that share a home (the top window, or the highest same-origin
+ * ancestor a frame can reach, or a worker); copies with different homes count from different random
+ * starts. The Rust side refuses a handle of another kind or from another renderer, live or
+ * disposed. The brands let TypeScript catch a swapped argument. A handle is at least 2^30, past the
+ * small integers V8 stores as they are, so a caller that reads one from an Array of numbers or an
+ * object property to pass it boxes it (12 bytes) each time; read from a variable or a constant, it
+ * costs nothing.
  */
 export type MeshHandle = number & { readonly [brand]: 'mesh' };
 export type TextureHandle = number & { readonly [brand]: 'texture' };
@@ -36,7 +40,7 @@ export interface RendererOptions {
   height?: number;
   /** Multisampling (default true). */
   antialias?: boolean;
-  /** Time each frame on the CPU (default false): costs two boxed numbers (20.8 sampled bytes) a frame. */
+  /** Time each frame on the CPU (default false): costs two boxed numbers (22 sampled bytes) a frame. */
   cpuTiming?: boolean;
   /** Where the wasm is: a URL, a Response, bytes (a DataView too) or a compiled module (default: beside web3d.js). */
   wasm?: string | URL | Response | BufferSource | WebAssembly.Module;
@@ -50,10 +54,8 @@ export interface RendererOptions {
    * live (disposed or not, at any time after the loss, even in a restored listener of the page's
    * that runs before web3d's), disposed while lost, or a create that failed because of the loss.
    * Create the next renderer then. web3d keeps one loss controller a canvas, which cancels every
-   * lost event so the context can be restored, and runs each hook once in its own try. Its
-   * listeners are the top window's copy of web3d's when one has loaded, else the latest create's
-   * copy's; a create puts them back if the frame whose copy made them is gone. A loss while the only
-   * listeners belong to a removed frame, before the next create, cannot be restored.
+   * lost event so the context can be restored, and runs each hook once in its own try; its
+   * listeners belong to the canvas's own realm, the only one web3d drives it from.
    */
   onContextRestored?: () => void;
 }
@@ -122,10 +124,13 @@ export interface MaterialOptions {
 
 export function compile(source?: RendererOptions['wasm']): Promise<WebAssembly.Module>;
 /**
- * One renderer per canvas while it is live. A canvas keeps its first WebGL context and that
- * context's antialias setting; a later renderer on it must ask for the same, and the context needs a
- * depth buffer. The renderer puts WebGL 2's default state back on the context, so what a page left
- * bound or switched on does not reach it, and owns that state from then on.
+ * One renderer per canvas while it is live, made by a copy of web3d in the canvas's own realm: a
+ * canvas of another window's document, or an OffscreenCanvas of another window or worker, is
+ * refused before anything touches it (so a frame cannot drive a canvas of the top document, nor the
+ * top a frame's). A canvas keeps its first WebGL context and that context's antialias setting; a
+ * later renderer on it must ask for the same, and the context needs a depth buffer. The renderer
+ * puts the context's state back to its defaults (docs/WEB3D.md lists what is set and what is left
+ * alone) and owns that state from then on.
  */
 export function createRenderer(canvas: HTMLCanvasElement | OffscreenCanvas, options?: RendererOptions): Promise<Renderer>;
 
