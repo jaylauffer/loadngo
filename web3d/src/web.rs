@@ -8,7 +8,8 @@
 //! **Exports** are C-ABI functions taking a `*mut Web3d` from [`web3d_create`]. `js/web3d.js`
 //! wraps them in a `Renderer` class. Matrices and material values go through a fixed exchange
 //! area ([`web3d_io`]) that the JS side writes through a `Float32Array` view, and per-frame
-//! numbers come back through another ([`web3d_stats`]). Functions that create return a handle,
+//! numbers come back through another ([`web3d_stats`]). Functions that create return a handle (a
+//! double: handles are wider than 32 bits, see `slots`),
 //! 0 on failure; others return 0 for success and 1 for failure. Either way the reason is in
 //! [`web3d_error_ptr`] / [`web3d_error_len`] (UTF-8).
 
@@ -20,6 +21,7 @@ use std::sync::Once;
 use crate::gl::{Attrib, Gl, LogLevel, TextureUpload};
 use crate::math::Mat4;
 use crate::renderer::{AlphaMode, Error, MaterialDesc, MeshInput, Renderer, Result, TextureDesc};
+use crate::slots;
 
 mod import {
     #[link(wasm_import_module = "web3d_gl")]
@@ -289,12 +291,13 @@ impl Web3d {
         }
     }
 
-    fn handle(&mut self, result: Result<u32>) -> u32 {
+    /// A handle for JS, as an exact double (every handle is below 2^53), or 0 on failure.
+    fn handle(&mut self, result: Result<u64>) -> f64 {
         match result {
-            Ok(h) => h,
+            Ok(h) => h as f64,
             Err(e) => {
                 self.fail(e);
-                0
+                0.0
             }
         }
     }
@@ -317,6 +320,16 @@ impl Web3d {
 unsafe fn web3d<'a>(w: *mut Web3d) -> Option<&'a mut Web3d> {
     // SAFETY: as above; `as_mut` checks for null.
     unsafe { w.as_mut() }
+}
+
+/// A handle from JS: a whole number from 1 to below 2^53, else 0, which names nothing. Handles
+/// cross as doubles because they are wider than 32 bits ([`crate::slots`]).
+fn handle_in(h: f64) -> u64 {
+    if h >= 1.0 && h < slots::HANDLE_LIMIT as f64 && h.fract() == 0.0 {
+        h as u64
+    } else {
+        0
+    }
 }
 
 /// What [`web3d_error_ptr`] and [`web3d_error_len`] report for a null renderer.
@@ -409,12 +422,13 @@ pub extern "C" fn web3d_free(ptr: *mut u8, len: usize) {
 }
 
 /// A renderer that has made no GL calls yet; call [`web3d_init`] next. Every handle it issues
-/// carries `salt` (below 32), so renderers with different salts refuse each other's handles. Null
-/// if the salt is out of range.
+/// carries `serial` (below 2^20). `js/web3d.js` gives each renderer a page its own, from 1 up and
+/// never twice, so renderers refuse each other's handles and never issue the same one; a raw
+/// caller that passes nothing gets serial 0. Null if the serial is out of range.
 #[unsafe(no_mangle)]
-pub extern "C" fn web3d_create(salt: u32) -> *mut Web3d {
+pub extern "C" fn web3d_create(serial: u32) -> *mut Web3d {
     install_panic_hook();
-    let Some(renderer) = Renderer::with_salt(WebGl, salt) else {
+    let Some(renderer) = Renderer::with_serial(WebGl, serial) else {
         return std::ptr::null_mut();
     };
     Box::into_raw(Box::new(Web3d {
@@ -555,10 +569,10 @@ pub unsafe extern "C" fn web3d_mesh_create(
     morph_positions: *const f32,
     morph_len: usize,
     morph_targets: usize,
-) -> u32 {
+) -> f64 {
     // SAFETY: see the function's contract.
     let Some(w) = (unsafe { web3d(w) }) else {
-        return 0;
+        return 0.0;
     };
     let input = (|| {
         Ok(MeshInput {
@@ -579,12 +593,12 @@ pub unsafe extern "C" fn web3d_mesh_create(
 /// # Safety
 /// `w` is null (refused) or came from [`web3d_create`] and has not been destroyed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn web3d_mesh_destroy(w: *mut Web3d, mesh: u32) -> u32 {
+pub unsafe extern "C" fn web3d_mesh_destroy(w: *mut Web3d, mesh: f64) -> u32 {
     // SAFETY: see the function's contract.
     let Some(w) = (unsafe { web3d(w) }) else {
         return 1;
     };
-    let result = w.renderer.destroy_mesh(mesh);
+    let result = w.renderer.destroy_mesh(handle_in(mesh));
     w.status(result)
 }
 
@@ -598,10 +612,10 @@ pub unsafe extern "C" fn web3d_texture_create(
     width: u32,
     height: u32,
     flags: u32,
-) -> u32 {
+) -> f64 {
     // SAFETY: see the function's contract.
     let Some(w) = (unsafe { web3d(w) }) else {
-        return 0;
+        return 0.0;
     };
     // Flags as `TextureDesc::from_flags` reads them; an unknown wrap mode is refused.
     let result =
@@ -612,12 +626,12 @@ pub unsafe extern "C" fn web3d_texture_create(
 /// # Safety
 /// `w` is null (refused) or came from [`web3d_create`] and has not been destroyed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn web3d_texture_destroy(w: *mut Web3d, texture: u32) -> u32 {
+pub unsafe extern "C" fn web3d_texture_destroy(w: *mut Web3d, texture: f64) -> u32 {
     // SAFETY: see the function's contract.
     let Some(w) = (unsafe { web3d(w) }) else {
         return 1;
     };
-    let result = w.renderer.destroy_texture(texture);
+    let result = w.renderer.destroy_texture(handle_in(texture));
     w.status(result)
 }
 
@@ -629,17 +643,23 @@ pub unsafe extern "C" fn web3d_texture_destroy(w: *mut Web3d, texture: u32) -> u
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn web3d_material_create(
     w: *mut Web3d,
-    texture: u32,
+    texture: f64,
     alpha_mode: u32,
     double_sided: u32,
-) -> u32 {
+) -> f64 {
     // SAFETY: see the function's contract.
     let Some(w) = (unsafe { web3d(w) }) else {
-        return 0;
+        return 0.0;
     };
     let Some(alpha_mode) = AlphaMode::from_u32(alpha_mode) else {
         w.fail("material refused: alpha mode must be 0 (opaque), 1 (mask) or 2 (blend)");
-        return 0;
+        return 0.0;
+    };
+    // 0 is "no texture"; anything else must be a texture handle.
+    let texture = if texture == 0.0 {
+        0
+    } else {
+        handle_in(texture).max(1)
     };
     let io = &w.io;
     let desc = MaterialDesc {
@@ -658,12 +678,12 @@ pub unsafe extern "C" fn web3d_material_create(
 /// # Safety
 /// `w` is null (refused) or came from [`web3d_create`] and has not been destroyed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn web3d_material_destroy(w: *mut Web3d, material: u32) -> u32 {
+pub unsafe extern "C" fn web3d_material_destroy(w: *mut Web3d, material: f64) -> u32 {
     // SAFETY: see the function's contract.
     let Some(w) = (unsafe { web3d(w) }) else {
         return 1;
     };
-    let result = w.renderer.destroy_material(material);
+    let result = w.renderer.destroy_material(handle_in(material));
     w.status(result)
 }
 
@@ -672,13 +692,15 @@ pub unsafe extern "C" fn web3d_material_destroy(w: *mut Web3d, material: u32) ->
 /// # Safety
 /// `w` is null (refused) or came from [`web3d_create`] and has not been destroyed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn web3d_object_create(w: *mut Web3d, mesh: u32, material: u32) -> u32 {
+pub unsafe extern "C" fn web3d_object_create(w: *mut Web3d, mesh: f64, material: f64) -> f64 {
     // SAFETY: see the function's contract.
     let Some(w) = (unsafe { web3d(w) }) else {
-        return 0;
+        return 0.0;
     };
     let model = w.matrix(0);
-    let result = w.renderer.create_object(mesh, material, &model);
+    let result = w
+        .renderer
+        .create_object(handle_in(mesh), handle_in(material), &model);
     w.handle(result)
 }
 
@@ -687,37 +709,37 @@ pub unsafe extern "C" fn web3d_object_create(w: *mut Web3d, mesh: u32, material:
 /// # Safety
 /// `w` is null (refused) or came from [`web3d_create`] and has not been destroyed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn web3d_object_set_transform(w: *mut Web3d, object: u32) -> u32 {
+pub unsafe extern "C" fn web3d_object_set_transform(w: *mut Web3d, object: f64) -> u32 {
     // SAFETY: see the function's contract.
     let Some(w) = (unsafe { web3d(w) }) else {
         return 1;
     };
     let model = w.matrix(0);
-    let result = w.renderer.set_transform(object, &model);
+    let result = w.renderer.set_transform(handle_in(object), &model);
     w.status(result)
 }
 
 /// # Safety
 /// `w` is null (refused) or came from [`web3d_create`] and has not been destroyed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn web3d_object_set_visible(w: *mut Web3d, object: u32, visible: u32) -> u32 {
+pub unsafe extern "C" fn web3d_object_set_visible(w: *mut Web3d, object: f64, visible: u32) -> u32 {
     // SAFETY: see the function's contract.
     let Some(w) = (unsafe { web3d(w) }) else {
         return 1;
     };
-    let result = w.renderer.set_visible(object, visible != 0);
+    let result = w.renderer.set_visible(handle_in(object), visible != 0);
     w.status(result)
 }
 
 /// # Safety
 /// `w` is null (refused) or came from [`web3d_create`] and has not been destroyed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn web3d_object_destroy(w: *mut Web3d, object: u32) -> u32 {
+pub unsafe extern "C" fn web3d_object_destroy(w: *mut Web3d, object: f64) -> u32 {
     // SAFETY: see the function's contract.
     let Some(w) = (unsafe { web3d(w) }) else {
         return 1;
     };
-    let result = w.renderer.destroy_object(object);
+    let result = w.renderer.destroy_object(handle_in(object));
     w.status(result)
 }
 

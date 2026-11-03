@@ -1,0 +1,2 @@
+pass  E1 an object table issues 32,767 x 128 handles in its life (here 1 kept + 32,766 x 128), none twice, then refuses cleanly and keeps drawing
+browser and server stopped

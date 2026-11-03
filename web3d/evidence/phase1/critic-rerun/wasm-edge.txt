@@ -4,4 +4,4 @@ init 0
 web3d_frame(0)                 -> returned normally
 web3d_material_create(0, ...) -> returned 0, error at address 0 says: "no renderer (a null pointer: disposed, or never created)"
 non-zero bytes written into the first 4 KiB of linear memory (stack bottom): 0
-material handle before: 12582913, after 1024 create/destroy cycles: 12582921; stale 12582913 now destroys the new material -> refused: material handle 12582913 is not live in this renderer (destroyed, never created, or another renderer's)
+material handle before: 3221225473, after 1024 create/destroy cycles: 3288334337; stale 3221225473 now destroys the new material -> refused: 3221225473 is not a valid material handle: not live in this renderer (destroyed, never created, or another renderer's)

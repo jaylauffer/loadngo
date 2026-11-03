@@ -1,13 +1,14 @@
 // Types for loadngo-web3d's JS API (web3d.js). BSD-3-Clause.
 
-/** 16 numbers, column-major: three.js's `Matrix4.elements` (an Array or a typed array of exactly 16). */
+/** 16 numbers, column-major: three.js's `Matrix4.elements` (an Array of numbers or a typed array, exactly 16). */
 export type Matrix4 = ArrayLike<number>;
 export type Vector3 = ArrayLike<number>;
 
 declare const brand: unique symbol;
 /**
- * Handles are numbers that name one kind of thing in one renderer: the Rust side refuses a handle
- * of another kind or from another renderer. The brands let TypeScript catch a swapped argument.
+ * Handles are whole numbers below 2^53 that name one kind of thing in one renderer, and no handle is
+ * issued twice in a page: the Rust side refuses a handle of another kind or from another renderer,
+ * live or disposed. The brands let TypeScript catch a swapped argument.
  */
 export type MeshHandle = number & { readonly [brand]: 'mesh' };
 export type TextureHandle = number & { readonly [brand]: 'texture' };

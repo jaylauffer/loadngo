@@ -1,0 +1,72 @@
+# build.sh reruns, 10:01, loadngo 284194b6
+pkg as found:
+a58be9321ab5a75029d98e429a64eb3178f4c3f0560e64244c46d34b8729fa90  gl.js
+768e4f124799db688c709cf93fca1dab01ffe04ffb0fc52e740575c1879a3ff3  loadngo_web3d.wasm
+3a2a69eb0c34c6356ec9cb2f53743108396d920ecfc05596e37f0b505b230613  web3d.d.ts
+0e0f8742756f20aa9c8ea14e80d28656e31da80f53556d166dc65e073a146254  web3d.js
+== build.sh run 1 (workspace target)
+== cargo rustc (target dir: /Users/jay/pudding/loadngo/target)
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           105026  gzip   37776
+pkg/loadngo_web3d.wasm                68531  gzip   31295
+pkg/gl.js                             13177  gzip    4460
+pkg/web3d.js                          34924  gzip   10945
+exit 0
+a58be9321ab5a75029d98e429a64eb3178f4c3f0560e64244c46d34b8729fa90  gl.js
+768e4f124799db688c709cf93fca1dab01ffe04ffb0fc52e740575c1879a3ff3  loadngo_web3d.wasm
+3a2a69eb0c34c6356ec9cb2f53743108396d920ecfc05596e37f0b505b230613  web3d.d.ts
+0e0f8742756f20aa9c8ea14e80d28656e31da80f53556d166dc65e073a146254  web3d.js
+== build.sh run 2 (workspace target)
+== cargo rustc (target dir: /Users/jay/pudding/loadngo/target)
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           105026  gzip   37776
+pkg/loadngo_web3d.wasm                68531  gzip   31295
+pkg/gl.js                             13177  gzip    4460
+pkg/web3d.js                          34924  gzip   10945
+exit 0
+a58be9321ab5a75029d98e429a64eb3178f4c3f0560e64244c46d34b8729fa90  gl.js
+768e4f124799db688c709cf93fca1dab01ffe04ffb0fc52e740575c1879a3ff3  loadngo_web3d.wasm
+3a2a69eb0c34c6356ec9cb2f53743108396d920ecfc05596e37f0b505b230613  web3d.d.ts
+0e0f8742756f20aa9c8ea14e80d28656e31da80f53556d166dc65e073a146254  web3d.js
+== build.sh run 3 (empty CARGO_TARGET_DIR)
+== cargo rustc (target dir: <scratch>/target-empty)
+   Compiling loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           105026  gzip   37776
+pkg/loadngo_web3d.wasm                68531  gzip   31295
+pkg/gl.js                             13177  gzip    4460
+pkg/web3d.js                          34924  gzip   10945
+exit 0
+a58be9321ab5a75029d98e429a64eb3178f4c3f0560e64244c46d34b8729fa90  gl.js
+768e4f124799db688c709cf93fca1dab01ffe04ffb0fc52e740575c1879a3ff3  loadngo_web3d.wasm
+3a2a69eb0c34c6356ec9cb2f53743108396d920ecfc05596e37f0b505b230613  web3d.d.ts
+0e0f8742756f20aa9c8ea14e80d28656e31da80f53556d166dc65e073a146254  web3d.js
+== compare
+run1 identical to pkg as found
+run2 identical to pkg as found
+run3 identical to pkg as found
+== path-like strings left in the wasm
+    // Directions and the highlight in highp: at mediump (fp16, where a driver honours it) N.H
+    // moves in steps of 1/2048 near 1, and pow(N.H, 2048), a sharp catchlight, would band.
+    // three.js r180: F_Schlick (f90 = 1), then G * D = u_material.w * (N.H)^n.
+    vec3 hi = 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055;
+/rust/deps/dlmalloc-0.2.14/src/dlmalloc.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/alloc/src/fmt.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/alloc/src/raw_vec/mod.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/alloc/src/string.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/slice/sort/shared/smallsort.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/slice/sort/unstable/quicksort.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/panicking.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/sync/once.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/sys/sync/rwlock/no_threads.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/thread/local.rs
+tj!A/ 
+web3d/src/pack.rs
+web3d/src/renderer.rs
+web3d/src/slots.rs
+web3d/src/timer.rs
+web3d/src/web.rs
+0

@@ -1,0 +1,4 @@
+pass  B1 with the heap past 2 GiB, a mesh staged above 2 GiB draws
+FAIL  E1 an object table issues 32,767 x 128 handles in its life, none twice, then refuses cleanly and keeps drawing
+pass  K1 a 33rd live renderer is refused, its failed create leaves no listener, and a slot freed by dispose is usable
+browser and server stopped

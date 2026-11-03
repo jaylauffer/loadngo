@@ -1,7 +1,7 @@
 exports: memory web3d_alloc web3d_caps web3d_create web3d_destroy web3d_error_len web3d_error_ptr web3d_frame web3d_free web3d_init web3d_io web3d_material_create web3d_material_destroy web3d_mesh_create web3d_mesh_destroy web3d_object_create web3d_object_destroy web3d_object_set_transform web3d_object_set_visible web3d_resize web3d_set_ambient web3d_set_camera web3d_set_camera_look_at web3d_set_clear_color web3d_set_cpu_timing web3d_set_key_light web3d_stats web3d_texture_create web3d_texture_destroy
 NULL POINTER:
   init: 1
-  error_ptr/len: 1056081/56 "no renderer (a null pointer: disposed, or never created)"
+  error_ptr/len: 1056061/56 "no renderer (a null pointer: disposed, or never created)"
   io: 0
   stats: 0
   caps: 0
@@ -28,9 +28,9 @@ NULL POINTER:
   free: undefined
   low 1 KiB bytes changed: 0; GL calls made: 0
 init 0 ""
-mesh 4194305 
-material: first 12582914, 3,001 cycles later new 14450713; duplicates 0; max handle 16744472 (< 2^30: true); stale first -> refused: material handle 12582914 is not live in this renderer (destroyed, never created, or another renderer's)
-object: first 16777217, 3,001 cycles later new 18645016; duplicates 0; max handle 20938775 (< 2^30: true); stale first -> refused: object handle 16777217 is not live in this renderer (destroyed, never created, or another renderer's)
+mesh 1073741825 
+material: first 3221225474, 3,001 cycles later new 3417899010; duplicates 0; max handle 3417833474 (< 2^30: false); stale first -> refused: 3221225474 is not a valid material handle: not live in this renderer (destroyed, never created, or another renderer's)
+object: first 4294967297, 3,001 cycles later new 4294970297; duplicates 0; max handle 65537 (< 2^30: true); stale first -> refused: 4294967297 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)
 EDGES:
   mesh: 0 positions: 0 "mesh refused: positions must hold x, y, z for at least one vertex"
   mesh: null positions: 0 "mesh refused: positions must hold x, y, z for at least one vertex"
@@ -42,7 +42,7 @@ EDGES:
   mesh: weights 1.75 each: 0 "mesh refused: weights must lie between 0 and 1"
   mesh: weights NaN: 0 "mesh refused: weights must lie between 0 and 1"
   mesh: weights all zero (unskinned vertex): 0 "mesh refused: each vertex's four weights must sum to 1"
-  mesh: weights sum 1.019: 4194306 
+  mesh: weights sum 1.019: 1073741826 
   mesh: joints without weights: 0 "mesh refused: joints and weights come together"
   mesh: index u32::MAX: 0 "mesh refused: an index is past the last vertex"
   mesh: NaN normal (accepted? packs as +Y): 0 "mesh refused: normals must be finite"
@@ -51,10 +51,10 @@ EDGES:
   texture: 4097 wide: 0 "texture is 4097x4; this GPU allows 1 to 4096 pixels a side (resize it first, for example with createImageBitmap's resizeWidth)"
   texture: wrap bits 3 (invalid) -> ?: 0 "texture refused: wrap modes are 0 (repeat), 1 (clamp) or 2 (mirror)"
   material: alpha mode 3: 0 "material refused: alpha mode must be 0 (opaque), 1 (mask) or 2 (blend)"
-  material: stale texture handle 12345: 0 "12345 is not a texture handle"
+  material: stale texture handle 12345: 0 "12345 is not a valid texture handle"
   material: NaN base colour: 0 "material refused: every value must be finite"
-  object: mesh handle 0: 0 "0 is not a mesh handle"
-  object: handle u32::MAX: 1 "4294967295 is not an object handle"
+  object: mesh handle 0: 0 "0 is not a valid mesh handle"
+  object: handle u32::MAX: 1 "0 is not a valid object handle"
   camera: zero view matrix: 1 "camera refused: the view matrix is not invertible"
   look-at: eye == target: 0 "camera refused: the view matrix is not invertible"
   look-at: fov 0: 1 "camera refused: the field of view must be between 0 and pi radians"
@@ -66,7 +66,7 @@ EDGES:
   ambient: NaN: 1 "light refused: colours and intensity must be finite"
   resize to 0x0 then frame: ok 
   resize to 2^31+ (u32 > i32): viewport import received undefined 
-stats, cpu timing off: [null,2.5,4,1,1,0,0,0]
+stats, cpu timing off: [null,2.5,4,3001,3001,0,0,0]
 clock readings in a frame with timing off: 0
-clock readings in a frame with timing on: 2 stats [0.00274999999999892,2.5,6,1,1,0,0,0]
+clock readings in a frame with timing on: 2 stats [0.18958299999999895,2.5,6,3001,3001,0,0,0]
 destroy made: {"vertex_array_delete":2,"buffer_delete":9,"program_delete":3,"query_delete":8}

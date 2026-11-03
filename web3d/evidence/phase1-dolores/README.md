@@ -1,8 +1,10 @@
 # Phase 1 demo on dolores, 2026-11-03
 
-**The scene.** The phase-1 demo (`web3d/demo/`) is a procedural scene of 60 draws and 324,932
-triangles. It uses lean shading: Lambert plus Blinn-Phong, a hemisphere ambient, two textures (a
-canvas label and a masked grille), all static.
+**The scene.** The first version of the phase-1 demo (`web3d/demo/` as it was on this date): a
+procedural scene of torus knots, spheres, a masked grille, a glass pane and a ground grid. It uses
+lean shading: Lambert plus Blinn-Phong, a hemisphere ambient, two textures (a canvas label and the
+grille's mask), all static. The demo has since been given a round load of its own (64 draws and
+320,000 triangles), which has not been measured here; these results are the earlier load's.
 
 **The setup.**
 - It ran on dolores: a Raspberry Pi 5 4 GB, Debian 13, Chromium 156, ANGLE over V3D 7.1.
@@ -29,8 +31,8 @@ pixels**, R² 0.985. On p50 instead, it is 2.86 + 0.0044, R² 0.94.
 proportionally the largest single cost in this table, and a sweep with MSAA on at every size is
 still to do.
 
-**What it shows.** About 325k triangles in 60 draws, with lean vertex and fragment shading, cost a
-few milliseconds of GPU time on this Pi.
+**What it shows.** That scene, with lean vertex and fragment shading, costs a few milliseconds of GPU
+time on this Pi.
 
 **What it does not show.** The shading of a real scene: skinning, morph targets, alpha-tested or
 blended hair, several textures per material, image light, tone mapping. It also predates two shader

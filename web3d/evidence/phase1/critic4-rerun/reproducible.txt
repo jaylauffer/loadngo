@@ -1,19 +1,22 @@
 # build.sh twice (workspace target/), then once from an empty CARGO_TARGET_DIR; sha256 of pkg/ each time; then every string in the wasm that looks like a path.
 ## 1
-a58be9321ab5a75029d98e429a64eb3178f4c3f0560e64244c46d34b8729fa90  web3d/pkg/gl.js
-768e4f124799db688c709cf93fca1dab01ffe04ffb0fc52e740575c1879a3ff3  web3d/pkg/loadngo_web3d.wasm
-3a2a69eb0c34c6356ec9cb2f53743108396d920ecfc05596e37f0b505b230613  web3d/pkg/web3d.d.ts
-0e0f8742756f20aa9c8ea14e80d28656e31da80f53556d166dc65e073a146254  web3d/pkg/web3d.js
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+0204bc88657198e1f57b65e4f576ccd420f14a63637f6936a2f553d28b51f3a2  web3d/pkg/gl.js
+d7fb6ce6fa7369bd43bb61b99f0b294385218f900900da5a337e0e8822f5919d  web3d/pkg/loadngo_web3d.wasm
+aa608f614999b941322bfce7207996f752a2441d09fca34aba549f83802d70f7  web3d/pkg/web3d.d.ts
+c3996bb80e2b82225eab4003febb4acd9af98f79e062152943896114833a4c98  web3d/pkg/web3d.js
 ## 2
-a58be9321ab5a75029d98e429a64eb3178f4c3f0560e64244c46d34b8729fa90  web3d/pkg/gl.js
-768e4f124799db688c709cf93fca1dab01ffe04ffb0fc52e740575c1879a3ff3  web3d/pkg/loadngo_web3d.wasm
-3a2a69eb0c34c6356ec9cb2f53743108396d920ecfc05596e37f0b505b230613  web3d/pkg/web3d.d.ts
-0e0f8742756f20aa9c8ea14e80d28656e31da80f53556d166dc65e073a146254  web3d/pkg/web3d.js
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+0204bc88657198e1f57b65e4f576ccd420f14a63637f6936a2f553d28b51f3a2  web3d/pkg/gl.js
+d7fb6ce6fa7369bd43bb61b99f0b294385218f900900da5a337e0e8822f5919d  web3d/pkg/loadngo_web3d.wasm
+aa608f614999b941322bfce7207996f752a2441d09fca34aba549f83802d70f7  web3d/pkg/web3d.d.ts
+c3996bb80e2b82225eab4003febb4acd9af98f79e062152943896114833a4c98  web3d/pkg/web3d.js
 ## 3 (fresh target dir)
-a58be9321ab5a75029d98e429a64eb3178f4c3f0560e64244c46d34b8729fa90  web3d/pkg/gl.js
-768e4f124799db688c709cf93fca1dab01ffe04ffb0fc52e740575c1879a3ff3  web3d/pkg/loadngo_web3d.wasm
-3a2a69eb0c34c6356ec9cb2f53743108396d920ecfc05596e37f0b505b230613  web3d/pkg/web3d.d.ts
-0e0f8742756f20aa9c8ea14e80d28656e31da80f53556d166dc65e073a146254  web3d/pkg/web3d.js
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+0204bc88657198e1f57b65e4f576ccd420f14a63637f6936a2f553d28b51f3a2  web3d/pkg/gl.js
+d7fb6ce6fa7369bd43bb61b99f0b294385218f900900da5a337e0e8822f5919d  web3d/pkg/loadngo_web3d.wasm
+aa608f614999b941322bfce7207996f752a2441d09fca34aba549f83802d70f7  web3d/pkg/web3d.d.ts
+c3996bb80e2b82225eab4003febb4acd9af98f79e062152943896114833a4c98  web3d/pkg/web3d.js
 ## paths in the wasm
 /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/slice/sort/shared/smallsort.rs
 /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/slice/sort/unstable/quicksort.rs

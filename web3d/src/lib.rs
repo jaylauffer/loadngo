@@ -1,5 +1,5 @@
-//! loadngo-web3d: a lean WebGL2 3D renderer in Rust, compiled to WebAssembly, for a skinned,
-//! morph-targeted character in a small room on low-end GPUs such as the Raspberry Pi 5's V3D 7.1.
+//! loadngo-web3d: a lean WebGL2 3D renderer in Rust, compiled to WebAssembly, for skinned,
+//! morph-targeted characters in small scenes on low-end GPUs such as the Raspberry Pi 5's V3D 7.1.
 //! See `docs/WEB3D.md`.
 //!
 //! The crate has no dependencies. WebGL2 is bound by hand: `js/gl.js` owns the context and the

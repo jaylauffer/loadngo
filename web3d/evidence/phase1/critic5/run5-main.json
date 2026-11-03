@@ -1,0 +1,291 @@
+{
+  "groups": {
+    "x8": {
+      "tests": [
+        {
+          "name": "X8 a representable fraction on a handle is refused; o + 2^-30 is o itself for every object handle (2^24 and up)",
+          "pass": true,
+          "detail": {
+            "salt": 0,
+            "spare": 4194306,
+            "spareBelow2To23": true,
+            "sparePlusTinyRepresentable": true,
+            "destroySparePlusTiny": {
+              "threw": true,
+              "message": "web3d: 4194306.000000001 is not a valid mesh handle (a whole number from 1 to 2^30 - 1)"
+            },
+            "object": 16777217,
+            "objectPlusTinyIsObject": true,
+            "smallestObjectHandle": 16777217,
+            "setVisibleObjectPlusHalf": {
+              "threw": true,
+              "message": "web3d: 16777217.5 is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+            },
+            "x8Value": true,
+            "spareStillLive": true
+          }
+        }
+      ],
+      "messages": []
+    },
+    "main": {
+      "tests": [
+        {
+          "name": "C1 non-numbers inside a matrix or vector Array are refused and no valueOf runs (WEB3D.md \"Nothing is converted, so no valueOf runs\")",
+          "pass": false,
+          "detail": {
+            "createObjectWithStringMatrix": {
+              "threw": false,
+              "value": 16777217
+            },
+            "setTransformWithValueOfElements": {
+              "threw": false
+            },
+            "valueOfCalls": 16,
+            "lookAtWithStrings": {
+              "threw": false
+            },
+            "setCameraWithBooleans": {
+              "threw": false
+            },
+            "setCameraWithNulls": {
+              "threw": false
+            },
+            "pixel": [
+              56,
+              255,
+              56
+            ],
+            "glError": 0
+          }
+        },
+        {
+          "name": "C2 an Array argument's length is read once (WEB3D.md \"Each field ... is read into a local before anything is checked or staged\")",
+          "pass": false,
+          "detail": {
+            "setTransform": {
+              "threw": false
+            },
+            "lengthReadsSetTransform": 2,
+            "setCameraProjection": {
+              "threw": true,
+              "message": "offset is out of bounds"
+            },
+            "lengthReadsProjection": 2,
+            "later": {
+              "threw": false,
+              "value": true
+            },
+            "pixel": [
+              56,
+              255,
+              56
+            ]
+          }
+        },
+        {
+          "name": "H5 another (disposed) renderer's handle is refused, also once its salt is reused (WEB3D.md \"another renderer's handle, is refused\"; \"never reissued\")",
+          "pass": false,
+          "detail": {
+            "saltA": 2,
+            "between": [
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23,
+              24,
+              25,
+              26,
+              27,
+              28,
+              29,
+              30,
+              31,
+              0,
+              1
+            ],
+            "saltB": 2,
+            "handles": {
+              "oA": 83886081,
+              "oB": 83886081,
+              "same": true
+            },
+            "staleHandleOnB": {
+              "threw": false
+            },
+            "pixelAfter": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "name": "R1 Rust refuses staged arrays that run past, are misaligned, lie outside staging or were freed; frees of anything else are ignored",
+          "pass": true,
+          "detail": {
+            "valid": {
+              "handle": 104857601
+            },
+            "oneFloatPastTheEnd": {
+              "refused": "mesh refused: an array's pointer and length do not lie inside one staging allocation"
+            },
+            "misaligned": {
+              "refused": "mesh refused: an array's pointer and length do not lie inside one staging allocation"
+            },
+            "ioArea": {
+              "refused": "mesh refused: an array's pointer and length do not lie inside one staging allocation"
+            },
+            "lengthOverflow": {
+              "refused": "mesh refused: an array's pointer and length do not lie inside one staging allocation"
+            },
+            "indicesFromThePositionsAllocation": {
+              "refused": "mesh refused: an index is past the last vertex"
+            },
+            "afterWrongLengthFree": {
+              "handle": 104857602
+            },
+            "afterFree": {
+              "refused": "mesh refused: an array's pointer and length do not lie inside one staging allocation"
+            },
+            "realloc": {
+              "p": 1118112,
+              "p2": 1118656,
+              "sameBlock": false,
+              "zeroed": true
+            },
+            "hugeAlloc": 0,
+            "publicCreateAfter": {
+              "threw": false,
+              "value": 117440513
+            },
+            "pixel": [
+              56,
+              255,
+              56
+            ],
+            "glError": 0
+          }
+        },
+        {
+          "name": "R2 300 creates that throw after staging (about 5 MiB each) leave memory where it was",
+          "pass": true,
+          "detail": {
+            "thrown": 300,
+            "memoryBefore": 1179648,
+            "memoryAfter": 2293760,
+            "frame": {
+              "threw": false,
+              "value": true
+            }
+          }
+        },
+        {
+          "name": "T1 a texture option getter that calls the renderer is refused, and one that throws leaves it usable",
+          "pass": true,
+          "detail": {
+            "getterCallsFrame": {
+              "threw": true,
+              "message": "web3d: a renderer method was called while the renderer was reading another call's arguments (from a getter, valueOf or a Proxy); call it afterwards"
+            },
+            "getterDisposes": {
+              "threw": true,
+              "message": "web3d: a renderer method was called while the renderer was reading another call's arguments (from a getter, valueOf or a Proxy); call it afterwards"
+            },
+            "getterThrows": {
+              "threw": true,
+              "message": "boom"
+            },
+            "afterThrow": {
+              "threw": false,
+              "value": true
+            },
+            "glErrorBefore": 0,
+            "resizedInGetter": {
+              "threw": false,
+              "value": 176160769
+            },
+            "glErrorAfterResize": 1281
+          }
+        },
+        {
+          "name": "T2 a texture option getter that resizes the source after its size was read: refused, or no GL error (WEB3D.md \"read once ... before anything is checked\")",
+          "pass": false,
+          "detail": {
+            "getterCallsFrame": {
+              "threw": true,
+              "message": "web3d: a renderer method was called while the renderer was reading another call's arguments (from a getter, valueOf or a Proxy); call it afterwards"
+            },
+            "getterDisposes": {
+              "threw": true,
+              "message": "web3d: a renderer method was called while the renderer was reading another call's arguments (from a getter, valueOf or a Proxy); call it afterwards"
+            },
+            "getterThrows": {
+              "threw": true,
+              "message": "boom"
+            },
+            "afterThrow": {
+              "threw": false,
+              "value": true
+            },
+            "glErrorBefore": 0,
+            "resizedInGetter": {
+              "threw": false,
+              "value": 176160769
+            },
+            "glErrorAfterResize": 1281
+          }
+        },
+        {
+          "name": "L5 one failed fetch, then the same URL loads; two creates sharing one failed fetch both fail and the next one loads",
+          "pass": true,
+          "detail": {
+            "first": "web3d: fetching the wasm failed: 503 http://127.0.0.1:5483/flaky/once.wasm",
+            "second": "created",
+            "raceA": "web3d: fetching the wasm failed: 503 http://127.0.0.1:5483/flaky/race.wasm",
+            "raceB": "web3d: fetching the wasm failed: 503 http://127.0.0.1:5483/flaky/race.wasm",
+            "third": "created",
+            "serverRequests": {
+              "once": 2,
+              "race": 2
+            }
+          }
+        },
+        {
+          "name": "Y5 a renderer that asks for antialias on a canvas whose context lacks it is refused (WEB3D.md \"must ask for the same, or is refused\")",
+          "pass": false,
+          "detail": {
+            "pageContextAntialias": false,
+            "create": "created",
+            "rendererInfoAntialias": false,
+            "samples": 0
+          }
+        }
+      ],
+      "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+      "messages": [
+        "warning: [.WebGL-0x12408ac5400] GL_INVALID_VALUE: glTexSubImage2DRobustANGLE: Offset overflows texture dimensions.",
+        "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+        "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+      ]
+    }
+  },
+  "browser": "156.0.8078.76"
+}

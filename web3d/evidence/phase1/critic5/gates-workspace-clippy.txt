@@ -1,0 +1,3 @@
+== CI form (macos row): cargo clippy --locked --workspace --all-targets --all-features --exclude loadngo-gfx-dx12 --exclude gui-win32 --exclude proactor-harness -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.31s
+exit 0

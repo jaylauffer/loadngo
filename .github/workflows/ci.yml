@@ -117,7 +117,7 @@ jobs:
         run: cargo test --locked --no-fail-fast --workspace ${{ matrix.excludes }}
 
       # web3d's wasm32 boundary (web3d/src/web.rs: the raw wasm imports and
-      # exports, and all of the crate's unsafe code) compiles only for wasm32,
+      # exports, and most of the crate's unsafe code) compiles only for wasm32,
       # so the host steps above never see it. One row is enough: the target
       # is the same everywhere.
       - name: cargo clippy (web3d, wasm32)

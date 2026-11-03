@@ -137,10 +137,10 @@
       "name": "H (informational) a handle plus 2^32, plus 0.75, or as a string is refused, not aliased",
       "pass": true,
       "detail": {
-        "handle": 16777223,
+        "handle": 12884901895,
         "alias": {
           "threw": true,
-          "message": "web3d: 4311744519 is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+          "message": "web3d: 17179869191 is not a valid object handle"
         },
         "hiddenByAlias": [
           255,
@@ -149,7 +149,7 @@
         ],
         "frac": {
           "threw": true,
-          "message": "web3d: 16777223.75 is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+          "message": "web3d: 12884901895.75 is not a valid object handle (a whole number from 1 to 2^53 - 1)"
         },
         "shownByFraction": [
           255,
@@ -158,7 +158,7 @@
         ],
         "str": {
           "threw": true,
-          "message": "web3d: \"16777223\" is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+          "message": "web3d: \"12884901895\" is not a valid object handle (a whole number from 1 to 2^53 - 1)"
         },
         "hiddenByString": [
           255,
@@ -270,5 +270,7 @@
   "passed": 10,
   "failed": [],
   "browser": "156.0.8078.76",
-  "messages": []
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
 }

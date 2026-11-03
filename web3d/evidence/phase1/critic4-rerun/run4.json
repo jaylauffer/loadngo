@@ -7,14 +7,14 @@
         "pass": true,
         "detail": {
           "handles": {
-            "left": 4194305,
-            "right": 4194306,
-            "red": 12582913,
-            "green": 12582914
+            "left": 9663676417,
+            "right": 9663676418,
+            "red": 11811160065,
+            "green": 11811160066
           },
           "swappedCreateObject": {
             "threw": true,
-            "message": "web3d: 12582914 is a material handle, not a mesh handle"
+            "message": "web3d: 11811160066 is not a valid mesh handle: it is a material handle"
           },
           "rightHalfAfterSwap": [
             0,
@@ -28,15 +28,15 @@
           ],
           "destroyMaterialWithMeshHandle": {
             "threw": true,
-            "message": "web3d: 4194306 is a mesh handle, not a material handle"
+            "message": "web3d: 9663676418 is not a valid material handle: it is a mesh handle"
           },
           "greenStillUsable": {
             "threw": false,
-            "value": 16777217
+            "value": 12884901889
           },
           "setVisibleWithMeshHandle": {
             "threw": true,
-            "message": "web3d: 4194305 is a mesh handle, not an object handle"
+            "message": "web3d: 9663676417 is not a valid object handle: it is a mesh handle"
           },
           "rightHalfAfterHide": [
             0,
@@ -49,14 +49,14 @@
         "name": "X2 a handle from another renderer is refused",
         "pass": true,
         "detail": {
-          "ownObjectHandle": 50331649,
+          "ownObjectHandle": 21474836481,
           "setVisible": {
             "threw": true,
-            "message": "web3d: undefined is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+            "message": "web3d: undefined is not a valid object handle (a whole number from 1 to 2^53 - 1)"
           },
           "destroyObject": {
             "threw": true,
-            "message": "web3d: undefined is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+            "message": "web3d: undefined is not a valid object handle (a whole number from 1 to 2^53 - 1)"
           }
         }
       },
@@ -145,7 +145,7 @@
         "name": "X5 a failed wasm fetch does not poison every later create",
         "pass": true,
         "detail": {
-          "first": "web3d: fetching the wasm failed: 404 http://127.0.0.1:5526/web3d/pkg/missing.wasm",
+          "first": "web3d: fetching the wasm failed: 404 http://127.0.0.1:5556/web3d/pkg/missing.wasm",
           "second": "created"
         }
       },
@@ -200,46 +200,46 @@
         "detail": {
           "minusZero": {
             "threw": true,
-            "message": "web3d: -0 is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+            "message": "web3d: -0 is not a valid object handle (a whole number from 1 to 2^53 - 1)"
           },
           "numberObject": {
             "threw": true,
-            "message": "web3d: an object is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+            "message": "web3d: an object is not a valid object handle (a whole number from 1 to 2^53 - 1)"
           },
           "bigint": {
             "threw": true,
-            "message": "web3d: 385875969n is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+            "message": "web3d: 107374182401n is not a valid object handle (a whole number from 1 to 2^53 - 1)"
           },
           "boolean": {
             "threw": true,
-            "message": "web3d: true is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+            "message": "web3d: true is not a valid object handle (a whole number from 1 to 2^53 - 1)"
           },
           "array": {
             "threw": true,
-            "message": "web3d: an Array is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+            "message": "web3d: an Array is not a valid object handle (a whole number from 1 to 2^53 - 1)"
           },
           "valueOf": {
             "threw": true,
-            "message": "web3d: an object is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+            "message": "web3d: an object is not a valid object handle (a whole number from 1 to 2^53 - 1)"
           },
           "string": {
             "threw": true,
-            "message": "web3d: \"385875969\" is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+            "message": "web3d: \"107374182401\" is not a valid object handle (a whole number from 1 to 2^53 - 1)"
           },
           "nearlyWhole": {
             "threw": false
           },
           "limit": {
             "threw": true,
-            "message": "web3d: 1073741824 is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+            "message": "web3d: 1073741824 is not a valid object handle: it is a mesh handle"
           },
           "overInt32": {
             "threw": true,
-            "message": "web3d: 2533359617 is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+            "message": "web3d: 109521666049 is not a valid object handle"
           },
           "infinity": {
             "threw": true,
-            "message": "web3d: Infinity is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+            "message": "web3d: Infinity is not a valid object handle (a whole number from 1 to 2^53 - 1)"
           },
           "stillDrawn": [
             0,
@@ -261,7 +261,7 @@
       "label": "with the flags",
       "flags": true,
       "frames": 601,
-      "pageScriptBytesPerFrame": 173.51
+      "pageScriptBytesPerFrame": 178.04
     },
     {
       "label": "without the flags",
@@ -273,7 +273,7 @@
       "label": "with the flags again",
       "flags": true,
       "frames": 601,
-      "pageScriptBytesPerFrame": 21.86
+      "pageScriptBytesPerFrame": 21.96
     }
   ]
 }

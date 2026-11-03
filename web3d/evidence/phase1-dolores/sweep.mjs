@@ -1,7 +1,7 @@
 // The phase-1 demo on a Pi's own screen: drives the one tab of a Chromium already running in the Pi's
-// desktop session over CDP, sets a 1366x768 viewport, and measures the demo (60 draws, about 325k
-// triangles, lean shading) at five render scales without MSAA, then at scale 0.75 with MSAA, 10 s
-// each, by reloading the same tab. Fits GPU ms against drawn pixels.
+// desktop session over CDP, sets a 1366x768 viewport, and measures the demo (lean shading, whatever
+// load demo.js has) at five render scales without MSAA, then at scale 0.75 with MSAA, 10 s each, by
+// reloading the same tab. Fits GPU ms against drawn pixels.
 //   PLAYWRIGHT_CORE=.../playwright-core/index.mjs node sweep.mjs <cdp url> <demo url as the Pi sees it> <out json>
 import { writeFileSync } from 'node:fs';
 // playwright-core from PLAYWRIGHT_CORE (a path to its index.mjs), else from node_modules.

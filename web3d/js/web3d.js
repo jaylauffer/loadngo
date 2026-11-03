@@ -10,18 +10,20 @@
 //   requestAnimationFrame(function tick() { r.frame(); requestAnimationFrame(tick); });
 //
 // Colours are linear, light intensities in three.js r180's units, matrices column-major (three.js's
-// `elements`). Handles are whole numbers that name one kind of thing in one renderer. Nothing on the
-// per-frame path (`setTransform`, `setCamera`, `setCameraLookAt`, `setKeyLight`, `frame`,
-// `readStats`) allocates.
+// `elements`). Handles are whole numbers below 2^53 that name one kind of thing in one renderer, and
+// no handle is issued twice in a page. Nothing on the per-frame path (`setTransform`, `setCamera`,
+// `setCameraLookAt`, `setKeyLight`, `frame`, `readStats`) allocates.
 //
 // The boundary. Every argument is checked before it reaches wasm:
 // - typed arrays are recognised by their internal slots, never by `instanceof` or their own
 //   properties, so a Proxy or a subclass that lies about `length` cannot change what is staged;
-// - numbers must be numbers (no `valueOf` is ever called);
-// - a caller's object (a descriptor, an options bag, an Array) is read once, and a renderer method
-//   called from inside that read (a getter, `valueOf`, a Proxy trap) throws instead of running;
-// - handles carry their kind and their renderer, and the Rust side refuses a handle of another kind
-//   or from another renderer.
+// - numbers must be numbers, in arguments and in the elements of a matrix, vector or colour given
+//   as an Array: nothing is converted, so no `valueOf` runs;
+// - a caller's object (a descriptor, an options bag, an Array's length and elements) is read once,
+//   and a renderer method called from inside that read (a getter or a Proxy trap) throws instead of
+//   running;
+// - handles carry their kind and their renderer's page-unique serial, and the Rust side refuses a
+//   handle of another kind or from another renderer.
 // Page code that patches built-ins, or reaches into a renderer's private fields, is out of scope.
 //
 // After `dispose()` every call throws "web3d: renderer disposed". When the WebGL context is lost,
@@ -36,10 +38,8 @@ const IO_FLOATS = 64;
 const STATS_LEN = 8;
 /** The largest drawing-buffer side accepted, as the Rust side's MAX_DRAWING_BUFFER. */
 const MAX_DRAWING_BUFFER = 32768;
-/** Handles are whole numbers below 2^30 (src/slots.rs). */
-const HANDLE_LIMIT = 2 ** 30;
-/** Distinct handle salts (src/slots.rs SALTS): at most this many renderers live at once. */
-const SALTS = 32;
+/** Renderer serials run from 1 to below 2^20 (src/slots.rs SERIALS), one per renderer a page makes. */
+const SERIALS = 2 ** 20;
 
 const DISPOSED = 'web3d: renderer disposed';
 const LOST =
@@ -106,12 +106,14 @@ function describe(v) {
 }
 
 /**
- * Checks a handle before it crosses into wasm, where ToInt32 would turn a handle plus 2^32, a
- * fraction or a numeric string into a live handle. Allocates nothing unless it throws.
+ * Checks a handle before it crosses into wasm: a whole number from 1 to 2^53 - 1, passed to wasm as
+ * an exact double. A fraction, a numeric string or a Number object is refused here; the Rust side
+ * then refuses a number that is not a live handle of this kind in this renderer. Allocates nothing
+ * unless it throws.
  */
 function handle(what, h) {
-  if (!Number.isInteger(h) || h <= 0 || h >= HANDLE_LIMIT) {
-    throw new Error(`web3d: ${describe(h)} is not a valid ${what} handle (a whole number from 1 to 2^30 - 1)`);
+  if (!Number.isSafeInteger(h) || h <= 0) {
+    throw new Error(`web3d: ${describe(h)} is not a valid ${what} handle (a whole number from 1 to 2^53 - 1)`);
   }
   return h;
 }
@@ -241,33 +243,27 @@ function checkSize(width, height) {
 
 /**
  * State shared by every copy of this module in the page (a second import under another URL is
- * another copy): which renderer owns each canvas, the antialias setting each canvas's context was
- * made with, and the handle salts in use.
+ * another copy): which renderer owns each canvas, the antialias setting each canvas's context has,
+ * and the next renderer serial.
  */
-const SHARED_STATE = (globalThis[Symbol.for('loadngo-web3d')] ??= {
-  owners: new WeakMap(),
-  contexts: new WeakMap(),
-  salts: { next: 0, live: new Set() },
-});
+const SHARED_STATE = (globalThis[Symbol.for('loadngo-web3d')] ??= {});
+SHARED_STATE.owners ??= new WeakMap();
+SHARED_STATE.contexts ??= new WeakMap();
+SHARED_STATE.serials ??= { next: 1 };
 const OWNERS = SHARED_STATE.owners;
 const CONTEXTS = SHARED_STATE.contexts;
 const PENDING = { lost: false };
 
-/** A salt no live renderer has, taken round-robin, so a disposed renderer's comes back last. */
-function takeSalt() {
-  const pool = SHARED_STATE.salts;
-  for (let k = 0; k < SALTS; k++) {
-    const salt = (pool.next + k) % SALTS;
-    if (!pool.live.has(salt)) {
-      pool.live.add(salt);
-      pool.next = (salt + 1) % SALTS;
-      return salt;
-    }
-  }
-  throw new Error(`web3d: ${SALTS} renderers are live in this page; dispose one first`);
+/**
+ * The next renderer serial. Serials are never reused in a page, so no two renderers, live or
+ * disposed, can issue the same handle. A page may make 2^20 - 1 renderers.
+ */
+function takeSerial() {
+  const pool = SHARED_STATE.serials;
+  if (pool.next >= SERIALS) throw new Error(`web3d: this page has made ${SERIALS - 1} renderers, the most it may`);
+  return pool.next++;
 }
 
-const releaseSalt = (salt) => SHARED_STATE.salts.live.delete(salt);
 
 // Compiled modules, by URL. A failed compile is forgotten, so a later create tries again.
 const COMPILED = new Map();
@@ -331,27 +327,24 @@ function readOptions(canvas, options) {
 
 /**
  * Creates a renderer on a canvas. Each renderer gets its own module instance (the compiled
- * module is shared) and its own handle salt, so renderers are independent and refuse each other's
- * handles.
+ * module is shared) and its own serial, so renderers are independent, refuse each other's handles,
+ * and never issue the same handle.
  *
  * options: width, height (drawing-buffer pixels, whole numbers from 0 to 32768; default the
  * canvas's), antialias (default true, as three's WebGLRenderer is usually created), cpuTiming
  * (default false; see setCpuTiming), wasm (see compile), onContextLost, onContextRestored.
  *
- * A canvas keeps the WebGL context it first had, with that context's settings: a later renderer
- * on the same canvas must ask for the same antialias, or it is refused. Everything is checked
- * before the context is made, and a create that fails afterwards removes what it set up.
+ * A canvas keeps the WebGL context it first had, with that context's settings, whoever made it: a
+ * renderer must ask for the antialias the context has, or it is refused. Everything is checked
+ * before the context is made, and a create that fails afterwards removes what it set up and puts
+ * the canvas's size back.
  */
 export async function createRenderer(canvas, options) {
   const o = readOptions(canvas, options);
   const owner = OWNERS.get(canvas);
   if (owner && !owner.lost) throw new Error(SHARED);
   const first = CONTEXTS.get(canvas);
-  if (first !== undefined && first !== o.antialias) {
-    throw new Error(
-      `web3d: this canvas's WebGL context was made with antialias ${first}; a canvas keeps its first context's settings, so ask for the same or use a new canvas`,
-    );
-  }
+  if (first !== undefined && first !== o.antialias) throw new Error(contextMismatch(first));
   // Claimed before the first await, so two calls in a row cannot both pass the check.
   OWNERS.set(canvas, PENDING);
   try {
@@ -378,11 +371,14 @@ async function build(canvas, o) {
   };
   const gl = WEBGL2 ? o.kind.getContext.call(canvas, 'webgl2', attributes) : null;
   if (!gl) throw new Error('web3d: WebGL2 is not available here, or this canvas already has another kind of context');
-  if (!CONTEXTS.has(canvas)) CONTEXTS.set(canvas, o.antialias);
+  // The context the canvas now has, which the page may have made first with other settings.
+  const actual = Boolean(gl.getContextAttributes()?.antialias);
+  CONTEXTS.set(canvas, actual);
+  if (actual !== o.antialias) throw new Error(contextMismatch(actual));
   const shim = createGl(canvas, gl, { onContextLost: o.onContextLost, onContextRestored: o.onContextRestored });
+  const size = [o.kind.width.call(canvas), o.kind.height.call(canvas)];
   let x = null;
   let w = 0;
-  let salt = -1;
   try {
     if (shim.lost()) throw new Error(LOST); // between a loss and its restore, programs cannot compile
     x = (await WebAssembly.instantiate(module, shim.imports)).exports;
@@ -390,8 +386,8 @@ async function build(canvas, o) {
       throw new Error('web3d: the wasm module is not loadngo-web3d (its exports are missing)');
     }
     shim.attach(x.memory);
-    salt = takeSalt();
-    w = x.web3d_create(salt) >>> 0;
+    const serial = takeSerial();
+    w = x.web3d_create(serial) >>> 0;
     if (w === 0) throw new Error('web3d: the module could not create a renderer');
     o.kind.setWidth.call(canvas, o.width);
     o.kind.setHeight.call(canvas, o.height);
@@ -399,14 +395,20 @@ async function build(canvas, o) {
       throw new Error(`web3d: ${errorText(x, w, shim)}`);
     }
     if (o.cpuTiming) x.web3d_set_cpu_timing(w, 1);
-    return new Renderer(canvas, o.kind, gl, shim, x, w, salt);
+    return new Renderer(canvas, o.kind, gl, shim, x, w, serial);
   } catch (error) {
-    // Leave nothing behind: the renderer's GL objects, the shim's listeners, the salt.
+    // Leave nothing behind: the renderer's GL objects, the shim's listeners, the canvas's size. A
+    // serial taken is spent, never reused.
     if (w !== 0) x.web3d_destroy(w);
     shim.dispose();
-    if (salt >= 0) releaseSalt(salt);
+    if (o.kind.width.call(canvas) !== size[0]) o.kind.setWidth.call(canvas, size[0]);
+    if (o.kind.height.call(canvas) !== size[1]) o.kind.setHeight.call(canvas, size[1]);
     throw error;
   }
+}
+
+function contextMismatch(antialias) {
+  return `web3d: this canvas's WebGL context has antialias ${antialias}; a canvas keeps its first context and that context's settings, so ask for antialias: ${antialias} or use a new canvas`;
 }
 
 function errorText(x, w, shim) {
@@ -420,14 +422,14 @@ function errorText(x, w, shim) {
 
 /** Made only by createRenderer. */
 export class Renderer {
-  constructor(canvas, kind, gl, shim, exports, w, salt) {
+  constructor(canvas, kind, gl, shim, exports, w, serial) {
     this.canvas = canvas;
     this._kind = kind;
     this._gl = gl;
     this._shim = shim;
     this._x = exports;
     this._w = w;
-    this._salt = salt;
+    this._serial = serial;
     this._busy = false;
     this._ioPtr = exports.web3d_io(w) >>> 0;
     this._statsPtr = exports.web3d_stats(w) >>> 0;
@@ -492,20 +494,30 @@ export class Renderer {
   }
 
   /**
-   * Copies `n` numbers into the exchange area at `at`, through the built-in TypedArray set (an
-   * element-by-element copy of a fractional number would box it while V8 still runs the code
-   * unoptimised). A typed array's real length must be `n`; an Array's `length` must be `n`. The
-   * copy is bounded by the exchange area, and the Rust side refuses non-finite values.
+   * Copies `n` numbers into the exchange area at `at`. A typed array (by its internal slot) must
+   * have a real length of `n` and is copied by the built-in TypedArray set, which reads its storage
+   * and so converts nothing. An Array's `length` is read once and must be `n`; each element is read
+   * once and must be a number, so no `valueOf` runs. The Rust side refuses non-finite values.
    */
   _put(what, at, v, n) {
     const io = this._ioView();
     const k = typedKind(v);
     if (k !== undefined) {
-      if (TA_LENGTH.call(v) !== n) throw new Error(`web3d: ${what} must hold ${n} numbers, not ${TA_LENGTH.call(v)}`);
-    } else if (!isArray(v) || v.length !== n) {
-      throw new Error(`web3d: ${what} must be an Array or typed array of ${n} numbers, not ${describe(v)}`);
+      const length = TA_LENGTH.call(v);
+      if (length !== n || k === 'BigInt64Array' || k === 'BigUint64Array') {
+        throw new Error(`web3d: ${what} must hold ${n} numbers, not ${describe(v)} of ${length}`);
+      }
+      TA_SET.call(io, v, at);
+      return;
     }
-    TA_SET.call(io, v, at);
+    if (!isArray(v)) throw new Error(`web3d: ${what} must be an Array or typed array of ${n} numbers, not ${describe(v)}`);
+    const length = v.length;
+    if (length !== n) throw new Error(`web3d: ${what} must hold ${n} numbers, not ${describe(length)}`);
+    for (let i = 0; i < n; i++) {
+      const x = v[i];
+      if (typeof x !== 'number') throw new Error(`web3d: ${what}[${i}] must be a number, not ${describe(x)}`);
+      io[at + i] = x;
+    }
   }
 
   /** Sizes the canvas, then returns the drawing buffer's real size, which the browser may have clamped. */
@@ -611,7 +623,9 @@ export class Renderer {
   createTexture(source, options) {
     this._enter(true);
     try {
-      const [width, height] = imageSize(source);
+      // The options first: they are the caller's object, and its getters run here. The source's
+      // size is read after them, through built-in getters, so no caller code runs between it and
+      // the upload; the shim checks the size again just before uploading all the same.
       const opts = options ?? {};
       const srgb = opts.srgb ?? true;
       const mipmaps = opts.mipmaps ?? true;
@@ -623,7 +637,8 @@ export class Renderer {
         throw new Error(`web3d: wrap modes are 'repeat', 'clamp' or 'mirror', not ${describe(s === undefined ? wrapS : wrapT)}`);
       }
       const flags = (srgb ? 1 : 0) | (mipmaps ? 2 : 0) | (s << 2) | (t << 4);
-      this._shim.stage(source);
+      const [width, height] = imageSize(source);
+      this._shim.stage(source, () => imageSize(source));
       try {
         return this._handle(this._x.web3d_texture_create(this._w, width, height, flags));
       } finally {
@@ -903,7 +918,6 @@ export class Renderer {
     this._x.web3d_destroy(this._w);
     this._w = 0;
     this._shim.dispose();
-    releaseSalt(this._salt);
     if (OWNERS.get(this.canvas) === this) OWNERS.delete(this.canvas);
   }
 }

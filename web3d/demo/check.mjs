@@ -4,7 +4,7 @@
 // aborts if WebGL is software-rendered, measures frame times, CPU and GPU milliseconds, takes
 // screenshots, and stops its browser and server.
 //
-// It fails (exit 1) unless every demo run draws the scene it should (60 draws, 324,932 triangles),
+// It fails (exit 1) unless every demo run draws the scene it should (64 draws, 320,000 triangles),
 // its pixels are right (the exact clear colour above the horizon, a lit object at the centre), and
 // it reports no GL error and no page error; and unless every probe in demo/probe.html passes
 // (pixel-exact rendering, lighting against three.js r180, refusals, use after dispose, context loss
@@ -57,14 +57,14 @@ const RUNS = [
   { name: 'low-1024x576-no-msaa', query: 'still=1&scale=0.75&aa=0', note: 'pixel ratio 0.75 without multisampling' },
 ];
 const VIEWPORT = { width: 1366, height: 768 };
-const SCENE = { draws: 60, triangles: 324932 };
+const SCENE = { draws: 64, triangles: 320000 };
 const srgbByte = (c) => Math.round((c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055) * 255);
 // CPU timing off (cputime=0): its two clock readings a frame are boxed numbers by design (20.8
 // sampled bytes a frame, see Renderer.setCpuTiming). The readout off (hud=0) and frames counted without
 // statistics (frames()), so nothing the page runs per frame should allocate: the check fails if the
 // page's own scripts (demo/ and pkg/) average more than ALLOCATION_LIMIT sampled bytes a frame at
 // steady state. Chrome's own code ("(native or internal)") is reported, not gated.
-const ALLOCATION_RUN = { name: 'allocation', query: 'scale=0.75&cputime=0&hud=0', note: 'JS heap allocation while drawing at pixel ratio 0.75, camera and three objects moving, CPU timing and readout off' };
+const ALLOCATION_RUN = { name: 'allocation', query: 'scale=0.75&cputime=0&hud=0&arrays=1', note: 'JS heap allocation while drawing at pixel ratio 0.75, camera and three objects moving, matrices and vectors as plain Arrays (as three.js holds them), CPU timing and readout off' };
 const ALLOCATION_LIMIT = 1;
 // A window must hold at least this share of the frames 60 Hz would give, or it proves nothing.
 const MIN_FRAME_SHARE = 0.9;

@@ -514,8 +514,8 @@ async function kinds() {
   r2.dispose();
   log(
     'W a handle of another kind, a bare small number, or another renderer\'s handle is refused; the right object still draws',
-    d.swapped.threw && /is a material handle, not a mesh handle/.test(d.swapped.message) &&
-      d.destroyMaterialWithMesh.threw && /is a mesh handle, not a material handle/.test(d.destroyMaterialWithMesh.message) &&
+    d.swapped.threw && /is not a valid mesh handle: it is a material handle/.test(d.swapped.message) &&
+      d.destroyMaterialWithMesh.threw && /is not a valid material handle: it is a mesh handle/.test(d.destroyMaterialWithMesh.message) &&
       d.setVisibleWithMesh.threw && d.small.every((t) => t.threw) && d.rightHalf[1] > 200 &&
       d.handlesDiffer && d.foreignSetVisible.threw && /another renderer/.test(d.foreignSetVisible.message) && d.foreignDestroy.threw && !d.ownStillWorks.threw,
     d,
@@ -564,7 +564,7 @@ async function failedCreate() {
   // Fails after the context and the shim exist: a module that is not web3d.
   const empty = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
   d.late = await settle(createRenderer(c, { width: 32, height: 32, antialias: false, wasm: empty, onContextLost: () => calls.late++ }));
-  // Forty more failures, then forty creates: no salt or canvas is left held.
+  // Forty more failures, then forty creates: no canvas is left held.
   for (let i = 0; i < 40; i++) await settle(createRenderer(c, { width: 32, height: 32, antialias: false, wasm: empty }));
   let created = 0;
   for (let i = 0; i < 40; i++) {
@@ -584,9 +584,9 @@ async function failedCreate() {
   d.calls = calls;
   for (const k of ['early', 'late', 'mismatch']) d[k] = d[k].ok ? 'created' : d[k].message;
   log(
-    'Y a failed create (before or after the context exists) leaves no listener, salt or claim behind; a canvas refuses other context settings',
+    'Y a failed create (before or after the context exists) leaves no listener or claim behind; a canvas refuses other context settings',
     /whole number/.test(d.early) && /not loadngo-web3d/.test(d.late) && created === 40 &&
-      /keeps its first context's settings/.test(d.mismatch) && d.goodAttributes.antialias === false && d.goodAttributes.samples === 0 &&
+      /keeps its first context/.test(d.mismatch) && d.goodAttributes.antialias === false && d.goodAttributes.samples === 0 &&
       calls.early === 0 && calls.late === 0 && calls.good === 1,
     d,
   );
@@ -606,7 +606,7 @@ async function reentrancy() {
   Object.defineProperty(matrix, 12, { get: () => (r.dispose(), 0) });
   d.getterDisposes = attempt(() => r.setTransform(o, matrix));
   const boxed = Array.from(IDENT);
-  boxed[13] = { valueOf: () => (r.frame(), 0) };
+  boxed[13] = { valueOf: () => (d.valueOfCalls++, r.frame(), 0) };
   d.valueOfFrames = attempt(() => r.setTransform(o, boxed));
   d.descriptorGetter = attempt(() =>
     r.createMesh({
@@ -624,12 +624,222 @@ async function reentrancy() {
   r.dispose();
   const reentrant = (t) => t.threw && /while the renderer was reading/.test(t.message);
   log(
-    'U a getter, valueOf or descriptor that calls the renderer is refused; numbers are never converted; the renderer stays live and drawn',
+    'U a getter or descriptor that calls the renderer is refused; numbers, in arguments and in Arrays, are never converted, so no valueOf runs; the renderer stays live and drawn',
     d.valueOfCalls === 0 && d.keyLight.threw && /must be a number/.test(d.keyLight.message) && d.clearColor.threw &&
-      reentrant(d.getterDisposes) && reentrant(d.valueOfFrames) && reentrant(d.descriptorGetter) && reentrant(d.materialGetter) &&
+      reentrant(d.getterDisposes) && d.valueOfFrames.threw && /must be a number/.test(d.valueOfFrames.message) &&
+      reentrant(d.descriptorGetter) && reentrant(d.materialGetter) &&
       d.stillLive.value === true && d.pixel[1] > 200 && d.glError === 0,
     d,
   );
+}
+
+/** H6: no handle is issued twice in a page, across many renderers, live or disposed. */
+async function serials() {
+  const c = document.getElementById('serials');
+  const opts = { width: 16, height: 16, antialias: false };
+  const seen = new Set();
+  let twice = 0;
+  const keep = (h) => {
+    if (seen.has(h)) twice++;
+    seen.add(h);
+    return h;
+  };
+  const first = await createRenderer(c, opts);
+  flat(first);
+  const firstObject = keep(first.createObject(keep(first.createMesh(quad(-1, -1, 1, 1, -5))), keep(first.createMaterial({}))));
+  first.dispose();
+  // 100 renderers come and go on one canvas: more than three cycles of the 32 salts an earlier
+  // scheme had. Each makes a mesh, a material and two objects, destroying one.
+  for (let i = 0; i < 100; i++) {
+    const r = await createRenderer(c, opts);
+    const mesh = keep(r.createMesh(quad(-1, -1, 1, 1, -5)));
+    const mat = keep(r.createMaterial({}));
+    r.destroyObject(keep(r.createObject(mesh, mat)));
+    keep(r.createObject(mesh, mat));
+    r.dispose();
+  }
+  const last = await createRenderer(c, opts);
+  flat(last);
+  const lastObject = keep(last.createObject(keep(last.createMesh(quad(-1, -1, 1, 1, -5))), keep(last.createMaterial({ baseColor: [0, 1, 0, 1] }))));
+  const d = { handles: seen.size, twice, firstObject, lastObject };
+  d.staleOnLast = attempt(() => last.setVisible(firstObject, false));
+  last.frame();
+  d.pixel = reader(last)(0, 0);
+  last.dispose();
+  log(
+    'H6 102 renderers on one canvas issue 406 handles, none twice; the first renderer\'s handle is refused by the last, whose object stays drawn',
+    d.handles === 406 && twice === 0 && d.staleOnLast.threw && /another renderer/.test(d.staleOnLast.message) && d.pixel[1] > 200,
+    d,
+  );
+}
+
+/** C: Array elements must be numbers (no valueOf runs), and an Array's length is read once. */
+async function arrays() {
+  const r = await createRenderer(document.getElementById('arrays'), { width: 16, height: 16, antialias: false });
+  flat(r);
+  const mesh = r.createMesh(quad(-1, -1, 1, 1, -5));
+  const mat = r.createMaterial({ baseColor: [0, 1, 0, 1] });
+  const o = r.createObject(mesh, mat);
+  const d = { valueOfCalls: 0 };
+  const plain = Array.from(IDENT);
+  d.plainArray = attempt(() => r.setTransform(o, plain));
+  d.strings = attempt(() => r.createObject(mesh, mat, Array.from(IDENT, String)));
+  d.valueOfs = attempt(() => r.setTransform(o, Array.from(IDENT, (v) => ({ valueOf: () => (d.valueOfCalls++, v) }))));
+  d.lookAtStrings = attempt(() => r.setCameraLookAt(['0', '0', '5'], [0, 0, 0], 0.8, 0.1, 100));
+  d.booleans = attempt(() => r.setCamera(Array.from(IDENT, (v) => v === 1), ORTHO));
+  d.nulls = attempt(() => r.setCamera(Array.from(IDENT, (v) => (v === 0 ? null : v)), ORTHO));
+  d.colourString = attempt(() => r.createMaterial({ baseColor: ['1', 0, 0, 1] }));
+  let reads = 0;
+  const lying = new Proxy(Array.from(IDENT), {
+    get(t, k, rcv) {
+      if (k === 'length') return ++reads === 1 ? 16 : 64;
+      return Reflect.get(t, k, rcv);
+    },
+  });
+  d.lyingLength = attempt(() => r.setTransform(o, lying));
+  d.lengthReads = reads;
+  r.setCamera(IDENT, ORTHO);
+  r.frame();
+  d.pixel = reader(r)(0, 0);
+  d.glError = r.gl.getError();
+  r.dispose();
+  const refused = (t) => t.threw && /must be a number/.test(t.message);
+  log(
+    'C Array matrices, vectors and colours must hold numbers (no valueOf runs) and their length is read once; plain number Arrays work',
+    !d.plainArray.threw && refused(d.strings) && refused(d.valueOfs) && d.valueOfCalls === 0 && refused(d.lookAtStrings) &&
+      refused(d.booleans) && refused(d.nulls) && refused(d.colourString) && !d.lyingLength.threw && d.lengthReads === 1 &&
+      d.pixel[1] > 200 && d.glError === 0,
+    d,
+  );
+}
+
+/** T: a texture source resized by an option getter; a source resized behind the size check. */
+async function textureSize() {
+  const r = await createRenderer(document.getElementById('texsize'), { width: 16, height: 16, antialias: false });
+  flat(r);
+  const src = document.createElement('canvas');
+  src.width = 4;
+  src.height = 4;
+  const g = src.getContext('2d');
+  g.fillStyle = '#00ff00';
+  g.fillRect(0, 0, 4, 4);
+  const d = {};
+  d.grownInGetter = attempt(() => r.createTexture(src, { get wrapS() { src.width = 64; src.height = 64; g.fillStyle = '#00ff00'; g.fillRect(0, 0, 64, 64); return 'clamp'; } }));
+  d.errorAfterGrow = r.gl.getError();
+  if (!d.grownInGetter.threw) {
+    r.createObject(r.createMesh(quad(-1, -1, 1, 1, -5)), r.createMaterial({ texture: d.grownInGetter.value }));
+    r.frame();
+    d.pixel = reader(r)(0, 0);
+  }
+  // Behind the wrapper's back: the shim's own check before upload, given a size that is not the source's.
+  const shim = r._shim;
+  shim.stage(src, () => [4, 4]);
+  d.shimRefused = r._x.web3d_texture_create(r._w, 64, 64, 1) === 0 ? r._errorText() : 'uploaded';
+  shim.stage(null);
+  d.errorAfterShim = r.gl.getError();
+  r.dispose();
+  log(
+    'T a texture option getter that resizes the source gets a texture of the new size with no GL error; the shim refuses a size that is not the source\'s',
+    !d.grownInGetter.threw && d.errorAfterGrow === 0 && d.pixel?.[1] > 200 && /refused the texture upload/.test(d.shimRefused) && d.errorAfterShim === 0,
+    d,
+  );
+}
+
+/**
+ * Y2: a canvas whose WebGL2 context the page made, with other settings, and a failed create after
+ * the canvas was resized. The fake module below exports what web3d.js needs, but its init fails.
+ */
+async function foreignContext() {
+  const c = document.getElementById('foreign');
+  const gl = c.getContext('webgl2', { antialias: false });
+  const d = { pageAntialias: gl.getContextAttributes().antialias };
+  d.askedForAntialias = await settle(createRenderer(c, { width: 16, height: 16, antialias: true }));
+  const ok = await settle(createRenderer(c, { width: 16, height: 16, antialias: false }));
+  d.askedForNone = ok.ok ? 'created' : ok.message;
+  if (ok.ok) ok.r.dispose();
+  // A module whose web3d_init fails, so the create fails after the canvas was sized.
+  const failing = failingModule();
+  const c2 = document.getElementById('resized');
+  c2.width = 20;
+  c2.height = 10;
+  d.failedInit = await settle(createRenderer(c2, { width: 48, height: 24, antialias: false, wasm: failing }));
+  d.sizeAfterFailure = [c2.width, c2.height];
+  d.askedForAntialias = d.askedForAntialias.ok ? 'created' : d.askedForAntialias.message;
+  d.failedInit = d.failedInit.ok ? 'created' : d.failedInit.message;
+  log(
+    'Y2 a canvas whose page-made context has no antialias refuses a renderer that asks for it, and accepts one that does not; a failed create puts the canvas size back',
+    d.pageAntialias === false && /keeps its first context/.test(d.askedForAntialias) && d.askedForNone === 'created' &&
+      /init failed on purpose/.test(d.failedInit) && d.sizeAfterFailure[0] === 20 && d.sizeAfterFailure[1] === 10,
+    d,
+  );
+}
+
+/**
+ * A tiny wasm module, assembled here: memory, web3d_create returning 16, web3d_init returning 1
+ * (failure), web3d_error_ptr/len pointing at "init failed on purpose", web3d_destroy doing nothing.
+ */
+function failingModule() {
+  const message = new TextEncoder().encode('init failed on purpose');
+  const leb = (n) => {
+    const out = [];
+    do {
+      let b = n & 0x7f;
+      n >>>= 7;
+      if (n) b |= 0x80;
+      out.push(b);
+    } while (n);
+    return out;
+  };
+  const section = (id, bytes) => [id, ...leb(bytes.length), ...bytes];
+  const vec = (items) => [...leb(items.length), ...items.flat()];
+  const name = (s) => [...leb(s.length), ...new TextEncoder().encode(s)];
+  const I32 = 0x7f;
+  const types = vec([
+    [0x60, 1, I32, 1, I32], // (i32) -> i32
+    [0x60, 3, I32, I32, I32, 1, I32], // (i32, i32, i32) -> i32
+    [0x60, 1, I32, 0], // (i32) -> ()
+  ]);
+  const funcs = vec([[0], [1], [0], [0], [2]]);
+  const memory = vec([[0x00, 1]]);
+  const exports = vec([
+    [...name('memory'), 0x02, 0],
+    [...name('web3d_create'), 0x00, 0],
+    [...name('web3d_init'), 0x00, 1],
+    [...name('web3d_error_ptr'), 0x00, 2],
+    [...name('web3d_error_len'), 0x00, 3],
+    [...name('web3d_destroy'), 0x00, 4],
+  ]);
+  const body = (code) => [...leb(code.length + 1), 0, ...code]; // no locals
+  // i32.const takes a signed LEB128.
+  const sleb = (n) => {
+    const out = [];
+    for (;;) {
+      const b = n & 0x7f;
+      n >>= 7;
+      const done = (n === 0 && (b & 0x40) === 0) || (n === -1 && (b & 0x40) !== 0);
+      out.push(done ? b : b | 0x80);
+      if (done) return out;
+    }
+  };
+  const i32 = (n) => [0x41, ...sleb(n)];
+  const code = vec([
+    body([...i32(16), 0x0b]),
+    body([...i32(1), 0x0b]),
+    body([...i32(64), 0x0b]),
+    body([...i32(message.length), 0x0b]),
+    body([0x0b]),
+  ]);
+  const data = vec([[0x00, ...i32(64), 0x0b, ...leb(message.length), ...message]]);
+  const bytes = new Uint8Array([
+    0, 0x61, 0x73, 0x6d, 1, 0, 0, 0,
+    ...section(1, types),
+    ...section(3, funcs),
+    ...section(5, memory),
+    ...section(7, exports),
+    ...section(10, code),
+    ...section(11, data),
+  ]);
+  return new WebAssembly.Module(bytes);
 }
 
 async function main() {
@@ -645,6 +855,10 @@ async function main() {
   await compileCache();
   await failedCreate();
   await reentrancy();
+  await serials();
+  await arrays();
+  await textureSize();
+  await foreignContext();
   out.passed = out.tests.filter((t) => t.pass).length;
   out.failed = out.tests.filter((t) => !t.pass).map((t) => t.name);
 }

@@ -67,7 +67,7 @@ export function createGl(canvas, gl, hooks = {}) {
   const decoder = new TextDecoder();
   const depthOnly = [gl.DEPTH];
 
-  const state = { staged: null, lost: false, lastLog: '' };
+  const state = { staged: null, stagedSize: null, lost: false, lastLog: '' };
   /** True from the moment the context is lost, and for good: the event can lag isContextLost(). */
   const gone = () => {
     if (!state.lost && gl.isContextLost()) state.lost = true;
@@ -221,6 +221,19 @@ export function createGl(canvas, gl, hooks = {}) {
         return 0;
       }
       if (gone()) return 0;
+      // The size the texture is made for must still be the source's, or the upload would fail
+      // (larger) or fill only a corner (smaller).
+      let w = width;
+      let h = height;
+      try {
+        if (state.stagedSize) [w, h] = state.stagedSize();
+      } catch {
+        w = -1; // no longer an image source; never throw through the wasm module
+      }
+      if (w !== width || h !== height) {
+        note(2, `web3d: the image source is ${w}x${h} now, not the ${width}x${height} it was when the texture was asked for`);
+        return 0;
+      }
       const texture = gl.createTexture();
       if (!texture) return 0;
       try {
@@ -296,11 +309,12 @@ export function createGl(canvas, gl, hooks = {}) {
       memory = wasmMemory;
       heap = new Uint8Array(memory.buffer);
     },
-    /** Holds an image source for the next texture_create_staged call. */
     /** Whether the context has been lost (for good, for this shim). */
     lost: gone,
-    stage(source) {
+    /** Holds an image source, and a way to read its size again, for the next texture_create_staged call. */
+    stage(source, sizeOf = null) {
       state.staged = source;
+      state.stagedSize = sizeOf;
     },
     info() {
       const debug = gl.getExtension('WEBGL_debug_renderer_info');

@@ -1,6 +1,5 @@
-// The web3d phase 1 demo: a procedural scene of 60 draws and 324,932 triangles (the load of a
-// small furnished room with a character in it), drawn by the Rust/WebAssembly renderer, with fps,
-// GPU ms and CPU ms on screen.
+// The web3d phase 1 demo: a procedural scene of 64 draws and 320,000 triangles, a round load of
+// its own, drawn by the Rust/WebAssembly renderer, with fps, GPU ms and CPU ms on screen.
 //
 // Opaque torus knots overlap in depth across a grid; one sphere wears a generated canvas texture;
 // a masked, double-sided grille and a blended, double-sided glass pane exercise the other alpha
@@ -25,8 +24,8 @@ const num = (name, fallback) => {
   return params.has(name) && Number.isFinite(v) ? v : fallback;
 };
 const SCALE = num('scale', 1);
-const KNOTS = Math.max(0, Math.floor(num('knots', 54)));
-const TUBULAR = Math.max(8, Math.floor(num('tubular', 208)));
+const KNOTS = Math.max(0, Math.floor(num('knots', 58)));
+const TUBULAR = Math.max(8, Math.floor(num('tubular', 192)));
 const RADIAL = Math.max(3, Math.floor(num('radial', 14)));
 const STILL = params.get('still') === '1';
 // CPU timing is on unless cputime=0: it costs two boxed numbers a frame (the allocation check
@@ -34,6 +33,9 @@ const STILL = params.get('still') === '1';
 const CPU_TIMING = params.get('cputime') !== '0';
 // hud=0: no on-screen readout (its once-a-second text is the demo's only steady allocation).
 const HUD = params.get('hud') !== '0';
+// arrays=1: matrices and vectors as plain Arrays, as three.js holds them (Matrix4.elements), instead
+// of Float32Arrays; the allocation check uses it, since that is the path an application takes.
+const ARRAYS = params.get('arrays') === '1';
 
 const canvas = document.getElementById('view');
 const hud = document.getElementById('hud');
@@ -130,21 +132,22 @@ function sphere(radius, widthSegments, heightSegments) {
 }
 
 /** A ground grid in the XZ plane, facing +Y. */
-function ground(size, segments) {
-  const row = segments + 1;
-  const positions = new Float32Array(row * row * 3);
-  const normals = new Float32Array(row * row * 3);
-  const indices = new Uint32Array(segments * segments * 6);
-  for (let iz = 0; iz <= segments; iz++) {
-    for (let ix = 0; ix <= segments; ix++) {
+function ground(size, segmentsX, segmentsZ) {
+  const row = segmentsX + 1;
+  const vertices = row * (segmentsZ + 1);
+  const positions = new Float32Array(vertices * 3);
+  const normals = new Float32Array(vertices * 3);
+  const indices = new Uint32Array(segmentsX * segmentsZ * 6);
+  for (let iz = 0; iz <= segmentsZ; iz++) {
+    for (let ix = 0; ix <= segmentsX; ix++) {
       const v = iz * row + ix;
-      positions.set([(ix / segments - 0.5) * size, 0, (iz / segments - 0.5) * size], v * 3);
+      positions.set([(ix / segmentsX - 0.5) * size, 0, (iz / segmentsZ - 0.5) * size], v * 3);
       normals.set([0, 1, 0], v * 3);
     }
   }
   let k = 0;
-  for (let iz = 0; iz < segments; iz++) {
-    for (let ix = 0; ix < segments; ix++) {
+  for (let iz = 0; iz < segmentsZ; iz++) {
+    for (let ix = 0; ix < segmentsX; ix++) {
       const a = iz * row + ix;
       indices.set([a, a + row, a + 1, a + 1, a + row, a + row + 1], k);
       k += 6;
@@ -330,8 +333,10 @@ async function main() {
     r.createMesh(torusKnot(0.6, 0.17, TUBULAR, RADIAL, 3, 4)),
     r.createMesh(torusKnot(0.58, 0.16, TUBULAR, RADIAL, 2, 5)),
   ];
-  const meshGround = r.createMesh(ground(26, 32));
-  const meshBall = r.createMesh(sphere(1.1, 64, 32));
+  // 58 knots of 192 x 14 x 2 = 5,376 triangles, a 38 x 37 ground, a 32 x 16 sphere, two 48 x 24
+  // spheres and two panels: 64 draws and 320,000 triangles.
+  const meshGround = r.createMesh(ground(26, 38, 37));
+  const meshBall = r.createMesh(sphere(1.1, 32, 16));
   const meshSmallBall = r.createMesh(sphere(0.75, 48, 24));
   const meshPanel = r.createMesh(panel(2.6, 2.0));
 
@@ -354,7 +359,7 @@ async function main() {
   const matGrille = r.createMaterial({ texture: texGrille, alphaMode: 'mask', alphaCutoff: 0.5, doubleSided: true, roughness: 0.6 });
   const matGlass = r.createMaterial({ baseColor: [0.35, 0.6, 0.9, 0.35], alphaMode: 'blend', doubleSided: true, roughness: 0.1 });
 
-  const m = new Float32Array(16);
+  const m = ARRAYS ? [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] : new Float32Array(16);
   let triangles = 0;
   let draws = 0;
   const place = (mesh, material, tris, x, y, z, yaw = 0, pitch = 0, s = 1) => {
@@ -363,7 +368,7 @@ async function main() {
     return r.createObject(mesh, material, compose(m, x, y, z, yaw, pitch, s));
   };
   const knotTris = TUBULAR * RADIAL * 2;
-  place(meshGround, matGround, 32 * 32 * 2, 0, 0, 0);
+  place(meshGround, matGround, 38 * 37 * 2, 0, 0, 0);
   const columns = 9;
   for (let i = 0; i < KNOTS; i++) {
     const col = i % columns;
@@ -371,7 +376,7 @@ async function main() {
     place(meshKnots[i % 3], palette[(i * 7) % palette.length], knotTris,
       (col - (columns - 1) / 2) * 2.3, 1.25 + 0.15 * Math.sin(i), 3.2 - rowIndex * 2.3, i * 0.7, 0.3 * Math.cos(i), 0.95);
   }
-  const ball = place(meshBall, matLabel, 64 * 32 * 2 - 2 * 64, 0, 1.45, 6.2);
+  const ball = place(meshBall, matLabel, 32 * 16 * 2 - 2 * 32, 0, 1.45, 6.2);
   place(meshSmallBall, matGold, 48 * 24 * 2 - 2 * 48, -3.1, 0.95, 6.4);
   place(meshSmallBall, matGloss, 48 * 24 * 2 - 2 * 48, 3.1, 0.95, 6.4);
   const grille = place(meshPanel, matGrille, 2, -5.6, 1.4, 5.6);
@@ -383,8 +388,8 @@ async function main() {
   const CLEAR = [0.015, 0.018, 0.024];
   r.setClearColor(...CLEAR);
 
-  const eye = new Float32Array(3);
-  const target = new Float32Array([0, 1.0, -1.2]);
+  const eye = ARRAYS ? [0, 0, 0] : new Float32Array(3);
+  const target = ARRAYS ? [0, 1.0, -1.2] : new Float32Array([0, 1.0, -1.2]);
   const fov = (50 * Math.PI) / 180;
   const stats = new Float64Array(8);
   const meter = { frames: 0, since: 0, cpu: 0, cpuN: 0, gpu: 0, gpuN: 0, intervals: new Float64Array(512), n: 0, prev: 0 };

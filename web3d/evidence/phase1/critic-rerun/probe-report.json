@@ -174,7 +174,7 @@
         "name": "M GPU timer reading present",
         "pass": true,
         "detail": {
-          "gpuMs": 0.081666
+          "gpuMs": 0.07325
         }
       },
       {
@@ -238,7 +238,7 @@
         "pass": true,
         "detail": {
           "threw": true,
-          "message": "web3d: mesh handle 4194312 is not live in this renderer (destroyed, never created, or another renderer's)"
+          "message": "web3d: 9663676424 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
         }
       },
       {
@@ -262,7 +262,7 @@
         "pass": true,
         "detail": {
           "threw": false,
-          "value": 4227080
+          "value": 9663741960
         }
       },
       {
@@ -278,7 +278,7 @@
         "pass": true,
         "detail": {
           "threw": false,
-          "value": 4194313
+          "value": 9663676425
         }
       },
       {
@@ -337,7 +337,7 @@
           },
           "setTransform": {
             "threw": true,
-            "message": "web3d: 1 is not an object handle"
+            "message": "web3d: 1 is not a valid object handle"
           },
           "newRendererPixel": [
             56,
@@ -390,7 +390,7 @@
       {
         "name": "stale mesh handle is refused",
         "threw": true,
-        "message": "web3d: mesh handle 4194312 is not live in this renderer (destroyed, never created, or another renderer's)"
+        "message": "web3d: 9663676424 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
       },
       {
         "name": "NaN position refused",
@@ -405,7 +405,7 @@
       {
         "name": "Uint8 normalised weights (255 = 1.0) are dequantised and accepted",
         "threw": false,
-        "value": 4227080
+        "value": 9663741960
       },
       {
         "name": "weights summing to 7 per vertex are refused",
@@ -415,7 +415,7 @@
       {
         "name": "joint index 65535 with no skeleton is accepted until phase 3 has skeletons",
         "threw": false,
-        "value": 4194313
+        "value": 9663676425
       },
       {
         "name": "morph deltas of the wrong length are refused",
@@ -476,7 +476,7 @@
       },
       "setTransform": {
         "threw": true,
-        "message": "web3d: 1 is not an object handle"
+        "message": "web3d: 1 is not a valid object handle"
       },
       "newRendererPixel": [
         56,
@@ -492,30 +492,30 @@
   "probeMessages": [],
   "still-full": {
     "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
-    "draws": 60,
-    "triangles": 324932,
+    "draws": 64,
+    "triangles": 320000,
     "culled": 0,
     "gpu": {
-      "n": 122,
-      "mean": 1.037,
-      "p50": 1.058,
-      "p95": 1.075,
-      "max": 4.281
+      "n": 120,
+      "mean": 0.971,
+      "p50": 0.467,
+      "p95": 2.697,
+      "max": 14.461
     },
     "glError": 0,
     "msgs": []
   },
   "still-noaa": {
     "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
-    "draws": 60,
-    "triangles": 324932,
+    "draws": 64,
+    "triangles": 320000,
     "culled": 0,
     "gpu": {
-      "n": 122,
-      "mean": 0.68,
-      "p50": 0.669,
-      "p95": 0.771,
-      "max": 1.278
+      "n": 121,
+      "mean": 2.495,
+      "p50": 0.663,
+      "p95": 9.286,
+      "max": 16.432
     },
     "glError": 0,
     "msgs": []
@@ -525,29 +525,32 @@
     "cold": {
       "frames": 480,
       "bytesPerFrameByFile": {
-        "(native)": 74.7,
-        "/probe/game-path.js": 83.9,
-        "/web3d/pkg/web3d.js": 2,
-        "/web3d/pkg/loadngo_web3d.wasm": 200.5,
-        "/web3d/pkg/gl.js": 1.4
+        "(native)": 74.8,
+        "/probe/game-path.js": 92.2,
+        "/web3d/pkg/web3d.js": 38.1,
+        "/web3d/pkg/loadngo_web3d.wasm": 195,
+        "/web3d/pkg/gl.js": 1.9
       },
       "topFunctions": {
-        "/web3d/pkg/loadngo_web3d.wasm:1 js-to-wasm:i:": 96220,
-        "/probe/game-path.js:20 tick": 40268,
-        "/web3d/pkg/gl.js:276 query_begin": 356,
-        "/web3d/pkg/web3d.js:713 setTransform": 260,
-        "/web3d/pkg/web3d.js:487 _statsView": 220,
-        "/web3d/pkg/web3d.js:882 readStats": 188,
-        "/web3d/pkg/web3d.js:836 frame": 164,
-        "/web3d/pkg/web3d.js:743 setCamera": 140
+        "/web3d/pkg/loadngo_web3d.wasm:1 js-to-wasm:i:": 93584,
+        "/probe/game-path.js:20 tick": 44272,
+        "/web3d/pkg/web3d.js:502 _put": 17352,
+        "/web3d/pkg/gl.js:289 query_begin": 404,
+        "/web3d/pkg/web3d.js:897 readStats": 268,
+        "/web3d/pkg/web3d.js:758 setCamera": 220,
+        "/web3d/pkg/web3d.js:851 frame": 196,
+        "/web3d/pkg/gl.js:293 query_result_ns": 148
       }
     },
     "steady": {
-      "frames": 601,
+      "frames": 600,
       "bytesPerFrameByFile": {
-        "(native)": 31
+        "(native)": 31.9,
+        "/probe/game-path.js": 12
       },
-      "topFunctions": {}
+      "topFunctions": {
+        "/probe/game-path.js:20 tick": 7212
+      }
     }
   }
 }

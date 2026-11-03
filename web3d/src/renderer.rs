@@ -148,7 +148,7 @@ pub struct MaterialDesc {
     /// Linear RGBA; multiplies the texture.
     pub base_color: [f32; 4],
     /// A texture handle, or 0 for none.
-    pub texture: u32,
+    pub texture: u64,
     pub alpha_mode: AlphaMode,
     pub alpha_cutoff: f32,
     /// Draw back faces too (with their normals turned round), as glTF's `doubleSided`.
@@ -242,7 +242,7 @@ pub enum Error {
     GlObject(&'static str),
     Handle {
         kind: &'static str,
-        handle: u32,
+        handle: u64,
     },
     InUse {
         kind: &'static str,
@@ -297,19 +297,16 @@ impl fmt::Display for Error {
             Error::GlObject(what) => write!(f, "WebGL could not create {what}"),
             Error::Handle { kind, handle } => {
                 let an = |k: &str| if k.starts_with('o') { "an" } else { "a" };
+                write!(f, "{handle} is not a valid {kind} handle")?;
                 match Kind::of(*handle) {
-                    Some(found) if found.name() != *kind => write!(
-                        f,
-                        "{handle} is {} {} handle, not {} {kind} handle",
-                        an(found.name()),
-                        found.name(),
-                        an(kind)
-                    ),
+                    Some(found) if found.name() != *kind => {
+                        write!(f, ": it is {} {} handle", an(found.name()), found.name())
+                    }
                     Some(_) => write!(
                         f,
-                        "{kind} handle {handle} is not live in this renderer (destroyed, never created, or another renderer's)"
+                        ": not live in this renderer (destroyed, never created, or another renderer's)"
                     ),
-                    None => write!(f, "{handle} is not {} {kind} handle", an(kind)),
+                    None => Ok(()),
                 }
             }
             Error::InUse { kind, users, by } => {
@@ -723,18 +720,19 @@ pub struct Renderer<G: Gl> {
 
 impl<G: Gl> Renderer<G> {
     /// A renderer that has made no GL calls yet; [`Renderer::init`] sets it up. Its handles carry
-    /// salt 0; see [`Renderer::with_salt`].
+    /// serial 0; see [`Renderer::with_serial`].
     pub fn new(gl: G) -> Self {
         Self::build(gl, 0)
     }
 
-    /// As [`Renderer::new`], with the salt every handle it issues carries (below
-    /// [`slots::SALTS`], else `None`). Renderers with different salts refuse each other's handles.
-    pub fn with_salt(gl: G, salt: u32) -> Option<Self> {
-        (salt < slots::SALTS).then(|| Self::build(gl, salt))
+    /// As [`Renderer::new`], with the serial every handle it issues carries (below
+    /// [`slots::SERIALS`], else `None`). Renderers with different serials refuse each other's
+    /// handles and never issue the same one.
+    pub fn with_serial(gl: G, serial: u32) -> Option<Self> {
+        (serial < slots::SERIALS).then(|| Self::build(gl, serial))
     }
 
-    fn build(gl: G, salt: u32) -> Self {
+    fn build(gl: G, serial: u32) -> Self {
         Self {
             gl,
             ready: false,
@@ -742,10 +740,10 @@ impl<G: Gl> Renderer<G> {
             cpu_timing: false,
             caps: Caps::default(),
             programs: [0; PROGRAM_COUNT],
-            meshes: Slots::new(Kind::Mesh, salt),
-            textures: Slots::new(Kind::Texture, salt),
-            materials: Slots::new(Kind::Material, salt),
-            objects: Slots::new(Kind::Object, salt),
+            meshes: Slots::new(Kind::Mesh, serial),
+            textures: Slots::new(Kind::Texture, serial),
+            materials: Slots::new(Kind::Material, serial),
+            objects: Slots::new(Kind::Object, serial),
             frame_ubo: 0,
             frame_data: [0; frame_block::SIZE],
             object_ubo: UniformArena::new(),
@@ -972,7 +970,7 @@ impl<G: Gl> Renderer<G> {
     /// Uploads a mesh: positions in one stream, packed normals and texture coordinates in a
     /// second, indices narrowed to 16 bits where they fit. Every check comes before the first GL
     /// call, so a refused mesh leaves nothing behind.
-    pub fn create_mesh(&mut self, input: &MeshInput<'_>) -> Result<u32> {
+    pub fn create_mesh(&mut self, input: &MeshInput<'_>) -> Result<u64> {
         self.require_ready()?;
         let vertices = validate_mesh(input)?;
         let mut indices = std::mem::take(&mut self.scratch_indices);
@@ -992,7 +990,7 @@ impl<G: Gl> Renderer<G> {
         indices: &mut Vec<u8>,
         attributes: &mut Vec<u8>,
         computed: &mut Vec<f32>,
-    ) -> Result<u32> {
+    ) -> Result<u64> {
         let index_format = pack::pack_indices(input.indices, vertices, indices)
             .ok_or(Error::Mesh("an index is past the last vertex"))?;
         let normals = match input.normals {
@@ -1102,11 +1100,11 @@ impl<G: Gl> Renderer<G> {
         }
     }
 
-    pub fn mesh_info(&self, mesh: u32) -> Option<MeshInfo> {
+    pub fn mesh_info(&self, mesh: u64) -> Option<MeshInfo> {
         self.meshes.get(mesh).map(|m| m.info)
     }
 
-    pub fn destroy_mesh(&mut self, mesh: u32) -> Result<()> {
+    pub fn destroy_mesh(&mut self, mesh: u64) -> Result<()> {
         let m = self.meshes.get(mesh).ok_or(Error::Handle {
             kind: "mesh",
             handle: mesh,
@@ -1126,7 +1124,7 @@ impl<G: Gl> Renderer<G> {
 
     /// Creates a texture from the image source the JS side has staged (an `ImageBitmap`,
     /// `HTMLImageElement` or canvas), so the browser has decoded it, WebP and JPEG included.
-    pub fn create_texture(&mut self, desc: &TextureDesc) -> Result<u32> {
+    pub fn create_texture(&mut self, desc: &TextureDesc) -> Result<u64> {
         self.require_ready()?;
         let max = self.caps.max_texture_size;
         if desc.width == 0 || desc.height == 0 || desc.width > max || desc.height > max {
@@ -1178,7 +1176,7 @@ impl<G: Gl> Renderer<G> {
         }
     }
 
-    pub fn destroy_texture(&mut self, texture: u32) -> Result<()> {
+    pub fn destroy_texture(&mut self, texture: u64) -> Result<()> {
         let t = self.textures.get(texture).ok_or(Error::Handle {
             kind: "texture",
             handle: texture,
@@ -1199,7 +1197,7 @@ impl<G: Gl> Renderer<G> {
         Ok(())
     }
 
-    pub fn create_material(&mut self, desc: &MaterialDesc) -> Result<u32> {
+    pub fn create_material(&mut self, desc: &MaterialDesc) -> Result<u64> {
         self.require_ready()?;
         if !finite(&desc.base_color) || !finite(&[desc.alpha_cutoff, desc.roughness, desc.metallic])
         {
@@ -1268,7 +1266,7 @@ impl<G: Gl> Renderer<G> {
         Ok(handle)
     }
 
-    pub fn destroy_material(&mut self, material: u32) -> Result<()> {
+    pub fn destroy_material(&mut self, material: u64) -> Result<()> {
         let index = self.materials.index_of(material).ok_or(Error::Handle {
             kind: "material",
             handle: material,
@@ -1293,7 +1291,7 @@ impl<G: Gl> Renderer<G> {
     }
 
     /// Places a mesh with a material in the scene.
-    pub fn create_object(&mut self, mesh: u32, material: u32, model: &Mat4) -> Result<u32> {
+    pub fn create_object(&mut self, mesh: u64, material: u64, model: &Mat4) -> Result<u64> {
         self.require_ready()?;
         let mesh_index = self.meshes.index_of(mesh).ok_or(Error::Handle {
             kind: "mesh",
@@ -1341,7 +1339,7 @@ impl<G: Gl> Renderer<G> {
     }
 
     /// Moves an object (a column-major model matrix, as three.js's `matrixWorld.elements`).
-    pub fn set_transform(&mut self, object: u32, model: &Mat4) -> Result<()> {
+    pub fn set_transform(&mut self, object: u64, model: &Mat4) -> Result<()> {
         let index = self.objects.index_of(object).ok_or(Error::Handle {
             kind: "object",
             handle: object,
@@ -1365,7 +1363,7 @@ impl<G: Gl> Renderer<G> {
         Ok(())
     }
 
-    pub fn set_visible(&mut self, object: u32, visible: bool) -> Result<()> {
+    pub fn set_visible(&mut self, object: u64, visible: bool) -> Result<()> {
         let o = self.objects.get_mut(object).ok_or(Error::Handle {
             kind: "object",
             handle: object,
@@ -1374,7 +1372,7 @@ impl<G: Gl> Renderer<G> {
         Ok(())
     }
 
-    pub fn destroy_object(&mut self, object: u32) -> Result<()> {
+    pub fn destroy_object(&mut self, object: u64) -> Result<()> {
         let o = self.objects.remove(object).ok_or(Error::Handle {
             kind: "object",
             handle: object,
@@ -1735,7 +1733,7 @@ mod tests {
         )
     }
 
-    fn quad_mesh(r: &mut Renderer<MockGl>) -> u32 {
+    fn quad_mesh(r: &mut Renderer<MockGl>) -> u64 {
         let (p, n, uv, i) = quad();
         r.create_mesh(&MeshInput {
             positions: &p,
@@ -1749,7 +1747,7 @@ mod tests {
 
     #[test]
     fn handles_of_another_kind_or_another_renderer_are_refused() {
-        let mut r = Renderer::with_salt(MockGl::new(), 1).unwrap();
+        let mut r = Renderer::with_serial(MockGl::new(), 1).unwrap();
         r.init(800, 600).unwrap();
         let mesh = quad_mesh(&mut r);
         let material = r.create_material(&MaterialDesc::default()).unwrap();
@@ -1763,7 +1761,7 @@ mod tests {
         );
         assert_eq!(
             r.destroy_material(mesh).unwrap_err().to_string(),
-            format!("{mesh} is a mesh handle, not a material handle")
+            format!("{mesh} is not a valid material handle: it is a mesh handle")
         );
         assert!(r.set_visible(mesh, false).is_err());
         let object = r.create_object(mesh, material, &math::IDENTITY).unwrap();
@@ -1775,11 +1773,11 @@ mod tests {
                 handle: 7
             }
             .to_string(),
-            "7 is not an object handle",
+            "7 is not a valid object handle",
             "a bare number has no kind"
         );
 
-        let mut other = Renderer::with_salt(MockGl::new(), 2).unwrap();
+        let mut other = Renderer::with_serial(MockGl::new(), 2).unwrap();
         other.init(800, 600).unwrap();
         let theirs = quad_mesh(&mut other);
         let their_material = other.create_material(&MaterialDesc::default()).unwrap();
@@ -1791,7 +1789,7 @@ mod tests {
         assert!(other.destroy_object(object).is_err());
         assert!(r.set_transform(their_object, &math::IDENTITY).is_err());
         assert_eq!(other.objects.len(), 1);
-        assert!(Renderer::with_salt(MockGl::new(), slots::SALTS).is_none());
+        assert!(Renderer::with_serial(MockGl::new(), slots::SERIALS).is_none());
     }
 
     fn translate(x: f32, y: f32, z: f32) -> Mat4 {
@@ -1817,7 +1815,7 @@ mod tests {
             .collect()
     }
 
-    fn texture(r: &mut Renderer<MockGl>) -> u32 {
+    fn texture(r: &mut Renderer<MockGl>) -> u64 {
         r.create_texture(&TextureDesc {
             width: 256,
             height: 128,
@@ -2244,7 +2242,7 @@ mod tests {
         let b_far = r
             .create_object(mesh, blended, &translate(0.0, 0.0, -2.0))
             .unwrap();
-        let slot = |h: u32| r.objects.index_of(h).unwrap() as u32;
+        let slot = |h: u64| r.objects.index_of(h).unwrap() as u32;
         let expected = [
             slot(o_near),
             slot(o_far),
@@ -2756,7 +2754,7 @@ mod tests {
         r.set_camera_look_at([0.0, 0.0, 10.0], [0.0; 3], [0.0, 1.0, 0.0], 1.0, 0.1, 100.0)
             .unwrap();
         let mesh = quad_mesh(&mut r);
-        let mats: Vec<u32> = (0..3)
+        let mats: Vec<u64> = (0..3)
             .map(|i| {
                 r.create_material(&MaterialDesc {
                     roughness: 0.2 + 0.3 * i as f32,

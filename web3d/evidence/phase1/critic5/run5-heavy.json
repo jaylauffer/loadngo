@@ -1,0 +1,133 @@
+{
+  "groups": {
+    "heap": {
+      "tests": [
+        {
+          "name": "B1 with the heap past 2 GiB, a mesh staged above 2 GiB draws",
+          "pass": true,
+          "detail": {
+            "big": 1118112,
+            "memoryBytes": 2148663296,
+            "create": {
+              "threw": false,
+              "value": 16777217
+            },
+            "nextStagingAt": 2148537040,
+            "frame": {
+              "threw": false,
+              "value": true
+            },
+            "pixel": [
+              56,
+              255,
+              56
+            ],
+            "errorText": "mesh refused: positions must hold x, y, z for at least one vertex",
+            "glError": 0
+          }
+        }
+      ],
+      "messages": []
+    },
+    "exhaust": {
+      "tests": [
+        {
+          "name": "E1 an object table issues 32,767 x 128 handles in its life, none twice, then refuses cleanly and keeps drawing",
+          "pass": false,
+          "detail": {
+            "keep": 16777217,
+            "ms": 462,
+            "issued": 4194049,
+            "error": "web3d: too many objects",
+            "lowSlotHandles": 2431,
+            "firstRefused": true,
+            "midRefused": true,
+            "lastRefused": true,
+            "keepStillWorks": true,
+            "frame": {
+              "threw": false,
+              "value": true
+            },
+            "pixel": [
+              56,
+              255,
+              56
+            ],
+            "otherKindsStillWork": true,
+            "glError": 0
+          }
+        }
+      ],
+      "messages": []
+    },
+    "cap": {
+      "tests": [
+        {
+          "name": "K1 a 33rd live renderer is refused, its failed create leaves no listener, and a slot freed by dispose is usable",
+          "pass": true,
+          "detail": {
+            "lostEvents": 17,
+            "salts": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23,
+              24,
+              25,
+              26,
+              27,
+              28,
+              29,
+              30,
+              31
+            ],
+            "distinctSalts": 32,
+            "thirtyThird": "web3d: 32 renderers are live in this page; dispose one first",
+            "afterOneDisposed": "created",
+            "failedCreatesHookCalls": 0
+          }
+        }
+      ],
+      "messages": [
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      ]
+    }
+  },
+  "browser": "156.0.8078.76"
+}

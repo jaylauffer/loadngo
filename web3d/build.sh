@@ -30,6 +30,8 @@ export CARGO_PROFILE_RELEASE_DEBUG=false
 # compiled into this crate. Remap it to the /rustc/<commit> prefix the standard library's own
 # paths already use, and the workspace to a fixed name. `cargo rustc` passes these to this crate
 # only, without replacing any rustflags the builder has configured.
+# The output is byte-identical for a given rustc and wasm-opt; record which.
+echo "== toolchain: $(rustc --version); $(wasm-opt --version)"
 sysroot="$(rustc --print sysroot)"
 commit="$(rustc -vV | sed -n 's/^commit-hash: //p')"
 remap=(

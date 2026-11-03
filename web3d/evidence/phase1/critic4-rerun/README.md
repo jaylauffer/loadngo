@@ -18,15 +18,15 @@ cache, the handover and re-entrancy.
 
 X8 fails on one of its eleven values, and that value is the handle itself:
 - the probe passes `o + 2^-30` and expects it refused;
-- handles now carry their kind and salt in their high bits, so `o` is 385,875,969 here;
-- at that size a double's step is 2^-24, so `o + 2^-30` rounds to exactly `o`
-  (`385875969 + 2**-30 === 385875969` is true in JavaScript).
+- handles are now whole numbers below 2^53 with the renderer's serial in their high bits, so `o` is
+  107,374,182,401 here (`run4.json`);
+- at that size a double's step is 2^-16, so `o + 2^-30` rounds to exactly `o`.
 
 So that call is a valid `setVisible(o, false)` on the probe's own object, which hides it, and the
 probe's "still drawn" pixel is then black. The other ten values are refused with "is not a valid
 object handle": -0, a Number object, a BigInt, true, an Array, `{ valueOf }`, a numeric string,
 2^30, 2^31 + o and Infinity. A fraction that a double can hold, such as `o + 0.5`, is refused
-(`demo/probe.js`, probe H).
+(`demo/probe.js`, probe H; the fifth critic's X8).
 
 The allocation half of `run4.mjs` shows again that Chrome accepts an unknown sampling parameter
 silently, and that without the "objects already collected" flags the profiler reads 0. The rendered

@@ -2,32 +2,36 @@
 //! and objects; a number for something already destroyed, never created, of another kind, or from
 //! another renderer is refused here instead of reaching whatever uses its slot.
 //!
-//! A handle is `salt << 25 | kind << 22 | generation << 15 | (index + 1)`:
-//! - 15 bits of slot index, so a table holds up to 32,767 live values;
-//! - 7 bits of generation;
+//! A handle is a whole number below 2^53 (exact in a JavaScript number), laid out as
+//! `serial << 33 | kind << 30 | generation << 16 | (index + 1)`:
+//! - 16 bits of slot index, so a table holds up to 65,535 live values;
+//! - 14 bits of generation;
 //! - 3 bits of kind ([`Kind`]: mesh, texture, material, object; never 0);
-//! - 5 bits of salt, which the renderer is given when it is created, so two live renderers' handles
-//!   differ (the JS wrapper gives each live renderer its own salt).
+//! - 20 bits of the renderer's serial, which the JS wrapper takes from a page-wide counter that
+//!   never repeats, so no two renderers in a page's life share one.
 //!
-//! So every handle is a positive number below 2^30 (a small integer in V8, never a boxed one), and
-//! 0, or any number without a kind, is never a valid handle. A table accepts only handles carrying
-//! its own kind and salt. Freeing a slot bumps its generation, and a slot whose generation has
-//! reached its last value is retired instead of reused, so no handle is ever issued twice: a stale
-//! handle is refused for the life of the table, never aliased to a newer object. Each slot serves
-//! 128 values before it retires, so a table issues about 4.2 million handles in its life.
+//! A table accepts only handles carrying its own kind and serial, so 0, a number without a kind,
+//! a handle of another kind and another renderer's handle are all refused. Freeing a slot bumps
+//! its generation, and a slot whose generation has reached its last value is retired instead of
+//! reused. So no handle is ever issued twice in a page: not by one renderer (generations), and not
+//! by two (serials). Each slot serves 16,384 values before it retires, so a table issues about a
+//! billion handles in its life, and a renderer's per-object uniform storage, sized by slots ever
+//! used, stays under 65,535 slots.
 
-const INDEX_BITS: u32 = 15;
-const INDEX_MASK: u32 = (1 << INDEX_BITS) - 1;
-const GENERATION_BITS: u32 = 7;
+const INDEX_BITS: u32 = 16;
+const INDEX_MASK: u64 = (1 << INDEX_BITS) - 1;
+const GENERATION_BITS: u32 = 14;
 /// The last generation a slot reaches before it retires.
 const LAST_GENERATION: u32 = (1 << GENERATION_BITS) - 1;
 const KIND_SHIFT: u32 = INDEX_BITS + GENERATION_BITS;
 const KIND_BITS: u32 = 3;
-const SALT_SHIFT: u32 = KIND_SHIFT + KIND_BITS;
-/// How many distinct salts there are (5 bits).
-pub const SALTS: u32 = 1 << 5;
-/// The bits a table compares whole: kind, salt, and the two top bits, which no handle has.
-const TAG_MASK: u32 = !((1 << KIND_SHIFT) - 1);
+const SERIAL_SHIFT: u32 = KIND_SHIFT + KIND_BITS;
+/// Renderer serials run from 1 to below this (20 bits); 0 is for tests.
+pub const SERIALS: u32 = 1 << 20;
+/// Every handle is below this: 2^53, the edge of JavaScript's exact integers.
+pub const HANDLE_LIMIT: u64 = 1 << (SERIAL_SHIFT + 20);
+/// The bits a table compares whole: kind, serial, and every bit above them, which no handle has.
+const TAG_MASK: u64 = !((1 << KIND_SHIFT) - 1);
 /// The most slots a table can hold.
 pub const MAX_SLOTS: usize = INDEX_MASK as usize;
 
@@ -52,7 +56,10 @@ impl Kind {
     }
 
     /// The kind a handle carries, if any.
-    pub const fn of(handle: u32) -> Option<Kind> {
+    pub const fn of(handle: u64) -> Option<Kind> {
+        if handle >= HANDLE_LIMIT {
+            return None;
+        }
         match (handle >> KIND_SHIFT) & ((1 << KIND_BITS) - 1) {
             1 => Some(Kind::Mesh),
             2 => Some(Kind::Texture),
@@ -63,9 +70,9 @@ impl Kind {
     }
 }
 
-/// The salt a handle carries.
-pub const fn salt_of(handle: u32) -> u32 {
-    (handle >> SALT_SHIFT) & (SALTS - 1)
+/// The renderer serial a handle carries.
+pub const fn serial_of(handle: u64) -> u32 {
+    ((handle >> SERIAL_SHIFT) & (SERIALS as u64 - 1)) as u32
 }
 
 struct Entry<T> {
@@ -78,24 +85,25 @@ pub struct Slots<T> {
     free: Vec<u32>,
     live: usize,
     retired: usize,
-    /// The kind and salt bits every handle of this table carries.
-    tag: u32,
+    /// The kind and serial bits every handle of this table carries.
+    tag: u64,
 }
 
 impl<T> Slots<T> {
-    /// A table of one kind, with salt `salt` (taken modulo [`SALTS`]; the renderer checks it).
-    pub const fn new(kind: Kind, salt: u32) -> Self {
+    /// A table of one kind, for the renderer with serial `serial` (taken modulo [`SERIALS`]; the
+    /// renderer checks it).
+    pub const fn new(kind: Kind, serial: u32) -> Self {
         Self {
             entries: Vec::new(),
             free: Vec::new(),
             live: 0,
             retired: 0,
-            tag: (salt % SALTS) << SALT_SHIFT | (kind as u32) << KIND_SHIFT,
+            tag: ((serial % SERIALS) as u64) << SERIAL_SHIFT | (kind as u64) << KIND_SHIFT,
         }
     }
 
     /// Stores a value and returns its handle and slot index, or `None` when the table is full.
-    pub fn insert(&mut self, value: T) -> Option<(u32, usize)> {
+    pub fn insert(&mut self, value: T) -> Option<(u64, usize)> {
         let index = match self.free.pop() {
             Some(index) => index as usize,
             None => {
@@ -113,28 +121,28 @@ impl<T> Slots<T> {
         entry.value = Some(value);
         self.live += 1;
         Some((
-            self.tag | entry.generation << INDEX_BITS | (index as u32 + 1),
+            self.tag | (entry.generation as u64) << INDEX_BITS | (index as u64 + 1),
             index,
         ))
     }
 
-    /// The slot index of a live handle of this table's kind and salt.
-    pub fn index_of(&self, handle: u32) -> Option<usize> {
+    /// The slot index of a live handle of this table's kind and serial.
+    pub fn index_of(&self, handle: u64) -> Option<usize> {
         if handle & TAG_MASK != self.tag {
             return None;
         }
         let index = (handle & INDEX_MASK) as usize;
         let index = index.checked_sub(1)?;
         let entry = self.entries.get(index)?;
-        let generation = (handle >> INDEX_BITS) & LAST_GENERATION;
+        let generation = ((handle >> INDEX_BITS) as u32) & LAST_GENERATION;
         (entry.value.is_some() && entry.generation == generation).then_some(index)
     }
 
-    pub fn get(&self, handle: u32) -> Option<&T> {
+    pub fn get(&self, handle: u64) -> Option<&T> {
         self.at(self.index_of(handle)?)
     }
 
-    pub fn get_mut(&mut self, handle: u32) -> Option<&mut T> {
+    pub fn get_mut(&mut self, handle: u64) -> Option<&mut T> {
         let index = self.index_of(handle)?;
         self.at_mut(index)
     }
@@ -163,7 +171,7 @@ impl<T> Slots<T> {
     }
 
     /// Removes a value; its handle, and any copy of it, stops working for good.
-    pub fn remove(&mut self, handle: u32) -> Option<T> {
+    pub fn remove(&mut self, handle: u64) -> Option<T> {
         let index = self.index_of(handle)?;
         self.vacate(index)
     }
@@ -221,7 +229,7 @@ mod tests {
         let a = s.insert("a").unwrap().0;
         let b = s.insert("b").unwrap().0;
         assert!(a != 0 && b != 0 && a != b);
-        assert!(a < 1 << 30 && b < 1 << 30);
+        assert!(a < HANDLE_LIMIT && b < HANDLE_LIMIT);
         assert_eq!(s.get(a), Some(&"a"));
         assert_eq!(s.get(b), Some(&"b"));
         assert_eq!(s.get(0), None);
@@ -249,7 +257,8 @@ mod tests {
         let a = s.insert(()).unwrap().0;
         assert_eq!(s.get(a + 1), None, "index past the end");
         assert_eq!(s.get(a ^ 5 << INDEX_BITS), None, "wrong generation");
-        assert_eq!(s.get(u32::MAX), None);
+        assert_eq!(s.get(u64::MAX), None);
+        assert_eq!(s.get(a | HANDLE_LIMIT), None, "a bit above 2^53");
     }
 
     #[test]
@@ -259,10 +268,10 @@ mod tests {
         let first = s.insert(0).unwrap().0;
         seen.insert(first);
         s.remove(first);
-        // 128 generations on slot 0, then it retires and a new slot serves.
-        for i in 1..300 {
+        // 16,384 generations on slot 0, then it retires and a new slot serves.
+        for i in 1..40_000 {
             let (h, _) = s.insert(i).unwrap();
-            assert!(h < 1 << 30);
+            assert!(h < HANDLE_LIMIT);
             assert!(seen.insert(h), "handle {h} issued twice (cycle {i})");
             s.remove(h);
         }
@@ -272,7 +281,7 @@ mod tests {
             None,
             "the very first handle is still refused"
         );
-        assert_eq!(s.retired(), 2, "slots 0 and 1 served 128 objects each");
+        assert_eq!(s.retired(), 2, "slots 0 and 1 served 16,384 objects each");
         assert_eq!(s.slot_count(), 3);
         assert!(s.is_empty());
     }
@@ -308,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn a_handle_of_another_kind_or_salt_is_refused() {
+    fn a_handle_of_another_kind_or_renderer_is_refused() {
         let mut meshes = Slots::new(Kind::Mesh, 3);
         let mut materials = Slots::new(Kind::Material, 3);
         let mut other = Slots::new(Kind::Mesh, 4);
@@ -325,12 +334,12 @@ mod tests {
             (Kind::of(m), Kind::of(t)),
             (Some(Kind::Mesh), Some(Kind::Material))
         );
-        assert_eq!((salt_of(m), salt_of(o)), (3, 4));
+        assert_eq!((serial_of(m), serial_of(o)), (3, 4));
         for small in 1..=64 {
             assert_eq!(meshes.get(small), None, "a bare small number has no kind");
         }
         assert_eq!(Kind::of(m & !TAG_MASK), None);
-        assert!(m < 1 << 30 && t < 1 << 30 && o < 1 << 30);
+        assert!(m < HANDLE_LIMIT && t < HANDLE_LIMIT && o < HANDLE_LIMIT);
         assert_eq!(
             materials.remove(m),
             None,
@@ -340,12 +349,31 @@ mod tests {
     }
 
     #[test]
-    fn the_largest_handle_is_below_two_to_the_thirty() {
-        let mut s = Slots::new(Kind::Object, SALTS - 1);
+    fn the_largest_handle_is_below_two_to_the_fifty_three() {
+        let mut s = Slots::new(Kind::Object, SERIALS - 1);
         let h = s.insert(()).unwrap().0;
-        let largest = h | INDEX_MASK | LAST_GENERATION << INDEX_BITS;
-        assert!(largest < 1 << 30);
+        let largest = h | INDEX_MASK | (LAST_GENERATION as u64) << INDEX_BITS;
+        assert!(largest < HANDLE_LIMIT && HANDLE_LIMIT == 1 << 53);
+        assert_eq!(
+            largest as f64 as u64, largest,
+            "exact as a JavaScript number"
+        );
         assert_eq!(Kind::of(largest), Some(Kind::Object));
-        assert_eq!(salt_of(largest), SALTS - 1);
+        assert_eq!(serial_of(largest), SERIALS - 1);
+    }
+
+    #[test]
+    fn renderers_with_different_serials_never_share_a_handle() {
+        // Two renderers' tables of one kind, each churning the same slot through every generation.
+        let mut a = Slots::new(Kind::Object, 1);
+        let mut b = Slots::new(Kind::Object, 2);
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..33_000 {
+            for s in [&mut a, &mut b] {
+                let (h, _) = s.insert(()).unwrap();
+                assert!(seen.insert(h), "handle {h} issued twice");
+                s.remove(h);
+            }
+        }
     }
 }
