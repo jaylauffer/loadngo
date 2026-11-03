@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>web3d critic 9 frame</title>
+  <link rel="icon" href="data:,">
+</head>
+<body>
+  <!-- A same-origin frame with its own copy of web3d.js. -->
+  <script type="module">
+    import { createRenderer } from '/web3d/pkg/web3d.js';
+    window.__frame = { createRenderer };
+  </script>
+</body>
+</html>

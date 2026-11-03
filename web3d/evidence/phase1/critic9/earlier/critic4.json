@@ -1,0 +1,279 @@
+{
+  "browser": "156.0.8078.80",
+  "probes": {
+    "tests": [
+      {
+        "name": "X1 a handle of one kind is refused where another kind is meant",
+        "pass": true,
+        "detail": {
+          "handles": {
+            "left": 478630215942145,
+            "right": 478630215942146,
+            "red": 478630484377601,
+            "green": 478630484377602
+          },
+          "swappedCreateObject": {
+            "threw": true,
+            "message": "web3d: 478630484377602 is not a valid mesh handle: it is a material handle"
+          },
+          "rightHalfAfterSwap": [
+            0,
+            0,
+            0
+          ],
+          "leftHalfAfterSwap": [
+            0,
+            0,
+            0
+          ],
+          "destroyMaterialWithMeshHandle": {
+            "threw": true,
+            "message": "web3d: 478630215942146 is not a valid material handle: it is a mesh handle"
+          },
+          "greenStillUsable": {
+            "threw": false,
+            "value": 478630618595329
+          },
+          "setVisibleWithMeshHandle": {
+            "threw": true,
+            "message": "web3d: 478630215942145 is not a valid object handle: it is a mesh handle"
+          },
+          "rightHalfAfterHide": [
+            0,
+            0,
+            0
+          ]
+        }
+      },
+      {
+        "name": "X2 a handle from another renderer is refused",
+        "pass": true,
+        "detail": {
+          "ownObjectHandle": 478631692337153,
+          "setVisible": {
+            "threw": true,
+            "message": "web3d: undefined is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+          },
+          "destroyObject": {
+            "threw": true,
+            "message": "web3d: undefined is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+          }
+        }
+      },
+      {
+        "name": "X3 a Proxy positions array cannot write past its staging allocation",
+        "pass": true,
+        "detail": {
+          "pixelBefore": [
+            56,
+            255,
+            56
+          ],
+          "marksBefore": 0,
+          "passesInstanceof": true,
+          "create": {
+            "threw": true,
+            "message": "web3d: positions must be a Float32Array, not an object; dequantise integer data first"
+          },
+          "lengthReads": 0,
+          "marksAfter": 0,
+          "memoryBytes": 1179648,
+          "frame": {
+            "threw": false,
+            "value": true
+          },
+          "pixelAfter": [
+            56,
+            255,
+            56
+          ],
+          "laterCreates": [
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok"
+          ],
+          "frame2": {
+            "threw": false,
+            "value": true
+          },
+          "pixelAfter2": [
+            56,
+            255,
+            56
+          ],
+          "glError": 0,
+          "dispose": {
+            "threw": false
+          }
+        }
+      },
+      {
+        "name": "X3b a subclass with a changing length cannot make wasm read past the staged floats",
+        "pass": true,
+        "detail": {
+          "create": {
+            "threw": true,
+            "message": "web3d: mesh refused: an index is past the last vertex"
+          },
+          "lengthReads": 0
+        }
+      },
+      {
+        "name": "X4 a failed create leaves nothing behind: its loss hook never fires",
+        "pass": true,
+        "detail": {
+          "bad": "web3d: a drawing-buffer side must be a whole number from 0 to 32768, not 1.5",
+          "failedHook": 0,
+          "goodHook": 1,
+          "attributesOfTheNextRenderer": {
+            "antialias": false,
+            "got": false,
+            "samples": 0
+          }
+        }
+      },
+      {
+        "name": "X5 a failed wasm fetch does not poison every later create",
+        "pass": true,
+        "detail": {
+          "first": "web3d: fetching the wasm failed: 404 http://127.0.0.1:5484/web3d/pkg/missing.wasm",
+          "second": "created"
+        }
+      },
+      {
+        "name": "X6 a renderer on a canvas another renderer used draws as on a fresh canvas",
+        "pass": true,
+        "detail": {
+          "handed": [
+            [
+              56,
+              255,
+              56
+            ],
+            [
+              56,
+              56,
+              255
+            ]
+          ],
+          "clean": [
+            [
+              56,
+              255,
+              56
+            ],
+            [
+              56,
+              56,
+              255
+            ]
+          ],
+          "errB": 0
+        }
+      },
+      {
+        "name": "X7 an argument whose valueOf disposes the renderer does not run the export on the freed renderer",
+        "pass": true,
+        "detail": {
+          "setKeyLight": {
+            "threw": true,
+            "message": "web3d: x must be a number, not an object"
+          },
+          "setClearColor": {
+            "threw": true,
+            "message": "web3d: r must be a number, not an object"
+          }
+        }
+      },
+      {
+        "name": "X8 odd handle values are all refused by the wrapper, and the object stays drawn",
+        "pass": false,
+        "detail": {
+          "minusZero": {
+            "threw": true,
+            "message": "web3d: -0 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+          },
+          "numberObject": {
+            "threw": true,
+            "message": "web3d: an object is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+          },
+          "bigint": {
+            "threw": true,
+            "message": "web3d: 478642429755393n is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+          },
+          "boolean": {
+            "threw": true,
+            "message": "web3d: true is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+          },
+          "array": {
+            "threw": true,
+            "message": "web3d: an Array is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+          },
+          "valueOf": {
+            "threw": true,
+            "message": "web3d: an object is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+          },
+          "string": {
+            "threw": true,
+            "message": "web3d: \"478642429755393\" is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+          },
+          "nearlyWhole": {
+            "threw": false
+          },
+          "limit": {
+            "threw": true,
+            "message": "web3d: 1073741824 is not a valid object handle"
+          },
+          "overInt32": {
+            "threw": true,
+            "message": "web3d: 478644577239041 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+          },
+          "infinity": {
+            "threw": true,
+            "message": "web3d: Infinity is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+          },
+          "stillDrawn": [
+            0,
+            0,
+            0
+          ]
+        }
+      }
+    ],
+    "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+    "messages": [
+      "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ]
+  },
+  "unknownParameter": "accepted",
+  "wrongTypeForARealFlag": "refused: cdpSession.send: Protocol error (HeapProfiler.startSampling): Invalid parameters",
+  "cpuTimingOn": [
+    {
+      "label": "with the flags",
+      "flags": true,
+      "frames": 601,
+      "pageScriptBytesPerFrame": 176.12
+    },
+    {
+      "label": "without the flags",
+      "flags": false,
+      "frames": 601,
+      "pageScriptBytesPerFrame": 0
+    },
+    {
+      "label": "with the flags again",
+      "flags": true,
+      "frames": 601,
+      "pageScriptBytesPerFrame": 20.75
+    }
+  ]
+}

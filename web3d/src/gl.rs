@@ -37,6 +37,39 @@ pub const UNIFORM_BUFFER_OFFSET_ALIGNMENT: u32 = 0x8A34;
 pub const SRGB8_ALPHA8: u32 = 0x8C43;
 pub const INT_2_10_10_10_REV: u32 = 0x8D9F;
 
+// WebGL 2's defaults, which `Renderer::init` puts back on a context it is given.
+pub const LESS: u32 = 0x0201;
+pub const BACK: u32 = 0x0405;
+pub const STENCIL_TEST: u32 = 0x0B90;
+pub const DITHER: u32 = 0x0BD0;
+pub const SCISSOR_TEST: u32 = 0x0C11;
+pub const UNPACK_ROW_LENGTH: u32 = 0x0CF2;
+pub const UNPACK_SKIP_ROWS: u32 = 0x0CF3;
+pub const UNPACK_SKIP_PIXELS: u32 = 0x0CF4;
+pub const UNPACK_ALIGNMENT: u32 = 0x0CF5;
+pub const PACK_ROW_LENGTH: u32 = 0x0D02;
+pub const PACK_SKIP_ROWS: u32 = 0x0D03;
+pub const PACK_SKIP_PIXELS: u32 = 0x0D04;
+pub const PACK_ALIGNMENT: u32 = 0x0D05;
+pub const DONT_CARE: u32 = 0x1100;
+pub const FUNC_ADD: u32 = 0x8006;
+pub const POLYGON_OFFSET_FILL: u32 = 0x8037;
+pub const UNPACK_SKIP_IMAGES: u32 = 0x806D;
+pub const UNPACK_IMAGE_HEIGHT: u32 = 0x806E;
+pub const SAMPLE_ALPHA_TO_COVERAGE: u32 = 0x809E;
+pub const SAMPLE_COVERAGE: u32 = 0x80A0;
+pub const GENERATE_MIPMAP_HINT: u32 = 0x8192;
+pub const MAX_VERTEX_ATTRIBS: u32 = 0x8869;
+pub const TIME_ELAPSED_EXT: u32 = 0x88BF;
+pub const PIXEL_PACK_BUFFER: u32 = 0x88EB;
+pub const PIXEL_UNPACK_BUFFER: u32 = 0x88EC;
+pub const MAX_COMBINED_TEXTURE_IMAGE_UNITS: u32 = 0x8B4D;
+pub const FRAGMENT_SHADER_DERIVATIVE_HINT: u32 = 0x8B8B;
+pub const ANY_SAMPLES_PASSED: u32 = 0x8C2F;
+pub const TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN: u32 = 0x8C88;
+pub const RASTERIZER_DISCARD: u32 = 0x8C89;
+pub const ANY_SAMPLES_PASSED_CONSERVATIVE: u32 = 0x8D6A;
+
 /// A vertex attribute's format within a buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Attrib {
@@ -121,6 +154,34 @@ pub trait Gl {
     fn disable(&mut self, cap: u32);
     fn front_face(&mut self, mode: u32);
     fn depth_mask(&mut self, write: bool);
+    fn color_mask(&mut self, r: bool, g: bool, b: bool, a: bool);
+    fn depth_func(&mut self, func: u32);
+    fn depth_range(&mut self, near: f32, far: f32);
+    fn clear_depth(&mut self, depth: f32);
+    fn cull_face(&mut self, mode: u32);
+    fn blend_equation(&mut self, mode: u32);
+    fn hint(&mut self, target: u32, mode: u32);
+    /// `pixelStorei`.
+    fn pixel_store(&mut self, pname: u32, value: i32);
+    /// `bindFramebuffer(FRAMEBUFFER, null)`, then `drawBuffers([BACK])` and `readBuffer(BACK)`:
+    /// draw into, and read from, the canvas's own drawing buffer.
+    fn use_default_framebuffer(&mut self);
+    /// `bindBuffer(target, null)`.
+    fn unbind_buffer(&mut self, target: u32);
+    /// `bindSampler(unit, null)`: the bound texture's own parameters apply on `unit` again.
+    fn unbind_sampler(&mut self, unit: u32);
+    /// `vertexAttrib4f`: the value an attribute reads while its array is off.
+    fn vertex_attrib_default(&mut self, location: u32, value: [f32; 4]);
+    /// Ends transform feedback if it is active (paused or not), then binds the default transform
+    /// feedback object.
+    fn end_transform_feedback(&mut self);
+    /// Ends the query active on `target`, if there is one.
+    fn end_query_on(&mut self, target: u32);
+    /// Puts back the defaults of the state WebGL 2 extensions add, for each extension the browser
+    /// has (a page may have enabled it): `EXT_clip_control`'s lower-left origin and -1 to 1 depth,
+    /// and `EXT_depth_clamp`'s and `WEBGL_clip_cull_distance`'s switches off. Not
+    /// `WEBGL_polygon_mode`'s: enabling it to ask makes Chrome warn in the console.
+    fn reset_extension_state(&mut self);
     fn blend_func_separate(&mut self, src_rgb: u32, dst_rgb: u32, src_alpha: u32, dst_alpha: u32);
     fn viewport(&mut self, x: i32, y: i32, width: u32, height: u32);
     fn clear_color(&mut self, r: f32, g: f32, b: f32, a: f32);

@@ -1,0 +1,49 @@
+The current probes (demo/probe.js) run against web3d as it was at 994f9bc8, the round the ninth critic judged
+(built by build-before-fix.sh, run by probes-against.mjs; Chrome 156.0.8078.80 (headless, own instance)). before-fix.json has every detail.
+
+passed 68 of 72; INVALID_OPERATION warnings 12
+
+FAIL  PS a page-made context that suits, left with state of the page's (each of the ninth critic's N8 cases and every other state the renderer resets): web3d draws, uploads and reads back as on a new context, with no WebGL error, and the page's own objects are kept
+FAIL  LR a page's own restored listener that runs before web3d's disposes the live renderer: onContextRestored comes once (N1); disposed in the page's lost listener instead: once, and no onContextLost; disposed after the restore was handled: no second call
+FAIL  RF ran to its end
+FAIL  MS a detached OffscreenCanvas is refused as detached, a placeholder canvas as transferred (N21); a loss before web3d's first use: the message says web3d cancels a lost event still to come, as it does when the loss is in the create's own task (the hook comes once), and none comes for one already dispatched (N7b')
+
+PS, case by case (the pixel read at the check point; glError after the frames):
+  FAIL  scissor test on, a 1x1 box at the corner  {"pixel":[0,0,0],"glError":0}
+  FAIL  colour mask all false  {"pixel":[0,0,0],"glError":0}
+  FAIL  depth func NEVER  {"pixel":[0,0,0],"glError":0}
+  FAIL  cull face FRONT  {"pixel":[0,0,0],"glError":0}
+  FAIL  clear depth 0  {"pixel":[0,0,0],"glError":0}
+  FAIL  depth range 1 to 1  {"pixel":[0,0,0],"glError":0}
+  FAIL  rasterizer discard on  {"pixel":[0,0,0],"glError":0}
+  FAIL  draw buffers NONE on the default framebuffer  {"pixel":[0,0,0],"glError":0}
+  FAIL  read buffer NONE on the default framebuffer  {"pixel":[0,0,0],"glError":1282}
+  FAIL  a framebuffer of its own left bound  {"pixel":[0,0,0],"glError":1280,"kept":true}
+  FAIL  stencil test on with func NEVER, on a context with stencil  {"pixel":[0,0,0],"glError":0}
+  FAIL  polygon offset fill on, pushing depth past the far plane  {"pixel":[0,0,0],"glError":0}
+  FAIL  sample coverage on at 0, multisampled  {"pixel":[0,0,0],"glError":0}
+  FAIL  alpha to coverage on, multisampled, an opaque material of alpha 0  {"pixel":[0,0,0],"glError":0}
+  FAIL  blend equation FUNC_REVERSE_SUBTRACT, a blended material  {"pixel":[0,0,0],"glError":0}
+  FAIL  a sampler object on unit 0 with TEXTURE_MIN_LOD 10, a mipmapped texture  {"pixel":[195,195,195],"glError":0}
+  FAIL  the uv attribute's generic value at (0.9, 0.5), a textured mesh without uvs  {"pixel":[255,56,56],"glError":0}
+  FAIL  transform feedback left active  {"pixel":[0,0,0],"glError":1282}
+  FAIL  a TIME_ELAPSED query left running  {"pixel":[56,255,56],"glError":1282}
+  FAIL  an occlusion query left running  {"pixel":[56,255,56],"glError":0,"kept":false}
+  pass  a vertex array of its own left bound, holding an index buffer  {"pixel":[56,255,56],"glError":0,"kept":true}
+  FAIL  a pixel pack buffer bound and PACK_SKIP_PIXELS 3 (the readback here would fail)  {"pixel":[0,0,0],"glError":1282}
+  FAIL  UNPACK_SKIP_PIXELS 1, an upload  {"glError":0,"threw":"web3d: the browser refused the texture upload (the console has the reason: a cross-origin "}
+  FAIL  UNPACK_SKIP_ROWS 1, an upload  {"glError":0,"threw":"web3d: the browser refused the texture upload (the console has the reason: a cross-origin "}
+  pass  UNPACK_ROW_LENGTH 1, an upload  {"pixel":{"tl":[255,56,56],"tr":[56,255,56],"bl":[56,56,255]},"glError":0}
+  FAIL  a pixel unpack buffer left bound, an upload  {"glError":0,"threw":"web3d: the browser refused the texture upload (the console has the reason: a cross-origin "}
+  pass  UNPACK_FLIP_Y_WEBGL and UNPACK_PREMULTIPLY_ALPHA_WEBGL on, an upload  {"pixel":{"tl":[255,56,56],"tr":[56,255,56],"bl":[56,56,255]},"glError":0}
+  FAIL  EXT_clip_control: an upper-left origin and depth from 0 to 1  {"pixel":[0,0,0],"glError":0}
+  FAIL  EXT_depth_clamp on  {"pixel":[56,255,56],"glError":0,"kept":false}
+  FAIL  WEBGL_clip_cull_distance: CLIP_DISTANCE0 on (web3d writes no clip distance)  {"pixel":[56,255,56],"glError":0,"kept":false}
+  pass  nothing changed (control), a draw  {"pixel":[56,255,56],"glError":0}
+  pass  nothing changed (control), an upload  {"pixel":{"tl":[255,56,56],"tr":[56,255,56],"bl":[56,56,255]},"glError":0}
+
+LR: {"restoredListener":{"lost":1,"restored":0},"lostListener":{"lost":0,"restored":1},"late":{"before":1,"after":1,"frame":"web3d: renderer disposed"}}
+
+RF: Error: web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore (case a: the loss was not cancelled, so the context was never restored)
+
+MS: {"detached":"web3d: this canvas cannot be read here (its control was transferred to an OffscreenCanvas)","pending":"web3d: the canvas's WebGL context was lost before web3d first used this canvas; it can be restored only if the page cancelled the lost event, and then this call's onContextRestored is called"}

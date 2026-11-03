@@ -531,6 +531,21 @@ impl UniformArena {
     }
 }
 
+/// WebGL 2's default `pixelStorei` values, put back by `Renderer::reset_context_state`. The
+/// WebGL-only unpack settings are set at each texture upload instead.
+const DEFAULT_PIXEL_STORE: [(u32, i32); 10] = [
+    (gl::UNPACK_ALIGNMENT, 4),
+    (gl::UNPACK_ROW_LENGTH, 0),
+    (gl::UNPACK_IMAGE_HEIGHT, 0),
+    (gl::UNPACK_SKIP_PIXELS, 0),
+    (gl::UNPACK_SKIP_ROWS, 0),
+    (gl::UNPACK_SKIP_IMAGES, 0),
+    (gl::PACK_ALIGNMENT, 4),
+    (gl::PACK_ROW_LENGTH, 0),
+    (gl::PACK_SKIP_PIXELS, 0),
+    (gl::PACK_SKIP_ROWS, 0),
+];
+
 /// What the renderer last told GL, so a frame sends only changes.
 struct StateCache {
     program: u32,
@@ -816,8 +831,9 @@ impl<G: Gl> Renderer<G> {
         }
     }
 
-    /// Reads the GPU's limits, compiles the programs, checks their uniform layouts against the
-    /// driver's, creates the uniform buffers and sets the fixed state.
+    /// Puts WebGL 2's default state back first (`reset_context_state`), then reads the
+    /// GPU's limits, compiles the programs, checks their uniform layouts against the driver's,
+    /// creates the uniform buffers and sets the fixed state.
     pub fn init(&mut self, width: u32, height: u32) -> Result<()> {
         if self.released {
             return Err(Error::Released);
@@ -828,6 +844,7 @@ impl<G: Gl> Renderer<G> {
         if width > MAX_DRAWING_BUFFER || height > MAX_DRAWING_BUFFER {
             return Err(Error::Viewport { width, height });
         }
+        self.reset_context_state();
         let positive = |v: i32| u32::try_from(v).unwrap_or(0);
         self.caps = Caps {
             max_texture_size: positive(self.gl.get_integer(gl::MAX_TEXTURE_SIZE)),
@@ -869,6 +886,80 @@ impl<G: Gl> Renderer<G> {
         self.caps.timer_query = self.timer.supported();
         self.ready = true;
         self.resize(width, height)
+    }
+
+    /// Puts back WebGL 2's default value of the context state that would change what the
+    /// renderer draws or uploads and that it does not set itself, so a context the page made, and
+    /// left with its own state, draws as a new one would. First what would make later calls fail:
+    /// transform feedback left active, and queries left running (the GPU timer's target among
+    /// them). Then: the canvas's own framebuffer, drawn into and read from (`BACK`); what WebGL 2
+    /// extensions add (clip origin and depth mode, depth clamp, clip distances); the
+    /// scissor, stencil, polygon-offset, alpha-to-coverage, sample-coverage and rasterizer-discard
+    /// switches off, dithering on; all four colour channels written; depth `LESS` over the range 0
+    /// to 1, cleared to 1; back faces culled when culling is on; blending by addition; the hints at
+    /// `DONT_CARE`; no pixel unpack or pack buffer, and every unpack and pack parameter at its
+    /// default; no vertex array; no sampler object on any texture unit; and every generic vertex
+    /// attribute at (0, 0, 0, 1), the value an attribute whose array is off reads.
+    ///
+    /// The renderer sets the rest itself: the viewport and clear colour on its first frame; the
+    /// depth test, the blend function, and the depth-write, blend and cull switches and the front
+    /// face (through the state cache, which starts unknown); the program, textures, vertex arrays
+    /// and uniform-buffer ranges it uses; and, at each texture upload, the WebGL unpack settings
+    /// (flip, premultiply, colour conversion). What has no effect while its switch is off (the
+    /// scissor box, the stencil function, operations and masks, the polygon offset, the coverage
+    /// value) is left as it was, and so are the blend colour and line width, which no draw uses.
+    /// The page's own objects are not deleted, only unbound.
+    fn reset_context_state(&mut self) {
+        /// Loops over GL limits stop here, whatever a driver reports.
+        const MOST: u32 = 256;
+        let gl = &mut self.gl;
+        gl.end_transform_feedback();
+        for target in [
+            gl::ANY_SAMPLES_PASSED,
+            gl::ANY_SAMPLES_PASSED_CONSERVATIVE,
+            gl::TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN,
+        ] {
+            gl.end_query_on(target);
+        }
+        if gl.timer_query_supported() {
+            gl.end_query_on(gl::TIME_ELAPSED_EXT);
+        }
+        gl.use_default_framebuffer();
+        gl.reset_extension_state();
+        for cap in [
+            gl::SCISSOR_TEST,
+            gl::STENCIL_TEST,
+            gl::POLYGON_OFFSET_FILL,
+            gl::SAMPLE_ALPHA_TO_COVERAGE,
+            gl::SAMPLE_COVERAGE,
+            gl::RASTERIZER_DISCARD,
+        ] {
+            gl.disable(cap);
+        }
+        gl.enable(gl::DITHER);
+        gl.color_mask(true, true, true, true);
+        gl.depth_func(gl::LESS);
+        gl.depth_range(0.0, 1.0);
+        gl.clear_depth(1.0);
+        gl.cull_face(gl::BACK);
+        gl.blend_equation(gl::FUNC_ADD);
+        gl.hint(gl::GENERATE_MIPMAP_HINT, gl::DONT_CARE);
+        gl.hint(gl::FRAGMENT_SHADER_DERIVATIVE_HINT, gl::DONT_CARE);
+        gl.unbind_buffer(gl::PIXEL_UNPACK_BUFFER);
+        gl.unbind_buffer(gl::PIXEL_PACK_BUFFER);
+        for (pname, value) in DEFAULT_PIXEL_STORE {
+            gl.pixel_store(pname, value);
+        }
+        gl.vertex_array_bind(0);
+        let limit = |v: i32| u32::try_from(v).unwrap_or(0).min(MOST);
+        for unit in 0..limit(gl.get_integer(gl::MAX_COMBINED_TEXTURE_IMAGE_UNITS)) {
+            gl.unbind_sampler(unit);
+        }
+        for location in 0..limit(gl.get_integer(gl::MAX_VERTEX_ATTRIBS)) {
+            gl.vertex_attrib_default(location, [0.0, 0.0, 0.0, 1.0]);
+        }
+        self.state = StateCache::unknown();
+        self.state.vao = 0;
     }
 
     /// Compiles every program, then checks each; returns the bound size of each block.
@@ -1861,6 +1952,87 @@ mod tests {
         assert!(r.caps().timer_query);
         assert_eq!(r.caps().max_texture_size, 4096);
         assert!(r.is_ready());
+    }
+
+    #[test]
+    fn init_puts_back_webgl_default_state_before_anything_else() {
+        let mut r = Renderer::new(MockGl::new());
+        r.init(640, 480).unwrap();
+        let calls = &r.gl().calls;
+        let first_program = calls
+            .iter()
+            .position(|c| matches!(c, Call::ProgramCreate(_)))
+            .unwrap();
+        let reset = &calls[..first_program];
+        // First what would make the later calls fail: transform feedback, then running queries.
+        assert_eq!(
+            reset[..5],
+            [
+                Call::EndTransformFeedback,
+                Call::EndQueryOn(gl::ANY_SAMPLES_PASSED),
+                Call::EndQueryOn(gl::ANY_SAMPLES_PASSED_CONSERVATIVE),
+                Call::EndQueryOn(gl::TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN),
+                Call::EndQueryOn(gl::TIME_ELAPSED_EXT),
+            ]
+        );
+        let mut expected = vec![
+            Call::UseDefaultFramebuffer,
+            Call::ResetExtensionState,
+            Call::Disable(gl::SCISSOR_TEST),
+            Call::Disable(gl::STENCIL_TEST),
+            Call::Disable(gl::POLYGON_OFFSET_FILL),
+            Call::Disable(gl::SAMPLE_ALPHA_TO_COVERAGE),
+            Call::Disable(gl::SAMPLE_COVERAGE),
+            Call::Disable(gl::RASTERIZER_DISCARD),
+            Call::Enable(gl::DITHER),
+            Call::ColorMask([true; 4]),
+            Call::DepthFunc(gl::LESS),
+            Call::DepthRange(0.0, 1.0),
+            Call::ClearDepth(1.0),
+            Call::CullFace(gl::BACK),
+            Call::BlendEquation(gl::FUNC_ADD),
+            Call::Hint(gl::GENERATE_MIPMAP_HINT, gl::DONT_CARE),
+            Call::Hint(gl::FRAGMENT_SHADER_DERIVATIVE_HINT, gl::DONT_CARE),
+            Call::UnbindBuffer(gl::PIXEL_UNPACK_BUFFER),
+            Call::UnbindBuffer(gl::PIXEL_PACK_BUFFER),
+        ];
+        expected.extend(DEFAULT_PIXEL_STORE.map(|(p, v)| Call::PixelStore(p, v)));
+        expected.push(Call::VaoBind(0));
+        expected.extend((0..32).map(Call::UnbindSampler));
+        expected.extend((0..16).map(|l| Call::VertexAttribDefault(l, [0.0, 0.0, 0.0, 1.0])));
+        assert_eq!(
+            reset[5..],
+            expected[..],
+            "the reset, in order, and nothing else"
+        );
+        // Every unpack and pack parameter WebGL 2 has, at its default.
+        let mut pnames: Vec<u32> = DEFAULT_PIXEL_STORE.iter().map(|&(p, _)| p).collect();
+        pnames.sort_unstable();
+        pnames.dedup();
+        assert_eq!(pnames.len(), 10);
+        // The fixed state comes after it.
+        let depth_test = calls
+            .iter()
+            .position(|c| *c == Call::Enable(gl::DEPTH_TEST))
+            .unwrap();
+        assert!(depth_test > first_program);
+
+        // No timer: its query target is not named (it would be INVALID_ENUM). A driver's limits
+        // are taken as reported, but a negative one is none and a huge one stops at 256.
+        let mut gl = MockGl::new();
+        gl.timer = false;
+        gl.texture_units = -1;
+        gl.vertex_attribs = i32::MAX;
+        let mut r = Renderer::new(gl);
+        r.init(640, 480).unwrap();
+        let calls = &r.gl().calls;
+        assert!(!calls.contains(&Call::EndQueryOn(gl::TIME_ELAPSED_EXT)));
+        assert!(!calls.iter().any(|c| matches!(c, Call::UnbindSampler(_))));
+        let attribs = calls
+            .iter()
+            .filter(|c| matches!(c, Call::VertexAttribDefault(..)))
+            .count();
+        assert_eq!(attribs, 256);
     }
 
     #[test]

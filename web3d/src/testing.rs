@@ -63,6 +63,21 @@ pub enum Call {
     QueryBegin(u32),
     QueryEnd,
     Disjoint,
+    ColorMask([bool; 4]),
+    DepthFunc(u32),
+    DepthRange(f32, f32),
+    ClearDepth(f32),
+    CullFace(u32),
+    BlendEquation(u32),
+    Hint(u32, u32),
+    PixelStore(u32, i32),
+    UseDefaultFramebuffer,
+    UnbindBuffer(u32),
+    UnbindSampler(u32),
+    VertexAttribDefault(u32, [f32; 4]),
+    EndTransformFeedback,
+    EndQueryOn(u32),
+    ResetExtensionState,
 }
 
 /// Records every call (unless `record` is off) and plays a configurable driver.
@@ -76,6 +91,9 @@ pub struct MockGl {
     pub disjoint: bool,
     pub max_texture_size: i32,
     pub ubo_alignment: i32,
+    /// `MAX_COMBINED_TEXTURE_IMAGE_UNITS` and `MAX_VERTEX_ATTRIBS`.
+    pub texture_units: i32,
+    pub vertex_attribs: i32,
     pub fail_program: bool,
     pub fail_texture: bool,
     /// A uniform the driver places somewhere else.
@@ -98,6 +116,8 @@ impl MockGl {
             disjoint: false,
             max_texture_size: 4096,
             ubo_alignment: 64,
+            texture_units: 32,
+            vertex_attribs: 16,
             fail_program: false,
             fail_texture: false,
             layout_override: None,
@@ -135,6 +155,8 @@ impl Gl for MockGl {
             gl::MAX_TEXTURE_SIZE => self.max_texture_size,
             gl::UNIFORM_BUFFER_OFFSET_ALIGNMENT => self.ubo_alignment,
             gl::MAX_UNIFORM_BLOCK_SIZE => 16384,
+            gl::MAX_COMBINED_TEXTURE_IMAGE_UNITS => self.texture_units,
+            gl::MAX_VERTEX_ATTRIBS => self.vertex_attribs,
             _ => 0,
         }
     }
@@ -287,6 +309,66 @@ impl Gl for MockGl {
 
     fn blend_func_separate(&mut self, _: u32, _: u32, _: u32, _: u32) {
         self.push(|| Call::BlendFunc);
+    }
+
+    fn color_mask(&mut self, r: bool, g: bool, b: bool, a: bool) {
+        self.push(|| Call::ColorMask([r, g, b, a]));
+    }
+
+    fn depth_func(&mut self, func: u32) {
+        self.push(|| Call::DepthFunc(func));
+    }
+
+    fn depth_range(&mut self, near: f32, far: f32) {
+        self.push(|| Call::DepthRange(near, far));
+    }
+
+    fn clear_depth(&mut self, depth: f32) {
+        self.push(|| Call::ClearDepth(depth));
+    }
+
+    fn cull_face(&mut self, mode: u32) {
+        self.push(|| Call::CullFace(mode));
+    }
+
+    fn blend_equation(&mut self, mode: u32) {
+        self.push(|| Call::BlendEquation(mode));
+    }
+
+    fn hint(&mut self, target: u32, mode: u32) {
+        self.push(|| Call::Hint(target, mode));
+    }
+
+    fn pixel_store(&mut self, pname: u32, value: i32) {
+        self.push(|| Call::PixelStore(pname, value));
+    }
+
+    fn use_default_framebuffer(&mut self) {
+        self.push(|| Call::UseDefaultFramebuffer);
+    }
+
+    fn unbind_buffer(&mut self, target: u32) {
+        self.push(|| Call::UnbindBuffer(target));
+    }
+
+    fn unbind_sampler(&mut self, unit: u32) {
+        self.push(|| Call::UnbindSampler(unit));
+    }
+
+    fn vertex_attrib_default(&mut self, location: u32, value: [f32; 4]) {
+        self.push(|| Call::VertexAttribDefault(location, value));
+    }
+
+    fn end_transform_feedback(&mut self) {
+        self.push(|| Call::EndTransformFeedback);
+    }
+
+    fn end_query_on(&mut self, target: u32) {
+        self.push(|| Call::EndQueryOn(target));
+    }
+
+    fn reset_extension_state(&mut self) {
+        self.push(|| Call::ResetExtensionState);
     }
 
     fn viewport(&mut self, _x: i32, _y: i32, width: u32, height: u32) {

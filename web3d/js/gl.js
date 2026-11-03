@@ -64,6 +64,7 @@ export function createGl(gl, lostSince) {
   const queries = new Table();
   const decoder = new TextDecoder();
   const depthOnly = [gl.DEPTH];
+  const back = [gl.BACK];
 
   const state = { staged: null, stagedSize: null, lost: false, lastLog: '' };
   /** True from the moment the context is lost, and for good: the event can lag isContextLost(). */
@@ -248,7 +249,7 @@ export function createGl(gl, lostSince) {
         // Pending errors were cleared above, so this one is the upload's.
         const error = gl.getError();
         if (error !== gl.NO_ERROR) {
-          note(2, `web3d: the texture upload raised WebGL error 0x${error.toString(16)}: the source's pixels do not fit the ${width}x${height} texture made for it`);
+          note(2, `web3d: the texture upload raised WebGL error 0x${error.toString(16)}: WebGL refused to put the source's pixels into the ${width}x${height} texture made for it`);
           gl.deleteTexture(texture);
           return 0;
         }
@@ -280,6 +281,47 @@ export function createGl(gl, lostSince) {
     front_face: (mode) => gl.frontFace(mode),
     depth_mask: (write) => gl.depthMask(write !== 0),
     blend_func_separate: (a, b, c, d) => gl.blendFuncSeparate(a, b, c, d),
+    // WebGL 2's default state, put back when a renderer is initialised (Renderer::init in
+    // src/renderer.rs says which, and why), so state a page left on its context reaches nothing.
+    color_mask: (r, g, b, a) => gl.colorMask(r !== 0, g !== 0, b !== 0, a !== 0),
+    depth_func: (func) => gl.depthFunc(func),
+    depth_range: (near, far) => gl.depthRange(near, far),
+    clear_depth: (depth) => gl.clearDepth(depth),
+    cull_face: (mode) => gl.cullFace(mode),
+    blend_equation: (mode) => gl.blendEquation(mode),
+    hint: (target, mode) => gl.hint(target, mode),
+    pixel_store: (pname, value) => gl.pixelStorei(pname, value),
+    use_default_framebuffer() {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.drawBuffers(back);
+      gl.readBuffer(gl.BACK);
+    },
+    unbind_buffer: (target) => gl.bindBuffer(target, null),
+    unbind_sampler: (unit) => gl.bindSampler(unit, null),
+    vertex_attrib_default: (location, x, y, z, w) => gl.vertexAttrib4f(location, x, y, z, w),
+    end_transform_feedback() {
+      // Ending it when none is active would be an error; binding while one is active, too.
+      if (gl.getParameter(gl.TRANSFORM_FEEDBACK_ACTIVE)) gl.endTransformFeedback();
+      gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
+    },
+    end_query_on(target) {
+      if (gl.getQuery(target, gl.CURRENT_QUERY)) gl.endQuery(target);
+    },
+    // State that WebGL 2 extensions add, for each the browser has: getExtension returns the page's
+    // object if it enabled one, and enabling one here changes no state. Not WEBGL_polygon_mode:
+    // Chrome prints a console warning whenever it is enabled, and whether the page enabled it
+    // cannot be asked without enabling it (docs/WEB3D.md says so).
+    reset_extension_state() {
+      const clip = gl.getExtension('EXT_clip_control');
+      if (clip) clip.clipControlEXT(clip.LOWER_LEFT_EXT, clip.NEGATIVE_ONE_TO_ONE_EXT);
+      const clamp = gl.getExtension('EXT_depth_clamp');
+      if (clamp) gl.disable(clamp.DEPTH_CLAMP_EXT);
+      const distances = gl.getExtension('WEBGL_clip_cull_distance');
+      if (distances) {
+        const n = Math.min(gl.getParameter(distances.MAX_CLIP_DISTANCES_WEBGL) | 0, 32);
+        for (let i = 0; i < n; i++) gl.disable(distances.CLIP_DISTANCE0_WEBGL + i);
+      }
+    },
     viewport: (x, y, width, height) => gl.viewport(x, y, width, height),
     clear_color: (r, g, b, a) => gl.clearColor(r, g, b, a),
     clear: (mask) => gl.clear(mask),

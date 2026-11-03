@@ -1,9 +1,9 @@
-serving web3d on http://127.0.0.1:5659/
+serving web3d on http://127.0.0.1:5668/
 Chrome 156.0.8078.80 (headless, launched by this script)
-low-1024x576: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.865 p50 0.861 p95 0.884 ms (602 readings), CPU mean 0.147 p95 0.24 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,241,231
-full-1366x768: 1366x768 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.023 p50 1.02 p95 1.029 ms (602 readings), CPU mean 0.039 p95 0.055 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 240,238,228
-low-1024x576-no-msaa: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.568 p50 0.567 p95 0.579 ms (602 readings), CPU mean 0.037 p95 0.05 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,240,230
-probes: 67 passed, 0 failed; INVALID_OPERATION warnings: 0; pending GL errors: 2 (2 raised on purpose)
+low-1024x576: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.869 p50 0.866 p95 0.891 ms (602 readings), CPU mean 0.138 p95 0.21 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,241,231
+full-1366x768: 1366x768 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.051 p50 1.048 p95 1.066 ms (602 readings), CPU mean 0.161 p95 0.235 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 240,238,228
+low-1024x576-no-msaa: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.584 p50 0.581 p95 0.603 ms (602 readings), CPU mean 0.126 p95 0.19 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,240,230
+probes: 72 passed, 0 failed; INVALID_OPERATION warnings: 0; pending GL errors: 2 (2 raised on purpose)
   pass  A output is sRGB-encoded (white under a uniform hemisphere)
   pass  A2 the clear colour is linear and encoded
   pass  B1 texture upright: top-left red, top-right green, bottom-left blue
@@ -71,11 +71,16 @@ probes: 67 passed, 0 failed; INVALID_OPERATION warnings: 0; pending GL errors: 2
   pass  TU pending page errors are reported as pending and do not refuse a good texture; a turned VideoFrame uploads at its turned size; bitmaprenderer canvases are refused, a blank canvas uploads; a DataView of the module compiles, a detached one is refused
   pass  LE one loss controller a canvas: a throwing hook does not stop the next (E1); one function runs once (E4b); a lost renderer left undisposed hears no later loss (E6); a page-made context lost during a create, and a canvas lost with no renderer, are restored (E11, E12); a loss and restore inside a create call its hook once, after (ET)
   pass  H7 at the largest serial a handle is below 2^50, a handle plus 0.5 or minus 0.25 is refused as a fraction, and the next serial wraps round to 1
-allocation, cold (first frames): 601 frames; page scripts 19.4 sampled bytes a frame; by file {"(native or internal)":10.2,"/demo/demo.js":14.3,"/pkg/web3d.js":1.9,"/pkg/loadngo_web3d.wasm":1.1,"/pkg/gl.js":2.1}
-allocation, steady (after 30 s of frames): 601 frames; page scripts 1.64 sampled bytes a frame; by file {"(native or internal)":9.3,"/demo/demo.js":1.6}
-allocation, positive control (one short-lived Array of 8 numbers a frame): 601 frames; page scripts 0.54 sampled bytes a frame; by file {"(native or internal)":8.8,"/demo/demo.js":0.5}
-allocation, CPU timing on (reported, not gated): 601 frames; page scripts 1.82 sampled bytes a frame; by file {"(native or internal)":10.9,"/demo/demo.js":1.8}
-  FAILED: the positive control read 0.5 sampled bytes a frame from demo.js (at least 40 expected): the profiler is blind to short-lived objects, so the gate proves nothing
+  pass  PS a page-made context that suits, left with state of the page's (each of the ninth critic's N8 cases and every other state the renderer resets): web3d draws, uploads and reads back as on a new context, with no WebGL error, and the page's own objects are kept
+  pass  LR a page's own restored listener that runs before web3d's disposes the live renderer: onContextRestored comes once (N1); disposed in the page's lost listener instead: once, and no onContextLost; disposed after the restore was handled: no second call
+  pass  RF a frame's copy of web3d took a context from this document's canvas, then the frame went: with this window's copy loaded the loss is cancelled and recovered (a); without it, a create here puts the listeners back (b), one made while the frame is there moves them (c), and a navigated frame counts as gone (d), each cancelling the next loss and calling its hooks once, with one listener of each kind; a loss before any such create is not cancelled, and the create says why (e); a frame's renderer left live holds the canvas until this window disposes it (f)
+  pass  NC as documented: a canvas with no context uploads and then has a '2d' context for good (no webgl2 or bitmaprenderer context, no transfer, later 2d options ignored), an OffscreenCanvas too; a canvas with its own 2d or WebGL context is unchanged and uploads its pixels; a bitmaprenderer canvas is refused and stays one
+  pass  MS a detached OffscreenCanvas is refused as detached, a placeholder canvas as transferred (N21); a loss before web3d's first use: the message says web3d cancels a lost event still to come, as it does when the loss is in the create's own task (the hook comes once), and none comes for one already dispatched (N7b')
+allocation, cold (first frames): 601 frames; page scripts 20.48 sampled bytes a frame; by file {"(native or internal)":10,"/demo/demo.js":14.9,"/pkg/web3d.js":1.6,"/pkg/loadngo_web3d.wasm":1.7,"/pkg/gl.js":2.2}
+allocation, steady (after 70 s of frames): 601 frames; page scripts 0 sampled bytes a frame; by file {"(native or internal)":9}
+allocation, positive control (one short-lived Array of 8 numbers a frame): 601 frames; page scripts 0.41 sampled bytes a frame; by file {"(native or internal)":9.2,"/demo/demo.js":0.4}
+allocation, CPU timing on (reported, not gated): 601 frames; page scripts 2.02 sampled bytes a frame; by file {"(native or internal)":10.5,"/demo/demo.js":2}
+  FAILED: the positive control read 0.4 sampled bytes a frame from demo.js (at least 40 expected): the profiler is blind to short-lived objects, so the gate proves nothing
 browser and server stopped
 wrote web3d/evidence/phase1/blind-control/rendered-check.json
 FAILED: see the lines marked FAILED above

@@ -1,0 +1,64 @@
+== pkg found before building:
+75be6e514851087e892825e65878ca46f325f46c20a5df1f76a82843e94be77a  pkg/gl.js
+6ec44bb63c999846bfb8eae7b7105abd1c250554f20c88c5ba8d9a9c077d2753  pkg/loadngo_web3d.wasm
+dde6ae506a13b32c0133cac79323e8e8fa9a8fd9e40040e598f31c79bbd1297f  pkg/web3d.d.ts
+a724a996d8fce785f7f46851fc512e782287d8720d529e2e7a2d8ddd5dfe8d44  pkg/web3d.js
+
+== build 1 (workspace target dir)
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+== cargo rustc (target dir: ~/pudding/loadngo/target)
+    Finished `release` profile [optimized] target(s) in 0.05s
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           105901  gzip   38080
+pkg/loadngo_web3d.wasm                69232  gzip   31678
+pkg/gl.js                             14578  gzip    4984
+pkg/web3d.js                          47632  gzip   14710
+exit 0
+75be6e514851087e892825e65878ca46f325f46c20a5df1f76a82843e94be77a  pkg/gl.js
+6ec44bb63c999846bfb8eae7b7105abd1c250554f20c88c5ba8d9a9c077d2753  pkg/loadngo_web3d.wasm
+dde6ae506a13b32c0133cac79323e8e8fa9a8fd9e40040e598f31c79bbd1297f  pkg/web3d.d.ts
+a724a996d8fce785f7f46851fc512e782287d8720d529e2e7a2d8ddd5dfe8d44  pkg/web3d.js
+
+== build 2 (workspace target dir)
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+== cargo rustc (target dir: ~/pudding/loadngo/target)
+    Finished `release` profile [optimized] target(s) in 0.03s
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           105901  gzip   38080
+pkg/loadngo_web3d.wasm                69232  gzip   31678
+pkg/gl.js                             14578  gzip    4984
+pkg/web3d.js                          47632  gzip   14710
+exit 0
+75be6e514851087e892825e65878ca46f325f46c20a5df1f76a82843e94be77a  pkg/gl.js
+6ec44bb63c999846bfb8eae7b7105abd1c250554f20c88c5ba8d9a9c077d2753  pkg/loadngo_web3d.wasm
+dde6ae506a13b32c0133cac79323e8e8fa9a8fd9e40040e598f31c79bbd1297f  pkg/web3d.d.ts
+a724a996d8fce785f7f46851fc512e782287d8720d529e2e7a2d8ddd5dfe8d44  pkg/web3d.js
+
+== build 3 (empty target dir: a new mktemp -d)
+entries before:        0
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+== cargo rustc (target dir: <empty>)
+   Compiling loadngo-web3d v0.1.0 (~/pudding/loadngo/web3d)
+    Finished `release` profile [optimized] target(s) in 0.62s
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           105901  gzip   38080
+pkg/loadngo_web3d.wasm                69232  gzip   31678
+pkg/gl.js                             14578  gzip    4984
+pkg/web3d.js                          47632  gzip   14710
+exit 0
+75be6e514851087e892825e65878ca46f325f46c20a5df1f76a82843e94be77a  pkg/gl.js
+6ec44bb63c999846bfb8eae7b7105abd1c250554f20c88c5ba8d9a9c077d2753  pkg/loadngo_web3d.wasm
+dde6ae506a13b32c0133cac79323e8e8fa9a8fd9e40040e598f31c79bbd1297f  pkg/web3d.d.ts
+a724a996d8fce785f7f46851fc512e782287d8720d529e2e7a2d8ddd5dfe8d44  pkg/web3d.js
+
+== local paths in pkg (strings -n 4, grep -a): expect none
+none
+pkg/gl.js:0
+pkg/loadngo_web3d.wasm:0
+pkg/web3d.d.ts:0
+pkg/web3d.js:0
+== remapped prefixes seen in the wasm:
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4

@@ -1309,6 +1309,641 @@ async function realms() {
   );
 }
 
+// The tenth round's probes: the ninth critic's findings N1 (LR), N8 (PS), N10 (RF) and N11 (NC),
+// and its notes N7b' and N21 (MS). Each makes its own canvases, and releases their contexts when it
+// is done, so Chrome's limit on live contexts drops none of the others.
+
+/** A canvas in the document with an id (the check counts its listeners by id). */
+function canvasFor(id, w = 16, h = 16) {
+  const c = document.createElement('canvas');
+  c.id = id;
+  c.width = w;
+  c.height = h;
+  document.body.append(c);
+  return c;
+}
+/** Releases a context a probe is done with (its loss is cancelled by web3d, which is harmless). */
+const release = (gl) => {
+  if (gl && !gl.isContextLost()) gl.getExtension('WEBGL_lose_context')?.loseContext();
+};
+const eventOf = (target, type) => new Promise((res) => target.addEventListener(type, () => setTimeout(() => res(type), 0), { once: true }));
+const isGreen = (p) => Array.isArray(p) && p[1] > 200 && p[0] < 70 && p[2] < 70;
+/** Draws a green quad over the whole canvas and reads its centre, in the same task. */
+const greenOn = (r) => {
+  flat(r);
+  r.createObject(r.createMesh(quad(-1, -1, 1, 1, -5)), r.createMaterial({ baseColor: [0, 1, 0, 1] }));
+  r.frame();
+  return reader(r)(0, 0);
+};
+/** The pixel at a point of the canvas's own drawing buffer, whatever framebuffer is bound for reading. */
+const canvasPixel = (gl, nx, ny) => {
+  const prior = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING);
+  gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+  const px = new Uint8Array(4);
+  gl.readPixels(Math.floor(((nx + 1) / 2) * gl.drawingBufferWidth), Math.floor(((ny + 1) / 2) * gl.drawingBufferHeight), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  gl.bindFramebuffer(gl.READ_FRAMEBUFFER, prior);
+  return [px[0], px[1], px[2]];
+};
+/** Leaves transform feedback active on `gl`, as a page that stopped mid-capture would. */
+function beginTransformFeedback(gl) {
+  const shader = (type, source) => {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, source);
+    gl.compileShader(sh);
+    return sh;
+  };
+  const p = gl.createProgram();
+  gl.attachShader(p, shader(gl.VERTEX_SHADER, '#version 300 es\nout float v_out;\nvoid main() { v_out = 1.0; gl_Position = vec4(0.0, 0.0, 0.0, 1.0); gl_PointSize = 1.0; }'));
+  gl.attachShader(p, shader(gl.FRAGMENT_SHADER, '#version 300 es\nprecision mediump float;\nout vec4 o;\nvoid main() { o = vec4(0.0); }'));
+  gl.transformFeedbackVaryings(p, ['v_out'], gl.SEPARATE_ATTRIBS);
+  gl.linkProgram(p);
+  gl.useProgram(p);
+  gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, gl.createTransformFeedback());
+  const b = gl.createBuffer();
+  gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, b);
+  gl.bufferData(gl.TRANSFORM_FEEDBACK_BUFFER, 64, gl.STREAM_COPY);
+  gl.beginTransformFeedback(gl.POINTS);
+  return { active: gl.getParameter(gl.TRANSFORM_FEEDBACK_ACTIVE) };
+}
+
+/**
+ * PS: a page-made context that suits (a depth buffer, the antialias asked for), handed over with
+ * state the page left. web3d puts WebGL 2's default state back, so it draws and uploads as on a new
+ * context: the ninth critic's N8 (its nine draw states and three upload states), widened to the rest
+ * of what src/renderer.rs resets that changes what is drawn, uploaded or read back. Every case reads
+ * the canvas's own drawing buffer, raises no WebGL error, and (for objects the page made) leaves
+ * them as they were, only unbound.
+ */
+async function pageState() {
+  const opts = { width: 16, height: 16, antialias: false };
+  const rgbw = () => bitmap(2, 2, [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255]);
+  const greenRed = () => bitmap(2, 1, [0, 255, 0, 255, 255, 0, 0, 255]);
+  // Draws for a case; returns what to check. Bitmaps are made before, so this runs in one task.
+  const draw = {
+    green: (r, gl) => {
+      flat(r);
+      r.createObject(r.createMesh(quad(-1, -1, 1, 1, -5)), r.createMaterial({ baseColor: [0, 1, 0, 1] }));
+      r.frame();
+      return { pixel: canvasPixel(gl, 0, 0), ok: (px) => isGreen(px) };
+    },
+    // An opaque material of alpha 0: drawn whole, unless alpha-to-coverage turns its alpha into no samples.
+    alpha0: (r, gl) => {
+      flat(r);
+      r.createObject(r.createMesh(quad(-1, -1, 1, 1, -5)), r.createMaterial({ baseColor: [0, 1, 0, 0] }));
+      r.frame();
+      return { pixel: canvasPixel(gl, 0, 0), ok: (px) => isGreen(px) };
+    },
+    // A blended material of alpha 1 over black: green by addition, black by reverse subtraction.
+    blend: (r, gl) => {
+      flat(r);
+      r.createObject(r.createMesh(quad(-1, -1, 1, 1, -5)), r.createMaterial({ baseColor: [0, 1, 0, 1], alphaMode: 'blend' }));
+      r.frame();
+      return { pixel: canvasPixel(gl, 0, 0), ok: (px) => isGreen(px) };
+    },
+    // A mipmapped 2x2 texture: its top-left texel is red; a sampler with TEXTURE_MIN_LOD 10 would
+    // sample the 1x1 level, the four texels' average, everywhere.
+    mip: (r, gl, b) => {
+      flat(r);
+      const t = r.createTexture(b, { wrapS: 'clamp', wrapT: 'clamp' });
+      r.createObject(r.createMesh(quad(-1, -1, 1, 1, -5)), r.createMaterial({ texture: t }));
+      r.frame();
+      return { pixel: canvasPixel(gl, -0.75, 0.75), ok: (px) => px[0] > 200 && px[1] < 70 && px[2] < 70 };
+    },
+    // A textured mesh without uvs reads the uv attribute's generic value, (0, 0) by default: the
+    // green texel; at (0.9, 0.5) it would read the red one.
+    attrib: (r, gl, b) => {
+      flat(r);
+      const t = r.createTexture(b, { mipmaps: false, wrapS: 'clamp', wrapT: 'clamp' });
+      const { positions, normals, indices } = quad(-1, -1, 1, 1, -5);
+      r.createObject(r.createMesh({ positions, normals, indices }), r.createMaterial({ texture: t }));
+      r.frame();
+      return { pixel: canvasPixel(gl, 0, 0), ok: (px) => isGreen(px) };
+    },
+    // An upload: the 2x2 texture upright, every texel where it belongs.
+    upload: (r, gl, b) => {
+      flat(r);
+      const t = r.createTexture(b, { mipmaps: false, wrapS: 'clamp', wrapT: 'clamp' });
+      r.createObject(r.createMesh(quad(-1, -1, 1, 1, -5)), r.createMaterial({ texture: t }));
+      r.frame();
+      // Inside the edge texels, which clamping keeps pure under linear filtering.
+      const tl = canvasPixel(gl, -0.75, 0.75);
+      const tr = canvasPixel(gl, 0.75, 0.75);
+      const bl = canvasPixel(gl, -0.75, -0.75);
+      const only = (px, c) => px.every((v, i) => (i === c ? v > 200 : v < 70));
+      return { pixel: { tl, tr, bl }, ok: () => only(tl, 0) && only(tr, 1) && only(bl, 2) };
+    },
+  };
+  const cases = [
+    ['scissor test on, a 1x1 box at the corner', {}, (gl) => (gl.enable(gl.SCISSOR_TEST), gl.scissor(0, 0, 1, 1))],
+    ['colour mask all false', {}, (gl) => gl.colorMask(false, false, false, false)],
+    ['depth func NEVER', {}, (gl) => gl.depthFunc(gl.NEVER)],
+    ['cull face FRONT', {}, (gl) => gl.cullFace(gl.FRONT)],
+    ['clear depth 0', {}, (gl) => gl.clearDepth(0)],
+    ['depth range 1 to 1', {}, (gl) => gl.depthRange(1, 1)],
+    ['rasterizer discard on', {}, (gl) => gl.enable(gl.RASTERIZER_DISCARD)],
+    ['draw buffers NONE on the default framebuffer', {}, (gl) => gl.drawBuffers([gl.NONE])],
+    ['read buffer NONE on the default framebuffer', {}, (gl) => gl.readBuffer(gl.NONE)],
+    [
+      'a framebuffer of its own left bound',
+      {},
+      (gl, keep) => {
+        const fb = gl.createFramebuffer();
+        const tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, 16, 16);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+        // Kept, only unbound: its attachment is still its texture afterwards.
+        keep.check = () => {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+          const same = gl.getFramebufferAttachmentParameter(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.FRAMEBUFFER_ATTACHMENT_OBJECT_NAME) === tex;
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+          return same;
+        };
+      },
+    ],
+    ['stencil test on with func NEVER, on a context with stencil', { stencil: true }, (gl) => (gl.enable(gl.STENCIL_TEST), gl.stencilFunc(gl.NEVER, 0, 0xff))],
+    ['polygon offset fill on, pushing depth past the far plane', {}, (gl) => (gl.enable(gl.POLYGON_OFFSET_FILL), gl.polygonOffset(0, 1e9))],
+    ['sample coverage on at 0, multisampled', { antialias: true }, (gl) => (gl.enable(gl.SAMPLE_COVERAGE), gl.sampleCoverage(0, false))],
+    ['alpha to coverage on, multisampled, an opaque material of alpha 0', { antialias: true }, (gl) => gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE), 'alpha0'],
+    ['blend equation FUNC_REVERSE_SUBTRACT, a blended material', {}, (gl) => gl.blendEquation(gl.FUNC_REVERSE_SUBTRACT), 'blend'],
+    [
+      'a sampler object on unit 0 with TEXTURE_MIN_LOD 10, a mipmapped texture',
+      {},
+      (gl) => {
+        const sampler = gl.createSampler();
+        gl.samplerParameterf(sampler, gl.TEXTURE_MIN_LOD, 10);
+        gl.bindSampler(0, sampler);
+      },
+      'mip',
+      rgbw,
+    ],
+    ["the uv attribute's generic value at (0.9, 0.5), a textured mesh without uvs", {}, (gl) => gl.vertexAttrib4f(2, 0.9, 0.5, 0, 1), 'attrib', greenRed],
+    ['transform feedback left active', {}, (gl, keep) => (keep.before = beginTransformFeedback(gl))],
+    [
+      'a TIME_ELAPSED query left running',
+      {},
+      (gl, keep) => {
+        const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+        keep.timer = Boolean(ext);
+        if (ext) gl.beginQuery(ext.TIME_ELAPSED_EXT, gl.createQuery());
+      },
+    ],
+    [
+      'an occlusion query left running',
+      {},
+      (gl, keep) => {
+        gl.beginQuery(gl.ANY_SAMPLES_PASSED, gl.createQuery());
+        keep.check = () => gl.getQuery(gl.ANY_SAMPLES_PASSED, gl.CURRENT_QUERY) === null;
+      },
+    ],
+    [
+      'a vertex array of its own left bound, holding an index buffer',
+      {},
+      (gl, keep) => {
+        const vao = gl.createVertexArray();
+        const b = gl.createBuffer();
+        gl.bindVertexArray(vao);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, b);
+        // Kept as it was: web3d's index buffers went into its own vertex arrays.
+        keep.check = () => {
+          gl.bindVertexArray(vao);
+          const same = gl.getParameter(gl.ELEMENT_ARRAY_BUFFER_BINDING) === b;
+          gl.bindVertexArray(null);
+          return same;
+        };
+      },
+    ],
+    ['a pixel pack buffer bound and PACK_SKIP_PIXELS 3 (the readback here would fail)', {}, (gl) => (gl.bindBuffer(gl.PIXEL_PACK_BUFFER, gl.createBuffer()), gl.pixelStorei(gl.PACK_SKIP_PIXELS, 3))],
+    ['UNPACK_SKIP_PIXELS 1, an upload', {}, (gl) => gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 1), 'upload', rgbw],
+    ['UNPACK_SKIP_ROWS 1, an upload', {}, (gl) => gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 1), 'upload', rgbw],
+    ['UNPACK_ROW_LENGTH 1, an upload', {}, (gl) => gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 1), 'upload', rgbw],
+    ['a pixel unpack buffer left bound, an upload', {}, (gl) => gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, gl.createBuffer()), 'upload', rgbw],
+    ['UNPACK_FLIP_Y_WEBGL and UNPACK_PREMULTIPLY_ALPHA_WEBGL on, an upload', {}, (gl) => (gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true), gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true)), 'upload', rgbw],
+    // State WebGL 2 extensions add, where the browser has the extension (else the case is skipped).
+    [
+      'EXT_clip_control: an upper-left origin and depth from 0 to 1',
+      {},
+      (gl, keep) => {
+        const x = gl.getExtension('EXT_clip_control');
+        if (!x) return (keep.unsupported = true);
+        x.clipControlEXT(x.UPPER_LEFT_EXT, x.ZERO_TO_ONE_EXT);
+      },
+    ],
+    [
+      'EXT_depth_clamp on',
+      {},
+      (gl, keep) => {
+        const x = gl.getExtension('EXT_depth_clamp');
+        if (!x) return (keep.unsupported = true);
+        gl.enable(x.DEPTH_CLAMP_EXT);
+        keep.check = () => !gl.isEnabled(x.DEPTH_CLAMP_EXT);
+      },
+    ],
+    [
+      'WEBGL_clip_cull_distance: CLIP_DISTANCE0 on (web3d writes no clip distance)',
+      {},
+      (gl, keep) => {
+        const x = gl.getExtension('WEBGL_clip_cull_distance');
+        if (!x) return (keep.unsupported = true);
+        gl.enable(x.CLIP_DISTANCE0_WEBGL);
+        keep.check = () => !gl.isEnabled(x.CLIP_DISTANCE0_WEBGL);
+      },
+    ],
+    ['nothing changed (control), a draw', {}, () => {}],
+    ['nothing changed (control), an upload', {}, () => {}, 'upload', rgbw],
+  ];
+  const results = [];
+  let n = 0;
+  for (const [name, attributes, leave, kind = 'green', source = null] of cases) {
+    const c = canvasFor(`ps-${++n}`);
+    const gl = c.getContext('webgl2', { antialias: false, ...attributes });
+    const b = source ? await source() : null;
+    const keep = {};
+    leave(gl, keep);
+    const result = { name, pageError: gl.getError() };
+    if (keep.unsupported) {
+      results.push({ ...result, skipped: 'this browser does not have the extension', pass: true });
+      release(gl);
+      continue;
+    }
+    const r = await settle(createRenderer(c, { ...opts, antialias: Boolean(attributes.antialias) }));
+    if (!r.ok) {
+      results.push({ ...result, created: r.message });
+      release(gl);
+      continue;
+    }
+    try {
+      const { pixel, ok } = draw[kind](r.r, gl, b);
+      r.r.frame();
+      result.pixel = pixel;
+      result.drawn = ok(pixel);
+    } catch (e) {
+      result.threw = String(e?.message ?? e).slice(0, 200);
+    }
+    result.glError = gl.getError();
+    r.r.dispose();
+    if (keep.before) result.before = keep.before;
+    if (keep.timer !== undefined) result.timer = keep.timer;
+    if (keep.check) result.kept = keep.check();
+    result.pass = result.pageError === 0 && result.drawn === true && result.glError === 0 && result.kept !== false && (keep.before ? keep.before.active === true : true);
+    results.push(result);
+    release(gl);
+  }
+  log(
+    'PS a page-made context that suits, left with state of the page\'s (each of the ninth critic\'s N8 cases and every other state the renderer resets): web3d draws, uploads and reads back as on a new context, with no WebGL error, and the page\'s own objects are kept',
+    results.length === cases.length && results.every((x) => x.pass),
+    results,
+  );
+}
+
+/**
+ * LR: the order of listeners on the canvas (the ninth critic's N1). A page's own restored listener,
+ * added before web3d's, disposes the renderer live at the loss: its onContextRestored still comes,
+ * once. The same in the page's lost listener; and a dispose after web3d handled the restore adds no
+ * second call.
+ */
+async function listenerOrder() {
+  const opts = { width: 16, height: 16, antialias: false };
+  const d = {};
+  const lossAndRestore = async (c, lc) => {
+    const lost = eventOf(c, 'webglcontextlost');
+    lc.loseContext();
+    await lost;
+    const restored = eventOf(c, 'webglcontextrestored');
+    lc.restoreContext();
+    return Promise.race([restored, timeout(3000)]);
+  };
+  for (const order of ['restored', 'lost']) {
+    const c = canvasFor(`lr-${order}`);
+    const calls = { lost: 0, restored: 0 };
+    let r = null;
+    c.addEventListener(`webglcontext${order}`, () => {
+      d[`${order}LostAtDispose`] = r.gl.isContextLost();
+      r.dispose();
+    }, { once: true });
+    r = await createRenderer(c, { ...opts, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++ });
+    d[`${order}Event`] = await lossAndRestore(c, r.gl.getExtension('WEBGL_lose_context'));
+    await timeout(20);
+    d[order] = { ...calls };
+    const next = await settle(createRenderer(c, opts));
+    d[`${order}Next`] = next.ok ? greenOn(next.r) : next.message;
+    if (next.ok) {
+      next.r.dispose();
+      release(next.r.gl);
+    }
+  }
+  // Disposed later, after web3d's restored listener ran: the hook already came; no second call.
+  {
+    const c = canvasFor('lr-late');
+    const calls = { restored: 0 };
+    const r = await createRenderer(c, { ...opts, onContextRestored: () => calls.restored++ });
+    d.lateEvent = await lossAndRestore(c, r.gl.getExtension('WEBGL_lose_context'));
+    await timeout(20);
+    const before = calls.restored;
+    r.dispose();
+    await timeout(20);
+    d.late = { before, after: calls.restored, frame: attempt(() => r.frame()).message };
+    release(r.gl);
+  }
+  log(
+    "LR a page's own restored listener that runs before web3d's disposes the live renderer: onContextRestored comes once (N1); disposed in the page's lost listener instead: once, and no onContextLost; disposed after the restore was handled: no second call",
+    d.restoredEvent === 'webglcontextrestored' && d.restoredLostAtDispose === false && d.restored.lost === 1 && d.restored.restored === 1 && isGreen(d.restoredNext) &&
+      d.lostEvent === 'webglcontextrestored' && d.lostLostAtDispose === true && d.lost.lost === 0 && d.lost.restored === 1 && isGreen(d.lostNext) &&
+      d.lateEvent === 'webglcontextrestored' && d.late.before === 1 && d.late.after === 1,
+    d,
+  );
+}
+
+/**
+ * RF: removed and navigated frames (the ninth critic's N10 and N10e). A same-origin frame's copy of
+ * web3d takes a context from a canvas of this document. With this window's copy loaded, as here, the
+ * listeners are this copy's, and removing the frame changes nothing (a). Without one (simulated by
+ * taking the installer out of the shared state, as on a page whose top window has no copy): the
+ * frame's copy makes them; a create here after the frame is removed puts them back (b); a create
+ * here while it is still there moves them (c); a navigated frame counts as gone (d). The documented
+ * limit: a loss after the frame is removed and before any create is not cancelled, and the next
+ * create says so (e). A frame's renderer left live when the frame goes still holds the canvas until a
+ * window that holds it disposes it (f). After each reinstall the canvas holds one listener of each
+ * kind.
+ */
+async function removedFrames() {
+  const st = globalThis[Symbol.for('loadngo-web3d')];
+  const opts = { width: 16, height: 16, antialias: false };
+  const d = {};
+  const frame = async () => {
+    const iframe = document.createElement('iframe');
+    iframe.src = './probe-frame.html';
+    document.body.append(iframe);
+    await new Promise((res) => iframe.addEventListener('load', res, { once: true }));
+    for (let i = 0; i < 50 && !iframe.contentWindow.__frame; i++) await timeout(20);
+    return iframe;
+  };
+  const listeners = async (c) => (typeof window.__listeners === 'function' ? window.__listeners(c.id) : 'no driver');
+  const one = (l) => l?.webglcontextlost === 1 && l?.webglcontextrestored === 1;
+  /** A loss and restore with a renderer of this window's: whether the loss was cancelled, and its hooks. */
+  const recovery = async (c) => {
+    const calls = { lost: 0, restored: 0 };
+    const r = await createRenderer(c, { ...opts, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++ });
+    const out = { drawn: greenOn(r), listeners: await listeners(c) };
+    const lc = r.gl.getExtension('WEBGL_lose_context');
+    let prevented = null;
+    c.addEventListener('webglcontextlost', (e) => (prevented = e.defaultPrevented), { once: true }); // after web3d's
+    const lost = eventOf(c, 'webglcontextlost');
+    lc.loseContext();
+    await lost;
+    out.prevented = prevented;
+    r.dispose();
+    const restored = eventOf(c, 'webglcontextrestored');
+    lc.restoreContext();
+    out.restored = await Promise.race([restored, timeout(2000)]);
+    await timeout(20);
+    out.calls = calls;
+    const next = await settle(createRenderer(c, opts));
+    out.next = next.ok ? greenOn(next.r) : next.message;
+    if (next.ok) next.r.dispose();
+    release(r.gl);
+    return out;
+  };
+  const recovered = (x) => isGreen(x.drawn) && one(x.listeners) && x.prevented === true && x.restored === 'webglcontextrestored' && x.calls.lost === 1 && x.calls.restored === 1 && isGreen(x.next);
+  // a) This window's copy is loaded: the frame's renderer is left live when the frame is removed.
+  {
+    const c = canvasFor('rf-a');
+    const iframe = await frame();
+    const theirs = await iframe.contentWindow.__frame.createRenderer(c, opts);
+    d.aTheirs = greenOn(theirs);
+    iframe.remove();
+    await timeout(50);
+    const lc = c.getContext('webgl2').getExtension('WEBGL_lose_context');
+    let prevented = null;
+    c.addEventListener('webglcontextlost', (e) => (prevented = e.defaultPrevented), { once: true });
+    const lost = eventOf(c, 'webglcontextlost');
+    lc.loseContext();
+    await lost;
+    d.aPrevented = prevented;
+    const restored = eventOf(c, 'webglcontextrestored');
+    lc.restoreContext();
+    d.aRestored = await Promise.race([restored, timeout(2000)]);
+    d.a = await recovery(c); // the frame's renderer is lost, so the canvas is free
+  }
+  // f) The frame's renderer is left live when the frame goes: it still holds the canvas (any window
+  // that holds it can still use it), so a create here is refused until this window disposes it.
+  {
+    const c = canvasFor('rf-f');
+    const iframe = await frame();
+    const theirs = await iframe.contentWindow.__frame.createRenderer(c, opts);
+    iframe.remove();
+    await timeout(50);
+    d.fRefused = (await settle(createRenderer(c, opts))).message;
+    d.fDispose = attempt(() => theirs.dispose());
+    d.f = await recovery(c);
+  }
+  const installer = st.install;
+  delete st.install; // as on a page whose top window has no copy of web3d
+  try {
+    // b) The frame's copy made the listeners and the frame is removed; a create here puts them back.
+    {
+      const c = canvasFor('rf-b');
+      const iframe = await frame();
+      const theirs = await iframe.contentWindow.__frame.createRenderer(c, opts);
+      d.bTheirs = greenOn(theirs);
+      theirs.dispose();
+      iframe.remove();
+      await timeout(50);
+      d.b = await recovery(c);
+    }
+    // c) A create here while the frame is still there moves the listeners; then the frame goes.
+    {
+      const c = canvasFor('rf-c');
+      const iframe = await frame();
+      const theirs = await iframe.contentWindow.__frame.createRenderer(c, opts);
+      theirs.dispose();
+      const calls = { lost: 0, restored: 0 };
+      const ours = await createRenderer(c, { ...opts, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++ });
+      iframe.remove();
+      await timeout(50);
+      const lc = ours.gl.getExtension('WEBGL_lose_context');
+      let prevented = null;
+      c.addEventListener('webglcontextlost', (e) => (prevented = e.defaultPrevented), { once: true });
+      const lost = eventOf(c, 'webglcontextlost');
+      lc.loseContext();
+      await lost;
+      ours.dispose();
+      const restored = eventOf(c, 'webglcontextrestored');
+      lc.restoreContext();
+      d.c = { prevented, restored: await Promise.race([restored, timeout(2000)]) };
+      await timeout(20);
+      d.c.calls = calls;
+      d.c.listeners = await listeners(c);
+      release(ours.gl);
+    }
+    // d) The frame navigates away instead of going: its listeners stop just the same.
+    {
+      const c = canvasFor('rf-d');
+      const iframe = await frame();
+      const theirs = await iframe.contentWindow.__frame.createRenderer(c, opts);
+      theirs.dispose();
+      const navigated = new Promise((res) => iframe.addEventListener('load', res, { once: true }));
+      iframe.src = 'about:blank';
+      await navigated;
+      await timeout(50);
+      d.d = await recovery(c);
+      iframe.remove();
+    }
+    // e) The documented limit: the frame is removed and the loss comes before any create here.
+    {
+      const c = canvasFor('rf-e');
+      const iframe = await frame();
+      const theirs = await iframe.contentWindow.__frame.createRenderer(c, opts);
+      theirs.dispose();
+      iframe.remove();
+      await timeout(50);
+      let prevented = null;
+      c.addEventListener('webglcontextlost', (e) => (prevented = e.defaultPrevented), { once: true });
+      const lost = eventOf(c, 'webglcontextlost');
+      c.getContext('webgl2').getExtension('WEBGL_lose_context').loseContext();
+      await lost;
+      let calls = 0;
+      const after = await settle(createRenderer(c, { ...opts, onContextRestored: () => calls++ }));
+      // No restoreContext: Chrome refuses it for a loss nobody cancelled.
+      d.e = { prevented, create: after.ok ? 'created' : after.message, listeners: await listeners(c), calls };
+    }
+  } finally {
+    st.install = installer;
+  }
+  log(
+    "RF a frame's copy of web3d took a context from this document's canvas, then the frame went: with this window's copy loaded the loss is cancelled and recovered (a); without it, a create here puts the listeners back (b), one made while the frame is there moves them (c), and a navigated frame counts as gone (d), each cancelling the next loss and calling its hooks once, with one listener of each kind; a loss before any such create is not cancelled, and the create says why (e); a frame's renderer left live holds the canvas until this window disposes it (f)",
+    isGreen(d.aTheirs) && d.aPrevented === true && d.aRestored === 'webglcontextrestored' && recovered(d.a) &&
+      isGreen(d.bTheirs) && recovered(d.b) &&
+      d.c.prevented === true && d.c.restored === 'webglcontextrestored' && d.c.calls.lost === 1 && d.c.calls.restored === 1 && one(d.c.listeners) &&
+      recovered(d.d) &&
+      d.e.prevented === false && /after the window whose copy of web3d watched this canvas went away/.test(d.e.create) && one(d.e.listeners) && d.e.calls === 0 &&
+      /already has a live renderer/.test(d.fRefused) && !d.fDispose.threw && recovered(d.f),
+    d,
+  );
+}
+
+/**
+ * NC: canvases with and without a context as texture sources (the ninth critic's N11), as
+ * documented: one with no context is uploaded and has a '2d' context for good afterwards; one with a
+ * context, 2d or WebGL, is unchanged; a 'bitmaprenderer' one is refused and stays one.
+ */
+async function contextlessCanvases() {
+  const host = canvasFor('nc-host');
+  const r = await createRenderer(host, { width: 16, height: 16, antialias: false });
+  const d = {};
+  const el = document.createElement('canvas');
+  el.width = 4;
+  el.height = 4;
+  d.el = attempt(() => r.createTexture(el)).threw ? 'refused' : 'uploaded';
+  d.elAfter = {
+    webgl2: el.getContext('webgl2'),
+    bitmaprenderer: el.getContext('bitmaprenderer'),
+    transfer: attempt(() => el.transferControlToOffscreen()).threw,
+    attributes: el.getContext('2d', { alpha: false, willReadFrequently: true })?.getContextAttributes(),
+  };
+  d.elAfter.webgl2 = d.elAfter.webgl2 === null ? null : 'a context';
+  d.elAfter.bitmaprenderer = d.elAfter.bitmaprenderer === null ? null : 'a context';
+  d.elRenderer = (await settle(createRenderer(el, { width: 4, height: 4, antialias: false }))).message ?? 'created';
+  const off = new OffscreenCanvas(4, 4);
+  d.off = attempt(() => r.createTexture(off)).threw ? 'refused' : 'uploaded';
+  d.offWebgl2After = off.getContext('webgl2') === null ? null : 'a context';
+  // A 2d canvas the page drew on, with its own settings: unchanged, and its pixels are the texture's.
+  const two = document.createElement('canvas');
+  two.width = 2;
+  two.height = 2;
+  const g = two.getContext('2d', { alpha: false, willReadFrequently: true });
+  g.fillStyle = '#00ff00';
+  g.fillRect(0, 0, 2, 2);
+  const t = attempt(() => r.createTexture(two, { mipmaps: false }));
+  d.two = { texture: t.threw ? t.message : 'uploaded', same: two.getContext('2d') === g, attributes: g.getContextAttributes() };
+  // A WebGL 2 canvas: unchanged.
+  const glc = document.createElement('canvas');
+  const g2 = glc.getContext('webgl2');
+  d.webgl = { texture: attempt(() => r.createTexture(glc)).threw ? 'refused' : 'uploaded', same: glc.getContext('webgl2') === g2, no2d: glc.getContext('2d') === null };
+  release(g2);
+  // A bitmaprenderer canvas: refused, and still one.
+  const bmp = document.createElement('canvas');
+  bmp.width = 4;
+  bmp.height = 4;
+  const bctx = bmp.getContext('bitmaprenderer');
+  bctx.transferFromImageBitmap(await bitmap4(0, 255, 0));
+  const refused = attempt(() => r.createTexture(bmp));
+  d.bitmaprenderer = { refused: refused.threw && /bitmaprenderer/.test(refused.message), still: bmp.getContext('bitmaprenderer') === bctx };
+  if (!t.threw) {
+    flat(r);
+    r.createObject(r.createMesh(quad(-1, -1, 1, 1, -5)), r.createMaterial({ texture: t.value }));
+    r.frame();
+    d.two.pixel = reader(r)(0, 0);
+  }
+  d.glError = r.gl.getError();
+  r.dispose();
+  release(r.gl);
+  log(
+    "NC as documented: a canvas with no context uploads and then has a '2d' context for good (no webgl2 or bitmaprenderer context, no transfer, later 2d options ignored), an OffscreenCanvas too; a canvas with its own 2d or WebGL context is unchanged and uploads its pixels; a bitmaprenderer canvas is refused and stays one",
+    d.el === 'uploaded' && d.elAfter.webgl2 === null && d.elAfter.bitmaprenderer === null && d.elAfter.transfer && d.elAfter.attributes?.alpha === true &&
+      d.elAfter.attributes?.willReadFrequently === false && /another kind of context/.test(d.elRenderer) && d.off === 'uploaded' && d.offWebgl2After === null &&
+      d.two.texture === 'uploaded' && d.two.same && d.two.attributes.alpha === false && d.two.attributes.willReadFrequently === true && isGreen(d.two.pixel) &&
+      d.webgl.texture === 'uploaded' && d.webgl.same && d.webgl.no2d && d.bitmaprenderer.refused && d.bitmaprenderer.still && d.glError === 0,
+    d,
+  );
+}
+
+/**
+ * MS: what two refusals say (the ninth critic's notes N21 and N7b'). A detached OffscreenCanvas is
+ * named as detached, a placeholder canvas as transferred. A context lost before web3d first used its
+ * canvas: the create says the restore comes if the lost event is cancelled, which web3d does if the
+ * event is still to come; lost in the same task as the create, it is, and the hook comes once; lost
+ * with its event dispatched and not cancelled, no hook comes.
+ */
+async function refusalMessages() {
+  const opts = { width: 16, height: 16, antialias: false };
+  const d = {};
+  const r = await createRenderer(canvasFor('ms-host'), opts);
+  const placeholder = document.createElement('canvas');
+  placeholder.transferControlToOffscreen();
+  d.placeholder = attempt(() => r.createTexture(placeholder)).message;
+  const sent = new OffscreenCanvas(4, 4);
+  structuredClone(sent, { transfer: [sent] });
+  d.detached = attempt(() => r.createTexture(sent)).message;
+  r.dispose();
+  release(r.gl);
+  {
+    const c = canvasFor('ms-pending');
+    const gl = c.getContext('webgl2', { antialias: false });
+    const lc = gl.getExtension('WEBGL_lose_context');
+    let calls = 0;
+    lc.loseContext(); // its event is dispatched in a later task
+    d.pending = (await settle(createRenderer(c, { ...opts, onContextRestored: () => calls++ }))).message;
+    await timeout(30);
+    const restored = eventOf(c, 'webglcontextrestored');
+    lc.restoreContext();
+    d.pendingRestored = await Promise.race([restored, timeout(2000)]);
+    await timeout(20);
+    d.pendingCalls = calls;
+    release(gl);
+  }
+  {
+    const c = canvasFor('ms-dispatched');
+    const gl = c.getContext('webgl2', { antialias: false });
+    const lost = eventOf(c, 'webglcontextlost');
+    gl.getExtension('WEBGL_lose_context').loseContext();
+    await lost;
+    let calls = 0;
+    d.dispatched = (await settle(createRenderer(c, { ...opts, onContextRestored: () => calls++ }))).message;
+    await timeout(50);
+    d.dispatchedCalls = calls; // no restoreContext: Chrome refuses it for a loss nobody cancelled
+  }
+  const before = (m) => /lost before web3d first used this canvas/.test(m ?? '') && /which web3d now does if that event is still to come/.test(m) && !/only if the page cancelled/.test(m);
+  log(
+    "MS a detached OffscreenCanvas is refused as detached, a placeholder canvas as transferred (N21); a loss before web3d's first use: the message says web3d cancels a lost event still to come, as it does when the loss is in the create's own task (the hook comes once), and none comes for one already dispatched (N7b')",
+    /control was transferred to an OffscreenCanvas/.test(d.placeholder) && /detached/.test(d.detached) && !/transferred to an OffscreenCanvas/.test(d.detached) &&
+      before(d.pending) && d.pendingRestored === 'webglcontextrestored' && d.pendingCalls === 1 && before(d.dispatched) && d.dispatchedCalls === 0,
+    d,
+  );
+}
+
 async function main() {
   const r = await createRenderer(document.getElementById('main'), { width: S, height: S, antialias: false });
   out.info = r.info;
@@ -1334,6 +1969,20 @@ async function main() {
   await uploadsAndBytes();
   await lossController();
   await largestSerial();
+  // Each of these logs its own failure if it throws, so the rest still run.
+  for (const [id, probe] of [
+    ['PS', pageState],
+    ['LR', listenerOrder],
+    ['RF', removedFrames],
+    ['NC', contextlessCanvases],
+    ['MS', refusalMessages],
+  ]) {
+    try {
+      await probe();
+    } catch (e) {
+      log(`${id} ran to its end`, false, String(e?.stack ?? e));
+    }
+  }
   out.passed = out.tests.filter((t) => t.pass).length;
   out.failed = out.tests.filter((t) => !t.pass).map((t) => t.name);
 }

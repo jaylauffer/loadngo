@@ -8,7 +8,9 @@
 // its pixels are right (the exact clear colour above the horizon, a lit object at the centre), and
 // it reports no GL error and no page error; and unless every probe in demo/probe.html passes
 // (pixel-exact rendering, lighting against three.js r180, refusals, use after dispose, context loss
-// and recovery) with no WebGL INVALID_OPERATION warning.
+// and recovery, page-made contexts and frames) with no WebGL INVALID_OPERATION warning. The probe
+// page gets window.__listeners(id), which counts a canvas's event listeners over the DevTools
+// protocol.
 //
 // A last run samples JS heap allocation while frames are drawn: once in the first seconds (V8
 // still interpreting the JS and using its generic wasm call wrappers, which box fractional numbers)
@@ -218,6 +220,19 @@ try {
     const messages = [];
     page.on('console', (m) => messages.push(`${m.type()}: ${m.text()}`));
     page.on('pageerror', (e) => messages.push(`pageerror: ${e.message}`));
+    // window.__listeners(id): a canvas's event listeners counted by type, through the DevTools
+    // protocol (DOMDebugger.getEventListeners), so probe RF can see that a canvas keeps exactly one
+    // listener of each kind after web3d puts them back.
+    const cdp = await context.newCDPSession(page);
+    await page.exposeFunction('__listeners', async (id) => {
+      const { result } = await cdp.send('Runtime.evaluate', { expression: `document.getElementById(${JSON.stringify(String(id))})` });
+      if (!result.objectId) return { error: `no element ${id}` };
+      const { listeners } = await cdp.send('DOMDebugger.getEventListeners', { objectId: result.objectId });
+      await cdp.send('Runtime.releaseObject', { objectId: result.objectId });
+      const counts = {};
+      for (const l of listeners) counts[l.type] = (counts[l.type] ?? 0) + 1;
+      return counts;
+    });
     await page.goto(`http://127.0.0.1:${port}/demo/probe.html`);
     const probe = await page.evaluate(() => window.__probe.done);
     if (SOFTWARE.test(probe.info?.renderer ?? '')) throw new Error(`WebGL is software-rendered here (${probe.info.renderer})`);

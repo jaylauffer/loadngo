@@ -71,6 +71,21 @@ mod import {
         pub fn front_face(mode: u32);
         pub fn depth_mask(write: u32);
         pub fn blend_func_separate(src_rgb: u32, dst_rgb: u32, src_alpha: u32, dst_alpha: u32);
+        pub fn color_mask(r: u32, g: u32, b: u32, a: u32);
+        pub fn depth_func(func: u32);
+        pub fn depth_range(near: f32, far: f32);
+        pub fn clear_depth(depth: f32);
+        pub fn cull_face(mode: u32);
+        pub fn blend_equation(mode: u32);
+        pub fn hint(target: u32, mode: u32);
+        pub fn pixel_store(pname: u32, value: i32);
+        pub fn use_default_framebuffer();
+        pub fn unbind_buffer(target: u32);
+        pub fn unbind_sampler(unit: u32);
+        pub fn vertex_attrib_default(location: u32, x: f32, y: f32, z: f32, w: f32);
+        pub fn end_transform_feedback();
+        pub fn end_query_on(target: u32);
+        pub fn reset_extension_state();
         pub fn viewport(x: i32, y: i32, width: u32, height: u32);
         pub fn clear_color(r: f32, g: f32, b: f32, a: f32);
         pub fn clear(mask: u32);
@@ -210,6 +225,51 @@ impl Gl for WebGl {
     }
     fn blend_func_separate(&mut self, src_rgb: u32, dst_rgb: u32, src_alpha: u32, dst_alpha: u32) {
         unsafe { import::blend_func_separate(src_rgb, dst_rgb, src_alpha, dst_alpha) }
+    }
+    fn color_mask(&mut self, r: bool, g: bool, b: bool, a: bool) {
+        unsafe { import::color_mask(u32::from(r), u32::from(g), u32::from(b), u32::from(a)) }
+    }
+    fn depth_func(&mut self, func: u32) {
+        unsafe { import::depth_func(func) }
+    }
+    fn depth_range(&mut self, near: f32, far: f32) {
+        unsafe { import::depth_range(near, far) }
+    }
+    fn clear_depth(&mut self, depth: f32) {
+        unsafe { import::clear_depth(depth) }
+    }
+    fn cull_face(&mut self, mode: u32) {
+        unsafe { import::cull_face(mode) }
+    }
+    fn blend_equation(&mut self, mode: u32) {
+        unsafe { import::blend_equation(mode) }
+    }
+    fn hint(&mut self, target: u32, mode: u32) {
+        unsafe { import::hint(target, mode) }
+    }
+    fn pixel_store(&mut self, pname: u32, value: i32) {
+        unsafe { import::pixel_store(pname, value) }
+    }
+    fn use_default_framebuffer(&mut self) {
+        unsafe { import::use_default_framebuffer() }
+    }
+    fn unbind_buffer(&mut self, target: u32) {
+        unsafe { import::unbind_buffer(target) }
+    }
+    fn unbind_sampler(&mut self, unit: u32) {
+        unsafe { import::unbind_sampler(unit) }
+    }
+    fn vertex_attrib_default(&mut self, location: u32, v: [f32; 4]) {
+        unsafe { import::vertex_attrib_default(location, v[0], v[1], v[2], v[3]) }
+    }
+    fn end_transform_feedback(&mut self) {
+        unsafe { import::end_transform_feedback() }
+    }
+    fn end_query_on(&mut self, target: u32) {
+        unsafe { import::end_query_on(target) }
+    }
+    fn reset_extension_state(&mut self) {
+        unsafe { import::reset_extension_state() }
     }
     fn viewport(&mut self, x: i32, y: i32, width: u32, height: u32) {
         unsafe { import::viewport(x, y, width, height) }

@@ -9,7 +9,9 @@
 <body>
   <!-- Pixel-exact rendering checks, the lighting against three.js r180, refusals, use after
        dispose, context loss, and the boundary: lying typed arrays, handle kinds, the compile cache,
-       failed creates and re-entrancy. Driven by check.mjs; results in window.__probe.done. -->
+       failed creates and re-entrancy; page-made contexts left with the page's state, listener
+       order, removed and navigated frames, and canvases without a context (these make canvases of
+       their own). Driven by check.mjs; results in window.__probe.done. -->
   <canvas id="main"></canvas><canvas id="disposed"></canvas><canvas id="loss"></canvas><canvas id="shared"></canvas>
   <canvas id="typed"></canvas><canvas id="kinds"></canvas><canvas id="kinds2"></canvas><canvas id="cache1"></canvas>
   <canvas id="cache2"></canvas><canvas id="failed"></canvas><canvas id="reenter"></canvas><canvas id="serials"></canvas>

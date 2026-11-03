@@ -47,9 +47,13 @@ export interface RendererOptions {
   onContextLost?: () => void;
   /**
    * Called once when the context is restored after a loss of this renderer's: whether it was still
-   * live, disposed while lost, or a create that failed because of the loss. Create the next renderer
-   * then. web3d keeps one loss controller a canvas, which cancels every lost event so the context can
-   * be restored, and runs each hook once in its own try.
+   * live (disposed or not, at any time after the loss, even in a restored listener of the page's
+   * that runs before web3d's), disposed while lost, or a create that failed because of the loss.
+   * Create the next renderer then. web3d keeps one loss controller a canvas, which cancels every
+   * lost event so the context can be restored, and runs each hook once in its own try. Its
+   * listeners are the top window's copy of web3d's when one has loaded, else the latest create's
+   * copy's; a create puts them back if the frame whose copy made them is gone. A loss while the only
+   * listeners belong to a removed frame, before the next create, cannot be restored.
    */
   onContextRestored?: () => void;
 }
@@ -86,6 +90,13 @@ export interface MeshData {
  * rotation). An <img> or <video> is refused (its reported size can differ from the pixels WebGL
  * uploads): decode it first with createImageBitmap. A canvas with a 'bitmaprenderer' context is
  * refused too (its bitmap need not be its size): pass the ImageBitmap itself.
+ *
+ * A canvas must be drawn on (have its context) before it is passed. Telling a 'bitmaprenderer'
+ * canvas apart asks the canvas for a '2d' context, which changes nothing on a canvas that has a
+ * context; one with none gets a blank '2d' context for good, so it can never have a WebGL, WebGPU
+ * or 'bitmaprenderer' context, an element can no longer be transferred to an OffscreenCanvas, and a
+ * later getContext('2d', options) ignores the options. No browser call tells whether a canvas has a
+ * context without making one.
  */
 export type TextureSource = ImageBitmap | HTMLCanvasElement | OffscreenCanvas | ImageData | VideoFrame;
 
@@ -112,7 +123,9 @@ export interface MaterialOptions {
 export function compile(source?: RendererOptions['wasm']): Promise<WebAssembly.Module>;
 /**
  * One renderer per canvas while it is live. A canvas keeps its first WebGL context and that
- * context's antialias setting; a later renderer on it must ask for the same.
+ * context's antialias setting; a later renderer on it must ask for the same, and the context needs a
+ * depth buffer. The renderer puts WebGL 2's default state back on the context, so what a page left
+ * bound or switched on does not reach it, and owns that state from then on.
  */
 export function createRenderer(canvas: HTMLCanvasElement | OffscreenCanvas, options?: RendererOptions): Promise<Renderer>;
 
@@ -127,6 +140,7 @@ export class Renderer {
   readonly info: RendererInfo;
   /** True once the context has been lost; it stays true after a restore (create a new renderer). */
   readonly lost: boolean;
+  /** For debugging (getError, readPixels) only: the renderer owns the context's state. */
   readonly gl: WebGL2RenderingContext;
   /** CPU milliseconds of the last frame(), or null when CPU timing is off. */
   readonly cpuMs: number | null;
