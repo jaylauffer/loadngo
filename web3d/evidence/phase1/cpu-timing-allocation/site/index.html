@@ -1,0 +1,19 @@
+<!doctype html><html><head><meta charset="utf-8"><!-- An application's per-frame path (setCamera, setTransform, frame, readStats) with plain-Array matrices; ?bare: nothing else per frame; ?cpu: CPU timing on. Needs --js-flags=--allow-natives-syntax for window.__status. --><link rel="icon" href="data:,"></head><body><canvas id="c"></canvas>
+<script type="module">
+import { Renderer, createRenderer } from '/web3d/pkg/web3d.js';
+const r = await createRenderer(document.getElementById('c'), { width: 512, height: 288, cpuTiming: location.search.includes('cpu') });
+const quad = { positions: new Float32Array([-1,-1,0, 1,-1,0, 1,1,0, -1,1,0]), normals: new Float32Array([0,0,1, 0,0,1, 0,0,1, 0,0,1]), indices: new Uint32Array([0,1,2, 0,2,3]) };
+const mesh = r.createMesh(quad); const mat = r.createMaterial({});
+const objs = []; for (let i = 0; i < 60; i++) objs.push(r.createObject(mesh, mat, [1,0,0,0, 0,1,0,0, 0,0,1,0, (i % 10) - 5, Math.floor(i / 10) - 3, -10, 1]));
+const view = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]; const proj = [1.2,0,0,0, 0,2.1,0,0, 0,0,-1.002,-1, 0,0,-0.2002,0];
+const model = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,-10,1]; const stats = new Float64Array(8); const clock = new Float64Array(1);
+let frames = 0; const t0 = performance.now();
+const bare = location.search.includes('bare');
+const tick = bare
+  ? () => { requestAnimationFrame(tick); r.setCamera(view, proj); r.setTransform(objs[0], model); r.frame(); r.readStats(stats); frames++; }
+  : (now) => { requestAnimationFrame(tick); clock[0] = (now - t0) / 1000; view[12] = Math.sin(clock[0]) * 0.5; model[12] = Math.cos(clock[0]) * 2;
+  r.setCamera(view, proj); r.setTransform(objs[0], model); r.frame(); r.readStats(stats); frames++; };
+requestAnimationFrame(tick);
+const P = Renderer.prototype;
+window.__status = () => ({ frames, frame: %GetOptimizationStatus(P.frame), setCamera: %GetOptimizationStatus(P.setCamera), setTransform: %GetOptimizationStatus(P.setTransform), readStats: %GetOptimizationStatus(P.readStats), putMatrix: %GetOptimizationStatus(P._putMatrix), tick: %GetOptimizationStatus(tick) });
+</script></body></html>

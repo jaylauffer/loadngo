@@ -1,0 +1,263 @@
+{
+  "machine": "dolores, Raspberry Pi 5 4 GB, Debian 13, Chromium 156, desktop session",
+  "demo": "http://localhost:5398/demo/index.html",
+  "runs": [
+    {
+      "scale": 1,
+      "aa": 0,
+      "drawnPixels": 1049088,
+      "seconds": 10,
+      "frames": 600,
+      "fps": 60,
+      "intervalMs": {
+        "n": 600,
+        "mean": 16.667,
+        "p50": 16.7,
+        "p95": 17.3,
+        "max": 17.4
+      },
+      "cpuMs": {
+        "n": 600,
+        "mean": 0.25,
+        "p50": 0.2,
+        "p95": 0.3,
+        "max": 1.1
+      },
+      "gpuMs": {
+        "n": 600,
+        "mean": 6.894,
+        "p50": 7.069,
+        "p95": 8.95,
+        "max": 9.904
+      },
+      "draws": 60,
+      "triangles": 324932,
+      "culled": 0,
+      "programBinds": 3,
+      "materialBinds": 59,
+      "canvas": [
+        1366,
+        768
+      ],
+      "antialias": false,
+      "samples": 0,
+      "renderer": "ANGLE (Broadcom, V3D 7.1.10.2, OpenGL ES 3.1)",
+      "timerQuery": true
+    },
+    {
+      "scale": 0.75,
+      "aa": 0,
+      "drawnPixels": 589824,
+      "seconds": 10.017,
+      "frames": 601,
+      "fps": 60,
+      "intervalMs": {
+        "n": 601,
+        "mean": 16.667,
+        "p50": 16.7,
+        "p95": 17.3,
+        "max": 17.5
+      },
+      "cpuMs": {
+        "n": 601,
+        "mean": 0.243,
+        "p50": 0.2,
+        "p95": 0.3,
+        "max": 0.4
+      },
+      "gpuMs": {
+        "n": 602,
+        "mean": 5.281,
+        "p50": 6.13,
+        "p95": 6.546,
+        "max": 7.436
+      },
+      "draws": 60,
+      "triangles": 324932,
+      "culled": 0,
+      "programBinds": 3,
+      "materialBinds": 60,
+      "canvas": [
+        1024,
+        576
+      ],
+      "antialias": false,
+      "samples": 0,
+      "renderer": "ANGLE (Broadcom, V3D 7.1.10.2, OpenGL ES 3.1)",
+      "timerQuery": true
+    },
+    {
+      "scale": 0.5,
+      "aa": 0,
+      "drawnPixels": 262272,
+      "seconds": 10,
+      "frames": 600,
+      "fps": 60,
+      "intervalMs": {
+        "n": 600,
+        "mean": 16.667,
+        "p50": 16.7,
+        "p95": 17.3,
+        "max": 17.4
+      },
+      "cpuMs": {
+        "n": 600,
+        "mean": 0.245,
+        "p50": 0.2,
+        "p95": 0.3,
+        "max": 0.4
+      },
+      "gpuMs": {
+        "n": 601,
+        "mean": 3.728,
+        "p50": 4.368,
+        "p95": 4.831,
+        "max": 5.58
+      },
+      "draws": 60,
+      "triangles": 324932,
+      "culled": 0,
+      "programBinds": 3,
+      "materialBinds": 59,
+      "canvas": [
+        683,
+        384
+      ],
+      "antialias": false,
+      "samples": 0,
+      "renderer": "ANGLE (Broadcom, V3D 7.1.10.2, OpenGL ES 3.1)",
+      "timerQuery": true
+    },
+    {
+      "scale": 0.25,
+      "aa": 0,
+      "drawnPixels": 65472,
+      "seconds": 10.016,
+      "frames": 601,
+      "fps": 60,
+      "intervalMs": {
+        "n": 601,
+        "mean": 16.665,
+        "p50": 16.7,
+        "p95": 17.3,
+        "max": 17.5
+      },
+      "cpuMs": {
+        "n": 601,
+        "mean": 0.253,
+        "p50": 0.2,
+        "p95": 0.3,
+        "max": 1
+      },
+      "gpuMs": {
+        "n": 602,
+        "mean": 2.597,
+        "p50": 3.029,
+        "p95": 3.85,
+        "max": 4.347
+      },
+      "draws": 60,
+      "triangles": 324932,
+      "culled": 0,
+      "programBinds": 3,
+      "materialBinds": 60,
+      "canvas": [
+        341,
+        192
+      ],
+      "antialias": false,
+      "samples": 0,
+      "renderer": "ANGLE (Broadcom, V3D 7.1.10.2, OpenGL ES 3.1)",
+      "timerQuery": true
+    },
+    {
+      "scale": 0.1,
+      "aa": 0,
+      "drawnPixels": 10336,
+      "seconds": 10.017,
+      "frames": 601,
+      "fps": 60,
+      "intervalMs": {
+        "n": 601,
+        "mean": 16.667,
+        "p50": 16.7,
+        "p95": 17.3,
+        "max": 17.5
+      },
+      "cpuMs": {
+        "n": 601,
+        "mean": 0.248,
+        "p50": 0.2,
+        "p95": 0.3,
+        "max": 2.3
+      },
+      "gpuMs": {
+        "n": 602,
+        "mean": 2.105,
+        "p50": 2.459,
+        "p95": 3.275,
+        "max": 4.35
+      },
+      "draws": 60,
+      "triangles": 324932,
+      "culled": 0,
+      "programBinds": 3,
+      "materialBinds": 60,
+      "canvas": [
+        136,
+        76
+      ],
+      "antialias": false,
+      "samples": 0,
+      "renderer": "ANGLE (Broadcom, V3D 7.1.10.2, OpenGL ES 3.1)",
+      "timerQuery": true
+    },
+    {
+      "scale": 0.75,
+      "aa": 1,
+      "drawnPixels": 589824,
+      "seconds": 10,
+      "frames": 595,
+      "fps": 59.5,
+      "intervalMs": {
+        "n": 595,
+        "mean": 16.807,
+        "p50": 16.7,
+        "p95": 17.4,
+        "max": 34.1
+      },
+      "cpuMs": {
+        "n": 595,
+        "mean": 0.251,
+        "p50": 0.3,
+        "p95": 0.3,
+        "max": 0.4
+      },
+      "gpuMs": {
+        "n": 592,
+        "mean": 9.469,
+        "p50": 8.453,
+        "p95": 12.953,
+        "max": 16.202
+      },
+      "draws": 60,
+      "triangles": 324932,
+      "culled": 0,
+      "programBinds": 3,
+      "materialBinds": 59,
+      "canvas": [
+        1024,
+        576
+      ],
+      "antialias": true,
+      "samples": 4,
+      "renderer": "ANGLE (Broadcom, V3D 7.1.10.2, OpenGL ES 3.1)",
+      "timerQuery": true
+    }
+  ],
+  "fit": {
+    "fixedMs": 2.32,
+    "msPer1000Pixels": 0.0046,
+    "r2": 0.985
+  }
+}

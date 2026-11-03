@@ -1,0 +1,2 @@
+?bare=1&cpu=1 bytes/frame by function: {"/:13 ":20.8,"/:18 window.__status":1.1} status {"frames":3001,"frame":25,"setCamera":25,"setTransform":25,"readStats":25,"putMatrix":25,"tick":25}
+browser and server stopped

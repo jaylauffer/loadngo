@@ -1,0 +1,48 @@
+# Why loadngo-web3d does not use wasm-bindgen: the workspace cannot resolve it offline
+# 2026-11-02T23:20:27Z, loadngo 4f4d9f6c (dev), rustc 1.99.0, wasm-bindgen CLI 0.2.130
+
+## 1. The workspace already locks wasm-bindgen 0.2.106, through wasm32-only dependencies of winit, cpal and chrono:
+$ cargo tree --offline --locked -i wasm-bindgen --target all -e normal,build --depth 1
+wasm-bindgen v0.2.106
+├── chrono v0.4.42
+├── cpal v0.15.3
+├── iana-time-zone v0.1.64
+├── js-sys v0.3.83
+├── softbuffer v0.4.8
+├── wasm-bindgen-futures v0.4.56
+├── web-sys v0.3.83
+├── web-time v1.1.0
+└── winit v0.30.13
+
+## 2. js-sys pins wasm-bindgen exactly, so the workspace can hold only one 0.2.x:
+js-sys 0.3.83: version = "=0.2.106"
+js-sys 0.3.106: version = "=0.2.129"
+
+## 3. The offline index's newest web-sys and wasm-bindgen-futures stop at the 0.2.129 generation:
+js-sys: newest "vers":"0.3.107"
+web-sys: newest "vers":"0.3.106"
+wasm-bindgen-futures: newest "vers":"0.4.79"
+
+## 4. Adding wasm-bindgen = "=0.2.130" (the CLI's version) to web3d, offline:
+$ cargo metadata --offline --format-version 1
+exit 101
+error: failed to select a version for `wasm-bindgen`.
+    ... required by package `js-sys v0.3.77`
+    ... which satisfies dependency `js-sys = "^0"` of package `pdfium-render v0.9.4`
+    ... which satisfies dependency `pdfium-render = "^0.9.4"` of package `loadngo-host-desktop v0.1.0 (/Users/jay/pudding/loadngo/host-desktop)`
+    ... which satisfies path dependency `loadngo-host-desktop` (locked to 0.1.0) of package `bitmap-editor v0.1.0 (/Users/jay/pudding/loadngo/bitmap-editor)`
+versions that meet the requirements `=0.2.100` are: 0.2.100
+
+all possible versions conflict with previously selected packages
+
+  previously selected package `wasm-bindgen v0.2.130`
+    ... which satisfies dependency `wasm-bindgen = "=0.2.130"` of package `loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)`
+
+failed to select a version for `wasm-bindgen` which could resolve this conflict
+
+## 5. Pinning 0.2.106 instead (already in the lock) fails at the bindings step: the schemas differ.
+wasm-bindgen-shared 0.2.106: pub const SCHEMA_VERSION: &str = "0.2.106";
+wasm-bindgen-shared 0.2.130: pub const SCHEMA_VERSION: &str = "0.2.130";
+
+## Outcome: no dependency at all. js/gl.js is imported over the raw wasm C ABI (module web3d_gl),
+## so the crate stays a workspace member, CI checks it on every platform, and build.sh needs no CLI.

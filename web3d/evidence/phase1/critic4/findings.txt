@@ -1,0 +1,67 @@
+Fourth critic, web3d phase 1, 2026-11-03. Generic findings only; anything about the application the
+renderer is built for is kept in that application's private repository.
+
+Files here:
+- gates.txt: cargo fmt --check (workspace), clippy host and wasm32 (-D warnings), 70 tests; then clippy
+  and release tests again from a fresh target directory. All pass.
+- build.txt: build.sh twice (workspace target, fresh target); pkg byte-identical to the pkg found.
+- three-reference-check.txt: tools/three-reference.mjs --check against three 0.180.0: passes.
+- check-rerun.log, check-rerun/: demo/check.mjs on port 5483: exit 0, 50/50 probes, steady allocation
+  0.09 sampled bytes a frame. GPU times are noisy: other agents were using the GPU.
+- run3-rerun.txt, run3-rerun.json: the third critic's probes (critic3/run3.mjs): 10/10 pass, H and S
+  included.
+- run4.mjs, probe-site/, run4.txt, run4.json: this critic's probes (Chrome 156, ANGLE Metal, M4 Pro).
+
+Probe results (run4.json):
+- X1 FAIL. Handles of different kinds share one numbering (each table starts at 1). With meshes 1, 2
+  and materials 1, 2: createObject(material 2, mesh 1), arguments swapped, is accepted and draws mesh 2
+  in material 1; destroyMaterial(mesh handle 2) destroys material 2; setVisible(mesh handle 1) hides
+  object 1. docs/WEB3D.md:51 ("a stale or forged handle is refused, never aliased") and src/slots.rs
+  1-3 are false for a handle of the wrong kind.
+- X2 FAIL. A handle from another renderer is accepted (both renderers' first object is 1).
+- X3 FAIL. A Proxy over a Float32Array passes `instanceof Float32Array`. web3d.js `stage()` reads
+  `array.length` four times; a Proxy that answers 9, then 4,105, 4,105, 9 makes the wrapper allocate
+  36 bytes and then write 4,096 floats past them into the module's heap (4,089 marker floats found in
+  wasm memory afterwards). createMesh succeeds, the renderer keeps drawing and later creates succeed:
+  silent heap corruption.
+- X3b FAIL. A Float32Array subclass whose `length` getter answers 9, 9, then 3,009: wasm is told 3,009
+  floats while 9 were staged, and accepts index 1,000. Rust builds a slice past its allocation.
+- X4 FAIL. createRenderer with width 1.5 fails after the WebGL context and the shim's listeners exist;
+  nothing removes them. On the next renderer's context loss the failed renderer's onContextLost fires
+  too. The failed create also fixed the canvas's context attributes: the next renderer asked for
+  antialias false and got true (4 samples).
+- X5 FAIL. web3d.js `compile()` caches its first promise even when it rejects. One failed wasm fetch
+  (404 here; a dropped connection does the same) makes every later createRenderer in that page fail
+  with the same error, including those with the default source.
+- X6 pass. A renderer created on a canvas whose previous renderer left blending on, depth writes off,
+  culling off and a CW front face draws the same pixels as on a fresh canvas.
+- X7 FAIL (low impact). setKeyLight / setClearColor with an argument whose valueOf disposes the
+  renderer: the export runs on the freed renderer pointer and returns success.
+- X8 pass. -0, Number objects, BigInt, true, [h], {valueOf}, numeric strings, h + 2^-30, 2^30, 2^31 + h
+  and Infinity are all refused by the wrapper.
+
+Allocation gate (run4.json, demo with cputime=1, a known boxed-number allocation each frame):
+- HeapProfiler.startSampling with an unknown parameter is accepted silently; only a wrong type for a
+  known flag is refused ("Invalid parameters").
+- With the two "objects already collected" flags: 178.9, then 21.3 sampled bytes a frame (601 frames
+  each). Without them: 0.
+- So on a Chrome that lacks the flags the gate reads 0 and passes vacuously. check.mjs:230-232 ("No
+  fallback ... A Chrome without these flags fails the check") is not true, and docs/WEB3D.md:189-191
+  overstates the protection. Fix: a positive control, for example a cputime=1 window that must read at
+  least 10 sampled bytes a frame, or the check fails as blind.
+
+Other generic findings:
+- docs/WEB3D.md:6-7 says the target room alone is about 60 draws and 325k triangles. demo/demo.js:1-2
+  calls the same load "a small furnished room with a character in it". The figure is a room plus a
+  character, and the character carries most of the triangles. The line is false and should not carry
+  application-derived counts at all.
+- docs/WEB3D.md:239-240, "within 2/255 on 7 cases" of a real three.js WebGLRenderer: holds only after
+  web3d's environment stand-in is added to three's pixel (critic2-rerun/report-probe.json: the
+  half-metal case is web3d 72,107,83 against three 64,99,77).
+- js/web3d.js:483 says the CPU timer costs "about 21 bytes a frame", :495 says "24 bytes a frame"; the
+  measurement is 20.8 (the third critic's nit, still open).
+- docs/WEB3D.md:69 "Strings are decoded only while programs are built": error messages and logs are
+  decoded too (web3d.js _errorText, gl.js log).
+- The built wasm embeds the builder's home path (/Users/<user>/.rustup/... in panic locations), so pkg is
+  reproducible only for the same user and toolchain path. --remap-path-prefix would fix it.
+- A string handle's error message prints it as a number ("7 is not a valid object handle"); quote it.

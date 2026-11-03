@@ -1,0 +1,2 @@
+?bare=1 bytes/frame by function: {"/:18 window.__status":1.4} status {"frames":3002,"frame":25,"setCamera":25,"setTransform":25,"readStats":25,"putMatrix":25,"tick":25}
+browser and server stopped

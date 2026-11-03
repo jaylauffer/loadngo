@@ -37,6 +37,7 @@ members = [
     "terminal",
     "game-menu",
     "bitmap-editor",
+    "web3d",
 ]
 default-members = [
     "task",

@@ -1,0 +1,59 @@
+serving /Users/jay/pudding/loadngo/web3d on http://127.0.0.1:5481/
+Chrome 156.0.8078.76 (headless, launched by this script)
+low-1024x576: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.877 p50 0.875 p95 0.902 ms (602 readings), CPU mean 0.118 p95 0.205 ms, 60 draws 324932 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,240,230
+full-1366x768: 1366x768 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.06 p50 1.06 p95 1.078 ms (602 readings), CPU mean 0.153 p95 0.24 ms, 60 draws 324932 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 240,238,228
+low-1024x576-no-msaa: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.603 p50 0.6 p95 0.626 ms (602 readings), CPU mean 0.115 p95 0.19 ms, 60 draws 324932 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 242,240,230
+probes: 48 passed, 0 failed; INVALID_OPERATION warnings: 0
+  pass  A output is sRGB-encoded (white under a uniform hemisphere)
+  pass  A2 the clear colour is linear and encoded
+  pass  B texture upright: top-left red, top-right green, bottom-left blue
+  pass  B the sRGB texture is decoded (128 is linear 0.216)
+  pass  C alpha mask: left discarded (red behind shows), right drawn (green)
+  pass  D blend over opaque, drawn last, blended in encoded space
+  pass  E depth: the near quad wins, the far one shows around it
+  pass  F a single-sided back face is culled; double-sided draws it, lit from the front
+  pass  G a mirrored single-sided quad is still drawn and lit
+  pass  H an object outside the view is culled
+  pass  N a 65,537-vertex mesh with u32 indices draws
+  pass  P a 65,535-vertex mesh draws its triangle on vertex 65,534
+  pass  P a 65,536-vertex mesh draws its triangle on vertex 65,535
+  pass  P a 65,537-vertex mesh draws its triangle on vertex 65,536
+  pass  R lighting matches three.js r180: lambert-60deg
+  pass  R lighting matches three.js r180: hemisphere-side
+  pass  R lighting matches three.js r180: glossy-highlight
+  pass  R lighting matches three.js r180: metal-key
+  pass  M a GPU timer reading is present
+  pass  I an index past the end is refused
+  pass  I positions not a multiple of 3 are refused
+  pass  I a texture over MAX_TEXTURE_SIZE is refused
+  pass  I destroying a texture in use is refused
+  pass  I destroying a mesh in use is refused
+  pass  I an unknown alpha mode is refused
+  pass  I a non-finite transform is refused
+  pass  I a stale mesh handle is refused
+  pass  I a NaN position is refused
+  pass  I Int16 (quantised) positions are refused
+  pass  I a plain Array of positions is refused
+  pass  I Uint8 normalised weights are dequantised and accepted
+  pass  I weights of 1.75 (7 a vertex) are refused
+  pass  I weights summing to 2 are refused
+  pass  I joint index 65535 is accepted until phase 3 has skeletons
+  pass  I morph deltas of the wrong length are refused
+  pass  I an unknown wrap mode is refused
+  pass  I a wrap mode named after Object.prototype ('toString') is refused
+  pass  I a NaN normal is refused
+  pass  I a drawing buffer of 0x80000001 pixels is refused
+  pass  I a fractional drawing-buffer size is refused
+  pass  I 257 morph targets are refused
+  pass  I after 1,100 create/destroy cycles the first handle is still refused
+  pass  I handles are not reissued
+  pass  Z no GL error on the main renderer
+  pass  J every call after dispose() throws "renderer disposed"; disposing twice is harmless
+  pass  K loss: frame() returns false and every create throws "context is lost", a new renderer too
+  pass  K restore: the old renderer stays finished; a new one draws
+  pass  K disposing the old renderer sends nothing into the restored context (getError stays 0)
+allocation, cold (first frames): 601 frames; page scripts 593.78 sampled bytes a frame; by file {"(native or internal)":78.6,"/demo/demo.js":328.4,"/pkg/web3d.js":1.5,"/pkg/loadngo_web3d.wasm":261.3,"/pkg/gl.js":2.5}
+allocation, steady (after 70 s of frames): 601 frames; page scripts 0.09 sampled bytes a frame; by file {"(native or internal)":28.7,"/demo/demo.js":0.1}
+browser and server stopped
+wrote /Users/jay/pudding/loadngo/web3d/evidence/phase1/critic3/check-rerun/rendered-check.json
+exit 0

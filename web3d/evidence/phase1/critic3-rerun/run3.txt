@@ -1,0 +1,12 @@
+pass  R0 raw WebGL2 control: u16 index 0xFFFF restarts (draws nothing); u32 65535 and u16 65534 draw
+pass  P 65,535 vertices: u16, draws
+pass  P 65,536 vertices: u32, draws
+pass  P 65,537 vertices: u32, draws
+pass  T texture cache: red stays red after another texture is created, after a failed upload, and after drawing green
+pass  V a mesh created between frames leaves the last vertex array alone
+pass  H (informational) a handle plus 2^32, plus 0.75, or as a string is refused, not aliased
+pass  C (informational) a NaN clear colour is refused like every other non-finite input
+pass  Z resize to 0x0 and back: no throw, viewport follows, corners drawn
+pass  S (informational) a second renderer on the same canvas is refused, or leaves the first drawing correctly
+renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); error none; messages 1
+browser and server stopped

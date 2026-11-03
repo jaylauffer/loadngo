@@ -1,0 +1,274 @@
+{
+  "tests": [
+    {
+      "name": "R0 raw WebGL2 control: u16 index 0xFFFF restarts (draws nothing); u32 65535 and u16 65534 draw",
+      "pass": true,
+      "detail": {
+        "results": {
+          "65535 u16 index 65534": [
+            255,
+            0,
+            0
+          ],
+          "65536 u16 index 65535": [
+            0,
+            0,
+            0
+          ],
+          "65536 u32 index 65535": [
+            255,
+            0,
+            0
+          ],
+          "65537 u32 index 65536": [
+            255,
+            0,
+            0
+          ]
+        },
+        "getError": 0
+      }
+    },
+    {
+      "name": "P 65,535 vertices: u16, draws",
+      "pass": true,
+      "detail": {
+        "pixel": [
+          255,
+          255,
+          255
+        ],
+        "draws": [
+          {
+            "count": 3,
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "P 65,536 vertices: u32, draws",
+      "pass": true,
+      "detail": {
+        "pixel": [
+          255,
+          255,
+          255
+        ],
+        "draws": [
+          {
+            "count": 3,
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "P 65,537 vertices: u32, draws",
+      "pass": true,
+      "detail": {
+        "pixel": [
+          255,
+          255,
+          255
+        ],
+        "draws": [
+          {
+            "count": 3,
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "T texture cache: red stays red after another texture is created, after a failed upload, and after drawing green",
+      "pass": true,
+      "detail": {
+        "p1": [
+          255,
+          55,
+          55
+        ],
+        "p2": [
+          255,
+          55,
+          55
+        ],
+        "failed": {
+          "threw": true,
+          "message": "web3d: texture is 0x0; this GPU allows 1 to 16384 pixels a side (resize it first, for example with createImageBitmap's resizeWidth)"
+        },
+        "p3": [
+          255,
+          55,
+          55
+        ],
+        "p4": [
+          55,
+          255,
+          55
+        ],
+        "p5": [
+          255,
+          55,
+          55
+        ],
+        "getError": 0
+      }
+    },
+    {
+      "name": "V a mesh created between frames leaves the last vertex array alone",
+      "pass": true,
+      "detail": {
+        "before": [
+          255,
+          255,
+          255
+        ],
+        "after": [
+          255,
+          255,
+          255
+        ],
+        "getError": 0
+      }
+    },
+    {
+      "name": "H (informational) a handle plus 2^32, plus 0.75, or as a string is refused, not aliased",
+      "pass": true,
+      "detail": {
+        "handle": 16777223,
+        "alias": {
+          "threw": true,
+          "message": "web3d: 4311744519 is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+        },
+        "hiddenByAlias": [
+          255,
+          255,
+          255
+        ],
+        "frac": {
+          "threw": true,
+          "message": "web3d: 16777223.75 is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+        },
+        "shownByFraction": [
+          255,
+          255,
+          255
+        ],
+        "str": {
+          "threw": true,
+          "message": "web3d: \"16777223\" is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+        },
+        "hiddenByString": [
+          255,
+          255,
+          255
+        ],
+        "shown": [
+          255,
+          255,
+          255
+        ]
+      }
+    },
+    {
+      "name": "C (informational) a NaN clear colour is refused like every other non-finite input",
+      "pass": true,
+      "detail": {
+        "nan": {
+          "threw": true,
+          "message": "web3d: clear colour refused: every component must be finite"
+        },
+        "pixel": [
+          0,
+          0,
+          0
+        ],
+        "getError": 0
+      }
+    },
+    {
+      "name": "Z resize to 0x0 and back: no throw, viewport follows, corners drawn",
+      "pass": true,
+      "detail": {
+        "zero": {
+          "threw": false
+        },
+        "f0": {
+          "threw": false,
+          "value": true
+        },
+        "dims0": [
+          1,
+          1,
+          0,
+          0
+        ],
+        "back": {
+          "threw": false
+        },
+        "corners": [
+          [
+            255,
+            255,
+            255
+          ],
+          [
+            255,
+            255,
+            255
+          ]
+        ],
+        "viewport": [
+          0,
+          0,
+          96,
+          64
+        ],
+        "getError": 0
+      }
+    },
+    {
+      "name": "S (informational) a second renderer on the same canvas is refused, or leaves the first drawing correctly",
+      "pass": true,
+      "detail": {
+        "sameContext": false,
+        "aBefore": [
+          255,
+          56,
+          56
+        ],
+        "aAfter": null,
+        "afterSecondDisposedGetError": null,
+        "second": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)"
+      }
+    }
+  ],
+  "info": {
+    "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+    "vendor": "Google Inc. (Apple)",
+    "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+    "maxTextureSize": 16384,
+    "timerQuery": true,
+    "antialias": false,
+    "samples": 0
+  },
+  "precision": {
+    "fragMedium": {
+      "rangeMin": 127,
+      "rangeMax": 127,
+      "precision": 23
+    },
+    "fragHigh": {
+      "rangeMin": 127,
+      "rangeMax": 127,
+      "precision": 23
+    }
+  },
+  "mainGlError": 0,
+  "passed": 10,
+  "failed": [],
+  "browser": "156.0.8078.76",
+  "messages": []
+}

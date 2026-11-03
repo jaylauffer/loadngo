@@ -1,0 +1,105 @@
+{
+  "browser": "156.0.8078.76",
+  "alloc-cpu0": {
+    "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+    "cold": {
+      "frames": 480,
+      "perFrameByFile": {
+        "(native)": 96,
+        "/c/alloc.js": 116.1,
+        "/web3d/pkg/loadngo_web3d.wasm": 289.8,
+        "/web3d/pkg/web3d.js": 1.5,
+        "/web3d/pkg/gl.js": 1.8
+      },
+      "topFunctions": {
+        "/web3d/pkg/loadngo_web3d.wasm:1 js-to-wasm:i:": 288.5,
+        "/c/alloc.js:35 tick": 116.1,
+        "(native):0 sin": 32.1,
+        "(native):0 cos": 25.2,
+        "(native):0 (IDLE_EXTERNAL)": 12.9,
+        "(native):0 (V8 API)": 10.9,
+        "(native):364 evaluate": 9,
+        "(native):0 (BYTECODE_COMPILER)": 2
+      }
+    },
+    "steady": {
+      "frames": 600,
+      "perFrameByFile": {
+        "(native)": 33.2,
+        "/c/alloc.js": 27.3
+      },
+      "topFunctions": {
+        "/c/alloc.js:35 tick": 27.2,
+        "(native):0 (IDLE_EXTERNAL)": 11.8,
+        "(native):0 (V8 API)": 9.3,
+        "(native):364 evaluate": 7,
+        "(native):0 (BYTECODE_COMPILER)": 1.8,
+        "(native):1 ": 0.9,
+        "(native):200 serializeAsCallArgument": 0.7,
+        "(native):0 Map": 0.6
+      }
+    },
+    "stats": [
+      null,
+      0.171791,
+      3487,
+      30,
+      60,
+      0,
+      0,
+      3
+    ],
+    "msgs": []
+  },
+  "alloc-cpu1": {
+    "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+    "cold": {
+      "frames": 480,
+      "perFrameByFile": {
+        "(native)": 93.4,
+        "/c/alloc.js": 114.1,
+        "/web3d/pkg/loadngo_web3d.wasm": 313.1,
+        "/web3d/pkg/web3d.js": 1.6,
+        "/web3d/pkg/gl.js": 2
+      },
+      "topFunctions": {
+        "/web3d/pkg/loadngo_web3d.wasm:1 js-to-wasm:i:": 311.7,
+        "/c/alloc.js:35 tick": 114.1,
+        "(native):0 sin": 31.1,
+        "(native):0 cos": 24.7,
+        "(native):0 (IDLE_EXTERNAL)": 12.5,
+        "(native):0 (V8 API)": 10.8,
+        "(native):364 evaluate": 8.5,
+        "(native):0 (BYTECODE_COMPILER)": 2.2
+      }
+    },
+    "steady": {
+      "frames": 600,
+      "perFrameByFile": {
+        "(native)": 32.8,
+        "/c/alloc.js": 52.1
+      },
+      "topFunctions": {
+        "/c/alloc.js:35 tick": 52.1,
+        "(native):0 (IDLE_EXTERNAL)": 11.6,
+        "(native):0 (V8 API)": 9.2,
+        "(native):364 evaluate": 7.1,
+        "(native):0 (BYTECODE_COMPILER)": 1.5,
+        "(native):200 serializeAsCallArgument": 1,
+        "(native):1 ": 0.8,
+        "(native):0 Map": 0.6
+      }
+    },
+    "stats": [
+      0.11500000953674316,
+      0.176416,
+      3488,
+      30,
+      60,
+      0,
+      0,
+      3
+    ],
+    "msgs": []
+  }
+}

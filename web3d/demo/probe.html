@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>web3d probes</title>
+  <link rel="icon" href="data:,">
+  <style>body { margin: 0; background: #000; } canvas { display: block; width: 256px; height: 256px; }</style>
+</head>
+<body>
+  <!-- Pixel-exact rendering checks, the lighting against three.js r180, refusals, use after
+       dispose, context loss, and the boundary: lying typed arrays, handle kinds, the compile cache,
+       failed creates and re-entrancy. Driven by check.mjs; results in window.__probe.done. -->
+  <canvas id="main"></canvas><canvas id="disposed"></canvas><canvas id="loss"></canvas><canvas id="shared"></canvas>
+  <canvas id="typed"></canvas><canvas id="kinds"></canvas><canvas id="kinds2"></canvas><canvas id="cache1"></canvas>
+  <canvas id="cache2"></canvas><canvas id="failed"></canvas><canvas id="reenter"></canvas>
+  <script type="module" src="./probe.js"></script>
+</body>
+</html>

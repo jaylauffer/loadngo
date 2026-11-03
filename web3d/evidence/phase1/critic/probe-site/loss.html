@@ -1,0 +1,24 @@
+<!doctype html><html><head><meta charset="utf-8"><title>loss</title><link rel="icon" href="data:,"></head>
+<body><canvas id="c" style="width:64px;height:64px"></canvas><script type="module">
+import { createRenderer } from '/web3d/pkg/web3d.js';
+const c = document.getElementById('c');
+const quad = { positions: new Float32Array([-1,-1,-5, 1,-1,-5, 1,1,-5, -1,1,-5]), indices: new Uint32Array([0,1,2,0,2,3]) };
+let restored; const rp = new Promise((r) => { restored = r; });
+const r1 = await createRenderer(c, { width: 64, height: 64, antialias: false, onContextRestored: () => restored() });
+const tex = r1.createTexture(new OffscreenCanvas(4, 4));
+r1.createObject(r1.createMesh(quad), r1.createMaterial({ texture: tex }));
+r1.frame();
+const lc = r1.gl.getExtension('WEBGL_lose_context');
+lc.loseContext();
+await new Promise((r) => setTimeout(r, 50));
+// Adapted by the builder: creating while lost now throws; record it instead of dying on it.
+let handle; try { handle = r1.createMesh(quad); } catch (e) { handle = `threw: ${e.message}`; }
+const whileLost = { handle, getError: r1.gl.getError(), isContextLost: r1.gl.isContextLost() };
+lc.restoreContext();
+await Promise.race([rp, new Promise((r) => setTimeout(r, 2000))]);
+r1.dispose();                       // dispose the old renderer first, as a caller would
+const r2 = await createRenderer(c, { width: 64, height: 64, antialias: false });
+r2.frame();
+window.__loss = { whileLost, errorOnNewRenderer: r2.gl.getError() };
+r2.dispose();
+</script></body></html>

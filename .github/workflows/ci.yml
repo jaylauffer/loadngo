@@ -116,6 +116,17 @@ jobs:
         # --no-fail-fast: report every failing crate in one run.
         run: cargo test --locked --no-fail-fast --workspace ${{ matrix.excludes }}
 
+      # web3d's wasm32 boundary (web3d/src/web.rs: the raw wasm imports and
+      # exports, and all of the crate's unsafe code) compiles only for wasm32,
+      # so the host steps above never see it. One row is enough: the target
+      # is the same everywhere.
+      - name: cargo clippy (web3d, wasm32)
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: loadngo
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo clippy --locked -p loadngo-web3d --target wasm32-unknown-unknown --all-targets -- -D warnings
+
       # Compile-only, and `check` rather than `clippy -D warnings`: the iOS
       # target carries pre-existing lint debt (deprecated `msg_send_id`, dead
       # code in gfx-metal). No signing is involved, so a lapsed provisioning

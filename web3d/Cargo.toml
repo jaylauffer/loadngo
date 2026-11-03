@@ -1,0 +1,16 @@
+[package]
+name = "loadngo-web3d"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Lean WebGL2 3D renderer in Rust compiled to WebAssembly; see docs/WEB3D.md"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# No dependencies, on purpose. WebGL2 is bound by hand: js/gl.js owns the context and its handle
+# tables, and the wasm module imports its functions over the raw C ABI (module "web3d_gl"). The
+# wasm-bindgen route cannot join this workspace offline; docs/WEB3D.md, "Why no wasm-bindgen".
+[dependencies]

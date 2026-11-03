@@ -1,0 +1,42 @@
+# build.sh with a fresh CARGO_TARGET_DIR (<scratch>/target-build)
+== cargo build (target dir: <scratch>/target-build)
+   Compiling loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+    Finished `release` profile [optimized] target(s) in 0.45s
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm            98877  gzip   35926
+pkg/loadngo_web3d.wasm                64826  gzip   29475
+pkg/gl.js                             12975  gzip    4360
+pkg/web3d.js                          19306  gzip    6427
+>>> exit 0
+4f7733ba2c5cfa89a308b067094664384deda7495626a6a3097266f2d2175184  web3d/pkg/gl.js
+251fd0480fcc77bff650ddf59e4c2984ce8b0178c62dbec10f60a93b5f9d6832  web3d/pkg/loadngo_web3d.wasm
+361a2640f0cc2006063ed92b89c8a2c8bdbd21e20928c85be5238f137b666a09  web3d/pkg/web3d.d.ts
+95c36d63f27e03bf4c2de20b1f03b7e3a0aaca1f5127899eb0abbc67b1ad822b  web3d/pkg/web3d.js
+# compare against pkg as found
+same: web3d/pkg/gl.js
+same: web3d/pkg/loadngo_web3d.wasm
+same: web3d/pkg/web3d.d.ts
+same: web3d/pkg/web3d.js
+# build.sh with the workspace target dir
+== cargo build (target dir: /Users/jay/pudding/loadngo/target)
+    Finished `release` profile [optimized] target(s) in 0.04s
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm            98877  gzip   35926
+pkg/loadngo_web3d.wasm                64826  gzip   29475
+pkg/gl.js                             12975  gzip    4360
+pkg/web3d.js                          19306  gzip    6427
+>>> exit 0
+4f7733ba2c5cfa89a308b067094664384deda7495626a6a3097266f2d2175184  web3d/pkg/gl.js
+251fd0480fcc77bff650ddf59e4c2984ce8b0178c62dbec10f60a93b5f9d6832  web3d/pkg/loadngo_web3d.wasm
+361a2640f0cc2006063ed92b89c8a2c8bdbd21e20928c85be5238f137b666a09  web3d/pkg/web3d.d.ts
+95c36d63f27e03bf4c2de20b1f03b7e3a0aaca1f5127899eb0abbc67b1ad822b  web3d/pkg/web3d.js
+same: web3d/pkg/gl.js
+same: web3d/pkg/loadngo_web3d.wasm
+same: web3d/pkg/web3d.d.ts
+same: web3d/pkg/web3d.js
+# js sources equal pkg copies
+same: gl.js
+same: web3d.js
+same: web3d.d.ts

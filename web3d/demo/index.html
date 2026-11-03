@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>web3d phase 1 demo</title>
+  <link rel="icon" href="data:,">
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b0d10; overflow: hidden; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+    #hud {
+      position: fixed; top: 8px; left: 8px; margin: 0; padding: 6px 9px;
+      background: rgba(0, 0, 0, 0.62); color: #e8e8e8; border-radius: 4px;
+      font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace; white-space: pre; pointer-events: none;
+    }
+    #hud.error { color: #ff8a80; }
+  </style>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <pre id="hud">loading…</pre>
+  <!-- Query parameters: scale (drawing-buffer pixels per CSS pixel, times devicePixelRatio;
+       default 1), aa (0 turns multisampling off), knots, tubular, radial (scene load), still (1:
+       no animation). -->
+  <script type="module" src="./demo.js"></script>
+</body>
+</html>

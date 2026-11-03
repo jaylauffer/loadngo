@@ -1860,6 +1860,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "loadngo-web3d"
+version = "0.1.0"
+
+[[package]]
 name = "loadngo-weights"
 version = "0.1.0"
 dependencies = [

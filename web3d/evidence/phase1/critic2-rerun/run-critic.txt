@@ -1,0 +1,16 @@
+pass  P1 a 65,535-vertex mesh (u16, max index 65534) draws its triangle
+pass  P1 a 65,536-vertex mesh (u16, index 65535) draws its triangle
+pass  P1 a 65,537-vertex mesh (u32) draws its triangle
+pass  L key only, grey dielectric, 45 deg: web3d within 2/255 of three.js r180 (plus the stand-in)
+pass  L oblique normal, glossy, hemisphere: web3d within 2/255 of three.js r180 (plus the stand-in)
+pass  L half metal, downward normal, hemisphere: web3d within 2/255 of three.js r180 (plus the stand-in)
+pass  L full metal, on-peak highlight: web3d within 2/255 of three.js r180 (plus the stand-in)
+pass  L dielectric, on-peak highlight, roughness 0.2: web3d within 2/255 of three.js r180 (plus the stand-in)
+pass  L skin-like rough red, side key: web3d within 2/255 of three.js r180 (plus the stand-in)
+pass  L grazing view (65 deg), fresnel: web3d within 2/255 of three.js r180 (plus the stand-in)
+pass  S blended draws composite back to front whatever the creation order
+pass  D every method throws "renderer disposed" after dispose(); getters are null
+pass  K1 first loss: old renderer finished (frame false, creates throw), destroys after restore harmless, getError 0, new renderer draws
+pass  K2 second loss on the same canvas: old renderer finished (frame false, creates throw), destroys after restore harmless, getError 0, new renderer draws
+14 passed, 0 failed; INVALID_OPERATION warnings 0; renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)
+browser and server stopped

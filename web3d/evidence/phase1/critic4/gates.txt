@@ -1,0 +1,23 @@
+== cargo fmt --check (workspace)
+exit 0
+== clippy host web3d
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+exit 0
+== clippy wasm32
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s
+exit 0
+== test
+running 70 tests
+test result: ok. 70 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+exit 0
+== fresh target: clippy host
+    Checking loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.41s
+== fresh: clippy wasm32
+    Checking loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.33s
+== fresh: test release
+test result: ok. 70 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

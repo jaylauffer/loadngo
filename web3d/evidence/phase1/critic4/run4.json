@@ -1,0 +1,275 @@
+{
+  "browser": "156.0.8078.76",
+  "probes": {
+    "tests": [
+      {
+        "name": "X1 a handle of one kind is refused where another kind is meant",
+        "pass": false,
+        "detail": {
+          "handles": {
+            "left": 1,
+            "right": 2,
+            "red": 1,
+            "green": 2
+          },
+          "swappedCreateObject": {
+            "threw": false,
+            "value": 1
+          },
+          "rightHalfAfterSwap": [
+            255,
+            56,
+            56
+          ],
+          "leftHalfAfterSwap": [
+            0,
+            0,
+            0
+          ],
+          "destroyMaterialWithMeshHandle": {
+            "threw": false
+          },
+          "greenStillUsable": {
+            "threw": true,
+            "message": "web3d: material handle 2 is not live (destroyed, or never created)"
+          },
+          "setVisibleWithMeshHandle": {
+            "threw": false
+          },
+          "rightHalfAfterHide": [
+            0,
+            0,
+            0
+          ]
+        }
+      },
+      {
+        "name": "X2 a handle from another renderer is refused",
+        "pass": false,
+        "detail": {
+          "foreignObjectHandle": 1,
+          "ownObjectHandle": 1,
+          "setVisible": {
+            "threw": false
+          },
+          "destroyObject": {
+            "threw": false
+          }
+        }
+      },
+      {
+        "name": "X3 a Proxy positions array cannot write past its staging allocation",
+        "pass": false,
+        "detail": {
+          "pixelBefore": [
+            56,
+            255,
+            56
+          ],
+          "marksBefore": 0,
+          "passesInstanceof": true,
+          "create": {
+            "threw": false,
+            "value": 2
+          },
+          "lengthReads": 4,
+          "marksAfter": 4089,
+          "memoryBytes": 1179648,
+          "frame": {
+            "threw": false,
+            "value": true
+          },
+          "pixelAfter": [
+            56,
+            255,
+            56
+          ],
+          "laterCreates": [
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok"
+          ],
+          "frame2": {
+            "threw": false,
+            "value": true
+          },
+          "pixelAfter2": [
+            56,
+            255,
+            56
+          ],
+          "glError": 0,
+          "dispose": {
+            "threw": false
+          }
+        }
+      },
+      {
+        "name": "X3b a subclass with a changing length cannot make wasm read past the staged floats",
+        "pass": false,
+        "detail": {
+          "create": {
+            "threw": false,
+            "value": 1
+          },
+          "lengthReads": 3
+        }
+      },
+      {
+        "name": "X4 a failed create leaves nothing behind: its loss hook never fires",
+        "pass": false,
+        "detail": {
+          "bad": "web3d: a drawing-buffer side must be a whole number from 0 to 32768, not 1.5",
+          "failedHook": 1,
+          "goodHook": 1,
+          "attributesOfTheNextRenderer": {
+            "antialias": false,
+            "got": true,
+            "samples": 4
+          }
+        }
+      },
+      {
+        "name": "X5 a failed wasm fetch does not poison every later create",
+        "pass": false,
+        "detail": {
+          "first": "web3d: fetching the wasm failed: 404 http://127.0.0.1:5482/web3d/pkg/missing.wasm",
+          "second": "web3d: fetching the wasm failed: 404 http://127.0.0.1:5482/web3d/pkg/missing.wasm"
+        }
+      },
+      {
+        "name": "X6 a renderer on a canvas another renderer used draws as on a fresh canvas",
+        "pass": true,
+        "detail": {
+          "handed": [
+            [
+              56,
+              255,
+              56
+            ],
+            [
+              56,
+              56,
+              255
+            ]
+          ],
+          "clean": [
+            [
+              56,
+              255,
+              56
+            ],
+            [
+              56,
+              56,
+              255
+            ]
+          ],
+          "errB": 0
+        }
+      },
+      {
+        "name": "X7 an argument whose valueOf disposes the renderer does not run the export on the freed renderer",
+        "pass": false,
+        "detail": {
+          "setKeyLight": {
+            "threw": false
+          },
+          "setClearColor": {
+            "threw": false
+          }
+        }
+      },
+      {
+        "name": "X8 odd handle values are all refused by the wrapper, and the object stays drawn",
+        "pass": true,
+        "detail": {
+          "minusZero": {
+            "threw": true,
+            "message": "web3d: 0 is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+          },
+          "numberObject": {
+            "threw": true,
+            "message": "web3d: 1 is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+          },
+          "bigint": {
+            "threw": true,
+            "message": "web3d: 1 is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+          },
+          "boolean": {
+            "threw": true,
+            "message": "web3d: true is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+          },
+          "array": {
+            "threw": true,
+            "message": "web3d: 1 is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+          },
+          "valueOf": {
+            "threw": true,
+            "message": "web3d: [object Object] is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+          },
+          "string": {
+            "threw": true,
+            "message": "web3d: 1 is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+          },
+          "nearlyWhole": {
+            "threw": true,
+            "message": "web3d: 1.0000000009313226 is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+          },
+          "limit": {
+            "threw": true,
+            "message": "web3d: 1073741824 is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+          },
+          "overInt32": {
+            "threw": true,
+            "message": "web3d: 2147483649 is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+          },
+          "infinity": {
+            "threw": true,
+            "message": "web3d: Infinity is not a valid object handle (a whole number from 1 to 2^30 - 1)"
+          },
+          "stillDrawn": [
+            255,
+            255,
+            255
+          ]
+        }
+      }
+    ],
+    "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+    "messages": [
+      "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ]
+  },
+  "unknownParameter": "accepted",
+  "wrongTypeForARealFlag": "refused: cdpSession.send: Protocol error (HeapProfiler.startSampling): Invalid parameters",
+  "cpuTimingOn": [
+    {
+      "label": "with the flags",
+      "flags": true,
+      "frames": 601,
+      "pageScriptBytesPerFrame": 178.9
+    },
+    {
+      "label": "without the flags",
+      "flags": false,
+      "frames": 601,
+      "pageScriptBytesPerFrame": 0
+    },
+    {
+      "label": "with the flags again",
+      "flags": true,
+      "frames": 601,
+      "pageScriptBytesPerFrame": 21.3
+    }
+  ]
+}

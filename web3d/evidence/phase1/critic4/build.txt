@@ -1,0 +1,36 @@
+== build.sh (workspace target)
+== cargo build (target dir: /Users/jay/pudding/loadngo/target)
+    Finished `release` profile [optimized] target(s) in 0.05s
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm            99047  gzip   35956
+pkg/loadngo_web3d.wasm                64972  gzip   29528
+pkg/gl.js                             12975  gzip    4360
+pkg/web3d.js                          21166  gzip    7085
+exit 0
+4f7733ba2c5cfa89a308b067094664384deda7495626a6a3097266f2d2175184  web3d/pkg/gl.js
+fa8cb38ad4212644a3f6e1ba4ae77a95d764892cbc2b0ab4ff221d390f299706  web3d/pkg/loadngo_web3d.wasm
+9e86463eeecf3b787d9ca8c895bc4bad597ccb0df48426accfe9328c5d96f6b2  web3d/pkg/web3d.d.ts
+86d1a3b1b17d3e0b68bb836d76f7ef82f960e7fc5340a8a9cfc97e312f3f27b7  web3d/pkg/web3d.js
+== cmp to pre-existing pkg
+same gl.js
+same loadngo_web3d.wasm
+same web3d.d.ts
+same web3d.js
+== build.sh (fresh target)
+== cargo build (target dir: <scratch>)
+    Finished `release` profile [optimized] target(s) in 0.52s
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm            99047  gzip   35956
+pkg/loadngo_web3d.wasm                64972  gzip   29528
+pkg/gl.js                             12975  gzip    4360
+pkg/web3d.js                          21166  gzip    7085
+4f7733ba2c5cfa89a308b067094664384deda7495626a6a3097266f2d2175184  web3d/pkg/gl.js
+fa8cb38ad4212644a3f6e1ba4ae77a95d764892cbc2b0ab4ff221d390f299706  web3d/pkg/loadngo_web3d.wasm
+9e86463eeecf3b787d9ca8c895bc4bad597ccb0df48426accfe9328c5d96f6b2  web3d/pkg/web3d.d.ts
+86d1a3b1b17d3e0b68bb836d76f7ef82f960e7fc5340a8a9cfc97e312f3f27b7  web3d/pkg/web3d.js
+same gl.js
+same loadngo_web3d.wasm
+same web3d.d.ts
+same web3d.js

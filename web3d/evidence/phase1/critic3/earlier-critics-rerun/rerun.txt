@@ -1,0 +1,147 @@
+== critic1 run.mjs
+   "p95": 0.703,
+   "max": 0.721
+  },
+  "glError": 0,
+  "msgs": []
+ },
+ "gamePath": {
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+  "cold": {
+   "frames": 480,
+   "bytesPerFrameByFile": {
+    "(native)": 76.2,
+    "/probe/game-path.js": 78.1,
+    "/web3d/pkg/web3d.js": 1.4,
+    "/web3d/pkg/loadngo_web3d.wasm": 197.3,
+    "/web3d/pkg/gl.js": 1.8
+   },
+   "topFunctions": {
+    "/web3d/pkg/loadngo_web3d.wasm:1 js-to-wasm:i:": 94720,
+    "/probe/game-path.js:20 tick": 37492,
+    "/web3d/pkg/gl.js:271 query_begin": 340,
+    "/web3d/pkg/web3d.js:372 setTransform": 188,
+    "/web3d/pkg/web3d.js:197 _statsView": 132,
+    "/web3d/pkg/web3d.js:389 setCamera": 124,
+    "/web3d/pkg/web3d.js:479 readStats": 124,
+    "/web3d/pkg/gl.js:273 query_available": 116
+   }
+  },
+  "steady": {
+   "frames": 600,
+   "bytesPerFrameByFile": {
+    "(native)": 31.7,
+    "/probe/game-path.js": 0.1
+   },
+   "topFunctions": {
+    "/probe/game-path.js:18 frames": 56
+   }
+  }
+ }
+}
+exit 0
+== critic1 run-loss.mjs
+{
+ "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+ "result": {
+  "whileLost": {
+   "handle": "threw: web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again",
+   "getError": 37442,
+   "isContextLost": true
+  },
+  "errorOnNewRenderer": 0
+ },
+ "warnings": 0,
+ "sample": []
+}
+browser and server stopped
+exit 0
+== critic1 wasm-edge.mjs
+init 0 
+3 vertices, 6 deltas, 2 targets          -> refused: mesh refused: morph deltas must hold x, y, z per vertex for each target
+3 vertices, 6 deltas, 0x55555556 targets -> refused: mesh refused: a mesh may have 1 to 256 morph targets (3 * 9 * 0x55555556 wraps to 6 on wasm32)
+web3d_frame(0)                 -> returned normally
+web3d_material_create(0, ...) -> returned 0, error at address 0 says: "no renderer (a null pointer: disposed, or never created)"
+non-zero bytes written into the first 4 KiB of linear memory (stack bottom): 0
+material handle before: 1, after 1024 create/destroy cycles: 2; stale 1 now destroys the new material -> refused: material handle 1 is not live (destroyed, or never created)
+exit 0
+== critic2 run-critic.mjs
+pass  P1 a 65,535-vertex mesh (u16, max index 65534) draws its triangle
+pass  P1 a 65,536-vertex mesh (u16, index 65535) draws its triangle
+pass  P1 a 65,537-vertex mesh (u32) draws its triangle
+pass  L key only, grey dielectric, 45 deg: web3d within 2/255 of three.js r180 (plus the stand-in)
+pass  L oblique normal, glossy, hemisphere: web3d within 2/255 of three.js r180 (plus the stand-in)
+pass  L half metal, downward normal, hemisphere: web3d within 2/255 of three.js r180 (plus the stand-in)
+pass  L full metal, on-peak highlight: web3d within 2/255 of three.js r180 (plus the stand-in)
+pass  L dielectric, on-peak highlight, roughness 0.2: web3d within 2/255 of three.js r180 (plus the stand-in)
+pass  L skin-like rough red, side key: web3d within 2/255 of three.js r180 (plus the stand-in)
+pass  L grazing view (65 deg), fresnel: web3d within 2/255 of three.js r180 (plus the stand-in)
+pass  S blended draws composite back to front whatever the creation order
+pass  D every method throws "renderer disposed" after dispose(); getters are null
+pass  K1 first loss: old renderer finished (frame false, creates throw), destroys after restore harmless, getError 0, new renderer draws
+pass  K2 second loss on the same canvas: old renderer finished (frame false, creates throw), destroys after restore harmless, getError 0, new renderer draws
+14 passed, 0 failed; INVALID_OPERATION warnings 0; renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)
+browser and server stopped
+exit 0
+== critic2 abi-edge.mjs
+  texture_destroy: 1
+  material_create: 0
+  material_create bad mode: 0
+  material_destroy: 1
+  object_create: 0
+  object_set_transform: 1
+  object_set_visible: 1
+  object_destroy: 1
+  set_camera: 1
+  set_camera_look_at: 1
+  set_key_light: 1
+  set_ambient: 1
+  set_clear_color: undefined
+  frame: undefined
+  destroy: undefined
+  free: undefined
+  low 1 KiB bytes changed: 0; GL calls made: 0
+init 0 ""
+mesh 1 
+material: first 2, 3,001 cycles later new 999292932; duplicates 0; max handle 1072693251 (< 2^30: true); stale first -> refused: material handle 2 is not live (destroyed, or never created)
+object: first 1, 3,001 cycles later new 999292931; duplicates 0; max handle 1072693250 (< 2^30: true); stale first -> refused: object handle 1 is not live (destroyed, or never created)
+EDGES:
+  mesh: 0 positions: 0 "mesh refused: positions must hold x, y, z for at least one vertex"
+  mesh: null positions: 0 "mesh refused: positions must hold x, y, z for at least one vertex"
+  mesh: null indices: 0 "mesh refused: indices must list whole triangles"
+  mesh: morph targets 0x55555556 with 6 deltas: 0 "mesh refused: a mesh may have 1 to 256 morph targets"
+  mesh: morph targets usize::MAX: 0 "mesh refused: a mesh may have 1 to 256 morph targets"
+  mesh: morph count without deltas: 0 "mesh refused: morph target count given without deltas"
+  mesh: infinite morph delta: 0 "mesh refused: morph deltas must be finite"
+  mesh: weights 1.75 each: 0 "mesh refused: weights must lie between 0 and 1"
+  mesh: weights NaN: 0 "mesh refused: weights must lie between 0 and 1"
+  mesh: weights all zero (unskinned vertex): 0 "mesh refused: each vertex's four weights must sum to 1"
+  mesh: weights sum 1.019: 2 
+  mesh: joints without weights: 0 "mesh refused: joints and weights come together"
+  mesh: index u32::MAX: 0 "mesh refused: an index is past the last vertex"
+  mesh: NaN normal (accepted? packs as +Y): 0 "mesh refused: normals must be finite"
+  mesh: NaN uv: 0 "mesh refused: uvs must be finite"
+  texture: 0x0: 0 "texture is 0x0; this GPU allows 1 to 4096 pixels a side (resize it first, for example with createImageBitmap's resizeWidth)"
+  texture: 4097 wide: 0 "texture is 4097x4; this GPU allows 1 to 4096 pixels a side (resize it first, for example with createImageBitmap's resizeWidth)"
+  texture: wrap bits 3 (invalid) -> ?: 0 "texture refused: wrap modes are 0 (repeat), 1 (clamp) or 2 (mirror)"
+  material: alpha mode 3: 0 "material refused: alpha mode must be 0 (opaque), 1 (mask) or 2 (blend)"
+  material: stale texture handle 12345: 0 "texture handle 12345 is not live (destroyed, or never created)"
+  material: NaN base colour: 0 "material refused: every value must be finite"
+  object: mesh handle 0: 0 "mesh handle 0 is not live (destroyed, or never created)"
+  object: handle u32::MAX: 1 "object handle 4294967295 is not live (destroyed, or never created)"
+  camera: zero view matrix: 1 "camera refused: the view matrix is not invertible"
+  look-at: eye == target: 0 "camera refused: the view matrix is not invertible"
+  look-at: fov 0: 1 "camera refused: the field of view must be between 0 and pi radians"
+  look-at: near 0: 1 "camera refused: near and far must satisfy 0 < near < far"
+  look-at: up zero: 0 "camera refused: near and far must satisfy 0 < near < far"
+  key light: zero direction: 1 "light refused: the direction must be non-zero"
+  key light: infinite intensity: 1 "light refused: colour and intensity must be finite"
+  key light: negative intensity: 0 "light refused: colour and intensity must be finite"
+  ambient: NaN: 1 "light refused: colours and intensity must be finite"
+  resize to 0x0 then frame: ok 
+  resize to 2^31+ (u32 > i32): viewport import received undefined 
+stats, cpu timing off: [null,2.5,4,1,1,0,0,0]
+clock readings in a frame with timing off: 0
+clock readings in a frame with timing on: 2 stats [0.0027089999999994063,2.5,6,1,1,0,0,0]
+destroy made: {"vertex_array_delete":2,"buffer_delete":9,"program_delete":3,"query_delete":8}
+exit 0

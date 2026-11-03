@@ -1,0 +1,7 @@
+init 0 
+3 vertices, 6 deltas, 2 targets          -> refused: mesh refused: morph deltas must hold x, y, z per vertex for each target
+3 vertices, 6 deltas, 0x55555556 targets -> refused: mesh refused: a mesh may have 1 to 256 morph targets (3 * 9 * 0x55555556 wraps to 6 on wasm32)
+web3d_frame(0)                 -> returned normally
+web3d_material_create(0, ...) -> returned 0, error at address 0 says: "no renderer (a null pointer: disposed, or never created)"
+non-zero bytes written into the first 4 KiB of linear memory (stack bottom): 0
+material handle before: 12582913, after 1024 create/destroy cycles: 12582921; stale 12582913 now destroys the new material -> refused: material handle 12582913 is not live in this renderer (destroyed, never created, or another renderer's)
