@@ -1,5 +1,5 @@
 {
-  "date": "2026-11-03T04:55:11.193Z",
+  "date": "2026-11-03T05:34:42.707Z",
   "machine": {
     "platform": "darwin 25.6.0",
     "cpu": "Apple M4 Pro",
@@ -14,7 +14,7 @@
     {
       "name": "low-1024x576",
       "note": "a 1366x768 window drawn at pixel ratio 0.75",
-      "url": "http://127.0.0.1:5574/demo/?still=1&scale=0.75",
+      "url": "http://127.0.0.1:5616/demo/?still=1&scale=0.75",
       "crossOriginIsolated": true,
       "seconds": 10.016,
       "frames": 601,
@@ -28,17 +28,17 @@
       },
       "cpuMs": {
         "n": 601,
-        "mean": 0.058,
-        "p50": 0.055,
-        "p95": 0.085,
-        "max": 0.36
+        "mean": 0.042,
+        "p50": 0.04,
+        "p95": 0.06,
+        "max": 0.23
       },
       "gpuMs": {
         "n": 602,
-        "mean": 1.491,
-        "p50": 0.89,
-        "p95": 4.18,
-        "max": 11.062
+        "mean": 0.843,
+        "p50": 0.841,
+        "p95": 0.859,
+        "max": 0.882
       },
       "draws": 64,
       "triangles": 320000,
@@ -74,7 +74,7 @@
         "centreIsLit": true
       },
       "sceneOk": true,
-      "hud": "web3d phase 1 · ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)\n60.0 fps   frame p50 16.7 / p95 16.7 ms\nGPU 1.26 ms   CPU 0.05 ms\n64 draws   320k tris   0 culled   1024×576   MSAA 4x",
+      "hud": "web3d phase 1 · ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)\n60.0 fps   frame p50 16.7 / p95 16.7 ms\nGPU 0.84 ms   CPU 0.05 ms\n64 draws   320k tris   0 culled   1024×576   MSAA 4x",
       "messages": [],
       "screenshot": "demo-low-1024x576.png",
       "problems": []
@@ -82,7 +82,7 @@
     {
       "name": "full-1366x768",
       "note": "the same window at pixel ratio 1",
-      "url": "http://127.0.0.1:5574/demo/?still=1&scale=1",
+      "url": "http://127.0.0.1:5616/demo/?still=1&scale=1",
       "crossOriginIsolated": true,
       "seconds": 10.016,
       "frames": 601,
@@ -96,17 +96,17 @@
       },
       "cpuMs": {
         "n": 601,
-        "mean": 0.062,
-        "p50": 0.055,
-        "p95": 0.15,
+        "mean": 0.049,
+        "p50": 0.05,
+        "p95": 0.065,
         "max": 0.235
       },
       "gpuMs": {
-        "n": 601,
-        "mean": 1.142,
-        "p50": 0.942,
-        "p95": 3.033,
-        "max": 10.387
+        "n": 602,
+        "mean": 1.021,
+        "p50": 1.02,
+        "p95": 1.025,
+        "max": 1.123
       },
       "draws": 64,
       "triangles": 320000,
@@ -142,7 +142,7 @@
         "centreIsLit": true
       },
       "sceneOk": true,
-      "hud": "web3d phase 1 · ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)\n60.0 fps   frame p50 16.7 / p95 16.7 ms\nGPU 1.62 ms   CPU 0.06 ms\n64 draws   320k tris   0 culled   1366×768   MSAA 4x",
+      "hud": "web3d phase 1 · ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)\n60.0 fps   frame p50 16.7 / p95 16.7 ms\nGPU 1.02 ms   CPU 0.05 ms\n64 draws   320k tris   0 culled   1366×768   MSAA 4x",
       "messages": [],
       "screenshot": "demo-full-1366x768.png",
       "problems": []
@@ -150,7 +150,7 @@
     {
       "name": "low-1024x576-no-msaa",
       "note": "pixel ratio 0.75 without multisampling",
-      "url": "http://127.0.0.1:5574/demo/?still=1&scale=0.75&aa=0",
+      "url": "http://127.0.0.1:5616/demo/?still=1&scale=0.75&aa=0",
       "crossOriginIsolated": true,
       "seconds": 10.016,
       "frames": 601,
@@ -164,17 +164,17 @@
       },
       "cpuMs": {
         "n": 601,
-        "mean": 0.071,
-        "p50": 0.055,
-        "p95": 0.175,
-        "max": 0.38
+        "mean": 0.037,
+        "p50": 0.035,
+        "p95": 0.05,
+        "max": 0.28
       },
       "gpuMs": {
         "n": 602,
-        "mean": 1.2,
-        "p50": 0.573,
-        "p95": 5.501,
-        "max": 14.689
+        "mean": 0.567,
+        "p50": 0.566,
+        "p95": 0.58,
+        "max": 0.602
       },
       "draws": 64,
       "triangles": 320000,
@@ -210,7 +210,7 @@
         "centreIsLit": true
       },
       "sceneOk": true,
-      "hud": "web3d phase 1 · ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)\n60.0 fps   frame p50 16.7 / p95 16.7 ms\nGPU 0.99 ms   CPU 0.05 ms\n64 draws   320k tris   0 culled   1024×576   no MSAA",
+      "hud": "web3d phase 1 · ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)\n60.0 fps   frame p50 16.7 / p95 16.7 ms\nGPU 0.57 ms   CPU 0.03 ms\n64 draws   320k tris   0 culled   1024×576   no MSAA",
       "messages": [],
       "screenshot": "demo-low-1024x576-no-msaa.png",
       "problems": []
@@ -493,7 +493,7 @@
         "name": "M a GPU timer reading is present",
         "pass": true,
         "detail": {
-          "gpuMs": 8.681,
+          "gpuMs": 0.056999,
           "timerQuery": true
         }
       },
@@ -558,7 +558,7 @@
         "pass": true,
         "detail": {
           "threw": true,
-          "message": "web3d: 677912403509258 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
+          "message": "web3d: 328188248981514 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
         }
       },
       {
@@ -590,7 +590,7 @@
         "pass": true,
         "detail": {
           "threw": false,
-          "value": 677912403574794
+          "value": 328188249047050
         }
       },
       {
@@ -614,7 +614,7 @@
         "pass": true,
         "detail": {
           "threw": false,
-          "value": 677912403509259
+          "value": 328188248981515
         }
       },
       {
@@ -678,15 +678,15 @@
         "pass": true,
         "detail": {
           "threw": true,
-          "message": "web3d: 677912671944716 is not a valid material handle: not live in this renderer (destroyed, never created, or another renderer's)"
+          "message": "web3d: 328188517416972 is not a valid material handle: not live in this renderer (destroyed, never created, or another renderer's)"
         }
       },
       {
         "name": "I handles are not reissued",
         "pass": true,
         "detail": {
-          "first": 677912671944716,
-          "later": 677912744099852
+          "first": 328188517416972,
+          "later": 328188589572108
         }
       },
       {
@@ -696,19 +696,19 @@
           "tries": [
             {
               "threw": true,
-              "message": "web3d: 677917101129749 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 328192946602005 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             {
               "threw": true,
-              "message": "web3d: 677912806162453.8 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: 328188651634709.75 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
             },
             {
               "threw": true,
-              "message": "web3d: \"677912806162453\" is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: \"328188651634709\" is not a valid object handle (a whole number from 1 to 2^50 - 1)"
             },
             {
               "threw": true,
-              "message": "web3d: -677912806162453 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: -328188651634709 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
             },
             {
               "threw": true,
@@ -726,23 +726,23 @@
           "others": [
             {
               "threw": true,
-              "message": "web3d: 677917101129749 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 328192946602005 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             {
               "threw": true,
-              "message": "web3d: \"677912806162453\" is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: \"328188651634709\" is not a valid object handle (a whole number from 1 to 2^50 - 1)"
             },
             {
               "threw": true,
-              "message": "web3d: 677912403509249.5 is not a valid mesh handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: 328188248981505.5 is not a valid mesh handle (a whole number from 1 to 2^50 - 1)"
             },
             {
               "threw": true,
-              "message": "web3d: 677916832694273 is not a valid texture handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 328192678166529 is not a valid texture handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             {
               "threw": true,
-              "message": "web3d: 677916698476545 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 328192543948801 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
             }
           ],
           "pixel": [
@@ -821,24 +821,24 @@
           },
           "createMesh": {
             "threw": true,
-            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
           },
           "createTexture": {
             "threw": true,
-            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
           },
           "createMaterial": {
             "threw": true,
-            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
           },
           "createObject": {
             "threw": true,
-            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
           },
           "setTransformWhileLost": {
             "threw": false
           },
-          "createRendererWhileLost": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again",
+          "createRendererWhileLost": "web3d: the canvas's WebGL context is lost; create the renderer again once it is restored (this call's onContextRestored is called then)",
           "isContextLostBeforeRestore": true,
           "restoredEvent": "restored",
           "oldStillLost": true,
@@ -869,24 +869,24 @@
           },
           "createMesh": {
             "threw": true,
-            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
           },
           "createTexture": {
             "threw": true,
-            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
           },
           "createMaterial": {
             "threw": true,
-            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
           },
           "createObject": {
             "threw": true,
-            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
           },
           "setTransformWhileLost": {
             "threw": false
           },
-          "createRendererWhileLost": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again",
+          "createRendererWhileLost": "web3d: the canvas's WebGL context is lost; create the renderer again once it is restored (this call's onContextRestored is called then)",
           "isContextLostBeforeRestore": true,
           "restoredEvent": "restored",
           "oldStillLost": true,
@@ -917,24 +917,24 @@
           },
           "createMesh": {
             "threw": true,
-            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
           },
           "createTexture": {
             "threw": true,
-            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
           },
           "createMaterial": {
             "threw": true,
-            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
           },
           "createObject": {
             "threw": true,
-            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
           },
           "setTransformWhileLost": {
             "threw": false
           },
-          "createRendererWhileLost": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again",
+          "createRendererWhileLost": "web3d: the canvas's WebGL context is lost; create the renderer again once it is restored (this call's onContextRestored is called then)",
           "isContextLostBeforeRestore": true,
           "restoredEvent": "restored",
           "oldStillLost": true,
@@ -970,7 +970,7 @@
           },
           "lyingAccepted": {
             "threw": false,
-            "value": 677919919702018
+            "value": 328195765174274
           },
           "lyingGetterCalls": 0,
           "rawOutside": 0,
@@ -987,7 +987,7 @@
           ],
           "later": {
             "threw": false,
-            "value": 677919919702019
+            "value": 328195765174275
           },
           "glError": 0
         }
@@ -997,22 +997,22 @@
         "pass": true,
         "detail": {
           "handles": {
-            "left": 677920993443841,
-            "right": 677920993443842,
-            "red": 677921261879297,
-            "green": 677921261879298
+            "left": 328196838916097,
+            "right": 328196838916098,
+            "red": 328197107351553,
+            "green": 328197107351554
           },
           "swapped": {
             "threw": true,
-            "message": "web3d: 677921261879298 is not a valid mesh handle: it is a material handle"
+            "message": "web3d: 328197107351554 is not a valid mesh handle: it is a material handle"
           },
           "destroyMaterialWithMesh": {
             "threw": true,
-            "message": "web3d: 677920993443842 is not a valid material handle: it is a mesh handle"
+            "message": "web3d: 328196838916098 is not a valid material handle: it is a mesh handle"
           },
           "setVisibleWithMesh": {
             "threw": true,
-            "message": "web3d: 677920993443841 is not a valid object handle: it is a mesh handle"
+            "message": "web3d: 328196838916097 is not a valid object handle: it is a mesh handle"
           },
           "small": [
             {
@@ -1044,11 +1044,11 @@
           "handlesDiffer": true,
           "foreignSetVisible": {
             "threw": true,
-            "message": "web3d: 677921396097025 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            "message": "web3d: 328197241569281 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
           },
           "foreignDestroy": {
             "threw": true,
-            "message": "web3d: 677921396097025 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            "message": "web3d: 328197241569281 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
           },
           "ownStillWorks": {
             "threw": false
@@ -1061,11 +1061,11 @@
         "detail": {
           "first": {
             "ok": false,
-            "message": "web3d: fetching the wasm failed: 404 http://127.0.0.1:5574/pkg/missing.wasm"
+            "message": "web3d: fetching the wasm failed: 404 http://127.0.0.1:5616/pkg/missing.wasm"
           },
           "retry": {
             "ok": false,
-            "message": "web3d: fetching the wasm failed: 404 http://127.0.0.1:5574/pkg/missing.wasm"
+            "message": "web3d: fetching the wasm failed: 404 http://127.0.0.1:5616/pkg/missing.wasm"
           },
           "missingFetches": 2,
           "byDefault": "created",
@@ -1080,7 +1080,7 @@
           "early": "web3d: a drawing-buffer side must be a whole number from 0 to 32768, not 1.5",
           "late": "web3d: the wasm module is not loadngo-web3d (its exports are missing)",
           "createdAfterFailures": 40,
-          "mismatch": "web3d: this canvas's WebGL context has antialias false; a canvas keeps its first context and that context's settings, so ask for antialias: false or use a new canvas",
+          "mismatch": "web3d: this canvas's WebGL context has antialias false (ask for antialias: false); a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit",
           "goodAttributes": {
             "antialias": false,
             "samples": 0
@@ -1139,11 +1139,11 @@
         "detail": {
           "handles": 406,
           "twice": 0,
-          "firstObject": 677970788220929,
-          "lastObject": 678079236145153,
+          "firstObject": 328246633693185,
+          "lastObject": 328355081617409,
           "staleOnLast": {
             "threw": true,
-            "message": "web3d: 677970788220929 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            "message": "web3d: 328246633693185 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
           },
           "pixel": [
             56,
@@ -1202,7 +1202,7 @@
         "detail": {
           "grownInGetter": {
             "threw": false,
-            "value": 678081115193345
+            "value": 328356960665601
           },
           "errorAfterGrow": 0,
           "pixel": [
@@ -1210,7 +1210,7 @@
             255,
             56
           ],
-          "shimRefused": "the browser refused the texture upload (the console has the reason: a cross-origin image, a closed ImageBitmap or a lost context)\nweb3d: the image source is 4x4 now, not the 64x64 it was when the texture was asked for",
+          "shimRefused": "the browser refused the texture upload (the console has the reason: a cross-origin image, a closed ImageBitmap, a lost context, or a source whose pixels do not fit the size it reports or changed size)\nweb3d: the image source is 4x4 now, not the 64x64 it was when the texture was asked for",
           "errorAfterShim": 0
         }
       },
@@ -1219,7 +1219,7 @@
         "pass": true,
         "detail": {
           "pageAntialias": false,
-          "askedForAntialias": "web3d: this canvas's WebGL context has antialias false; a canvas keeps its first context and that context's settings, so ask for antialias: false or use a new canvas",
+          "askedForAntialias": "web3d: this canvas's WebGL context has antialias false (ask for antialias: false); a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit",
           "askedForNone": "created",
           "failedInit": "web3d: init failed on purpose",
           "sizeAfterFailure": [
@@ -1232,7 +1232,7 @@
         "name": "K2 with default options: a create during a loss says the context is lost; after the restore and dispose(), a default create works and draws",
         "pass": true,
         "detail": {
-          "during": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again",
+          "during": "web3d: the canvas's WebGL context is lost; create the renderer again once it is restored (this call's onContextRestored is called then)",
           "restored": "restored",
           "after": "created",
           "antialias": true,
@@ -1248,7 +1248,7 @@
         "name": "K3 a context lost during the create: the error says the context is lost, the context can be restored, and the next create draws",
         "pass": true,
         "detail": {
-          "first": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again",
+          "first": "web3d: the canvas's WebGL context is lost; create the renderer again once it is restored (this call's onContextRestored is called then)",
           "restoreThrew": false,
           "restored": "restored",
           "again": "created",
@@ -1264,14 +1264,14 @@
         "name": "G a context without depth is refused; an <img> is refused (decode it first); a VideoFrame is sized by its visible rectangle and fills the texture",
         "pass": true,
         "detail": {
-          "noDepth": "web3d: this canvas's WebGL context has no depth buffer, which web3d needs; a canvas keeps its first context, so use a new canvas",
+          "noDepth": "web3d: this canvas's WebGL context has no depth buffer (web3d needs one); a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit",
           "image": {
             "threw": true,
             "message": "web3d: an <img> is not accepted as a texture source, because its reported size can differ from the pixels WebGL uploads; decode it first with createImageBitmap(source, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })"
           },
           "frame": {
             "threw": false,
-            "value": 678087557644289
+            "value": 328363403116545
           },
           "errorAfterFrame": 0,
           "pixels": [
@@ -1290,22 +1290,73 @@
         }
       },
       {
-        "name": "R an iframe's renderer has a serial of its own (each realm starts at random), and its handle is refused here",
+        "name": "R a same-origin iframe's renderer takes the next serial from the shared counter, and its handle is refused here",
         "pass": true,
         "detail": {
-          "ourSerial": 631520,
-          "theirSerial": 631519,
-          "ourObject": 678089973563393,
-          "theirObject": 678088899821569,
+          "ourSerial": 305814,
+          "theirSerial": 305813,
+          "ourObject": 328365819035649,
+          "theirObject": 328364745293825,
           "theirsOnOurs": {
             "threw": true,
-            "message": "web3d: 678088899821569 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            "message": "web3d: 328364745293825 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
           },
           "pixel": [
             56,
             255,
             56
           ]
+        }
+      },
+      {
+        "name": "K4 dispose in onContextLost, then onContextRestored still comes and a new renderer draws; frame() is false at once after a loss; a lost renderer cannot resize a canvas a new one owns",
+        "pass": true,
+        "detail": {
+          "restoredCalls": 1,
+          "frameRightAfter": {
+            "threw": false,
+            "value": false
+          },
+          "disposed": {
+            "threw": true,
+            "message": "web3d: renderer disposed"
+          },
+          "restored": "restored",
+          "next": "created",
+          "pixel": [
+            56,
+            255,
+            56
+          ],
+          "oldResize": {
+            "threw": true,
+            "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
+          },
+          "sizeAfter": [
+            32,
+            32
+          ]
+        }
+      },
+      {
+        "name": "T3 pending page errors are reported as pending and do not refuse a good texture; a turned VideoFrame uploads at its turned size; a DataView of the module compiles",
+        "pass": true,
+        "detail": {
+          "warnings": [
+            "web3d: WebGL error 0x500 was pending before a texture upload; an earlier call raised it, not the upload",
+            "web3d: WebGL error 0x501 was pending before a texture upload; an earlier call raised it, not the upload"
+          ],
+          "withPending": {
+            "threw": false,
+            "value": 328370919309313
+          },
+          "errorAfter": 0,
+          "turned": {
+            "threw": false,
+            "value": 328370919309314
+          },
+          "errorAfterTurned": 0,
+          "dataView": "created"
         }
       },
       {
@@ -1356,24 +1407,24 @@
       },
       "createMesh": {
         "threw": true,
-        "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+        "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
       },
       "createTexture": {
         "threw": true,
-        "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+        "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
       },
       "createMaterial": {
         "threw": true,
-        "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+        "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
       },
       "createObject": {
         "threw": true,
-        "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+        "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
       },
       "setTransformWhileLost": {
         "threw": false
       },
-      "createRendererWhileLost": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again",
+      "createRendererWhileLost": "web3d: the canvas's WebGL context is lost; create the renderer again once it is restored (this call's onContextRestored is called then)",
       "isContextLostBeforeRestore": true,
       "restoredEvent": "restored",
       "oldStillLost": true,
@@ -1391,7 +1442,7 @@
       ],
       "errorAfterFrame": 0
     },
-    "passed": 64,
+    "passed": 66,
     "failed": [],
     "invalidOperationWarnings": [],
     "messages": [
@@ -1401,11 +1452,19 @@
       "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
       "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
       "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+      "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+      "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+      "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+      "warning: WebGL: INVALID_ENUM: enable: invalid capability",
+      "warning: web3d: WebGL error 0x500 was pending before a texture upload; an earlier call raised it, not the upload",
+      "warning: web3d: WebGL error 0x501 was pending before a texture upload; an earlier call raised it, not the upload",
+      "warning: [.WebGL-0x10c000d3800] GL_INVALID_VALUE: glLineWidth: Invalid width.",
+      "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
       "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost."
     ]
   },
   "allocation": {
-    "url": "http://127.0.0.1:5574/demo/?scale=0.75&cputime=0&hud=0&arrays=1",
+    "url": "http://127.0.0.1:5616/demo/?scale=0.75&cputime=0&hud=0&arrays=1",
     "samplingIntervalBytes": 32,
     "flags": "none (--blind)",
     "limitBytesPerFrame": 1,
@@ -1419,50 +1478,50 @@
       {
         "label": "cold (first frames)",
         "frames": 601,
-        "pageScriptBytesPerFrame": 20.09,
+        "pageScriptBytesPerFrame": 19.7,
         "sampledBytesByFile": {
-          "(native or internal)": 6140,
-          "/demo/demo.js": 8836,
-          "/pkg/web3d.js": 1172,
-          "/pkg/loadngo_web3d.wasm": 916,
-          "/pkg/gl.js": 1148
+          "(native or internal)": 6320,
+          "/demo/demo.js": 8644,
+          "/pkg/web3d.js": 1036,
+          "/pkg/loadngo_web3d.wasm": 996,
+          "/pkg/gl.js": 1164
         },
         "sampledBytesPerFrameByFile": {
-          "(native or internal)": 10.2,
-          "/demo/demo.js": 14.7,
-          "/pkg/web3d.js": 2,
-          "/pkg/loadngo_web3d.wasm": 1.5,
+          "(native or internal)": 10.5,
+          "/demo/demo.js": 14.4,
+          "/pkg/web3d.js": 1.7,
+          "/pkg/loadngo_web3d.wasm": 1.7,
           "/pkg/gl.js": 1.9
         },
         "topFunctions": {
-          "/demo/demo.js:558 tick": 6312,
-          "/demo/demo.js:476 record": 1988,
+          "/demo/demo.js:558 tick": 6256,
+          "/demo/demo.js:476 record": 1776,
           "/pkg/loadngo_web3d.wasm:1 js-to-wasm:id:i": 668,
-          "/demo/demo.js:181 composeAt": 412,
-          "/pkg/web3d.js:868 setCameraLookAt": 340,
-          "/pkg/web3d.js:584 _statsView": 300,
-          "/pkg/gl.js:298 query_begin": 276,
-          "/pkg/loadngo_web3d.wasm:1 js-to-wasm:i:": 248,
-          "/pkg/web3d.js:992 readStats": 188,
-          "/pkg/web3d.js:823 setTransform": 180,
-          "/pkg/gl.js:272 texture_bind": 172,
-          "/pkg/web3d.js:946 frame": 164
+          "/demo/demo.js:181 composeAt": 376,
+          "/pkg/loadngo_web3d.wasm:1 js-to-wasm:i:": 328,
+          "/pkg/web3d.js:944 setCameraLookAt": 292,
+          "/pkg/web3d.js:657 _statsView": 260,
+          "/pkg/gl.js:282 texture_bind": 220,
+          "/pkg/gl.js:308 query_begin": 196,
+          "/pkg/web3d.js:1069 readStats": 188,
+          "/pkg/web3d.js:1022 frame": 164,
+          "/pkg/gl.js:312 query_result_ns": 148
         }
       },
       {
         "label": "steady (after 30 s of frames)",
         "frames": 601,
-        "pageScriptBytesPerFrame": 2.4,
+        "pageScriptBytesPerFrame": 1.49,
         "sampledBytesByFile": {
-          "(native or internal)": 5700,
-          "/demo/demo.js": 1440
+          "(native or internal)": 5664,
+          "/demo/demo.js": 896
         },
         "sampledBytesPerFrameByFile": {
-          "(native or internal)": 9.5,
-          "/demo/demo.js": 2.4
+          "(native or internal)": 9.4,
+          "/demo/demo.js": 1.5
         },
         "topFunctions": {
-          "/demo/demo.js:558 tick": 1440
+          "/demo/demo.js:558 tick": 896
         }
       },
       {
@@ -1470,11 +1529,11 @@
         "frames": 601,
         "pageScriptBytesPerFrame": 0.59,
         "sampledBytesByFile": {
-          "(native or internal)": 5588,
+          "(native or internal)": 5424,
           "/demo/demo.js": 352
         },
         "sampledBytesPerFrameByFile": {
-          "(native or internal)": 9.3,
+          "(native or internal)": 9,
           "/demo/demo.js": 0.6
         },
         "topFunctions": {
@@ -1484,18 +1543,18 @@
       {
         "label": "CPU timing on (reported, not gated)",
         "frames": 601,
-        "pageScriptBytesPerFrame": 1.97,
+        "pageScriptBytesPerFrame": 1.78,
         "sampledBytesByFile": {
-          "(native or internal)": 6748,
-          "/demo/demo.js": 1184
+          "(native or internal)": 6612,
+          "/demo/demo.js": 1072
         },
         "sampledBytesPerFrameByFile": {
-          "(native or internal)": 11.2,
-          "/demo/demo.js": 2
+          "(native or internal)": 11,
+          "/demo/demo.js": 1.8
         },
         "topFunctions": {
-          "/demo/demo.js:424 (anonymous)": 732,
-          "/demo/demo.js:558 tick": 452
+          "/demo/demo.js:424 (anonymous)": 648,
+          "/demo/demo.js:558 tick": 424
         }
       }
     ]

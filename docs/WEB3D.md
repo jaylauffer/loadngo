@@ -5,7 +5,7 @@ to WebAssembly, and drawing through WebGL2. It is built for small scenes with sk
 morph-targeted characters, on GPUs as slow as a Raspberry Pi 5's V3D 7.1, at 30 fps. The application
 loads its data with three.js, so matrices and light units follow three.js r180.
 
-**Status:** phase 1 of 5, the skeleton, is built (2026-11-03) and has been through five critic
+**Status:** phase 1 of 5, the skeleton, is built (2026-11-03) and has been through seven critic
 rounds. It draws a procedural test scene and reports fps, GPU ms and CPU ms.
 
 **Sources.** Each figure below names where it comes from:
@@ -90,7 +90,7 @@ JS (`web3d.js`). Colours are linear, matrices column-major.
 | --- | --- |
 | `createRenderer(canvas, { width, height, antialias, cpuTiming, wasm, onContextLost, onContextRestored })` | One renderer per canvas: a second is refused while the first is live, since both would share one WebGL context. A canvas keeps its first WebGL context and that context's antialias setting, whoever made it, so a renderer must ask for the antialias the context has, or is refused |
 | `createMesh({ positions, normals, uvs, indices, joints, weights, morphTargets })` | One glTF primitive |
-| `createTexture(source, { srgb, mipmaps, wrapS, wrapT })` | From an `ImageBitmap`, canvas, `OffscreenCanvas`, `ImageData` or `VideoFrame`, sources whose upload size is exactly knowable (a `VideoFrame` by its visible rectangle). An `<img>` or `<video>` is refused, since its reported size can differ from the pixels WebGL uploads: decode it with `createImageBitmap`, which also decodes WebP and JPEG. Wrap modes `'repeat'`, `'clamp'` or `'mirror'` |
+| `createTexture(source, { srgb, mipmaps, wrapS, wrapT })` | From an `ImageBitmap`, canvas, `OffscreenCanvas`, `ImageData` or `VideoFrame`, each sized through built-in getters (a `VideoFrame` by its visible rectangle, turned by its rotation). An `<img>` or `<video>` is refused, since its reported size can differ from the pixels WebGL uploads: decode it with `createImageBitmap`, which also decodes WebP and JPEG. A source whose pixels still do not fit the size it reports (a canvas with a `bitmaprenderer` context) is refused by the check after the upload. Wrap modes `'repeat'`, `'clamp'` or `'mirror'` |
 | `createMaterial({ baseColor, texture, alphaMode, alphaCutoff, doubleSided, roughness, metallic })` | `alphaMode` `'opaque'`, `'mask'` or `'blend'` |
 | `createObject(mesh, material, matrix)`, `setTransform`, `setVisible` | A mesh placed with a material |
 | `setCamera(view, projection)`, `setCameraLookAt(eye, target, fovY, near, far)` | three.js's `matrixWorldInverse` and `projectionMatrix`, or a look-at |
@@ -179,7 +179,8 @@ renderer.
 the WebGL context is made. A failure after that (a module that is not this one, an init that fails,
 a context lost meanwhile) destroys the renderer, removes the shim's context-loss listeners, releases
 the canvas and puts its size back. A context lost so recently that its event has not been
-dispatched yet is still allowed a restore.
+dispatched yet is still allowed a restore. A create that fails because of a loss does not call
+`onContextLost`: it throws "the context is lost".
 
 **The canvas's context must suit web3d** (probes G, Y2 and K2). A lost context (between a loss and
 its restore, or one the browser dropped) is refused as lost, and nothing is recorded from it. A
@@ -188,15 +189,25 @@ than the one asked for, is refused.
 
 **The compiled module is cached per URL, and a failure is not cached** (probe L). A failed fetch is
 fetched again by the next create, and a later `wasm` option with another URL compiles that URL. The
-option must be a string, a URL, a Response, bytes or a `WebAssembly.Module` (one from another realm
-too), each recognised by a built-in check; anything else is refused before it is used.
+option must be a string, a URL, a Response, bytes (a `DataView`'s too) or a `WebAssembly.Module` (one
+from another realm too), each recognised by a built-in check; anything else is refused before it is
+used.
+
+**A texture upload is checked once** (probes G and T3). Errors left pending by earlier calls are
+cleared first and reported as pending, in a console warning, so a page's own error is neither taken
+for the upload's nor refuses a good texture. Then `getError()` after the upload says whether the
+source's pixels fitted the texture made for them; if not, the texture is freed and the create
+refused.
 
 **Context loss.** Once the WebGL context is lost:
 
-- `frame()` returns false, and every create throws, `createRenderer` too, with "the context is lost";
-- the renderer is finished, because its objects belonged to the lost context;
-- dispose it and create a new one after `onContextRestored`, with the same options as before (probe
-  K2 does this with the defaults);
+- `frame()` returns false from that moment, before the lost event arrives too, and every create and
+  `resize` throws, `createRenderer` too, with "the context is lost";
+- the renderer is finished, because its objects belonged to the lost context, and a new renderer may
+  take the canvas once the context is restored, so the old one can no longer resize it;
+- dispose it, in `onContextLost` or later, and create a new one when `onContextRestored` comes, with
+  the same options as before. The hook comes for a renderer disposed while lost, and for a create
+  that failed because of the loss, too (probes K2 and K4, which follow this exactly);
 - disposing the old renderer sends nothing into the restored context; its shim only forgets its
   handles.
 
@@ -242,11 +253,11 @@ if they differ from its std140 packing.
   - **if the profiler is blind.** Chrome accepts an unknown sampling parameter silently, so the
     "objects already collected" flags cannot be trusted by the call succeeding. A positive-control
     window has the demo make one short-lived Array of 8 numbers a frame, and the check fails unless
-    the profiler reports at least 40 sampled bytes a frame from it. It read 89.5. With the flags
+    the profiler reports at least 40 sampled bytes a frame from it. It read 88.6. With the flags
     left out (`--blind`) it read 0.6 and the check failed (`evidence/phase1/blind-control/`).
-- **Cold frames differ.** In the first 10 s the module's call wrappers showed 256 sampled bytes a
-  frame, `web3d.js` 29 (copying Array elements one by one boxes them until V8 optimises the loop)
-  and `gl.js` 2.1 (same file).
+- **Cold frames differ.** In the first 10 s the module's call wrappers showed 261.2 sampled bytes a
+  frame, `web3d.js` 31.9 (copying Array elements one by one boxes them until V8 optimises the loop)
+  and `gl.js` 2.7 (same file).
 - **CPU timing costs boxed numbers:** its two `performance.now()` readings, 20.8 sampled bytes a frame
   in isolation (`web3d/evidence/phase1/cpu-timing-allocation/on.txt`; that line is absent from
   `off.txt`). In the demo, the check's timing window reads more (`rendered-check.json`, reported,
@@ -374,14 +385,14 @@ on, 10 s at 60 fps after a 3 s warm-up (`web3d/evidence/phase1/rendered-check.js
 
 | Canvas | GPU ms mean | p50 | p95 | CPU ms p50 (p95) | Draws | Triangles |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1024x576, MSAA 4x | 0.845 | 0.842 | 0.859 | 0.035 (0.05) | 64 | 320,000 |
-| 1366x768, MSAA 4x | 1.02 | 1.02 | 1.023 | 0.035 (0.05) | 64 | 320,000 |
-| 1024x576, no MSAA | 0.567 | 0.566 | 0.579 | 0.03 (0.045) | 64 | 320,000 |
+| 1024x576, MSAA 4x | 0.869 | 0.865 | 0.889 | 0.15 (0.225) | 64 | 320,000 |
+| 1366x768, MSAA 4x | 1.05 | 1.048 | 1.067 | 0.165 (0.24) | 64 | 320,000 |
+| 1024x576, no MSAA | 0.585 | 0.582 | 0.607 | 0.07 (0.18) | 64 | 320,000 |
 
-- The GPU was quiet for this run: each p95 is within 2% of its median.
+- Each p95 is within 4.3% of its median, so the GPU was not shared during the run.
 - Every frame took 16.67 ms, the display's 60 Hz, so GPU time is the capacity measure.
 - The clear colour read exactly (33, 36, 43), and the centre was lit, in every run.
-- All **64** probes passed, with `getError` 0 and no `INVALID_OPERATION` (same file, `probes`).
+- All **66** probes passed, with `getError` 0 and no `INVALID_OPERATION` (same file, `probes`).
 - The critics' scripts pass on this code:
 
   | Critic | Result | Evidence |
@@ -392,6 +403,7 @@ on, 10 s at 60 fps after a 3 s warm-up (`web3d/evidence/phase1/rendered-check.js
   | Fourth | X1 to X7 pass; X8 refuses 10 of 11 values, and the eleventh is the handle itself (`o + 2^-30` rounds to `o`) | `critic4-rerun/` (its README) |
   | Fifth | C1, C2, H5, R1, R2, T1, T2, L5, Y5 and B1 pass. X8, K1 and E1 assume the earlier 30-bit handles: X8's fraction rounds to the handle, there is no longer a 32-renderer limit to refuse, and the object table now issues 134,213,633 handles, then refuses cleanly | `critic5-rerun/` (its README) |
   | Sixth | G2-G7, G8b, G8c, G9a-c, G10, G11, G13 and G16 pass. G1, G12, G8a and G14 test what changed: the handle layout (now below 2⁵⁰), 2,048 generations a slot, `<img>` refused, a counter that goes round | `critic6-rerun/` (its README) |
+  | Seventh | LC1-LC8, D1, D2, T1-T5, S1-S3, H1, H2, W1 and W2 pass, with every earlier critic's intent | `critic7-rerun/` (its README) |
 
 **dolores.** A Raspberry Pi 5 with Chromium 156 on V3D 7.1, with **the demo's earlier load**, before
 it was given its present one (`web3d/evidence/phase1-dolores/README.md`):
@@ -439,7 +451,7 @@ It uses two textures, the canvas label and the grille's mask. Its query paramete
 `aa=0`, `still=1`, `cputime=0`, `hud=0`, `arrays=1` (matrices and vectors as plain Arrays, as three.js
 holds them; the allocation run uses it), `knots`, `tubular` and `radial`.
 
-**The probes** (`demo/probe.html`, 64 of them) cover:
+**The probes** (`demo/probe.html`, 66 of them) cover:
 
 - pixel-exact rendering, primitive restart, and lighting against three.js r180;
 - refusals, forged handles, and use after dispose;
@@ -450,7 +462,8 @@ holds them; the allocation run uses it), `knots`, `tubular` and `radial`.
   (T), the compile cache (L), failed creates and context settings (Y, Y2), re-entrancy (U), the
   recovery from a loss with default options and a loss during a create (K2, K3), contexts without
   depth and texture sources by upload size (G), another realm's serials (R, with
-  `demo/probe-frame.html`), and the largest serial (H7).
+  `demo/probe-frame.html`), the largest serial (H7), the recovery exactly as documented (K4), and
+  pending errors, turned frames and `DataView` bytes (T3).
 
 **The rendered check** serves `web3d/` cross-origin isolated, for 5 µs timers. It uses a port it
 refuses to share and its own headless Chrome, and aborts on a software renderer. It **fails** unless
@@ -485,15 +498,16 @@ That step cannot run here, since GitHub Actions runs only on a push. It was chec
   - the third's: `critic3/run3.mjs`;
   - the fourth's: `critic4/run4.mjs`;
   - the fifth's: `critic5/run5.mjs`;
-  - the sixth's: `critic6/run6.mjs` (and `extra.html`).
+  - the sixth's: `critic6/run6.mjs` (and `extra.html`);
+  - the seventh's: `critic7/run7.mjs`.
 
 **Sizes** (`web3d/evidence/phase1/gates.txt`):
 
 | File | Bytes | gzip -9 |
 | --- | --- | --- |
-| `pkg/loadngo_web3d.wasm` | 69,160 | 31,657 |
-| `pkg/gl.js` | 14,628 | 4,945 |
-| `pkg/web3d.js` | 40,427 | 12,576 |
+| `pkg/loadngo_web3d.wasm` | 69,232 | 31,678 |
+| `pkg/gl.js` | 15,381 | 5,216 |
+| `pkg/web3d.js` | 44,472 | 13,725 |
 
 ## Limits of phase 1
 

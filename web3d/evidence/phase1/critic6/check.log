@@ -1,4 +1,4 @@
-serving /Users/jay/pudding/loadngo/web3d on http://127.0.0.1:5481/
+serving <home>/pudding/loadngo/web3d on http://127.0.0.1:5481/
 Chrome 156.0.8078.76 (headless, launched by this script)
 low-1024x576: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.993 p50 1.894 p95 4.577 ms (600 readings), CPU mean 0.064 p95 0.085 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,241,231
 full-1366x768: 1366x768 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 2.192 p50 1.657 p95 5.7 ms (602 readings), CPU mean 0.058 p95 0.075 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 240,238,228
@@ -68,5 +68,5 @@ allocation, steady (after 70 s of frames): 601 frames; page scripts 0 sampled by
 allocation, positive control (one short-lived Array of 8 numbers a frame): 601 frames; page scripts 87.67 sampled bytes a frame; by file {"(native or internal)":30.8,"/demo/demo.js":87.7}
 allocation, CPU timing on (reported, not gated): 601 frames; page scripts 191.15 sampled bytes a frame; by file {"(native or internal)":31,"/demo/demo.js":166.5,"/pkg/web3d.js":24.6}
 browser and server stopped
-wrote /Users/jay/pudding/loadngo/web3d/evidence/phase1/critic6/check/rendered-check.json
+wrote <home>/pudding/loadngo/web3d/evidence/phase1/critic6/check/rendered-check.json
 exit 0

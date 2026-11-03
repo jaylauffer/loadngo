@@ -305,7 +305,7 @@
             },
             "setVisible": {
               "threw": true,
-              "message": "web3d: 74552579194882 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 755810628009986 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             "createTexture": true
           },
@@ -317,7 +317,7 @@
             56
           ],
           "freshGetError": 0,
-          "freshGpuMs": 0.028291
+          "freshGpuMs": 0.547583
         }
       },
       {
@@ -357,7 +357,7 @@
             },
             "setVisible": {
               "threw": true,
-              "message": "web3d: 74554726678530 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 755812775493634 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             "createTexture": true
           },
@@ -369,7 +369,7 @@
             56
           ],
           "freshGetError": 0,
-          "freshGpuMs": 0.065375
+          "freshGpuMs": 0.118208
         }
       }
     ],
@@ -618,7 +618,7 @@
           },
           "setVisible": {
             "threw": true,
-            "message": "web3d: 74552579194882 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            "message": "web3d: 755810628009986 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
           },
           "createTexture": true
         },
@@ -630,7 +630,7 @@
           56
         ],
         "freshGetError": 0,
-        "freshGpuMs": 0.028291
+        "freshGpuMs": 0.547583
       },
       "K2 second loss on the same canvas": {
         "framesBefore": 12,
@@ -666,7 +666,7 @@
           },
           "setVisible": {
             "threw": true,
-            "message": "web3d: 74554726678530 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            "message": "web3d: 755812775493634 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
           },
           "createTexture": true
         },
@@ -678,7 +678,7 @@
           56
         ],
         "freshGetError": 0,
-        "freshGpuMs": 0.065375
+        "freshGpuMs": 0.118208
       }
     },
     "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",

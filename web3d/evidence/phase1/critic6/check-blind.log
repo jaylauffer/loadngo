@@ -1,4 +1,4 @@
-serving /Users/jay/pudding/loadngo/web3d on http://127.0.0.1:5482/
+serving <home>/pudding/loadngo/web3d on http://127.0.0.1:5482/
 Chrome 156.0.8078.76 (headless, launched by this script)
 low-1024x576: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.862 p50 1.538 p95 4.528 ms (602 readings), CPU mean 0.05 p95 0.065 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,241,231
 full-1366x768: 1366x768 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.31 p50 1.02 p95 4.182 ms (602 readings), CPU mean 0.045 p95 0.065 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 240,238,228
@@ -69,6 +69,6 @@ allocation, positive control (one short-lived Array of 8 numbers a frame): 601 f
 allocation, CPU timing on (reported, not gated): 601 frames; page scripts 2.36 sampled bytes a frame; by file {"(native or internal)":11,"/demo/demo.js":2.4}
   FAILED: the positive control read 0.5 sampled bytes a frame from demo.js (at least 40 expected): the profiler is blind to short-lived objects, so the gate proves nothing
 browser and server stopped
-wrote /Users/jay/pudding/loadngo/web3d/evidence/phase1/critic6/blind/rendered-check.json
+wrote <home>/pudding/loadngo/web3d/evidence/phase1/critic6/blind/rendered-check.json
 FAILED: see the lines marked FAILED above
 exit 1

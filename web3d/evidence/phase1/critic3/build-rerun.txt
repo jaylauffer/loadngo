@@ -1,6 +1,6 @@
 # build.sh with a fresh CARGO_TARGET_DIR (<scratch>/target-build)
 == cargo build (target dir: <scratch>/target-build)
-   Compiling loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+   Compiling loadngo-web3d v0.1.0 (<home>/pudding/loadngo/web3d)
     Finished `release` profile [optimized] target(s) in 0.45s
 == wasm-opt -Os
 == sizes (bytes, and gzip -9)
@@ -19,7 +19,7 @@ same: web3d/pkg/loadngo_web3d.wasm
 same: web3d/pkg/web3d.d.ts
 same: web3d/pkg/web3d.js
 # build.sh with the workspace target dir
-== cargo build (target dir: /Users/jay/pudding/loadngo/target)
+== cargo build (target dir: <home>/pudding/loadngo/target)
     Finished `release` profile [optimized] target(s) in 0.04s
 == wasm-opt -Os
 == sizes (bytes, and gzip -9)

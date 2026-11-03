@@ -15,7 +15,7 @@
             56,
             255
           ],
-          "created": "web3d: this canvas's WebGL context has no depth buffer, which web3d needs; a canvas keeps its first context, so use a new canvas"
+          "created": "web3d: this canvas's WebGL context has no depth buffer (web3d needs one); a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit"
         }
       },
       {

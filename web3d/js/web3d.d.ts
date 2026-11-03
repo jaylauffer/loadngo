@@ -38,9 +38,14 @@ export interface RendererOptions {
   antialias?: boolean;
   /** Time each frame on the CPU (default false): costs two boxed numbers (20.8 sampled bytes) a frame. */
   cpuTiming?: boolean;
-  /** Where the wasm is: a URL, a Response, bytes or a compiled module (default: beside web3d.js). */
+  /** Where the wasm is: a URL, a Response, bytes (a DataView too) or a compiled module (default: beside web3d.js). */
   wasm?: string | URL | Response | BufferSource | WebAssembly.Module;
+  /** Called when this renderer's context is lost; not for a create that fails because of a loss. */
   onContextLost?: () => void;
+  /**
+   * Called when the context is restored: for a live renderer, for one disposed while lost, and for a
+   * create that failed because the context was lost. Create the next renderer then.
+   */
   onContextRestored?: () => void;
 }
 
@@ -72,8 +77,10 @@ export interface MeshData {
 }
 
 /**
- * Sources whose upload size is exactly knowable. An <img> or <video> is refused (its reported size
- * can differ from the pixels WebGL uploads): decode it first with createImageBitmap.
+ * Sources sized through built-in getters (a VideoFrame by its visible rectangle, turned by its
+ * rotation). An <img> or <video> is refused (its reported size can differ from the pixels WebGL
+ * uploads): decode it first with createImageBitmap. An upload that still does not fit, such as a
+ * 'bitmaprenderer' canvas whose bitmap is not the canvas's size, is refused.
  */
 export type TextureSource = ImageBitmap | HTMLCanvasElement | OffscreenCanvas | ImageData | VideoFrame;
 
@@ -106,8 +113,9 @@ export function createRenderer(canvas: HTMLCanvasElement | OffscreenCanvas, opti
 
 /**
  * After dispose() every method throws "web3d: renderer disposed". Once the WebGL context is lost,
- * frame() returns false and every create* throws; dispose the renderer, then create a new one after
- * onContextRestored and upload everything again.
+ * frame() returns false and every create* and resize throws; dispose the renderer, then create a new
+ * one after onContextRestored (which is still called when the renderer was disposed while lost) and
+ * upload everything again.
  */
 export class Renderer {
   readonly canvas: HTMLCanvasElement | OffscreenCanvas;

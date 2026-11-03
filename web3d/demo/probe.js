@@ -953,6 +953,121 @@ async function contextAndSources() {
   );
 }
 
+/**
+ * K4: the recovery exactly as the LOST message words it: dispose in onContextLost, then create a new
+ * renderer when onContextRestored comes. Also: frame() is false from the moment of the loss, and a
+ * lost renderer cannot resize a canvas a new renderer owns.
+ */
+async function lossAsDocumented() {
+  const canvas = document.getElementById('loss4');
+  const d = { restoredCalls: 0 };
+  let restoredResolve;
+  const restored = new Promise((res) => (restoredResolve = res));
+  let r = null;
+  const make = (opts) =>
+    createRenderer(canvas, {
+      width: 32,
+      height: 32,
+      ...opts,
+      onContextLost: () => r?.dispose(),
+      onContextRestored: () => (d.restoredCalls++, restoredResolve('restored')),
+    });
+  r = await make({});
+  const lc = r.gl.getExtension('WEBGL_lose_context');
+  lc.loseContext();
+  d.frameRightAfter = attempt(() => r.frame()); // before the event: already false
+  const before = r;
+  await timeout(50); // the event has run: onContextLost disposed the renderer
+  d.disposed = attempt(() => before.frame());
+  lc.restoreContext();
+  d.restored = await Promise.race([restored, timeout(3000)]);
+  const next = await settle(make({}));
+  d.next = next.ok ? 'created' : next.message;
+  if (next.ok) {
+    r = next.r;
+    flat(r);
+    r.createObject(r.createMesh(quad(-1, -1, 1, 1, -5)), r.createMaterial({ baseColor: [0, 1, 0, 1] }));
+    r.frame();
+    d.pixel = reader(r)(0, 0);
+  }
+  // A second loss, the old renderer left undisposed: a new one takes the canvas, and the old one
+  // cannot resize it.
+  const c2 = document.getElementById('loss5');
+  const old = await createRenderer(c2, { width: 32, height: 32, antialias: false });
+  const lc2 = old.gl.getExtension('WEBGL_lose_context');
+  const lost2 = new Promise((res) => c2.addEventListener('webglcontextlost', () => setTimeout(res, 0), { once: true }));
+  const restored2 = new Promise((res) => c2.addEventListener('webglcontextrestored', () => res('restored'), { once: true }));
+  lc2.loseContext();
+  await lost2;
+  lc2.restoreContext();
+  await Promise.race([restored2, timeout(3000)]);
+  const fresh = await createRenderer(c2, { width: 32, height: 32, antialias: false });
+  d.oldResize = attempt(() => old.resize(8, 8));
+  d.sizeAfter = [c2.width, c2.height];
+  fresh.dispose();
+  old.dispose();
+  r.dispose();
+  log(
+    'K4 dispose in onContextLost, then onContextRestored still comes and a new renderer draws; frame() is false at once after a loss; a lost renderer cannot resize a canvas a new one owns',
+    d.frameRightAfter.value === false && d.disposed.threw && /disposed/.test(d.disposed.message) && d.restored === 'restored' &&
+      d.restoredCalls === 1 && d.next === 'created' && d.pixel?.[1] > 200 && d.oldResize.threw && /context is lost/.test(d.oldResize.message) &&
+      d.sizeAfter[0] === 32 && d.sizeAfter[1] === 32,
+    d,
+  );
+}
+
+/** T3: a page's pending WebGL error is not taken for an upload's; DataView bytes compile; turned and bitmaprenderer sources. */
+async function uploadsAndBytes() {
+  const r = await createRenderer(document.getElementById('pending'), { width: 16, height: 16, antialias: false });
+  flat(r);
+  const d = { warnings: [] };
+  const warn = console.warn;
+  console.warn = (...a) => (d.warnings.push(String(a[0])), warn.apply(console, a));
+  try {
+    r.gl.enable(0x1234); // INVALID_ENUM, left pending by "the page"
+    r.gl.lineWidth(-1); // and INVALID_VALUE (one flag a kind of error)
+    const bitmap = await bitmap4(0, 255, 0);
+    d.withPending = attempt(() => r.createTexture(bitmap));
+  } finally {
+    console.warn = warn;
+  }
+  d.errorAfter = r.gl.getError();
+  // A VideoFrame turned 90 degrees, 4x2 coded: sized 2x4 if the browser turns it, else 4x2.
+  const px = new Uint8Array(4 * 2 * 4).fill(255);
+  let turned = null;
+  try {
+    turned = new VideoFrame(px, { format: 'RGBA', codedWidth: 4, codedHeight: 2, rotation: 90, timestamp: 0 });
+  } catch (e) {
+    d.turnedUnsupported = String(e?.message ?? e);
+  }
+  if (turned) {
+    d.turned = attempt(() => r.createTexture(turned));
+    turned.close();
+  }
+  d.errorAfterTurned = r.gl.getError();
+  // (A bitmaprenderer canvas, whose size is not its bitmap's, is refused by the upload check; the
+  // browser logs an INVALID_OPERATION for it, which this page's check counts as a failure, so the
+  // seventh critic's T3 probe covers it instead.)
+  r.dispose();
+  // The module's bytes as a DataView.
+  const bytes = await (await fetch('../pkg/loadngo_web3d.wasm')).arrayBuffer();
+  const viaView = await settle(createRenderer(document.getElementById('dataview'), { width: 16, height: 16, antialias: false, wasm: new DataView(bytes) }));
+  d.dataView = viaView.ok ? 'created' : viaView.message;
+  if (viaView.ok) viaView.r.dispose();
+  log(
+    'T3 pending page errors are reported as pending and do not refuse a good texture; a turned VideoFrame uploads at its turned size; a DataView of the module compiles',
+    !d.withPending.threw && d.warnings.filter((w) => /was pending before a texture upload/.test(w)).length === 2 && d.errorAfter === 0 &&
+      (d.turned ? !d.turned.threw : true) && d.errorAfterTurned === 0 && d.dataView === 'created',
+    d,
+  );
+}
+
+const bitmap4 = (r, g, b) => {
+  const data = new Uint8ClampedArray(4 * 4 * 4);
+  for (let i = 0; i < 16; i++) data.set([r, g, b, 255], i * 4);
+  return createImageBitmap(new ImageData(data, 4, 4), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+};
+
 /** H7: at the largest serial, handles stay below 2^50, where a handle plus a half is still a fraction. */
 async function largestSerial() {
   const pool = globalThis[Symbol.for('loadngo-web3d')].serials;
@@ -979,7 +1094,7 @@ async function largestSerial() {
   );
 }
 
-/** R: another realm (a same-origin iframe) has its own serials, starting at random, so its handles are not this realm's. */
+/** R: another realm (a same-origin iframe) runs its own copy of the module but shares the top window's serial counter, so its handles are not this realm's. */
 async function realms() {
   const iframe = document.createElement('iframe');
   iframe.src = './probe-frame.html';
@@ -1000,8 +1115,8 @@ async function realms() {
   ours.dispose();
   iframe.remove();
   log(
-    'R an iframe\'s renderer has a serial of its own (each realm starts at random), and its handle is refused here',
-    d.ourSerial !== d.theirSerial && d.ourObject !== d.theirObject && d.theirsOnOurs.threw && d.pixel[1] > 200,
+    'R a same-origin iframe\'s renderer takes the next serial from the shared counter, and its handle is refused here',
+    d.ourSerial === (d.theirSerial % (2 ** 20 - 1)) + 1 && d.ourObject !== d.theirObject && d.theirsOnOurs.threw && d.pixel[1] > 200,
     d,
   );
 }
@@ -1027,6 +1142,8 @@ async function main() {
   await lossDuringCreate();
   await contextAndSources();
   await realms();
+  await lossAsDocumented();
+  await uploadsAndBytes();
   await largestSerial();
   out.passed = out.tests.filter((t) => t.pass).length;
   out.failed = out.tests.filter((t) => !t.pass).map((t) => t.name);

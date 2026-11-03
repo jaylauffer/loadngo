@@ -291,7 +291,7 @@ impl fmt::Display for Error {
             ),
             Error::TextureUpload => write!(
                 f,
-                "the browser refused the texture upload (the console has the reason: a cross-origin image, a closed ImageBitmap or a lost context)"
+                "the browser refused the texture upload (the console has the reason: a cross-origin image, a closed ImageBitmap, a lost context, or a source whose pixels do not fit the size it reports or changed size)"
             ),
             Error::Texture(why) => write!(f, "texture refused: {why}"),
             Error::GlObject(what) => write!(f, "WebGL could not create {what}"),
@@ -1122,8 +1122,8 @@ impl<G: Gl> Renderer<G> {
         Ok(())
     }
 
-    /// Creates a texture from the image source the JS side has staged (an `ImageBitmap`,
-    /// `HTMLImageElement` or canvas), so the browser has decoded it, WebP and JPEG included.
+    /// Creates a texture from the image source the JS side has staged (an `ImageBitmap`, a canvas,
+    /// an `OffscreenCanvas`, `ImageData` or a `VideoFrame`), which the browser has decoded.
     pub fn create_texture(&mut self, desc: &TextureDesc) -> Result<u64> {
         self.require_ready()?;
         let max = self.caps.max_texture_size;

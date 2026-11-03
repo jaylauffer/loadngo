@@ -20,11 +20,11 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 == fresh target dir (<scratch>/target-web3d), web3d only
 $ cargo clippy --locked -p loadngo-web3d --all-targets --all-features -- -D warnings
-    Checking loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+    Checking loadngo-web3d v0.1.0 (<home>/pudding/loadngo/web3d)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.31s
 >>> exit 0
 $ cargo clippy --locked -p loadngo-web3d --target wasm32-unknown-unknown --all-targets -- -D warnings
-    Checking loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+    Checking loadngo-web3d v0.1.0 (<home>/pudding/loadngo/web3d)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.30s
 >>> exit 0
 $ cargo test --locked -p loadngo-web3d (fresh)
@@ -43,6 +43,6 @@ test result: ok. 70 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
 test result: ok. 70 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 $ THREE_DIR=<three r180> node web3d/tools/three-reference.mjs --check
 three 0.180.0: 20 transcribed lines found verbatim
-/Users/jay/pudding/loadngo/web3d/tools/three-reference.txt matches three 0.180.0 exactly
+<home>/pudding/loadngo/web3d/tools/three-reference.txt matches three 0.180.0 exactly
 >>> exit 0
 three version 0.180.0

@@ -1,0 +1,90 @@
+== loadngo ffe5f208; rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+== the pkg found
+8f2134bdbd333bc57d9ed79bc833c765c841cedb77476d3498cc5a6aa3672960  gl.js
+59d8359dbf1c6b7bef709eb836150b6e69e14bfa54341765d358cff8cca99133  loadngo_web3d.wasm
+24a6f252c5c802bc19bf22194848dc941a195c9c1957886989b7a02be393b130  web3d.d.ts
+681ab1b56d329f3641a55f52e4660f82816ba86261e9f008ec6c702b8e06a089  web3d.js
+
+== build 1: in place, workspace target dir
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+== cargo rustc (target dir: ~/pudding/loadngo/target)
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           105829  gzip   38051
+pkg/loadngo_web3d.wasm                69160  gzip   31657
+pkg/gl.js                             14628  gzip    4945
+pkg/web3d.js                          40427  gzip   12576
+8f2134bdbd333bc57d9ed79bc833c765c841cedb77476d3498cc5a6aa3672960  gl.js
+59d8359dbf1c6b7bef709eb836150b6e69e14bfa54341765d358cff8cca99133  loadngo_web3d.wasm
+24a6f252c5c802bc19bf22194848dc941a195c9c1957886989b7a02be393b130  web3d.d.ts
+681ab1b56d329f3641a55f52e4660f82816ba86261e9f008ec6c702b8e06a089  web3d.js
+build 1: identical to the pkg found
+
+== build 2: in place, workspace target dir
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+== cargo rustc (target dir: ~/pudding/loadngo/target)
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           105829  gzip   38051
+pkg/loadngo_web3d.wasm                69160  gzip   31657
+pkg/gl.js                             14628  gzip    4945
+pkg/web3d.js                          40427  gzip   12576
+8f2134bdbd333bc57d9ed79bc833c765c841cedb77476d3498cc5a6aa3672960  gl.js
+59d8359dbf1c6b7bef709eb836150b6e69e14bfa54341765d358cff8cca99133  loadngo_web3d.wasm
+24a6f252c5c802bc19bf22194848dc941a195c9c1957886989b7a02be393b130  web3d.d.ts
+681ab1b56d329f3641a55f52e4660f82816ba86261e9f008ec6c702b8e06a089  web3d.js
+build 2: identical to the pkg found
+
+== build 3: in place, empty target dir
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+== cargo rustc (target dir: <scratch>/target-b3)
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           105829  gzip   38051
+pkg/loadngo_web3d.wasm                69160  gzip   31657
+pkg/gl.js                             14628  gzip    4945
+pkg/web3d.js                          40427  gzip   12576
+8f2134bdbd333bc57d9ed79bc833c765c841cedb77476d3498cc5a6aa3672960  gl.js
+59d8359dbf1c6b7bef709eb836150b6e69e14bfa54341765d358cff8cca99133  loadngo_web3d.wasm
+24a6f252c5c802bc19bf22194848dc941a195c9c1957886989b7a02be393b130  web3d.d.ts
+681ab1b56d329f3641a55f52e4660f82816ba86261e9f008ec6c702b8e06a089  web3d.js
+build 3: identical to the pkg found
+
+== build 4: git archive of HEAD at another path, empty target dir
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+== cargo rustc (target dir: <scratch>/target-b4)
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           105829  gzip   38051
+pkg/loadngo_web3d.wasm                69160  gzip   31657
+pkg/gl.js                             14628  gzip    4945
+pkg/web3d.js                          40427  gzip   12576
+8f2134bdbd333bc57d9ed79bc833c765c841cedb77476d3498cc5a6aa3672960  gl.js
+59d8359dbf1c6b7bef709eb836150b6e69e14bfa54341765d358cff8cca99133  loadngo_web3d.wasm
+24a6f252c5c802bc19bf22194848dc941a195c9c1957886989b7a02be393b130  web3d.d.ts
+681ab1b56d329f3641a55f52e4660f82816ba86261e9f008ec6c702b8e06a089  web3d.js
+build 4: identical to the pkg found
+
+== path-like strings in the wasm (len >= 6 containing / )
+    // Directions and the highlight in highp: at mediump (fp16, where a driver honours it) N.H
+    // moves in steps of 1/2048 near 1, and pow(N.H, 2048), a sharp catchlight, would band.
+    // three.js r180: F_Schlick (f90 = 1), then G * D = u_material.w * (N.H)^n.
+    vec3 hi = 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055;
+/rust/deps/dlmalloc-0.2.14/src/dlmalloc.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/alloc/src/fmt.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/alloc/src/raw_vec/mod.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/alloc/src/string.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/slice/sort/shared/smallsort.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/slice/sort/unstable/quicksort.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/panicking.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/sync/once.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/sys/sync/rwlock/no_threads.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/thread/local.rs
+tj!A/ 
+web3d/src/pack.rs
+web3d/src/renderer.rs
+web3d/src/slots.rs
+web3d/src/timer.rs
+web3d/src/web.rs
+== local-path grep (Users, home, scratch, private/tmp) in pkg:
+none

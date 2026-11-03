@@ -1,0 +1,45 @@
+== critic1-run: node ../critic/run.mjs 5485 ~/pudding/loadngo/web3d/evidence/phase1/critic7/earlier/critic1
+ }
+}
+>>> exit 0
+== critic1-loss: node ../critic/run-loss.mjs 5485
+}
+browser and server stopped
+>>> exit 0
+== critic1-wasm-edge: node ../critic/wasm-edge.mjs
+non-zero bytes written into the first 4 KiB of linear memory (stack bottom): 0
+material handle before: 402653185, after 1024 create/destroy cycles: 469762049; stale 402653185 now destroys the new material -> refused: 402653185 is not a valid material handle: not live in this renderer (destroyed, never created, or another renderer's)
+>>> exit 0
+== critic2-run: node ../critic2/run-critic.mjs 5485 ~/pudding/loadngo/web3d/evidence/phase1/critic7/earlier/critic2
+14 passed, 0 failed; INVALID_OPERATION warnings 0; renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)
+browser and server stopped
+>>> exit 0
+== critic2-abi-edge: node ../critic2/abi-edge.mjs
+clock readings in a frame with timing on: 2 stats [0.005041999999999547,2.5,6,1,1,0,0,0]
+destroy made: {"vertex_array_delete":2,"buffer_delete":9,"program_delete":3,"query_delete":8}
+>>> exit 0
+== critic3-run: node ../critic3/run3.mjs 5485 ~/pudding/loadngo/web3d/evidence/phase1/critic7/earlier/critic3.json
+renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); error none; messages 1
+browser and server stopped
+>>> exit 0
+== critic4-run: node ../critic4/run4.mjs 5485 ~/pudding/loadngo/web3d/evidence/phase1/critic7/earlier/critic4.json
+cputime=1, with the flags again: 601 frames, page scripts 22.32 sampled bytes a frame (gate limit 1)
+browser and server stopped
+>>> exit 0
+== critic5-main: node ../critic5/run5.mjs 5485 ~/pudding/loadngo/web3d/evidence/phase1/critic7/earlier/critic5-main.json x8 main heap cap
+FAIL  K1 a 33rd live renderer is refused, its failed create leaves no listener, and a slot freed by dispose is usable
+browser and server stopped
+>>> exit 0
+== critic5-exhaust: node ../critic5/run5.mjs 5485 ~/pudding/loadngo/web3d/evidence/phase1/critic7/earlier/critic5-exhaust.json exhaust
+FAIL  E1 an object table issues 32,767 x 128 handles in its life (here 1 kept + 32,766 x 128), none twice, then refuses cleanly and keeps drawing
+browser and server stopped
+>>> exit 0
+== critic6-main: node ../critic6/run6.mjs 5485 ~/pudding/loadngo/web3d/evidence/phase1/critic7/earlier/critic6.json
+14 passed; failed: ["G1","G8a","G12"]; renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); console messages 37
+browser and servers stopped
+>>> exit 0
+== critic6-extra: node ../critic6/run6.mjs 5485 ~/pudding/loadngo/web3d/evidence/phase1/critic7/earlier/critic6-extra.json extra.html
+2 passed; failed: ["G14"]; renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); console messages 0
+browser and servers stopped
+>>> exit 0
+all done

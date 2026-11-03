@@ -1,9 +1,9 @@
-serving /Users/jay/pudding/loadngo/web3d on http://127.0.0.1:5574/
+serving web3d on http://127.0.0.1:5616/
 Chrome 156.0.8078.80 (headless, launched by this script)
-low-1024x576: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.491 p50 0.89 p95 4.18 ms (602 readings), CPU mean 0.058 p95 0.085 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,241,231
-full-1366x768: 1366x768 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.142 p50 0.942 p95 3.033 ms (601 readings), CPU mean 0.062 p95 0.15 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 240,238,228
-low-1024x576-no-msaa: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.2 p50 0.573 p95 5.501 ms (602 readings), CPU mean 0.071 p95 0.175 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,240,230
-probes: 64 passed, 0 failed; INVALID_OPERATION warnings: 0
+low-1024x576: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.843 p50 0.841 p95 0.859 ms (602 readings), CPU mean 0.042 p95 0.06 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,241,231
+full-1366x768: 1366x768 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.021 p50 1.02 p95 1.025 ms (602 readings), CPU mean 0.049 p95 0.065 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 240,238,228
+low-1024x576-no-msaa: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.567 p50 0.566 p95 0.58 ms (602 readings), CPU mean 0.037 p95 0.05 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,240,230
+probes: 66 passed, 0 failed; INVALID_OPERATION warnings: 0
   pass  A output is sRGB-encoded (white under a uniform hemisphere)
   pass  A2 the clear colour is linear and encoded
   pass  B texture upright: top-left red, top-right green, bottom-left blue
@@ -66,13 +66,15 @@ probes: 64 passed, 0 failed; INVALID_OPERATION warnings: 0
   pass  K2 with default options: a create during a loss says the context is lost; after the restore and dispose(), a default create works and draws
   pass  K3 a context lost during the create: the error says the context is lost, the context can be restored, and the next create draws
   pass  G a context without depth is refused; an <img> is refused (decode it first); a VideoFrame is sized by its visible rectangle and fills the texture
-  pass  R an iframe's renderer has a serial of its own (each realm starts at random), and its handle is refused here
+  pass  R a same-origin iframe's renderer takes the next serial from the shared counter, and its handle is refused here
+  pass  K4 dispose in onContextLost, then onContextRestored still comes and a new renderer draws; frame() is false at once after a loss; a lost renderer cannot resize a canvas a new one owns
+  pass  T3 pending page errors are reported as pending and do not refuse a good texture; a turned VideoFrame uploads at its turned size; a DataView of the module compiles
   pass  H7 at the largest serial a handle is below 2^50, a handle plus 0.5 or minus 0.25 is refused as a fraction, and the next serial wraps round to 1
-allocation, cold (first frames): 601 frames; page scripts 20.09 sampled bytes a frame; by file {"(native or internal)":10.2,"/demo/demo.js":14.7,"/pkg/web3d.js":2,"/pkg/loadngo_web3d.wasm":1.5,"/pkg/gl.js":1.9}
-allocation, steady (after 30 s of frames): 601 frames; page scripts 2.4 sampled bytes a frame; by file {"(native or internal)":9.5,"/demo/demo.js":2.4}
-allocation, positive control (one short-lived Array of 8 numbers a frame): 601 frames; page scripts 0.59 sampled bytes a frame; by file {"(native or internal)":9.3,"/demo/demo.js":0.6}
-allocation, CPU timing on (reported, not gated): 601 frames; page scripts 1.97 sampled bytes a frame; by file {"(native or internal)":11.2,"/demo/demo.js":2}
+allocation, cold (first frames): 601 frames; page scripts 19.7 sampled bytes a frame; by file {"(native or internal)":10.5,"/demo/demo.js":14.4,"/pkg/web3d.js":1.7,"/pkg/loadngo_web3d.wasm":1.7,"/pkg/gl.js":1.9}
+allocation, steady (after 30 s of frames): 601 frames; page scripts 1.49 sampled bytes a frame; by file {"(native or internal)":9.4,"/demo/demo.js":1.5}
+allocation, positive control (one short-lived Array of 8 numbers a frame): 601 frames; page scripts 0.59 sampled bytes a frame; by file {"(native or internal)":9,"/demo/demo.js":0.6}
+allocation, CPU timing on (reported, not gated): 601 frames; page scripts 1.78 sampled bytes a frame; by file {"(native or internal)":11,"/demo/demo.js":1.8}
   FAILED: the positive control read 0.6 sampled bytes a frame from demo.js (at least 40 expected): the profiler is blind to short-lived objects, so the gate proves nothing
 browser and server stopped
-wrote /Users/jay/pudding/loadngo/web3d/evidence/phase1/blind-control/rendered-check.json
+wrote web3d/evidence/phase1/blind-control/rendered-check.json
 FAILED: see the lines marked FAILED above

@@ -1,4 +1,4 @@
-serving /Users/jay/pudding/loadngo/web3d on http://127.0.0.1:5483/
+serving <home>/pudding/loadngo/web3d on http://127.0.0.1:5483/
 Chrome 156.0.8078.76 (headless, launched by this script)
 low-1024x576: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.469 p50 0.534 p95 6.215 ms (601 readings), CPU mean 0.063 p95 0.1 ms, 60 draws 324932 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,240,230
 full-1366x768: 1366x768 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.104 p50 1.134 p95 1.237 ms (602 readings), CPU mean 0.133 p95 0.27 ms, 60 draws 324932 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 240,238,228
@@ -7,4 +7,4 @@ probes: 50 passed, 0 failed; INVALID_OPERATION warnings: 0
 allocation, cold (first frames): 601 frames; page scripts 581.82 sampled bytes a frame; by file {"(native or internal)":80.7,"/demo/demo.js":327.3,"/pkg/web3d.js":1.2,"/pkg/loadngo_web3d.wasm":251.5,"/pkg/gl.js":1.9}
 allocation, steady (after 70 s of frames): 601 frames; page scripts 0.09 sampled bytes a frame; by file {"(native or internal)":28.1,"/demo/demo.js":0.1}
 browser and server stopped
-wrote /Users/jay/pudding/loadngo/web3d/evidence/phase1/critic4/check-rerun/rendered-check.json
+wrote <home>/pudding/loadngo/web3d/evidence/phase1/critic4/check-rerun/rendered-check.json

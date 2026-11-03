@@ -129,7 +129,9 @@ export function createGl(canvas, gl, hooks = {}) {
       const program = programs.items[p];
       if (!program) return 0;
       const ok = gl.getProgramParameter(program, gl.LINK_STATUS);
-      if (!ok) {
+      if (!ok && gone()) {
+        note(1, 'web3d: the WebGL context was lost while the shader programs were compiled');
+      } else if (!ok) {
         const logs = program.web3dShaders.map((s) => gl.getShaderInfoLog(s)).filter(Boolean);
         logs.push(gl.getProgramInfoLog(program));
         note(2, `web3d: shader program ${p} failed:\n${logs.join('\n')}`);
@@ -236,6 +238,13 @@ export function createGl(canvas, gl, hooks = {}) {
         note(2, `web3d: the image source is ${w}x${h} now, not the ${width}x${height} it was when the texture was asked for`);
         return 0;
       }
+      // Errors left pending by earlier calls (the page's, on a context it made, or a draw's) are not
+      // this upload's: report each as pending and clear it, so the check after the upload is exact.
+      for (let i = 0; i < 16; i++) {
+        const pending = gl.getError();
+        if (pending === gl.NO_ERROR) break;
+        note(1, `web3d: WebGL error 0x${pending.toString(16)} was pending before a texture upload; an earlier call raised it, not the upload`);
+      }
       const texture = gl.createTexture();
       if (!texture) return 0;
       try {
@@ -249,9 +258,10 @@ export function createGl(canvas, gl, hooks = {}) {
         gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, source);
         // Once a texture, not per frame: an upload WebGL refused leaves an error, not an exception.
+        // Pending errors were cleared above, so this one is the upload's.
         const error = gl.getError();
         if (error !== gl.NO_ERROR) {
-          note(2, `web3d: the texture upload raised WebGL error 0x${error.toString(16)}`);
+          note(2, `web3d: the texture upload raised WebGL error 0x${error.toString(16)}: the source's pixels do not fit the ${width}x${height} texture made for it`);
           gl.deleteTexture(texture);
           return 0;
         }

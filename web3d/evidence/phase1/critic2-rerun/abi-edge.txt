@@ -1,7 +1,7 @@
 exports: memory web3d_alloc web3d_caps web3d_create web3d_destroy web3d_error_len web3d_error_ptr web3d_frame web3d_free web3d_init web3d_io web3d_material_create web3d_material_destroy web3d_mesh_create web3d_mesh_destroy web3d_object_create web3d_object_destroy web3d_object_set_transform web3d_object_set_visible web3d_resize web3d_set_ambient web3d_set_camera web3d_set_camera_look_at web3d_set_clear_color web3d_set_cpu_timing web3d_set_key_light web3d_stats web3d_texture_create web3d_texture_destroy
 NULL POINTER:
   init: 1
-  error_ptr/len: 1056061/56 "no renderer (a null pointer: disposed, or never created)"
+  error_ptr/len: 1056133/56 "no renderer (a null pointer: disposed, or never created)"
   io: 0
   stats: 0
   caps: 0
@@ -68,5 +68,5 @@ EDGES:
   resize to 2^31+ (u32 > i32): viewport import received undefined 
 stats, cpu timing off: [null,2.5,4,1,1,0,0,0]
 clock readings in a frame with timing off: 0
-clock readings in a frame with timing on: 2 stats [0.0029170000000000584,2.5,6,1,1,0,0,0]
+clock readings in a frame with timing on: 2 stats [0.003124999999997158,2.5,6,1,1,0,0,0]
 destroy made: {"vertex_array_delete":2,"buffer_delete":9,"program_delete":3,"query_delete":8}

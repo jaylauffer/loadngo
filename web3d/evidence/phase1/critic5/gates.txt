@@ -18,11 +18,11 @@ test result: ok. 73 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 exit 0
 == fresh target dir: clippy host -p loadngo-web3d --all-targets --all-features -D warnings
-    Checking loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+    Checking loadngo-web3d v0.1.0 (<home>/pudding/loadngo/web3d)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.34s
 exit 0
 == fresh target dir: clippy wasm32
-    Checking loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+    Checking loadngo-web3d v0.1.0 (<home>/pudding/loadngo/web3d)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.40s
 exit 0
 == fresh target dir: clippy aarch64-unknown-linux-gnu / x86_64-pc-windows-msvc (check only if targets installed)

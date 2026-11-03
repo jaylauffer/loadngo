@@ -137,10 +137,10 @@
       "name": "H (informational) a handle plus 2^32, plus 0.75, or as a string is refused, not aliased",
       "pass": true,
       "detail": {
-        "handle": 84589917765639,
+        "handle": 874627677028359,
         "alias": {
           "threw": true,
-          "message": "web3d: 84594212732935 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+          "message": "web3d: 874631971995655 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
         },
         "hiddenByAlias": [
           255,
@@ -149,7 +149,7 @@
         ],
         "frac": {
           "threw": true,
-          "message": "web3d: 84589917765639.75 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+          "message": "web3d: 874627677028359.8 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
         },
         "shownByFraction": [
           255,
@@ -158,7 +158,7 @@
         ],
         "str": {
           "threw": true,
-          "message": "web3d: \"84589917765639\" is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+          "message": "web3d: \"874627677028359\" is not a valid object handle (a whole number from 1 to 2^50 - 1)"
         },
         "hiddenByString": [
           255,

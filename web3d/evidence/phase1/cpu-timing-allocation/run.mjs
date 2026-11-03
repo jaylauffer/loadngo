@@ -5,7 +5,7 @@ import http from 'node:http'; import path from 'node:path'; import { readFile } 
 // playwright-core from PLAYWRIGHT_CORE (a path to its index.mjs), else from node_modules.
 const { chromium } = await import(process.env.PLAYWRIGHT_CORE ?? 'playwright-core');
 const port = Number(process.argv[2]); const secs = Number(process.argv[3] ?? 30);
-const ROOTS = { '/web3d/': '/Users/jay/pudding/loadngo/web3d', '/': path.join(path.dirname(new URL(import.meta.url).pathname), 'site') };
+const ROOTS = { '/web3d/': path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..'), '/': path.join(path.dirname(new URL(import.meta.url).pathname), 'site') };
 const T = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm' };
 const server = http.createServer(async (req, res) => { const p = decodeURIComponent(new URL(req.url, 'http://x').pathname); const k = Object.keys(ROOTS).find((x) => p.startsWith(x)); let rel = p.slice(k.length); if (!rel || rel.endsWith('/')) rel += 'index.html'; try { res.writeHead(200, { 'Content-Type': T[path.extname(rel)] ?? 'application/octet-stream' }); res.end(await readFile(path.join(ROOTS[k], rel))); } catch { res.writeHead(404).end(); } });
 await new Promise((ok, no) => { server.once('error', no); server.listen(port, '127.0.0.1', ok); });

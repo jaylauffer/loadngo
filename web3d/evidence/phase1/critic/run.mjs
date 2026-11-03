@@ -7,7 +7,7 @@ const { chromium } = await import(process.env.PLAYWRIGHT_CORE ?? 'playwright-cor
 
 const port = Number(process.argv[2]);
 const outDir = process.argv[3];
-const ROOTS = { '/web3d/': '/Users/jay/pudding/loadngo/web3d', '/probe/': path.join(path.dirname(new URL(import.meta.url).pathname), 'probe-site') };
+const ROOTS = { '/web3d/': path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..'), '/probe/': path.join(path.dirname(new URL(import.meta.url).pathname), 'probe-site') };
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.wasm': 'application/wasm' };
 const server = http.createServer(async (req, res) => {
   const p = decodeURIComponent(new URL(req.url, 'http://x').pathname);

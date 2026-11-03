@@ -175,7 +175,7 @@ browser and server stopped
     "name": "M GPU timer reading present",
     "pass": true,
     "detail": {
-     "gpuMs": 0.07425
+     "gpuMs": 2.237625
     }
    },
    {
@@ -239,7 +239,7 @@ browser and server stopped
     "pass": true,
     "detail": {
      "threw": true,
-     "message": "web3d: 292287691096072 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
+     "message": "web3d: 790750858051592 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
     }
    },
    {
@@ -263,7 +263,7 @@ browser and server stopped
     "pass": true,
     "detail": {
      "threw": false,
-     "value": 292287691161608
+     "value": 790750858117128
     }
    },
    {
@@ -279,7 +279,7 @@ browser and server stopped
     "pass": true,
     "detail": {
      "threw": false,
-     "value": 292287691096073
+     "value": 790750858051593
     }
    },
    {
@@ -330,11 +330,11 @@ browser and server stopped
      "frame": false,
      "createMesh": {
       "threw": true,
-      "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+      "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
      },
      "createTexture": {
       "threw": true,
-      "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+      "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
      },
      "setTransform": {
       "threw": true,
@@ -391,7 +391,7 @@ browser and server stopped
    {
     "name": "stale mesh handle is refused",
     "threw": true,
-    "message": "web3d: 292287691096072 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
+    "message": "web3d: 790750858051592 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
    },
    {
     "name": "NaN position refused",
@@ -406,7 +406,7 @@ browser and server stopped
    {
     "name": "Uint8 normalised weights (255 = 1.0) are dequantised and accepted",
     "threw": false,
-    "value": 292287691161608
+    "value": 790750858117128
    },
    {
     "name": "weights summing to 7 per vertex are refused",
@@ -416,7 +416,7 @@ browser and server stopped
    {
     "name": "joint index 65535 with no skeleton is accepted until phase 3 has skeletons",
     "threw": false,
-    "value": 292287691096073
+    "value": 790750858051593
    },
    {
     "name": "morph deltas of the wrong length are refused",
@@ -469,11 +469,11 @@ browser and server stopped
    "frame": false,
    "createMesh": {
     "threw": true,
-    "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+    "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
    },
    "createTexture": {
     "threw": true,
-    "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+    "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
    },
    "setTransform": {
     "threw": true,
@@ -498,10 +498,10 @@ browser and server stopped
   "culled": 0,
   "gpu": {
    "n": 121,
-   "mean": 1.002,
-   "p50": 1.045,
-   "p95": 1.055,
-   "max": 1.75
+   "mean": 7.522,
+   "p50": 7.567,
+   "p95": 11.259,
+   "max": 11.845
   },
   "glError": 0,
   "msgs": []
@@ -512,11 +512,11 @@ browser and server stopped
   "triangles": 320000,
   "culled": 0,
   "gpu": {
-   "n": 122,
-   "mean": 0.655,
-   "p50": 0.649,
-   "p95": 0.676,
-   "max": 0.782
+   "n": 121,
+   "mean": 4.698,
+   "p50": 5.036,
+   "p95": 6.68,
+   "max": 7.633
   },
   "glError": 0,
   "msgs": []
@@ -526,31 +526,31 @@ browser and server stopped
   "cold": {
    "frames": 480,
    "bytesPerFrameByFile": {
-    "(native)": 76.5,
-    "/probe/game-path.js": 93.7,
-    "/web3d/pkg/web3d.js": 36.5,
-    "/web3d/pkg/loadngo_web3d.wasm": 196.9,
-    "/web3d/pkg/gl.js": 1.9
+    "(native)": 72.9,
+    "/probe/game-path.js": 93.5,
+    "/web3d/pkg/web3d.js": 37.8,
+    "/web3d/pkg/loadngo_web3d.wasm": 193.5,
+    "/web3d/pkg/gl.js": 2.4
    },
    "topFunctions": {
-    "/web3d/pkg/loadngo_web3d.wasm:1 js-to-wasm:i:": 94496,
-    "/probe/game-path.js:20 tick": 44968,
-    "/web3d/pkg/web3d.js:597 _put": 16728,
-    "/web3d/pkg/gl.js:298 query_begin": 428,
-    "/web3d/pkg/web3d.js:853 setCamera": 220,
-    "/web3d/pkg/web3d.js:584 _statsView": 172,
-    "/web3d/pkg/web3d.js:992 readStats": 140,
-    "/web3d/pkg/web3d.js:823 setTransform": 132
+    "/web3d/pkg/loadngo_web3d.wasm:1 js-to-wasm:i:": 92868,
+    "/probe/game-path.js:20 tick": 44880,
+    "/web3d/pkg/web3d.js:670 _put": 17040,
+    "/web3d/pkg/gl.js:308 query_begin": 340,
+    "/web3d/pkg/web3d.js:929 setCamera": 300,
+    "/web3d/pkg/web3d.js:657 _statsView": 220,
+    "/web3d/pkg/web3d.js:899 setTransform": 212,
+    "/web3d/pkg/web3d.js:1022 frame": 196
    }
   },
   "steady": {
    "frames": 600,
    "bytesPerFrameByFile": {
-    "(native)": 32,
-    "/probe/game-path.js": 12.9
+    "(native)": 32.8,
+    "/probe/game-path.js": 11.4
    },
    "topFunctions": {
-    "/probe/game-path.js:20 tick": 7752
+    "/probe/game-path.js:20 tick": 6864
    }
   }
  }

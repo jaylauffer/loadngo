@@ -6,18 +6,18 @@
           "name": "X8 a representable fraction on a handle is refused; o + 2^-30 is o itself for every object handle (2^24 and up)",
           "pass": false,
           "detail": {
-            "spare": 827825015750658,
+            "spare": 894635379523586,
             "spareBelow2To23": false,
             "sparePlusTinyRepresentable": false,
             "destroySparePlusTiny": {
               "threw": false
             },
-            "object": 827825418403841,
+            "object": 894635782176769,
             "objectPlusTinyIsObject": true,
             "smallestObjectHandle": 16777217,
             "setVisibleObjectPlusHalf": {
               "threw": true,
-              "message": "web3d: 827825418403841.5 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: 894635782176769.5 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
             },
             "x8Value": true,
             "spareStillLive": false
@@ -122,13 +122,13 @@
               null
             ],
             "handles": {
-              "oA": 936053225553921,
-              "oB": 936087585292289,
+              "oA": 155192737660929,
+              "oB": 155227097399297,
               "same": false
             },
             "staleHandleOnB": {
               "threw": true,
-              "message": "web3d: 936053225553921 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 155192737660929 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             "pixelAfter": [
               56,
@@ -142,7 +142,7 @@
           "pass": true,
           "detail": {
             "valid": {
-              "handle": 936088256380929
+              "handle": 155227768487937
             },
             "oneFloatPastTheEnd": {
               "refused": "mesh refused: an array's pointer and length do not lie inside one staging allocation"
@@ -160,7 +160,7 @@
               "refused": "mesh refused: an index is past the last vertex"
             },
             "afterWrongLengthFree": {
-              "handle": 936088256380930
+              "handle": 155227768487938
             },
             "afterFree": {
               "refused": "mesh refused: an array's pointer and length do not lie inside one staging allocation"
@@ -174,7 +174,7 @@
             "hugeAlloc": 0,
             "publicCreateAfter": {
               "threw": false,
-              "value": 936088659034113
+              "value": 155228171141121
             },
             "pixel": [
               56,
@@ -220,7 +220,7 @@
             "glErrorBefore": 0,
             "resizedInGetter": {
               "threw": false,
-              "value": 936090538082305
+              "value": 155230050189313
             },
             "glErrorAfterResize": 0
           }
@@ -248,7 +248,7 @@
             "glErrorBefore": 0,
             "resizedInGetter": {
               "threw": false,
-              "value": 936090538082305
+              "value": 155230050189313
             },
             "glErrorAfterResize": 0
           }
@@ -257,10 +257,10 @@
           "name": "L5 one failed fetch, then the same URL loads; two creates sharing one failed fetch both fail and the next one loads",
           "pass": true,
           "detail": {
-            "first": "web3d: fetching the wasm failed: 503 http://127.0.0.1:5569/flaky/once.wasm",
+            "first": "web3d: fetching the wasm failed: 503 http://127.0.0.1:5588/flaky/once.wasm",
             "second": "created",
-            "raceA": "web3d: fetching the wasm failed: 503 http://127.0.0.1:5569/flaky/race.wasm",
-            "raceB": "web3d: fetching the wasm failed: 503 http://127.0.0.1:5569/flaky/race.wasm",
+            "raceA": "web3d: fetching the wasm failed: 503 http://127.0.0.1:5588/flaky/race.wasm",
+            "raceB": "web3d: fetching the wasm failed: 503 http://127.0.0.1:5588/flaky/race.wasm",
             "third": "created",
             "serverRequests": {
               "once": 2,
@@ -273,7 +273,7 @@
           "pass": true,
           "detail": {
             "pageContextAntialias": false,
-            "create": "web3d: this canvas's WebGL context has antialias false; a canvas keeps its first context and that context's settings, so ask for antialias: false or use a new canvas"
+            "create": "web3d: this canvas's WebGL context has antialias false (ask for antialias: false); a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit"
           }
         }
       ],
@@ -293,7 +293,7 @@
             "memoryBytes": 2148663296,
             "create": {
               "threw": false,
-              "value": 1101435236253697
+              "value": 958850911961089
             },
             "nextStagingAt": 2148537056,
             "frame": {

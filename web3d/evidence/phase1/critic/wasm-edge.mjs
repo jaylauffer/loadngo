@@ -1,6 +1,6 @@
 // Drives the shipped wasm with stub GL imports: morph-count overflow on wasm32, and a null renderer pointer.
 import { readFile } from 'node:fs/promises';
-const bytes = await readFile('/Users/jay/pudding/loadngo/web3d/pkg/loadngo_web3d.wasm');
+const bytes = await readFile(new URL('../../../pkg/loadngo_web3d.wasm', import.meta.url));
 let next = 1; const id = () => next++;
 const logs = [];
 const gl = new Proxy({}, { get: (_, name) => {

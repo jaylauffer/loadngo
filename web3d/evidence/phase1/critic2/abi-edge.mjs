@@ -1,7 +1,7 @@
 // Critic's own raw-ABI probe: drives pkg/loadngo_web3d.wasm in Node with stub GL imports that record calls.
 import { readFile } from 'node:fs/promises';
 
-const bytes = await readFile('/Users/jay/pudding/loadngo/web3d/pkg/loadngo_web3d.wasm');
+const bytes = await readFile(new URL('../../../pkg/loadngo_web3d.wasm', import.meta.url));
 let next = 1;
 const id = () => next++;
 const calls = [];

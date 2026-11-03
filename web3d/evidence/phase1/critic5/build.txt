@@ -5,7 +5,7 @@ a58be9321ab5a75029d98e429a64eb3178f4c3f0560e64244c46d34b8729fa90  gl.js
 3a2a69eb0c34c6356ec9cb2f53743108396d920ecfc05596e37f0b505b230613  web3d.d.ts
 0e0f8742756f20aa9c8ea14e80d28656e31da80f53556d166dc65e073a146254  web3d.js
 == build.sh run 1 (workspace target)
-== cargo rustc (target dir: /Users/jay/pudding/loadngo/target)
+== cargo rustc (target dir: <home>/pudding/loadngo/target)
 == wasm-opt -Os
 == sizes (bytes, and gzip -9)
 release/loadngo_web3d.wasm           105026  gzip   37776
@@ -18,7 +18,7 @@ a58be9321ab5a75029d98e429a64eb3178f4c3f0560e64244c46d34b8729fa90  gl.js
 3a2a69eb0c34c6356ec9cb2f53743108396d920ecfc05596e37f0b505b230613  web3d.d.ts
 0e0f8742756f20aa9c8ea14e80d28656e31da80f53556d166dc65e073a146254  web3d.js
 == build.sh run 2 (workspace target)
-== cargo rustc (target dir: /Users/jay/pudding/loadngo/target)
+== cargo rustc (target dir: <home>/pudding/loadngo/target)
 == wasm-opt -Os
 == sizes (bytes, and gzip -9)
 release/loadngo_web3d.wasm           105026  gzip   37776
@@ -32,7 +32,7 @@ a58be9321ab5a75029d98e429a64eb3178f4c3f0560e64244c46d34b8729fa90  gl.js
 0e0f8742756f20aa9c8ea14e80d28656e31da80f53556d166dc65e073a146254  web3d.js
 == build.sh run 3 (empty CARGO_TARGET_DIR)
 == cargo rustc (target dir: <scratch>/target-empty)
-   Compiling loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+   Compiling loadngo-web3d v0.1.0 (<home>/pudding/loadngo/web3d)
 == wasm-opt -Os
 == sizes (bytes, and gzip -9)
 release/loadngo_web3d.wasm           105026  gzip   37776

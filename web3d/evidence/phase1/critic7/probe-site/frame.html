@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>web3d critic7 frame</title>
+  <link rel="icon" href="data:,">
+</head>
+<body>
+  <!-- A frame for probe7.js. Same origin or cross-origin, depending on where it is loaded from. It
+       makes one renderer, draws green, and reports its serial, a handle, whether it found the shared
+       state on the top window, and (with ?nest=<url>) the report of a frame nested inside it. -->
+  <canvas id="c" width="16" height="16"></canvas>
+  <script type="module">
+    import { createRenderer } from '/web3d/pkg/web3d.js';
+    const KEY = Symbol.for('loadngo-web3d');
+    const report = {};
+    try {
+      let topShared = 'unreachable';
+      try { topShared = window.top !== window && window.top[KEY] !== undefined ? 'on top' : 'not on top'; } catch {}
+      report.topShared = topShared;
+      report.ownShared = window[KEY] !== undefined;
+      const r = await createRenderer(document.getElementById('c'), { width: 16, height: 16, antialias: false });
+      const mesh = r.createMesh({
+        positions: new Float32Array([-1, -1, -5, 1, -1, -5, 1, 1, -5, -1, 1, -5]),
+        normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]),
+        indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
+      });
+      const o = r.createObject(mesh, r.createMaterial({ baseColor: [0, 1, 0, 1] }));
+      report.serial = r._serial;
+      report.object = o;
+      report.made = (window.top === window ? window : (() => { try { return window.top; } catch { return window; } })())[KEY]?.serials?.made;
+      window.__r = r;
+    } catch (e) {
+      report.error = String(e?.message ?? e);
+    }
+    const nest = new URLSearchParams(location.search).get('nest');
+    if (nest) {
+      const f = document.createElement('iframe');
+      f.src = nest;
+      document.body.append(f);
+      report.nested = await new Promise((res) => {
+        addEventListener('message', (e) => { if (e.source === f.contentWindow) res(e.data); });
+        setTimeout(() => res('timeout'), 5000);
+      });
+    }
+    parent.postMessage(report, '*');
+  </script>
+</body>
+</html>

@@ -51,22 +51,22 @@ $ cargo clippy --locked --workspace --all-targets --all-features --exclude loadn
 # CARGO_TARGET_DIR=<empty scratch dir> from here
 
 $ cargo clippy --locked --offline -p loadngo-web3d --all-targets --all-features -- -D warnings
-    Checking loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+    Checking loadngo-web3d v0.1.0 (<home>/pudding/loadngo/web3d)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.38s
 >>> exit 0
 
 $ cargo clippy --locked -p loadngo-web3d --target wasm32-unknown-unknown --all-targets -- -D warnings
-    Checking loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+    Checking loadngo-web3d v0.1.0 (<home>/pudding/loadngo/web3d)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.37s
 >>> exit 0
 
 $ cargo clippy --locked --offline -p loadngo-web3d --target aarch64-unknown-linux-gnu --all-targets --all-features -- -D warnings
-    Checking loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+    Checking loadngo-web3d v0.1.0 (<home>/pudding/loadngo/web3d)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.35s
 >>> exit 0
 
 $ cargo clippy --locked --offline -p loadngo-web3d --target x86_64-pc-windows-msvc --all-targets --all-features -- -D warnings
-    Checking loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+    Checking loadngo-web3d v0.1.0 (<home>/pudding/loadngo/web3d)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.35s
 >>> exit 0
 

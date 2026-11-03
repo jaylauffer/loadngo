@@ -1,5 +1,5 @@
 == build.sh (workspace target)
-== cargo build (target dir: /Users/jay/pudding/loadngo/target)
+== cargo build (target dir: <home>/pudding/loadngo/target)
     Finished `release` profile [optimized] target(s) in 0.05s
 == wasm-opt -Os
 == sizes (bytes, and gzip -9)

@@ -1,4 +1,4 @@
 $ THREE_DIR=<a three 0.180.0 package> node web3d/tools/three-reference.mjs --check
 three 0.180.0: 20 transcribed lines found verbatim
-/Users/jay/pudding/loadngo/web3d/tools/three-reference.txt matches three 0.180.0 exactly
+<home>/pudding/loadngo/web3d/tools/three-reference.txt matches three 0.180.0 exactly
 >>> exit 0

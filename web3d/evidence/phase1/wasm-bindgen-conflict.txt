@@ -29,14 +29,14 @@ exit 101
 error: failed to select a version for `wasm-bindgen`.
     ... required by package `js-sys v0.3.77`
     ... which satisfies dependency `js-sys = "^0"` of package `pdfium-render v0.9.4`
-    ... which satisfies dependency `pdfium-render = "^0.9.4"` of package `loadngo-host-desktop v0.1.0 (/Users/jay/pudding/loadngo/host-desktop)`
-    ... which satisfies path dependency `loadngo-host-desktop` (locked to 0.1.0) of package `bitmap-editor v0.1.0 (/Users/jay/pudding/loadngo/bitmap-editor)`
+    ... which satisfies dependency `pdfium-render = "^0.9.4"` of package `loadngo-host-desktop v0.1.0 (<home>/pudding/loadngo/host-desktop)`
+    ... which satisfies path dependency `loadngo-host-desktop` (locked to 0.1.0) of package `bitmap-editor v0.1.0 (<home>/pudding/loadngo/bitmap-editor)`
 versions that meet the requirements `=0.2.100` are: 0.2.100
 
 all possible versions conflict with previously selected packages
 
   previously selected package `wasm-bindgen v0.2.130`
-    ... which satisfies dependency `wasm-bindgen = "=0.2.130"` of package `loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)`
+    ... which satisfies dependency `wasm-bindgen = "=0.2.130"` of package `loadngo-web3d v0.1.0 (<home>/pudding/loadngo/web3d)`
 
 failed to select a version for `wasm-bindgen` which could resolve this conflict
 

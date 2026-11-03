@@ -3,7 +3,7 @@
 
 $ web3d/build.sh   # run 1, workspace target/
 == toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
-== cargo rustc (target dir: /Users/jay/pudding/loadngo/target)
+== cargo rustc (target dir: <home>/pudding/loadngo/target)
     Finished `release` profile [optimized] target(s) in 0.08s
 == wasm-opt -Os
 == sizes (bytes, and gzip -9)
@@ -19,7 +19,7 @@ c3996bb80e2b82225eab4003febb4acd9af98f79e062152943896114833a4c98  web3d/pkg/web3
 
 $ web3d/build.sh   # run 2, workspace target/
 == toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
-== cargo rustc (target dir: /Users/jay/pudding/loadngo/target)
+== cargo rustc (target dir: <home>/pudding/loadngo/target)
     Finished `release` profile [optimized] target(s) in 0.04s
 == wasm-opt -Os
 == sizes (bytes, and gzip -9)
@@ -36,7 +36,7 @@ c3996bb80e2b82225eab4003febb4acd9af98f79e062152943896114833a4c98  web3d/pkg/web3
 $ CARGO_TARGET_DIR=<new empty dir> web3d/build.sh   # run 3
 == toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
 == cargo rustc (target dir: <scratch>/target-empty-build)
-   Compiling loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+   Compiling loadngo-web3d v0.1.0 (<home>/pudding/loadngo/web3d)
     Finished `release` profile [optimized] target(s) in 0.53s
 == wasm-opt -Os
 == sizes (bytes, and gzip -9)

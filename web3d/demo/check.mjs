@@ -109,7 +109,7 @@ await new Promise((resolve, reject) => {
   server.once('error', reject);
   server.listen(port, '127.0.0.1', resolve);
 });
-console.log(`serving ${root} on http://127.0.0.1:${port}/`);
+console.log(`serving ${path.relative(process.cwd(), root) || '.'} on http://127.0.0.1:${port}/`);
 
 /** Sums sampled allocation bytes by script file and by function, from a sampling heap profile. */
 function allocationsByScript(profile) {
@@ -307,7 +307,7 @@ try {
   console.log('browser and server stopped');
 }
 await writeFile(path.join(outDir, 'rendered-check.json'), `${JSON.stringify(report, null, 2)}\n`);
-console.log(`wrote ${path.join(outDir, 'rendered-check.json')}`);
+console.log(`wrote ${path.relative(process.cwd(), path.join(outDir, 'rendered-check.json'))}`);
 if (failed) {
   console.error('FAILED: see the lines marked FAILED above');
   process.exit(1);

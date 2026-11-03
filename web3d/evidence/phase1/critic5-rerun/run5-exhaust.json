@@ -6,8 +6,8 @@
           "name": "E1 an object table issues 32,767 x 128 handles in its life (here 1 kept + 32,766 x 128), none twice, then refuses cleanly and keeps drawing",
           "pass": false,
           "detail": {
-            "keep": 445671039565825,
-            "ms": 15491,
+            "keep": 601694316527617,
+            "ms": 15388,
             "issued": 134213633,
             "error": "web3d: too many objects",
             "lowSlotHandles": 81919,

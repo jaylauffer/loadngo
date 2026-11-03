@@ -1,36 +1,36 @@
-== critic1-run: node /Users/jay/pudding/loadngo/web3d/evidence/phase1/critic6/../critic/run.mjs 5483 /Users/jay/pudding/loadngo/web3d/evidence/phase1/critic6/earlier/critic1
+== critic1-run: node <home>/pudding/loadngo/web3d/evidence/phase1/critic6/../critic/run.mjs 5483 <home>/pudding/loadngo/web3d/evidence/phase1/critic6/earlier/critic1
  }
 }
 >>> exit 0
-== critic1-loss: node /Users/jay/pudding/loadngo/web3d/evidence/phase1/critic6/../critic/run-loss.mjs 5483
+== critic1-loss: node <home>/pudding/loadngo/web3d/evidence/phase1/critic6/../critic/run-loss.mjs 5483
 }
 browser and server stopped
 >>> exit 0
-== critic1-wasm-edge: node /Users/jay/pudding/loadngo/web3d/evidence/phase1/critic6/../critic/wasm-edge.mjs
+== critic1-wasm-edge: node <home>/pudding/loadngo/web3d/evidence/phase1/critic6/../critic/wasm-edge.mjs
 non-zero bytes written into the first 4 KiB of linear memory (stack bottom): 0
 material handle before: 3221225473, after 1024 create/destroy cycles: 3288334337; stale 3221225473 now destroys the new material -> refused: 3221225473 is not a valid material handle: not live in this renderer (destroyed, never created, or another renderer's)
 >>> exit 0
-== critic2-run: node /Users/jay/pudding/loadngo/web3d/evidence/phase1/critic6/../critic2/run-critic.mjs 5483 /Users/jay/pudding/loadngo/web3d/evidence/phase1/critic6/earlier/critic2
+== critic2-run: node <home>/pudding/loadngo/web3d/evidence/phase1/critic6/../critic2/run-critic.mjs 5483 <home>/pudding/loadngo/web3d/evidence/phase1/critic6/earlier/critic2
 14 passed, 0 failed; INVALID_OPERATION warnings 0; renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)
 browser and server stopped
 >>> exit 0
-== critic2-abi-edge: node /Users/jay/pudding/loadngo/web3d/evidence/phase1/critic6/../critic2/abi-edge.mjs
+== critic2-abi-edge: node <home>/pudding/loadngo/web3d/evidence/phase1/critic6/../critic2/abi-edge.mjs
 clock readings in a frame with timing on: 2 stats [0.9648750000000028,2.5,6,3001,3001,0,0,0]
 destroy made: {"vertex_array_delete":2,"buffer_delete":9,"program_delete":3,"query_delete":8}
 >>> exit 0
-== critic3-run: node /Users/jay/pudding/loadngo/web3d/evidence/phase1/critic6/../critic3/run3.mjs 5483 /Users/jay/pudding/loadngo/web3d/evidence/phase1/critic6/earlier/critic3.json
+== critic3-run: node <home>/pudding/loadngo/web3d/evidence/phase1/critic6/../critic3/run3.mjs 5483 <home>/pudding/loadngo/web3d/evidence/phase1/critic6/earlier/critic3.json
 renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); error none; messages 1
 browser and server stopped
 >>> exit 0
-== critic4-run: node /Users/jay/pudding/loadngo/web3d/evidence/phase1/critic6/../critic4/run4.mjs 5483 /Users/jay/pudding/loadngo/web3d/evidence/phase1/critic6/earlier/critic4.json
+== critic4-run: node <home>/pudding/loadngo/web3d/evidence/phase1/critic6/../critic4/run4.mjs 5483 <home>/pudding/loadngo/web3d/evidence/phase1/critic6/earlier/critic4.json
 cputime=1, with the flags again: 601 frames, page scripts 22.32 sampled bytes a frame (gate limit 1)
 browser and server stopped
 >>> exit 0
-== critic5-main: node /Users/jay/pudding/loadngo/web3d/evidence/phase1/critic6/../critic5/run5.mjs 5483 /Users/jay/pudding/loadngo/web3d/evidence/phase1/critic6/earlier/critic5-main.json x8 main heap cap
+== critic5-main: node <home>/pudding/loadngo/web3d/evidence/phase1/critic6/../critic5/run5.mjs 5483 <home>/pudding/loadngo/web3d/evidence/phase1/critic6/earlier/critic5-main.json x8 main heap cap
 FAIL  K1 a 33rd live renderer is refused, its failed create leaves no listener, and a slot freed by dispose is usable
 browser and server stopped
 >>> exit 0
-== critic5-exhaust: node /Users/jay/pudding/loadngo/web3d/evidence/phase1/critic6/../critic5/run5.mjs 5483 /Users/jay/pudding/loadngo/web3d/evidence/phase1/critic6/earlier/critic5-exhaust.json exhaust
+== critic5-exhaust: node <home>/pudding/loadngo/web3d/evidence/phase1/critic6/../critic5/run5.mjs 5483 <home>/pudding/loadngo/web3d/evidence/phase1/critic6/earlier/critic5-exhaust.json exhaust
 FAIL  E1 an object table issues 32,767 x 128 handles in its life (here 1 kept + 32,766 x 128), none twice, then refuses cleanly and keeps drawing
 browser and server stopped
 >>> exit 0
