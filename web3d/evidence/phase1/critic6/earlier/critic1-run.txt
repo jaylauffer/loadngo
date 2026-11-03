@@ -1,0 +1,559 @@
+browser and server stopped
+{
+ "browser": "156.0.8078.76",
+ "probe": {
+  "tests": [
+   {
+    "name": "A sRGB-encoded output (white, ambient 0.5)",
+    "pass": true,
+    "detail": {
+     "got": [
+      191,
+      191,
+      191
+     ],
+     "expected": 191,
+     "ifLinearOutput": 133
+    }
+   },
+   {
+    "name": "A2 clear colour linear 0.5 encoded",
+    "pass": true,
+    "detail": {
+     "got": [
+      188,
+      188,
+      188
+     ],
+     "expected": 188
+    }
+   },
+   {
+    "name": "B texture upright: top-left red, top-right green, bottom-left blue",
+    "pass": true,
+    "detail": {
+     "tl": [
+      254,
+      58,
+      58
+     ],
+     "tr": [
+      58,
+      254,
+      56
+     ],
+     "bl": [
+      58,
+      56,
+      254
+     ],
+     "lo": 55
+    }
+   },
+   {
+    "name": "B sRGB texture decoded (128 -> linear 0.216)",
+    "pass": true,
+    "detail": {
+     "got": [
+      136,
+      136,
+      136
+     ],
+     "expected": 136,
+     "ifNotDecoded": 191
+    }
+   },
+   {
+    "name": "C alpha mask: left discarded (red behind), right drawn (green)",
+    "pass": true,
+    "detail": {
+     "left": [
+      255,
+      56,
+      56
+     ],
+     "right": [
+      56,
+      255,
+      56
+     ]
+    }
+   },
+   {
+    "name": "D blend over opaque (blended drawn last, blended in encoded space)",
+    "pass": true,
+    "detail": {
+     "got": [
+      156,
+      156,
+      255
+     ],
+     "expected": [
+      156,
+      156,
+      255
+     ]
+    }
+   },
+   {
+    "name": "E depth: near quad wins, far visible around it",
+    "pass": true,
+    "detail": {
+     "centre": [
+      56,
+      255,
+      56
+     ],
+     "corner": [
+      255,
+      56,
+      56
+     ]
+    }
+   },
+   {
+    "name": "F single-sided back face culled; double-sided drawn and lit from the front",
+    "pass": true,
+    "detail": {
+     "culled": [
+      0,
+      0,
+      0
+     ],
+     "doubleSided": [
+      255,
+      255,
+      255
+     ]
+    }
+   },
+   {
+    "name": "G mirrored single-sided quad still drawn and lit",
+    "pass": true,
+    "detail": {
+     "got": [
+      255,
+      255,
+      255
+     ]
+    }
+   },
+   {
+    "name": "H object outside the view is culled",
+    "pass": true,
+    "detail": {
+     "draws": 0,
+     "culled": 1
+    }
+   },
+   {
+    "name": "N 65,537-vertex mesh with u32 indices draws",
+    "pass": true,
+    "detail": {
+     "got": [
+      255,
+      255,
+      255
+     ]
+    }
+   },
+   {
+    "name": "L after memory growth: setTransform, setCamera, frame and readStats still work",
+    "pass": true,
+    "detail": {
+     "memoryBefore": 3211264,
+     "memoryAfter": 45285376,
+     "pixel": [
+      255,
+      255,
+      255
+     ],
+     "draws": 1
+    }
+   },
+   {
+    "name": "M GPU timer reading present",
+    "pass": true,
+    "detail": {
+     "gpuMs": 0.027541
+    }
+   },
+   {
+    "name": "I index past the end is refused",
+    "pass": true,
+    "detail": {
+     "threw": true,
+     "message": "web3d: mesh refused: an index is past the last vertex"
+    }
+   },
+   {
+    "name": "I positions not a multiple of 3 are refused",
+    "pass": true,
+    "detail": {
+     "threw": true,
+     "message": "web3d: mesh refused: positions must hold x, y, z for at least one vertex"
+    }
+   },
+   {
+    "name": "I texture over MAX_TEXTURE_SIZE is refused",
+    "pass": true,
+    "detail": {
+     "threw": true,
+     "message": "web3d: texture is 16385x1; this GPU allows 1 to 16384 pixels a side (resize it first, for example with createImageBitmap's resizeWidth)"
+    }
+   },
+   {
+    "name": "I destroying a texture in use is refused",
+    "pass": true,
+    "detail": {
+     "threw": true,
+     "message": "web3d: the texture is still used by 1 materials; destroy those first"
+    }
+   },
+   {
+    "name": "I destroying a mesh in use is refused",
+    "pass": true,
+    "detail": {
+     "threw": true,
+     "message": "web3d: the mesh is still used by 6 objects; destroy those first"
+    }
+   },
+   {
+    "name": "I unknown alpha mode is refused",
+    "pass": true,
+    "detail": {
+     "threw": true,
+     "message": "web3d: unknown alpha mode \"add\""
+    }
+   },
+   {
+    "name": "I non-finite transform is refused",
+    "pass": true,
+    "detail": {
+     "threw": true,
+     "message": "web3d: transform refused: every element must be finite"
+    }
+   },
+   {
+    "name": "I stale mesh handle is refused",
+    "pass": true,
+    "detail": {
+     "threw": true,
+     "message": "web3d: 9663676424 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
+    }
+   },
+   {
+    "name": "I NaN position refused",
+    "pass": true,
+    "detail": {
+     "threw": true,
+     "message": "web3d: mesh refused: positions must be finite"
+    }
+   },
+   {
+    "name": "I Int16 (quantised) positions are refused",
+    "pass": true,
+    "detail": {
+     "threw": true,
+     "message": "web3d: positions must be a Float32Array, not Int16Array; dequantise integer data first"
+    }
+   },
+   {
+    "name": "I Uint8 normalised weights (255 = 1.0) are dequantised and accepted",
+    "pass": true,
+    "detail": {
+     "threw": false,
+     "value": 9663741960
+    }
+   },
+   {
+    "name": "I weights summing to 7 per vertex are refused",
+    "pass": true,
+    "detail": {
+     "threw": true,
+     "message": "web3d: mesh refused: weights must lie between 0 and 1"
+    }
+   },
+   {
+    "name": "I joint index 65535 with no skeleton is accepted until phase 3 has skeletons",
+    "pass": true,
+    "detail": {
+     "threw": false,
+     "value": 9663676425
+    }
+   },
+   {
+    "name": "I morph deltas of the wrong length are refused",
+    "pass": true,
+    "detail": {
+     "threw": true,
+     "message": "web3d: mesh refused: morph deltas must hold x, y, z per vertex for each target"
+    }
+   },
+   {
+    "name": "J calls after dispose are refused with a clear error",
+    "pass": true,
+    "detail": {
+     "frame": {
+      "threw": true,
+      "message": "web3d: renderer disposed"
+     },
+     "createMaterial": {
+      "threw": true,
+      "message": "web3d: renderer disposed"
+     },
+     "createMesh": {
+      "threw": true,
+      "message": "web3d: renderer disposed"
+     },
+     "setTransform": {
+      "threw": true,
+      "message": "web3d: renderer disposed"
+     },
+     "destroyMesh": {
+      "threw": true,
+      "message": "web3d: renderer disposed"
+     },
+     "readStats": {
+      "threw": true,
+      "message": "web3d: renderer disposed"
+     },
+     "mem0": false
+    }
+   },
+   {
+    "name": "K context loss: frame stops, creates refused; a new renderer on the restored context draws",
+    "pass": true,
+    "detail": {
+     "lostCalled": true,
+     "lost": true,
+     "frame": false,
+     "createMesh": {
+      "threw": true,
+      "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+     },
+     "createTexture": {
+      "threw": true,
+      "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+     },
+     "setTransform": {
+      "threw": true,
+      "message": "web3d: 1 is not a valid object handle"
+     },
+     "newRendererPixel": [
+      56,
+      255,
+      56,
+      255
+     ],
+     "newLostFlag": false,
+     "errorBeforeOldDispose": 0,
+     "errorAfterOldDispose": 0
+    }
+   }
+  ],
+  "notes": [
+   {
+    "name": "index past the end is refused",
+    "threw": true,
+    "message": "web3d: mesh refused: an index is past the last vertex"
+   },
+   {
+    "name": "positions not a multiple of 3 are refused",
+    "threw": true,
+    "message": "web3d: mesh refused: positions must hold x, y, z for at least one vertex"
+   },
+   {
+    "name": "texture over MAX_TEXTURE_SIZE is refused",
+    "threw": true,
+    "message": "web3d: texture is 16385x1; this GPU allows 1 to 16384 pixels a side (resize it first, for example with createImageBitmap's resizeWidth)"
+   },
+   {
+    "name": "destroying a texture in use is refused",
+    "threw": true,
+    "message": "web3d: the texture is still used by 1 materials; destroy those first"
+   },
+   {
+    "name": "destroying a mesh in use is refused",
+    "threw": true,
+    "message": "web3d: the mesh is still used by 6 objects; destroy those first"
+   },
+   {
+    "name": "unknown alpha mode is refused",
+    "threw": true,
+    "message": "web3d: unknown alpha mode \"add\""
+   },
+   {
+    "name": "non-finite transform is refused",
+    "threw": true,
+    "message": "web3d: transform refused: every element must be finite"
+   },
+   {
+    "name": "stale mesh handle is refused",
+    "threw": true,
+    "message": "web3d: 9663676424 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
+   },
+   {
+    "name": "NaN position refused",
+    "threw": true,
+    "message": "web3d: mesh refused: positions must be finite"
+   },
+   {
+    "name": "Int16 (quantised) positions are refused",
+    "threw": true,
+    "message": "web3d: positions must be a Float32Array, not Int16Array; dequantise integer data first"
+   },
+   {
+    "name": "Uint8 normalised weights (255 = 1.0) are dequantised and accepted",
+    "threw": false,
+    "value": 9663741960
+   },
+   {
+    "name": "weights summing to 7 per vertex are refused",
+    "threw": true,
+    "message": "web3d: mesh refused: weights must lie between 0 and 1"
+   },
+   {
+    "name": "joint index 65535 with no skeleton is accepted until phase 3 has skeletons",
+    "threw": false,
+    "value": 9663676425
+   },
+   {
+    "name": "morph deltas of the wrong length are refused",
+    "threw": true,
+    "message": "web3d: mesh refused: morph deltas must hold x, y, z per vertex for each target"
+   }
+  ],
+  "info": {
+   "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+   "vendor": "Google Inc. (Apple)",
+   "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+   "maxTextureSize": 16384,
+   "timerQuery": true,
+   "antialias": false,
+   "samples": 0
+  },
+  "final": {
+   "glError": 0
+  },
+  "useAfterDispose": {
+   "frame": {
+    "threw": true,
+    "message": "web3d: renderer disposed"
+   },
+   "createMaterial": {
+    "threw": true,
+    "message": "web3d: renderer disposed"
+   },
+   "createMesh": {
+    "threw": true,
+    "message": "web3d: renderer disposed"
+   },
+   "setTransform": {
+    "threw": true,
+    "message": "web3d: renderer disposed"
+   },
+   "destroyMesh": {
+    "threw": true,
+    "message": "web3d: renderer disposed"
+   },
+   "readStats": {
+    "threw": true,
+    "message": "web3d: renderer disposed"
+   },
+   "mem0": false
+  },
+  "contextLoss": {
+   "lostCalled": true,
+   "lost": true,
+   "frame": false,
+   "createMesh": {
+    "threw": true,
+    "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+   },
+   "createTexture": {
+    "threw": true,
+    "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again"
+   },
+   "setTransform": {
+    "threw": true,
+    "message": "web3d: 1 is not a valid object handle"
+   },
+   "newRendererPixel": [
+    56,
+    255,
+    56,
+    255
+   ],
+   "newLostFlag": false,
+   "errorBeforeOldDispose": 0,
+   "errorAfterOldDispose": 0
+  }
+ },
+ "probeMessages": [],
+ "still-full": {
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+  "draws": 64,
+  "triangles": 320000,
+  "culled": 0,
+  "gpu": {
+   "n": 122,
+   "mean": 1.087,
+   "p50": 1.019,
+   "p95": 3.652,
+   "max": 5.782
+  },
+  "glError": 0,
+  "msgs": []
+ },
+ "still-noaa": {
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+  "draws": 64,
+  "triangles": 320000,
+  "culled": 0,
+  "gpu": {
+   "n": 122,
+   "mean": 0.665,
+   "p50": 0.662,
+   "p95": 0.691,
+   "max": 0.837
+  },
+  "glError": 0,
+  "msgs": []
+ },
+ "gamePath": {
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+  "cold": {
+   "frames": 480,
+   "bytesPerFrameByFile": {
+    "(native)": 74.7,
+    "/probe/game-path.js": 94.2,
+    "/web3d/pkg/web3d.js": 38.3,
+    "/web3d/pkg/loadngo_web3d.wasm": 194.3,
+    "/web3d/pkg/gl.js": 1.7
+   },
+   "topFunctions": {
+    "/web3d/pkg/loadngo_web3d.wasm:1 js-to-wasm:i:": 93252,
+    "/probe/game-path.js:20 tick": 45216,
+    "/web3d/pkg/web3d.js:502 _put": 17424,
+    "/web3d/pkg/gl.js:289 query_begin": 300,
+    "/web3d/pkg/web3d.js:897 readStats": 220,
+    "/web3d/pkg/web3d.js:728 setTransform": 212,
+    "/web3d/pkg/web3d.js:758 setCamera": 188,
+    "/web3d/pkg/web3d.js:489 _statsView": 180
+   }
+  },
+  "steady": {
+   "frames": 600,
+   "bytesPerFrameByFile": {
+    "(native)": 31,
+    "/probe/game-path.js": 12.4
+   },
+   "topFunctions": {
+    "/probe/game-path.js:20 tick": 7368,
+    "/probe/game-path.js:18 frames": 56
+   }
+  }
+ }
+}
+>>> exit 0

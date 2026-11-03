@@ -10,8 +10,9 @@
 //   requestAnimationFrame(function tick() { r.frame(); requestAnimationFrame(tick); });
 //
 // Colours are linear, light intensities in three.js r180's units, matrices column-major (three.js's
-// `elements`). Handles are whole numbers below 2^53 that name one kind of thing in one renderer, and
-// no handle is issued twice in a page. Nothing on the per-frame path (`setTransform`, `setCamera`,
+// `elements`). Handles are whole numbers below 2^50 that name one kind of thing in one renderer, and
+// no handle is issued twice in a window and its same-origin frames (a worker or a cross-origin frame
+// counts its own, from a random start). Nothing on the per-frame path (`setTransform`, `setCamera`,
 // `setCameraLookAt`, `setKeyLight`, `frame`, `readStats`) allocates.
 //
 // The boundary. Every argument is checked before it reaches wasm:
@@ -22,8 +23,8 @@
 // - a caller's object (a descriptor, an options bag, an Array's length and elements) is read once,
 //   and a renderer method called from inside that read (a getter or a Proxy trap) throws instead of
 //   running;
-// - handles carry their kind and their renderer's page-unique serial, and the Rust side refuses a
-//   handle of another kind or from another renderer.
+// - handles carry their kind and their renderer's serial, and the Rust side refuses a handle of
+//   another kind or from another renderer.
 // Page code that patches built-ins, or reaches into a renderer's private fields, is out of scope.
 //
 // After `dispose()` every call throws "web3d: renderer disposed". When the WebGL context is lost,
@@ -40,6 +41,8 @@ const STATS_LEN = 8;
 const MAX_DRAWING_BUFFER = 32768;
 /** Renderer serials run from 1 to below 2^20 (src/slots.rs SERIALS), one per renderer a page makes. */
 const SERIALS = 2 ** 20;
+/** Every handle is below this (src/slots.rs HANDLE_LIMIT): 2^50, where a number still holds quarters. */
+const HANDLE_LIMIT = 2 ** 50;
 
 const DISPOSED = 'web3d: renderer disposed';
 const LOST =
@@ -106,14 +109,14 @@ function describe(v) {
 }
 
 /**
- * Checks a handle before it crosses into wasm: a whole number from 1 to 2^53 - 1, passed to wasm as
+ * Checks a handle before it crosses into wasm: a whole number from 1 to 2^50 - 1, passed to wasm as
  * an exact double. A fraction, a numeric string or a Number object is refused here; the Rust side
  * then refuses a number that is not a live handle of this kind in this renderer. Allocates nothing
  * unless it throws.
  */
 function handle(what, h) {
-  if (!Number.isSafeInteger(h) || h <= 0) {
-    throw new Error(`web3d: ${describe(h)} is not a valid ${what} handle (a whole number from 1 to 2^53 - 1)`);
+  if (!Number.isSafeInteger(h) || h <= 0 || h >= HANDLE_LIMIT) {
+    throw new Error(`web3d: ${describe(h)} is not a valid ${what} handle (a whole number from 1 to 2^50 - 1)`);
   }
   return h;
 }
@@ -175,36 +178,61 @@ function morphList(targets) {
   return list;
 }
 
-// The image sources the browser can upload, each with its built-in size getters. A source is
-// recognised by whichever getter accepts it, so its own properties are never read.
+// The image sources whose upload size is exactly knowable, each with built-in getters for it. A
+// source is recognised by whichever getter accepts it, so its own properties are never read. A
+// VideoFrame uploads its visible rectangle, not its display size.
+const sizeBy = (name, w, h) => {
+  const proto = globalThis[name]?.prototype;
+  const gw = proto && getter(proto, w);
+  const gh = proto && getter(proto, h);
+  return gw && gh ? (source) => [gw.call(source), gh.call(source)] : null;
+};
+const RECT = globalThis.DOMRectReadOnly?.prototype;
+const RECT_W = RECT && getter(RECT, 'width');
+const RECT_H = RECT && getter(RECT, 'height');
+const VISIBLE_RECT = globalThis.VideoFrame && getter(globalThis.VideoFrame.prototype, 'visibleRect');
 const IMAGE_KINDS = [
-  ['ImageBitmap', 'width', 'height'],
-  ['HTMLImageElement', 'naturalWidth', 'naturalHeight'],
-  ['HTMLCanvasElement', 'width', 'height'],
-  ['OffscreenCanvas', 'width', 'height'],
-  ['HTMLVideoElement', 'videoWidth', 'videoHeight'],
-  ['ImageData', 'width', 'height'],
-  ['VideoFrame', 'displayWidth', 'displayHeight'],
+  sizeBy('ImageBitmap', 'width', 'height'),
+  sizeBy('HTMLCanvasElement', 'width', 'height'),
+  sizeBy('OffscreenCanvas', 'width', 'height'),
+  sizeBy('ImageData', 'width', 'height'),
+  VISIBLE_RECT && RECT_W
+    ? (frame) => {
+        const rect = VISIBLE_RECT.call(frame); // null once the frame is closed
+        return rect ? [RECT_W.call(rect), RECT_H.call(rect)] : [0, 0];
+      }
+    : null,
+].filter(Boolean);
+// Sources whose reported size can differ from the pixels WebGL uploads: an image's naturalWidth
+// follows srcset densities and image metadata, a video's videoWidth its display aspect.
+const INEXACT_KINDS = [
+  ['HTMLImageElement', 'an <img>'],
+  ['HTMLVideoElement', 'a <video>'],
 ]
-  .filter(([name]) => typeof globalThis[name] === 'function')
-  .map(([name, w, h]) => [getter(globalThis[name].prototype, w), getter(globalThis[name].prototype, h)])
-  .filter(([w, h]) => w && h);
+  .map(([name, what]) => [getter(globalThis[name]?.prototype ?? {}, 'width') ?? null, what])
+  .filter(([g]) => g);
 
 function imageSize(source) {
   if (typeof source === 'object' && source !== null) {
-    for (const [w, h] of IMAGE_KINDS) {
-      let width;
+    for (const size of IMAGE_KINDS) {
       try {
-        width = w.call(source);
+        return size(source);
       } catch {
-        continue; // not this kind
+        // not this kind
       }
-      return [width, h.call(source)];
+    }
+    for (const [g, what] of INEXACT_KINDS) {
+      try {
+        g.call(source);
+      } catch {
+        continue;
+      }
+      throw new Error(
+        `web3d: ${what} is not accepted as a texture source, because its reported size can differ from the pixels WebGL uploads; decode it first with createImageBitmap(source, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })`,
+      );
     }
   }
-  throw new Error(
-    `web3d: a texture source must be an ImageBitmap, image, canvas, OffscreenCanvas, video, ImageData or VideoFrame, not ${describe(source)}`,
-  );
+  throw new Error(`web3d: a texture source must be an ImageBitmap, canvas, OffscreenCanvas, ImageData or VideoFrame, not ${describe(source)}`);
 }
 
 // Canvases, recognised and sized through their built-in accessors.
@@ -242,26 +270,47 @@ function checkSize(width, height) {
 }
 
 /**
- * State shared by every copy of this module in the page (a second import under another URL is
- * another copy): which renderer owns each canvas, the antialias setting each canvas's context has,
- * and the next renderer serial.
+ * State shared by every copy of this module (a second import under another URL is another copy):
+ * which renderer owns each canvas, the antialias setting each canvas's context has, and the renderer
+ * serials. It lives on the top window when this realm can reach it, so a window and its same-origin
+ * frames share one; a worker or a cross-origin frame has its own.
  */
-const SHARED_STATE = (globalThis[Symbol.for('loadngo-web3d')] ??= {});
+const SHARED_KEY = Symbol.for('loadngo-web3d');
+const HOME = (() => {
+  try {
+    const top = globalThis.top;
+    if (top && top !== globalThis) {
+      void top[SHARED_KEY]; // throws for a cross-origin top
+      return top;
+    }
+  } catch {
+    // a cross-origin top: this realm keeps its own
+  }
+  return globalThis;
+})();
+const SHARED_STATE = (HOME[SHARED_KEY] ??= {});
 SHARED_STATE.owners ??= new WeakMap();
 SHARED_STATE.contexts ??= new WeakMap();
-SHARED_STATE.serials ??= { next: 1 };
+// Each home (a top window with its same-origin frames, a worker, a cross-origin frame) starts at a
+// random serial, so two homes collide only by chance; within one, serials never repeat.
+SHARED_STATE.serials ??= { next: 1 + (crypto.getRandomValues(new Uint32Array(1))[0] % (SERIALS - 1)), made: 0 };
 const OWNERS = SHARED_STATE.owners;
 const CONTEXTS = SHARED_STATE.contexts;
 const PENDING = { lost: false };
 
 /**
- * The next renderer serial. Serials are never reused in a page, so no two renderers, live or
- * disposed, can issue the same handle. A page may make 2^20 - 1 renderers.
+ * The next renderer serial, from 1 to 2^20 - 1, going round from a random start. Serials are never
+ * reused in one home (a window and its same-origin frames, or a worker, or a cross-origin frame), so
+ * no two of its renderers, live or disposed, can issue the same handle. A home may make 2^20 - 1
+ * renderers.
  */
 function takeSerial() {
   const pool = SHARED_STATE.serials;
-  if (pool.next >= SERIALS) throw new Error(`web3d: this page has made ${SERIALS - 1} renderers, the most it may`);
-  return pool.next++;
+  if (pool.made >= SERIALS - 1) throw new Error(`web3d: this page has made ${SERIALS - 1} renderers, the most it may`);
+  const serial = pool.next;
+  pool.next = (serial % (SERIALS - 1)) + 1;
+  pool.made++;
+  return serial;
 }
 
 
@@ -275,10 +324,11 @@ const DEFAULT_WASM = new URL('./loadngo_web3d.wasm', import.meta.url).href;
  * call fetches again.
  */
 export function compile(source) {
-  if (source instanceof WebAssembly.Module) return Promise.resolve(source);
-  if (source == null || typeof source === 'string' || source instanceof URL) {
+  if (isModule(source)) return Promise.resolve(source);
+  const url = source == null ? DEFAULT_WASM : typeof source === 'string' ? source : urlHref(source);
+  if (url !== undefined) {
     const base = globalThis.document?.baseURI ?? globalThis.location?.href;
-    const href = source == null ? DEFAULT_WASM : new URL(source, base).href;
+    const href = new URL(url, base).href;
     let promise = COMPILED.get(href);
     if (!promise) {
       promise = compileFrom(href);
@@ -289,12 +339,46 @@ export function compile(source) {
     }
     return promise;
   }
-  return compileFrom(source);
+  if (isResponse(source) || ArrayBuffer.isView(source) || isArrayBuffer(source)) return compileFrom(source);
+  throw new Error(`web3d: the wasm option must be a URL (a string or URL), a Response, bytes or a WebAssembly.Module, not ${describe(source)}`);
+}
+
+// Brand checks through built-ins, which also hold for objects from another realm (an iframe's).
+const URL_HREF = getter(URL.prototype, 'href');
+const RESPONSE_OK = globalThis.Response && getter(Response.prototype, 'ok');
+const AB_BYTES = getter(ArrayBuffer.prototype, 'byteLength');
+const branded = (g) => (v) => {
+  if (typeof v !== 'object' || v === null || !g) return false;
+  try {
+    g.call(v);
+    return true;
+  } catch {
+    return false;
+  }
+};
+const isResponse = branded(RESPONSE_OK);
+const isArrayBuffer = branded(AB_BYTES);
+function isModule(v) {
+  if (typeof v !== 'object' || v === null) return false;
+  try {
+    WebAssembly.Module.exports(v);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function urlHref(v) {
+  if (typeof v !== 'object' || v === null) return undefined;
+  try {
+    return URL_HREF.call(v);
+  } catch {
+    return undefined;
+  }
 }
 
 async function compileFrom(source) {
-  if (source instanceof ArrayBuffer || ArrayBuffer.isView(source)) return WebAssembly.compile(source);
-  const response = source instanceof Response ? source : await fetch(source);
+  if (isArrayBuffer(source) || ArrayBuffer.isView(source)) return WebAssembly.compile(source);
+  const response = isResponse(source) ? source : await fetch(source);
   if (!response.ok) throw new Error(`web3d: fetching the wasm failed: ${response.status} ${response.url}`);
   const type = response.headers.get('Content-Type') ?? '';
   if (WebAssembly.compileStreaming && type.startsWith('application/wasm')) {
@@ -371,10 +455,19 @@ async function build(canvas, o) {
   };
   const gl = WEBGL2 ? o.kind.getContext.call(canvas, 'webgl2', attributes) : null;
   if (!gl) throw new Error('web3d: WebGL2 is not available here, or this canvas already has another kind of context');
+  // A lost context (between a loss and its restore, or one the browser dropped) reports no
+  // attributes, so nothing is read or recorded from it.
+  const attrs = gl.isContextLost() ? null : gl.getContextAttributes();
+  if (!attrs) throw new Error(LOST);
   // The context the canvas now has, which the page may have made first with other settings.
-  const actual = Boolean(gl.getContextAttributes()?.antialias);
+  const actual = Boolean(attrs.antialias);
   CONTEXTS.set(canvas, actual);
   if (actual !== o.antialias) throw new Error(contextMismatch(actual));
+  if (!attrs.depth) {
+    throw new Error(
+      "web3d: this canvas's WebGL context has no depth buffer, which web3d needs; a canvas keeps its first context, so use a new canvas",
+    );
+  }
   const shim = createGl(canvas, gl, { onContextLost: o.onContextLost, onContextRestored: o.onContextRestored });
   const size = [o.kind.width.call(canvas), o.kind.height.call(canvas)];
   let x = null;
@@ -382,6 +475,7 @@ async function build(canvas, o) {
   try {
     if (shim.lost()) throw new Error(LOST); // between a loss and its restore, programs cannot compile
     x = (await WebAssembly.instantiate(module, shim.imports)).exports;
+    if (shim.lost()) throw new Error(LOST); // lost while the module was instantiated
     if (!(x.memory instanceof WebAssembly.Memory) || typeof x.web3d_create !== 'function') {
       throw new Error('web3d: the wasm module is not loadngo-web3d (its exports are missing)');
     }
@@ -392,7 +486,8 @@ async function build(canvas, o) {
     o.kind.setWidth.call(canvas, o.width);
     o.kind.setHeight.call(canvas, o.height);
     if (x.web3d_init(w, BUFFER_WIDTH.call(gl), BUFFER_HEIGHT.call(gl)) !== 0) {
-      throw new Error(`web3d: ${errorText(x, w, shim)}`);
+      // Programs fail to compile on a context lost meanwhile; say so, not that a shader failed.
+      throw new Error(shim.lost() ? LOST : `web3d: ${errorText(x, w, shim)}`);
     }
     if (o.cpuTiming) x.web3d_set_cpu_timing(w, 1);
     return new Renderer(canvas, o.kind, gl, shim, x, w, serial);

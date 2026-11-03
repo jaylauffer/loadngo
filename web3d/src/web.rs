@@ -291,7 +291,7 @@ impl Web3d {
         }
     }
 
-    /// A handle for JS, as an exact double (every handle is below 2^53), or 0 on failure.
+    /// A handle for JS, as an exact double (every handle is below 2^50), or 0 on failure.
     fn handle(&mut self, result: Result<u64>) -> f64 {
         match result {
             Ok(h) => h as f64,
@@ -322,7 +322,7 @@ unsafe fn web3d<'a>(w: *mut Web3d) -> Option<&'a mut Web3d> {
     unsafe { w.as_mut() }
 }
 
-/// A handle from JS: a whole number from 1 to below 2^53, else 0, which names nothing. Handles
+/// A handle from JS: a whole number from 1 to below 2^50, else 0, which names nothing. Handles
 /// cross as doubles because they are wider than 32 bits ([`crate::slots`]).
 fn handle_in(h: f64) -> u64 {
     if h >= 1.0 && h < slots::HANDLE_LIMIT as f64 && h.fract() == 0.0 {
@@ -422,9 +422,10 @@ pub extern "C" fn web3d_free(ptr: *mut u8, len: usize) {
 }
 
 /// A renderer that has made no GL calls yet; call [`web3d_init`] next. Every handle it issues
-/// carries `serial` (below 2^20). `js/web3d.js` gives each renderer a page its own, from 1 up and
-/// never twice, so renderers refuse each other's handles and never issue the same one; a raw
-/// caller that passes nothing gets serial 0. Null if the serial is out of range.
+/// carries `serial` (below 2^20). `js/web3d.js` gives each renderer its own, never twice under one
+/// counter (a window and its same-origin frames share one), so renderers refuse each other's handles
+/// and never issue the same one; a raw caller that passes nothing gets serial 0. Null if the serial
+/// is out of range.
 #[unsafe(no_mangle)]
 pub extern "C" fn web3d_create(serial: u32) -> *mut Web3d {
     install_panic_hook();

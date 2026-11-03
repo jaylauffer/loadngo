@@ -1,14 +1,28 @@
 // Types for loadngo-web3d's JS API (web3d.js). BSD-3-Clause.
 
-/** 16 numbers, column-major: three.js's `Matrix4.elements` (an Array of numbers or a typed array, exactly 16). */
-export type Matrix4 = ArrayLike<number>;
-export type Vector3 = ArrayLike<number>;
+/** Numbers as the wrapper takes them: an Array of numbers, or a typed array (not a BigInt one). */
+export type Numbers =
+  | readonly number[]
+  | Float32Array
+  | Float64Array
+  | Int8Array
+  | Uint8Array
+  | Uint8ClampedArray
+  | Int16Array
+  | Uint16Array
+  | Int32Array
+  | Uint32Array;
+/** 16 numbers, column-major: three.js's `Matrix4.elements`. Exactly 16. */
+export type Matrix4 = Numbers;
+/** Exactly 3 numbers. */
+export type Vector3 = Numbers;
 
 declare const brand: unique symbol;
 /**
- * Handles are whole numbers below 2^53 that name one kind of thing in one renderer, and no handle is
- * issued twice in a page: the Rust side refuses a handle of another kind or from another renderer,
- * live or disposed. The brands let TypeScript catch a swapped argument.
+ * Handles are whole numbers below 2^50 that name one kind of thing in one renderer, and no handle is
+ * issued twice in a window and its same-origin frames (a worker or a cross-origin frame counts its
+ * own, from a random start): the Rust side refuses a handle of another kind or from another
+ * renderer, live or disposed. The brands let TypeScript catch a swapped argument.
  */
 export type MeshHandle = number & { readonly [brand]: 'mesh' };
 export type TextureHandle = number & { readonly [brand]: 'texture' };
@@ -57,14 +71,11 @@ export interface MeshData {
   morphTargets?: Float32Array[];
 }
 
-export type TextureSource =
-  | ImageBitmap
-  | HTMLImageElement
-  | HTMLCanvasElement
-  | OffscreenCanvas
-  | HTMLVideoElement
-  | ImageData
-  | VideoFrame;
+/**
+ * Sources whose upload size is exactly knowable. An <img> or <video> is refused (its reported size
+ * can differ from the pixels WebGL uploads): decode it first with createImageBitmap.
+ */
+export type TextureSource = ImageBitmap | HTMLCanvasElement | OffscreenCanvas | ImageData | VideoFrame;
 
 export interface TextureOptions {
   /** Colour data, decoded from sRGB when sampled (default true). */
@@ -76,7 +87,8 @@ export interface TextureOptions {
 
 export interface MaterialOptions {
   /** Linear RGBA (default white). */
-  baseColor?: ArrayLike<number>;
+  /** 3 or 4 numbers. */
+  baseColor?: Numbers;
   texture?: TextureHandle;
   alphaMode?: 'opaque' | 'mask' | 'blend';
   alphaCutoff?: number;

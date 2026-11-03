@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>web3d probe frame</title>
+  <link rel="icon" href="data:,">
+</head>
+<body>
+  <!-- A second realm for probe.js (same origin): its own copy of web3d.js and its own serials. -->
+  <canvas id="c" width="16" height="16"></canvas>
+  <script type="module">
+    import { createRenderer } from '../pkg/web3d.js';
+    window.__frame = { createRenderer, canvas: document.getElementById('c') };
+  </script>
+</body>
+</html>

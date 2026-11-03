@@ -1,0 +1,5 @@
+pass  G9a opaque draws rely on the depth test (WEB3D.md "A frame"; probe E "depth, whatever the creation order"): a page-made context without a depth buffer should be refused, as one with the wrong antialias is, not draw far over near
+pass  G16 WEB3D.md createRenderer takes an OffscreenCanvas: it draws there like a canvas
+FAIL  G14 WEB3D.md "a page may make 2^20-1 renderers": the last serial issues exact handles below 2^53 and draws; the next create is refused, leaves the canvas unclaimed and its size as it was
+2 passed; failed: ["G14"]; renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); console messages 0
+browser and servers stopped

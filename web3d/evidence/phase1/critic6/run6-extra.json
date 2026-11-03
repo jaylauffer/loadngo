@@ -1,0 +1,88 @@
+{
+  "browser": "156.0.8078.76",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+  "served": {},
+  "result": {
+    "probes": [
+      {
+        "id": "G9a",
+        "claim": "opaque draws rely on the depth test (WEB3D.md \"A frame\"; probe E \"depth, whatever the creation order\"): a page-made context without a depth buffer should be refused, as one with the wrong antialias is, not draw far over near",
+        "pass": false,
+        "detail": {
+          "controlPixel": [
+            56,
+            255,
+            56,
+            255
+          ],
+          "created": "created",
+          "contextDepth": false,
+          "pixel": [
+            255,
+            56,
+            56,
+            255
+          ],
+          "glError": 0
+        }
+      },
+      {
+        "id": "G16",
+        "claim": "WEB3D.md createRenderer takes an OffscreenCanvas: it draws there like a canvas",
+        "pass": true,
+        "detail": {
+          "created": "created",
+          "pixel": [
+            56,
+            255,
+            56,
+            255
+          ],
+          "glError": 0
+        }
+      },
+      {
+        "id": "G14",
+        "claim": "WEB3D.md \"a page may make 2^20-1 renderers\": the last serial issues exact handles below 2^53 and draws; the next create is refused, leaves the canvas unclaimed and its size as it was",
+        "pass": true,
+        "detail": {
+          "serials": [
+            1048574,
+            1048575
+          ],
+          "handles": {
+            "am": 9007183148613633,
+            "bm": 9007191738548225,
+            "bmat": 9007193886031873,
+            "bo": 9007194959773697,
+            "boDecoded": {
+              "serial": 1048575,
+              "kind": 4,
+              "generation": 0,
+              "index": 1
+            }
+          },
+          "exact": true,
+          "pixel": [
+            56,
+            255,
+            56,
+            255
+          ],
+          "crossRefused": true,
+          "next": "web3d: this page has made 1048575 renderers, the most it may",
+          "again": "web3d: this page has made 1048575 renderers, the most it may",
+          "size": [
+            20,
+            10
+          ]
+        }
+      }
+    ],
+    "passed": 2,
+    "failed": [
+      "G9a"
+    ]
+  },
+  "messages": []
+}

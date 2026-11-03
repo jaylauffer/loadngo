@@ -1,0 +1,19 @@
+FAIL  G6 WEB3D.md "no handle is issued twice in a page"; the serial counter is "shared by every copy of the module": a same-origin iframe's renderer must not issue a handle the top renderer accepts
+pass  G1 slots.rs: a handle is serial << 33 | kind << 30 | generation << 16 | (index + 1), an exact double below 2^53
+pass  G2 WEB3D.md "Handles must be whole numbers from 1 to 2^53-1 ... anything else [is refused] by the Rust side": every forged value is refused and the object stays drawn
+pass  G3 web.rs handle_in: a raw export refuses every number that is not a whole number from 1 to below 2^53 naming a live handle
+pass  G4 WEB3D.md "another renderer's handle, live or disposed, is refused"; "no two renderers in a page issue the same handle": two live renderers refuse each other's handles, and 1,200 handles from 300 disposed renderers are issued once each and refused by both
+pass  G5 WEB3D.md: the serial comes from "a page-wide counter, shared by every copy of the module, that never repeats"; canvas ownership and context settings are shared too
+pass  G7 WEB3D.md "an Array's length and each of its elements is read once"; "no valueOf runs"; re-entrancy refused; non-finite values refused by the Rust side
+pass  G8a createTexture: plain images, ImageData, closed bitmaps, broken and cross-origin images are uploaded or refused cleanly (no GL error)
+FAIL  G8b web3d.js header and WEB3D.md: a texture is made at the size the wrapper reads, so the upload fits it; an <img> with a srcset density: naturalWidth against the bitmap WebGL uploads
+FAIL  G8c the same for a VideoFrame whose display size is not its coded size (displayWidth is what the wrapper reads)
+pass  G9a WEB3D.md (A frame, step 2 and Shading): opaque draws rely on a depth buffer; a page-made context without one should be refused like one with the wrong antialias, or the depth test silently does nothing
+pass  G9b a page-made WebGL1 or 2d context is refused with a clear message, the canvas is not left claimed, and its size is kept
+FAIL  G9c WEB3D.md Context loss: "every create throws" while lost, and "create a new one after onContextRestored": with the default antialias, a create during the loss must say the context is lost, and the documented recovery must then work
+FAIL  G10 WEB3D.md "A failed create leaves nothing behind ... removes the shim's context-loss listeners, releases the canvas and puts its size back", for a context lost during instantiation; the error should say the context is lost
+pass  G11 WEB3D.md "The compiled module is cached per URL, and a failure is not cached": one fetch for a URL used three times (one spelt differently); a module that fails to compile is fetched again
+pass  G12 slots.rs: "Each slot serves 16,384 values before it retires"; no handle is issued twice; a retired slot's handles stay refused
+pass  G13 no limit of live renderers but the browser's: 24 live renderers are all created; the live ones draw; failed creates on a dropped context leave no listener; a new canvas works afterwards
+12 passed; failed: ["G6","G8b","G8c","G9c","G10"]; renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); console messages 40
+browser and servers stopped

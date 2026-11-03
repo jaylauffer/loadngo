@@ -1,0 +1,71 @@
+
+# build.sh, three times
+
+$ web3d/build.sh   # run 1, workspace target/
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+== cargo rustc (target dir: /Users/jay/pudding/loadngo/target)
+    Finished `release` profile [optimized] target(s) in 0.08s
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           105841  gzip   38050
+pkg/loadngo_web3d.wasm                69172  gzip   31654
+pkg/gl.js                             13838  gzip    4686
+pkg/web3d.js                          36363  gzip   11286
+>>> exit 0
+0204bc88657198e1f57b65e4f576ccd420f14a63637f6936a2f553d28b51f3a2  web3d/pkg/gl.js
+d7fb6ce6fa7369bd43bb61b99f0b294385218f900900da5a337e0e8822f5919d  web3d/pkg/loadngo_web3d.wasm
+aa608f614999b941322bfce7207996f752a2441d09fca34aba549f83802d70f7  web3d/pkg/web3d.d.ts
+c3996bb80e2b82225eab4003febb4acd9af98f79e062152943896114833a4c98  web3d/pkg/web3d.js
+
+$ web3d/build.sh   # run 2, workspace target/
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+== cargo rustc (target dir: /Users/jay/pudding/loadngo/target)
+    Finished `release` profile [optimized] target(s) in 0.04s
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           105841  gzip   38050
+pkg/loadngo_web3d.wasm                69172  gzip   31654
+pkg/gl.js                             13838  gzip    4686
+pkg/web3d.js                          36363  gzip   11286
+>>> exit 0
+0204bc88657198e1f57b65e4f576ccd420f14a63637f6936a2f553d28b51f3a2  web3d/pkg/gl.js
+d7fb6ce6fa7369bd43bb61b99f0b294385218f900900da5a337e0e8822f5919d  web3d/pkg/loadngo_web3d.wasm
+aa608f614999b941322bfce7207996f752a2441d09fca34aba549f83802d70f7  web3d/pkg/web3d.d.ts
+c3996bb80e2b82225eab4003febb4acd9af98f79e062152943896114833a4c98  web3d/pkg/web3d.js
+
+$ CARGO_TARGET_DIR=<new empty dir> web3d/build.sh   # run 3
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+== cargo rustc (target dir: <scratch>/target-empty-build)
+   Compiling loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+    Finished `release` profile [optimized] target(s) in 0.53s
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           105841  gzip   38050
+pkg/loadngo_web3d.wasm                69172  gzip   31654
+pkg/gl.js                             13838  gzip    4686
+pkg/web3d.js                          36363  gzip   11286
+>>> exit 0
+0204bc88657198e1f57b65e4f576ccd420f14a63637f6936a2f553d28b51f3a2  web3d/pkg/gl.js
+d7fb6ce6fa7369bd43bb61b99f0b294385218f900900da5a337e0e8822f5919d  web3d/pkg/loadngo_web3d.wasm
+aa608f614999b941322bfce7207996f752a2441d09fca34aba549f83802d70f7  web3d/pkg/web3d.d.ts
+c3996bb80e2b82225eab4003febb4acd9af98f79e062152943896114833a4c98  web3d/pkg/web3d.js
+
+$ diff run1 run2; diff run1 run3
+run 1 = run 2
+run 1 = run 3
+
+$ local paths in pkg (wasm strings and the JS files)
+none in the wasm
+none in the JS
+
+$ path-like strings that remain in the wasm
+/rust/deps/dlmalloc-0.2.14/src/dlmalloc.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/alloc/src/fmt.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/alloc/src/raw_vec/mod.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/alloc/src/string.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/slice/sort/shared/smallsort.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/slice/sort/unstable/quicksort.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/panicking.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/sync/once.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/sys/sync/rwlock/no_threads.rs
+/rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/thread/local.rs

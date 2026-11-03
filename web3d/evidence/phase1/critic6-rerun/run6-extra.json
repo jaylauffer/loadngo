@@ -1,0 +1,80 @@
+{
+  "browser": "156.0.8078.80",
+  "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+  "served": {},
+  "result": {
+    "probes": [
+      {
+        "id": "G9a",
+        "claim": "opaque draws rely on the depth test (WEB3D.md \"A frame\"; probe E \"depth, whatever the creation order\"): a page-made context without a depth buffer should be refused, as one with the wrong antialias is, not draw far over near",
+        "pass": true,
+        "detail": {
+          "controlPixel": [
+            56,
+            255,
+            56,
+            255
+          ],
+          "created": "web3d: this canvas's WebGL context has no depth buffer, which web3d needs; a canvas keeps its first context, so use a new canvas"
+        }
+      },
+      {
+        "id": "G16",
+        "claim": "WEB3D.md createRenderer takes an OffscreenCanvas: it draws there like a canvas",
+        "pass": true,
+        "detail": {
+          "created": "created",
+          "pixel": [
+            56,
+            255,
+            56,
+            255
+          ],
+          "glError": 0
+        }
+      },
+      {
+        "id": "G14",
+        "claim": "WEB3D.md \"a page may make 2^20-1 renderers\": the last serial issues exact handles below 2^53 and draws; the next create is refused, leaves the canvas unclaimed and its size as it was",
+        "pass": false,
+        "detail": {
+          "serials": [
+            1048574,
+            1048575
+          ],
+          "handles": {
+            "am": 1125897893576705,
+            "bm": 1125898967318529,
+            "bmat": 1125899235753985,
+            "bo": 1125899369971713,
+            "boDecoded": {
+              "serial": 131071,
+              "kind": 7,
+              "generation": 8192,
+              "index": 1
+            }
+          },
+          "exact": true,
+          "pixel": [
+            56,
+            255,
+            56,
+            255
+          ],
+          "crossRefused": true,
+          "next": "created",
+          "again": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)",
+          "size": [
+            48,
+            24
+          ]
+        }
+      }
+    ],
+    "passed": 2,
+    "failed": [
+      "G14"
+    ]
+  },
+  "messages": []
+}

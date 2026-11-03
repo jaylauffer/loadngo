@@ -1,4 +1,4 @@
-# loadngo-web3d phase 1 gates, after the fifth critic's round (2026-11-03 10:53 +0700); loadngo 284194b6 (web3d-phase1) plus uncommitted changes in web3d/, docs/WEB3D.md and .github/workflows/ci.yml
+# loadngo-web3d phase 1 gates, after the sixth critic's round (2026-11-03 11:57 +0700); loadngo 59b74ced (web3d-phase1) plus uncommitted changes in web3d/, docs/WEB3D.md and .github/workflows/ci.yml
 # rustc 1.99.0 (b940084d7 2026-09-28); cargo 1.99.0 (5f94df478 2026-08-27); CARGO_TARGET_DIR is the workspace's own target/; macOS 26.6.2
 # THREE_DIR (a three.js r180 package) is set in the environment.
 
@@ -9,7 +9,7 @@ $ cargo fmt --check
 ==================================================================
 $ cargo clippy --locked --workspace --all-targets --all-features --exclude loadngo-gfx-dx12 --exclude gui-win32 --exclude proactor-harness -- -D warnings
     Checking loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.44s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.39s
 >>> exit 0
 
 ==================================================================
@@ -19,13 +19,13 @@ $ cargo test --locked -p loadngo-web3d
 
 running 74 tests
 test math::tests::frustum_culls_spheres_outside ... ok
-test math::tests::look_at_puts_eye_at_origin_and_target_down_negative_z ... ok
 test math::tests::inverse_undoes_a_transform_and_rejects_singular ... ok
+test math::tests::look_at_puts_eye_at_origin_and_target_down_negative_z ... ok
 test math::tests::look_at_survives_up_parallel_to_view ... ok
-test math::tests::mirroring_has_negative_determinant ... ok
-test math::tests::multiply_identity_and_known_product ... ok
 test math::tests::multiply_is_associative_and_not_commutative ... ok
+test math::tests::mirroring_has_negative_determinant ... ok
 test math::tests::normal_matrix_keeps_normals_perpendicular_under_non_uniform_scale ... ok
+test math::tests::multiply_identity_and_known_product ... ok
 test math::tests::perspective_maps_near_and_far_planes_and_field_of_view ... ok
 test pack::tests::align_up_rounds_to_multiples ... ok
 test pack::tests::attributes_fall_back_to_float_uv_and_omit_missing_uv ... ok
@@ -43,16 +43,16 @@ test renderer::tests::bad_meshes_are_refused_before_any_gl_call ... ok
 test renderer::tests::clear_colour_is_linear_and_encoded_once ... ok
 test renderer::tests::cpu_timing_is_off_until_asked_for ... ok
 test renderer::tests::draw_keys_order_passes_programs_materials_and_depth ... ok
-test renderer::tests::depth_writes_come_back_on_before_the_clear ... ok
 test pack::tests::normals_pack_into_10_bit_fields_and_round_trip ... ok
+test renderer::tests::depth_writes_come_back_on_before_the_clear ... ok
 test renderer::tests::double_sided_turns_culling_off_and_mirroring_flips_the_front_face ... ok
 test renderer::tests::frame_block_carries_camera_and_normalised_light ... ok
 test renderer::tests::each_material_is_bound_once_a_frame ... ok
-test renderer::tests::gpu_time_reaches_the_stats ... ok
 test renderer::tests::frame_draws_opaque_front_to_back_then_masked_then_blended_back_to_front ... ok
+test renderer::tests::gpu_time_reaches_the_stats ... ok
 test renderer::tests::handles_are_checked_and_resources_in_use_cannot_be_destroyed ... ok
-test renderer::tests::init_compiles_three_programs_and_binds_blocks_and_sampler ... ok
 test renderer::tests::init_refuses_a_driver_layout_that_differs ... ok
+test renderer::tests::init_compiles_three_programs_and_binds_blocks_and_sampler ... ok
 test renderer::tests::init_reports_a_shader_that_fails ... ok
 test renderer::tests::handles_of_another_kind_or_another_renderer_are_refused ... ok
 test renderer::tests::mesh_upload_splits_positions_from_packed_attributes_and_narrows_indices ... ok
@@ -73,17 +73,17 @@ test renderer::tests::unchanged_state_is_not_sent_again ... ok
 test shaders::tests::environment_stand_in_is_specular_colour_times_hemisphere_radiance ... ok
 test renderer::tests::uniform_slots_follow_alignment_and_driver_block_size ... ok
 test shaders::tests::every_block_member_is_declared_in_the_source ... ok
-test shaders::tests::sources_start_with_version_and_switch_features ... ok
-test slots::tests::a_handle_of_another_kind_or_renderer_is_refused ... ok
-test shaders::tests::the_shader_text_carries_the_same_constants ... ok
 test renderer::tests::a_frame_allocates_nothing ... ok
+test shaders::tests::sources_start_with_version_and_switch_features ... ok
+test shaders::tests::the_shader_text_carries_the_same_constants ... ok
+test slots::tests::a_handle_of_another_kind_or_renderer_is_refused ... ok
 test slots::tests::clearing_keeps_old_handles_refused ... ok
-test shaders::tests::shading_matches_three_js_r180 ... ok
 test slots::tests::forged_handles_fail ... ok
-test slots::tests::iter_and_remove_all_visit_live_values ... ok
+test shaders::tests::shading_matches_three_js_r180 ... ok
 test slots::tests::handles_are_positive_small_and_never_zero ... ok
+test slots::tests::iter_and_remove_all_visit_live_values ... ok
 test slots::tests::stale_handles_fail_after_their_slot_is_reused ... ok
-test slots::tests::the_largest_handle_is_below_two_to_the_fifty_three ... ok
+test slots::tests::the_largest_handle_is_below_two_to_the_fifty ... ok
 test testing::the_counter_sees_allocations ... ok
 test timer::tests::a_full_ring_skips_frames_instead_of_blocking ... ok
 test timer::tests::disjoint_discards_the_batch ... ok
@@ -93,7 +93,7 @@ test timer::tests::unsupported_timer_issues_no_queries ... ok
 test slots::tests::no_handle_is_ever_issued_twice_a_slot_retires_instead_of_wrapping ... ok
 test slots::tests::renderers_with_different_serials_never_share_a_handle ... ok
 
-test result: ok. 74 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 74 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 
    Doc-tests loadngo_web3d
 
@@ -105,7 +105,7 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 ==================================================================
 $ cargo clippy --locked -p loadngo-web3d --target wasm32-unknown-unknown --all-targets -- -D warnings
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
 >>> exit 0
 
 ==================================================================
@@ -116,35 +116,34 @@ $ cargo clippy --locked --offline -p loadngo-web3d --target wasm32-unknown-unkno
 ==================================================================
 $ cargo clippy --locked --offline -p loadngo-web3d --target aarch64-unknown-linux-gnu --all-targets --all-features -- -D warnings
     Checking loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.46s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.41s
 >>> exit 0
 
 ==================================================================
 $ cargo clippy --locked --offline -p loadngo-web3d --target x86_64-pc-windows-msvc --all-targets --all-features -- -D warnings
     Checking loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.47s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.42s
 >>> exit 0
 
 ==================================================================
 $ web3d/build.sh
 == toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
 == cargo rustc (target dir: /Users/jay/pudding/loadngo/target)
-   Compiling loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
-    Finished `release` profile [optimized] target(s) in 0.55s
+    Finished `release` profile [optimized] target(s) in 0.08s
 == wasm-opt -Os
 == sizes (bytes, and gzip -9)
-release/loadngo_web3d.wasm           105841  gzip   38050
-pkg/loadngo_web3d.wasm                69172  gzip   31654
-pkg/gl.js                             13838  gzip    4686
-pkg/web3d.js                          36363  gzip   11286
+release/loadngo_web3d.wasm           105829  gzip   38051
+pkg/loadngo_web3d.wasm                69160  gzip   31657
+pkg/gl.js                             14628  gzip    4945
+pkg/web3d.js                          40427  gzip   12576
 >>> exit 0
 
 ==================================================================
 $ shasum -a 256 web3d/pkg/loadngo_web3d.wasm web3d/pkg/gl.js web3d/pkg/web3d.js web3d/pkg/web3d.d.ts
-d7fb6ce6fa7369bd43bb61b99f0b294385218f900900da5a337e0e8822f5919d  web3d/pkg/loadngo_web3d.wasm
-0204bc88657198e1f57b65e4f576ccd420f14a63637f6936a2f553d28b51f3a2  web3d/pkg/gl.js
-c3996bb80e2b82225eab4003febb4acd9af98f79e062152943896114833a4c98  web3d/pkg/web3d.js
-aa608f614999b941322bfce7207996f752a2441d09fca34aba549f83802d70f7  web3d/pkg/web3d.d.ts
+59d8359dbf1c6b7bef709eb836150b6e69e14bfa54341765d358cff8cca99133  web3d/pkg/loadngo_web3d.wasm
+8f2134bdbd333bc57d9ed79bc833c765c841cedb77476d3498cc5a6aa3672960  web3d/pkg/gl.js
+681ab1b56d329f3641a55f52e4660f82816ba86261e9f008ec6c702b8e06a089  web3d/pkg/web3d.js
+24a6f252c5c802bc19bf22194848dc941a195c9c1957886989b7a02be393b130  web3d/pkg/web3d.d.ts
 >>> exit 0
 
 ==================================================================

@@ -1,0 +1,15 @@
+{
+ "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+ "result": {
+  "whileLost": {
+   "handle": "threw: web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored) and upload everything again",
+   "getError": 37442,
+   "isContextLost": true
+  },
+  "errorOnNewRenderer": 0
+ },
+ "warnings": 0,
+ "sample": []
+}
+browser and server stopped
+>>> exit 0

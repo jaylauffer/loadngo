@@ -1,0 +1,86 @@
+# sixth critic gates, 2026-11-03 10:59 +0700; loadngo 59b74ced (web3d-phase1); git status --short below
+?? web3d/evidence/phase1/critic6/
+# rustc 1.99.0 (b940084d7 2026-09-28); cargo 1.99.0 (5f94df478 2026-08-27); wasm-opt version 133; node v24.22.0
+
+$ shasum pkg before any build by this critic
+0204bc88657198e1f57b65e4f576ccd420f14a63637f6936a2f553d28b51f3a2  web3d/pkg/gl.js
+d7fb6ce6fa7369bd43bb61b99f0b294385218f900900da5a337e0e8822f5919d  web3d/pkg/loadngo_web3d.wasm
+aa608f614999b941322bfce7207996f752a2441d09fca34aba549f83802d70f7  web3d/pkg/web3d.d.ts
+c3996bb80e2b82225eab4003febb4acd9af98f79e062152943896114833a4c98  web3d/pkg/web3d.js
+
+$ cargo fmt --check
+>>> exit 0
+
+$ cargo clippy --locked --workspace --all-targets --all-features --exclude loadngo-gfx-dx12 --exclude gui-win32 --exclude proactor-harness -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s
+>>> exit 
+
+$ cargo clippy --locked -p loadngo-web3d --target wasm32-unknown-unknown --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s
+>>> exit 
+
+$ cargo clippy --locked --offline -p loadngo-web3d --target aarch64-unknown-linux-gnu --all-targets --all-features -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s
+>>> exit 
+
+$ cargo clippy --locked --offline -p loadngo-web3d --target x86_64-pc-windows-msvc --all-targets --all-features -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s
+>>> exit 
+
+$ cargo test --locked -p loadngo-web3d
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/loadngo_web3d-b9eafafae96f9adc)
+
+running 74 tests
+
+test result: ok. 74 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+   Doc-tests loadngo_web3d
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+>>> exit 
+
+# The same checks under bash, so exit codes record; web3d-only ones in an empty target dir (scratch) so nothing is replayed from cache
+
+$ cargo clippy --locked --workspace --all-targets --all-features --exclude loadngo-gfx-dx12 --exclude gui-win32 --exclude proactor-harness -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s
+>>> exit 0
+# CARGO_TARGET_DIR=<empty scratch dir> from here
+
+$ cargo clippy --locked --offline -p loadngo-web3d --all-targets --all-features -- -D warnings
+    Checking loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.38s
+>>> exit 0
+
+$ cargo clippy --locked -p loadngo-web3d --target wasm32-unknown-unknown --all-targets -- -D warnings
+    Checking loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.37s
+>>> exit 0
+
+$ cargo clippy --locked --offline -p loadngo-web3d --target aarch64-unknown-linux-gnu --all-targets --all-features -- -D warnings
+    Checking loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.35s
+>>> exit 0
+
+$ cargo clippy --locked --offline -p loadngo-web3d --target x86_64-pc-windows-msvc --all-targets --all-features -- -D warnings
+    Checking loadngo-web3d v0.1.0 (/Users/jay/pudding/loadngo/web3d)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.35s
+>>> exit 0
+
+$ cargo test --locked -p loadngo-web3d
+     Running unittests src/lib.rs (<scratch>/target-fresh/debug/deps/loadngo_web3d-b9eafafae96f9adc)
+
+running 74 tests
+
+test result: ok. 74 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+   Doc-tests loadngo_web3d
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+>>> exit 0

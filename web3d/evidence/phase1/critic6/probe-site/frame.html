@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>web3d in a same-origin iframe</title><link rel="icon" href="data:,"></head>
+<body style="margin:0;background:#000">
+  <canvas id="c" width="16" height="16"></canvas>
+  <script type="module">
+    // The same module URL as the top page imports, but this frame is another realm (its own
+    // globalThis and module map), so it runs its own copy of web3d.js.
+    import { createRenderer } from '/web3d/pkg/web3d.js';
+    const quad = {
+      positions: new Float32Array([-1, -1, -5, 1, -1, -5, 1, 1, -5, -1, 1, -5]),
+      normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]),
+      indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
+    };
+    // Makes renderers until one has the serial asked for, then gives it a mesh, a material and an
+    // object, as the top page's renderer has; returns its serial and handles.
+    window.makeWithSerial = async (want) => {
+      const c = document.getElementById('c');
+      for (;;) {
+        const r = await createRenderer(c, { width: 16, height: 16, antialias: false });
+        if (r._serial < want) {
+          r.dispose();
+          continue;
+        }
+        const mesh = r.createMesh(quad);
+        const material = r.createMaterial({ baseColor: [1, 0, 0, 1] });
+        const object = r.createObject(mesh, material);
+        window.kept = r;
+        return { serial: r._serial, mesh, material, object };
+      }
+    };
+    window.frameReady = true;
+  </script>
+</body>
+</html>

@@ -49,7 +49,7 @@ const outDir = path.resolve(args.out);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { chromium } = await import(process.env.PLAYWRIGHT_CORE ?? 'playwright-core');
 
-// The camera holds still (still=1) in the timed runs, so every run draws the same frame: all 60
+// The camera holds still (still=1) in the timed runs, so every run draws the same frame: all 64
 // objects in view, and pixels that can be checked. The allocation run below moves it.
 const RUNS = [
   { name: 'low-1024x576', query: 'still=1&scale=0.75', note: 'a 1366x768 window drawn at pixel ratio 0.75' },

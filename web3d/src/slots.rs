@@ -2,25 +2,29 @@
 //! and objects; a number for something already destroyed, never created, of another kind, or from
 //! another renderer is refused here instead of reaching whatever uses its slot.
 //!
-//! A handle is a whole number below 2^53 (exact in a JavaScript number), laid out as
-//! `serial << 33 | kind << 30 | generation << 16 | (index + 1)`:
+//! A handle is a whole number below 2^50, laid out as
+//! `serial << 30 | kind << 27 | generation << 16 | (index + 1)`. Below 2^50 a JavaScript number is
+//! exact and still holds halves and quarters, so a fraction made from a handle (a handle plus 0.5)
+//! stays a fraction, which the wrapper refuses, instead of rounding to another handle:
 //! - 16 bits of slot index, so a table holds up to 65,535 live values;
-//! - 14 bits of generation;
+//! - 11 bits of generation;
 //! - 3 bits of kind ([`Kind`]: mesh, texture, material, object; never 0);
-//! - 20 bits of the renderer's serial, which the JS wrapper takes from a page-wide counter that
-//!   never repeats, so no two renderers in a page's life share one.
+//! - 20 bits of the renderer's serial, which the JS wrapper takes from a counter that starts at
+//!   random and never repeats. A window and its same-origin frames share one counter; a worker or a
+//!   cross-origin frame has its own. So no two renderers sharing a counter ever share a serial, and
+//!   two counters give the same one only by chance.
 //!
 //! A table accepts only handles carrying its own kind and serial, so 0, a number without a kind,
 //! a handle of another kind and another renderer's handle are all refused. Freeing a slot bumps
 //! its generation, and a slot whose generation has reached its last value is retired instead of
-//! reused. So no handle is ever issued twice in a page: not by one renderer (generations), and not
-//! by two (serials). Each slot serves 16,384 values before it retires, so a table issues about a
-//! billion handles in its life, and a renderer's per-object uniform storage, sized by slots ever
+//! reused. So no handle is ever issued twice under one counter: not by one renderer (generations),
+//! and not by two (serials). Each slot serves 2,048 values before it retires, so a table issues about
+//! 134 million handles in its life, and a renderer's per-object uniform storage, sized by slots ever
 //! used, stays under 65,535 slots.
 
 const INDEX_BITS: u32 = 16;
 const INDEX_MASK: u64 = (1 << INDEX_BITS) - 1;
-const GENERATION_BITS: u32 = 14;
+const GENERATION_BITS: u32 = 11;
 /// The last generation a slot reaches before it retires.
 const LAST_GENERATION: u32 = (1 << GENERATION_BITS) - 1;
 const KIND_SHIFT: u32 = INDEX_BITS + GENERATION_BITS;
@@ -28,7 +32,7 @@ const KIND_BITS: u32 = 3;
 const SERIAL_SHIFT: u32 = KIND_SHIFT + KIND_BITS;
 /// Renderer serials run from 1 to below this (20 bits); 0 is for tests.
 pub const SERIALS: u32 = 1 << 20;
-/// Every handle is below this: 2^53, the edge of JavaScript's exact integers.
+/// Every handle is below this: 2^50, where a JavaScript number still holds quarters.
 pub const HANDLE_LIMIT: u64 = 1 << (SERIAL_SHIFT + 20);
 /// The bits a table compares whole: kind, serial, and every bit above them, which no handle has.
 const TAG_MASK: u64 = !((1 << KIND_SHIFT) - 1);
@@ -258,7 +262,7 @@ mod tests {
         assert_eq!(s.get(a + 1), None, "index past the end");
         assert_eq!(s.get(a ^ 5 << INDEX_BITS), None, "wrong generation");
         assert_eq!(s.get(u64::MAX), None);
-        assert_eq!(s.get(a | HANDLE_LIMIT), None, "a bit above 2^53");
+        assert_eq!(s.get(a | HANDLE_LIMIT), None, "a bit above 2^50");
     }
 
     #[test]
@@ -268,8 +272,8 @@ mod tests {
         let first = s.insert(0).unwrap().0;
         seen.insert(first);
         s.remove(first);
-        // 16,384 generations on slot 0, then it retires and a new slot serves.
-        for i in 1..40_000 {
+        // 2,048 generations on slot 0, then it retires and a new slot serves.
+        for i in 1..5_000 {
             let (h, _) = s.insert(i).unwrap();
             assert!(h < HANDLE_LIMIT);
             assert!(seen.insert(h), "handle {h} issued twice (cycle {i})");
@@ -281,7 +285,7 @@ mod tests {
             None,
             "the very first handle is still refused"
         );
-        assert_eq!(s.retired(), 2, "slots 0 and 1 served 16,384 objects each");
+        assert_eq!(s.retired(), 2, "slots 0 and 1 served 2,048 objects each");
         assert_eq!(s.slot_count(), 3);
         assert!(s.is_empty());
     }
@@ -349,11 +353,16 @@ mod tests {
     }
 
     #[test]
-    fn the_largest_handle_is_below_two_to_the_fifty_three() {
+    fn the_largest_handle_is_below_two_to_the_fifty() {
         let mut s = Slots::new(Kind::Object, SERIALS - 1);
         let h = s.insert(()).unwrap().0;
         let largest = h | INDEX_MASK | (LAST_GENERATION as u64) << INDEX_BITS;
-        assert!(largest < HANDLE_LIMIT && HANDLE_LIMIT == 1 << 53);
+        assert!(largest < HANDLE_LIMIT && HANDLE_LIMIT == 1 << 50);
+        assert_ne!(
+            largest as f64 + 0.5,
+            largest as f64,
+            "a half is still a fraction"
+        );
         assert_eq!(
             largest as f64 as u64, largest,
             "exact as a JavaScript number"
@@ -368,7 +377,7 @@ mod tests {
         let mut a = Slots::new(Kind::Object, 1);
         let mut b = Slots::new(Kind::Object, 2);
         let mut seen = std::collections::HashSet::new();
-        for _ in 0..33_000 {
+        for _ in 0..4_200 {
             for s in [&mut a, &mut b] {
                 let (h, _) = s.insert(()).unwrap();
                 assert!(seen.insert(h), "handle {h} issued twice");

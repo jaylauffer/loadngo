@@ -284,9 +284,9 @@ async function rendering(r) {
     check('after 1,100 create/destroy cycles the first handle is still refused', () => r.destroyMaterial(first), 'throw', /not live/);
     log('I handles are not reissued', later !== first, { first, later });
   }
-  // H: forged handles. The wasm boundary converts numbers with ToInt32, so the wrapper must refuse
-  // a handle plus 2^32, a fraction or a string before they could alias a live object (the third
-  // critic's probe H).
+  // H: forged handles: a handle plus 2^32, a fraction, a string, out of range. Handles cross into
+  // wasm as exact doubles; the wrapper refuses what is not a whole number, and the Rust side the
+  // rest (the third critic's probe H).
   {
     r.setKeyLight(0, 0, 1, 0, 0, 0, 0);
     r.setAmbient(1, 1, 1, 1, 1, 1, PI);
@@ -633,7 +633,7 @@ async function reentrancy() {
   );
 }
 
-/** H6: no handle is issued twice in a page, across many renderers, live or disposed. */
+/** H6: no handle is issued twice under one counter, across many renderers, live or disposed. */
 async function serials() {
   const c = document.getElementById('serials');
   const opts = { width: 16, height: 16, antialias: false };
@@ -842,6 +842,170 @@ function failingModule() {
   return new WebAssembly.Module(bytes);
 }
 
+/** K2: the documented recovery from a context loss, with the default options (antialias true). */
+async function lossDefault() {
+  const canvas = document.getElementById('loss2');
+  let restoredResolve;
+  const restored = new Promise((res) => (restoredResolve = res));
+  const old = await createRenderer(canvas, { width: 32, height: 32, onContextRestored: () => restoredResolve('restored') });
+  const lost = new Promise((res) => canvas.addEventListener('webglcontextlost', () => setTimeout(res, 0), { once: true }));
+  const lc = old.gl.getExtension('WEBGL_lose_context');
+  lc.loseContext();
+  await Promise.race([lost, timeout(2000)]);
+  const d = {};
+  const during = await settle(createRenderer(canvas, { width: 32, height: 32 }));
+  d.during = during.ok ? 'created' : during.message;
+  lc.restoreContext();
+  d.restored = await Promise.race([restored, timeout(3000)]);
+  old.dispose();
+  const after = await settle(createRenderer(canvas, { width: 32, height: 32 }));
+  d.after = after.ok ? 'created' : after.message;
+  if (after.ok) {
+    const r = after.r;
+    d.antialias = r.info.antialias;
+    flat(r);
+    r.createObject(r.createMesh(quad(-1, -1, 1, 1, -5)), r.createMaterial({ baseColor: [0, 1, 0, 1] }));
+    r.frame();
+    d.pixel = reader(r)(0, 0);
+    d.glError = r.gl.getError();
+    r.dispose();
+  }
+  log(
+    'K2 with default options: a create during a loss says the context is lost; after the restore and dispose(), a default create works and draws',
+    /context is lost/.test(d.during) && d.restored === 'restored' && d.after === 'created' && d.antialias === true && d.pixel?.[1] > 200 && d.glError === 0,
+    d,
+  );
+}
+
+/** K3: a context lost while the module is instantiated: the create says so, and the canvas recovers. */
+async function lossDuringCreate() {
+  const c = document.getElementById('loss3');
+  const gl = c.getContext('webgl2');
+  const lose = gl.getExtension('WEBGL_lose_context');
+  const real = WebAssembly.instantiate;
+  // A GPU reset just after instantiation: the test hooks a built-in for one call.
+  WebAssembly.instantiate = async (...args) => {
+    const result = await real.apply(WebAssembly, args);
+    lose.loseContext();
+    return result;
+  };
+  const d = {};
+  let hook = 0;
+  try {
+    const first = await settle(createRenderer(c, { width: 16, height: 16, onContextLost: () => hook++ }));
+    d.first = first.ok ? 'created' : first.message;
+  } finally {
+    WebAssembly.instantiate = real;
+  }
+  await timeout(50);
+  const restored = new Promise((res) => c.addEventListener('webglcontextrestored', () => res('restored'), { once: true }));
+  d.restoreThrew = attempt(() => lose.restoreContext()).threw;
+  d.restored = await Promise.race([restored, timeout(2000)]);
+  const again = await settle(createRenderer(c, { width: 16, height: 16 }));
+  d.again = again.ok ? 'created' : again.message;
+  if (again.ok) {
+    flat(again.r);
+    again.r.createObject(again.r.createMesh(quad(-1, -1, 1, 1, -5)), again.r.createMaterial({ baseColor: [0, 1, 0, 1] }));
+    again.r.frame();
+    d.pixel = reader(again.r)(0, 0);
+    again.r.dispose();
+  }
+  d.hook = hook;
+  log(
+    'K3 a context lost during the create: the error says the context is lost, the context can be restored, and the next create draws',
+    /context is lost/.test(d.first) && !d.restoreThrew && d.restored === 'restored' && d.again === 'created' && d.pixel?.[1] > 200 && hook === 0,
+    d,
+  );
+}
+
+/** G: a page-made context without a depth buffer is refused; texture sources sized by what is uploaded. */
+async function contextAndSources() {
+  const d = {};
+  const c = document.getElementById('nodepth');
+  c.getContext('webgl2', { depth: false });
+  const nodepth = await settle(createRenderer(c, { width: 16, height: 16 }));
+  d.noDepth = nodepth.ok ? 'created' : nodepth.message;
+  const r = await createRenderer(document.getElementById('sources'), { width: 16, height: 16, antialias: false });
+  flat(r);
+  const img = new Image();
+  img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==';
+  await img.decode();
+  d.image = attempt(() => r.createTexture(img));
+  // A frame coded 4x4 whose display size is 8x8: WebGL uploads its 4x4 visible rectangle.
+  const green = new Uint8Array(4 * 4 * 4);
+  for (let i = 0; i < 16; i++) green.set([0, 255, 0, 255], i * 4);
+  const frame = new VideoFrame(green, { format: 'RGBA', codedWidth: 4, codedHeight: 4, displayWidth: 8, displayHeight: 8, timestamp: 0 });
+  d.frame = attempt(() => r.createTexture(frame));
+  d.errorAfterFrame = r.gl.getError();
+  if (!d.frame.threw) {
+    r.createObject(r.createMesh(quad(-1, -1, 1, 1, -5)), r.createMaterial({ texture: d.frame.value }));
+    r.frame();
+    d.pixels = [reader(r)(-0.9, -0.9), reader(r)(0.9, 0.9)];
+  }
+  frame.close();
+  d.glError = r.gl.getError();
+  r.dispose();
+  log(
+    'G a context without depth is refused; an <img> is refused (decode it first); a VideoFrame is sized by its visible rectangle and fills the texture',
+    /no depth buffer/.test(d.noDepth) && d.image.threw && /decode it first/.test(d.image.message) && !d.frame.threw && d.errorAfterFrame === 0 &&
+      d.pixels.every((p) => p[1] > 200 && p[0] < 60) && d.glError === 0,
+    d,
+  );
+}
+
+/** H7: at the largest serial, handles stay below 2^50, where a handle plus a half is still a fraction. */
+async function largestSerial() {
+  const pool = globalThis[Symbol.for('loadngo-web3d')].serials;
+  pool.next = 2 ** 20 - 1; // the counter's last serial; the next one wraps round to 1
+  const c = document.getElementById('serial-max');
+  const r = await createRenderer(c, { width: 16, height: 16, antialias: false });
+  flat(r);
+  const o = r.createObject(r.createMesh(quad(-1, -1, 1, 1, -5)), r.createMaterial({ baseColor: [0, 1, 0, 1] }));
+  const d = { serial: r._serial, o, belowLimit: o < 2 ** 50, safe: Number.isSafeInteger(o) };
+  d.half = attempt(() => r.setVisible(o + 0.5, false));
+  d.quarter = attempt(() => r.setVisible(o - 0.25, false));
+  d.limit = attempt(() => r.setVisible(2 ** 50, false));
+  r.frame();
+  d.pixel = reader(r)(0, 0);
+  r.dispose();
+  const next = await createRenderer(c, { width: 16, height: 16, antialias: false });
+  d.nextSerial = next._serial;
+  next.dispose();
+  log(
+    'H7 at the largest serial a handle is below 2^50, a handle plus 0.5 or minus 0.25 is refused as a fraction, and the next serial wraps round to 1',
+    d.serial === 2 ** 20 - 1 && d.belowLimit && d.safe && d.half.threw && d.quarter.threw && d.limit.threw &&
+      [d.half, d.quarter, d.limit].every((t) => /is not a valid object handle/.test(t.message)) && d.pixel[1] > 200 && d.nextSerial === 1,
+    d,
+  );
+}
+
+/** R: another realm (a same-origin iframe) has its own serials, starting at random, so its handles are not this realm's. */
+async function realms() {
+  const iframe = document.createElement('iframe');
+  iframe.src = './probe-frame.html';
+  document.body.append(iframe);
+  await new Promise((res) => iframe.addEventListener('load', res, { once: true }));
+  for (let i = 0; i < 50 && !iframe.contentWindow.__frame; i++) await timeout(20);
+  const f = iframe.contentWindow.__frame;
+  const theirs = await f.createRenderer(f.canvas, { width: 16, height: 16, antialias: false });
+  const ours = await createRenderer(document.getElementById('realm'), { width: 16, height: 16, antialias: false });
+  flat(ours);
+  const ourObject = ours.createObject(ours.createMesh(quad(-1, -1, 1, 1, -5)), ours.createMaterial({ baseColor: [0, 1, 0, 1] }));
+  const theirObject = theirs.createObject(theirs.createMesh(quad(-1, -1, 1, 1, -5)), theirs.createMaterial({}));
+  const d = { ourSerial: ours._serial, theirSerial: theirs._serial, ourObject, theirObject };
+  d.theirsOnOurs = attempt(() => ours.setVisible(theirObject, false));
+  ours.frame();
+  d.pixel = reader(ours)(0, 0);
+  theirs.dispose();
+  ours.dispose();
+  iframe.remove();
+  log(
+    'R an iframe\'s renderer has a serial of its own (each realm starts at random), and its handle is refused here',
+    d.ourSerial !== d.theirSerial && d.ourObject !== d.theirObject && d.theirsOnOurs.threw && d.pixel[1] > 200,
+    d,
+  );
+}
+
 async function main() {
   const r = await createRenderer(document.getElementById('main'), { width: S, height: S, antialias: false });
   out.info = r.info;
@@ -859,6 +1023,11 @@ async function main() {
   await arrays();
   await textureSize();
   await foreignContext();
+  await lossDefault();
+  await lossDuringCreate();
+  await contextAndSources();
+  await realms();
+  await largestSerial();
   out.passed = out.tests.filter((t) => t.pass).length;
   out.failed = out.tests.filter((t) => !t.pass).map((t) => t.name);
 }

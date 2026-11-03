@@ -90,8 +90,10 @@ export function createGl(canvas, gl, hooks = {}) {
     else console.info(message);
   };
 
+  let lostEventSeen = false;
   const onLost = (event) => {
     event.preventDefault(); // allow a restore
+    lostEventSeen = true;
     state.lost = true;
     hooks.onContextLost?.();
   };
@@ -246,6 +248,13 @@ export function createGl(canvas, gl, hooks = {}) {
         gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
         gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, source);
+        // Once a texture, not per frame: an upload WebGL refused leaves an error, not an exception.
+        const error = gl.getError();
+        if (error !== gl.NO_ERROR) {
+          note(2, `web3d: the texture upload raised WebGL error 0x${error.toString(16)}`);
+          gl.deleteTexture(texture);
+          return 0;
+        }
         if (levels > 1) gl.generateMipmap(gl.TEXTURE_2D);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrapS);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrapT);
@@ -331,6 +340,12 @@ export function createGl(canvas, gl, hooks = {}) {
     dispose() {
       REMOVE_LISTENER.call(canvas, 'webglcontextlost', onLost);
       REMOVE_LISTENER.call(canvas, 'webglcontextrestored', onRestored);
+      // A context lost so recently that its event has not been dispatched yet must still be allowed
+      // a restore, or the canvas could never draw again: one call to preventDefault on that event,
+      // and nothing else (no hook).
+      if (!lostEventSeen && gl.isContextLost()) {
+        ADD_LISTENER.call(canvas, 'webglcontextlost', (event) => event.preventDefault(), { once: true });
+      }
     },
   };
 }
