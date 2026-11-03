@@ -54,8 +54,10 @@ cheap to detect, it is refused.
 
 - **XR**, new, in place of RF (whose cross-realm cases are now refused): a same-origin frame's copy is
   refused a canvas of this document and an `OffscreenCanvas` made here; this window's copy the frame's
-  canvas and the frame's `OffscreenCanvas`; each refused canvas keeps no context and no listener
-  (counted over the DevTools protocol); each copy draws on a canvas of its own. Under a top of another
+  canvas and the frame's `OffscreenCanvas`; each refused canvas keeps no context, and the first
+  keeps no listener (counted over the DevTools protocol; that round counted only `xr-top`'s, and
+  checked the other three for a context only, which the twelfth round corrected); each copy draws on
+  a canvas of its own. Under a top of another
   origin (`demo/probe-xorigin.html`, served from `localhost` while the probe page is `127.0.0.1`; the
   servers send `Cross-Origin-Resource-Policy: cross-origin` so the isolated page may embed it): the
   child's copy, loaded before its parent's, is refused the parent's canvas before and after the parent
@@ -83,7 +85,9 @@ cheap to detect, it is refused.
   drawn as lines, black off its diagonal.
 - XR: every cross-realm create succeeds, including the frame's on this document's canvas, which gets
   web3d's two listeners; under the top of another origin the child's copy has a home of its own
-  (`childHomeIsThisWindow` false; serials 560139 and 585108, from two random counters).
+  (`childHomeIsThisWindow` false; serials 33979 and 7064, `childSerial` and `ourSerial` in
+  `before-fix.json`, from two random counters; corrected in the twelfth round, when the eleventh
+  critic found this line quoting other numbers).
 
 With the fixes, all 72 pass (`../rendered-check.json`, from `../gates.sh`, in which every gate held).
 
@@ -107,8 +111,13 @@ So the timer costs 22.0 (20.8 in the first round). And a second cost the first m
 show, since handles had 30 bits then, small integers V8 stores as they are: a handle is at least
 2³⁰ now, so V8 boxes it (12 bytes) when the page reads it from an Array or an object property to
 pass it. `runs-120s.txt` (the
-original page, 7,800 frames after 120 s) shows the same 12 at the tick, with `_put` still at V8's
-middle tier. A run with TurboFan inlining off charged it to the tick too, not to web3d's methods.
+original page, 7,800 frames after 120 s) shows the same 12 at the tick, with `_put` at status 41,
+which is TurboFan, V8's top tier, not its middle tier as this line first said: in Chrome 156 a
+function forced into TurboFan reads 41 and one forced into Maglev 25 (the eleventh critic's
+`../critic11/handle-boxing/runs-40s.txt`). This line also said that a run with TurboFan's inlining
+off charged the 12 bytes to the tick too; no file recorded that run. The twelfth round ran it again,
+recorded in `../critic11-rerun/handle-boxing/runs-40s-no-turbo-inlining.txt`: 11.4 sampled bytes a
+frame from an Array, charged to the page's function, and 0 from a constant.
 `docs/WEB3D.md` ("No per-frame allocation") says so, and the documents no longer say that nothing on
 the per-frame path allocates without saying where.
 
@@ -132,7 +141,9 @@ to another realm"); probe XR checks that refusal.
 
 **The tenth's** (`run10-*.json` against `../critic10/run10-*.json`):
 
-- `state`: its 23 added states draw right, as before. Its six colour-space and drawing-buffer cases
+- `state`: 22 of its 23 added states draw right, as before; the 23rd, `EXT_blend_func_extended`, is
+  skipped, since this Chrome does not offer that extension (this line said all 23 until the twelfth
+  round). Its six colour-space and drawing-buffer cases
   now read as their controls: the P3 upload (206, 114, 76), the sRGB and float buffers and the P3
   colour space 134, against (194, 118, 84), 192, black with `INVALID_OPERATION`, and 134 at
   `d924345f`. Its pass test for those six is a green pixel, which their own controls fail too.

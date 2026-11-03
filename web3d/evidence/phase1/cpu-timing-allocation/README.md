@@ -25,4 +25,6 @@ PLAYWRIGHT_CORE=.../playwright-core/index.mjs node run.mjs <port> 40 '?bare=1[&c
 | off (the default) | 0 (only the measuring call's own 1.4) | `off.txt` |
 | on | **20.8**, charged to the caller, where `frame()` is inlined | `on.txt` |
 
-The renderer's documents quote the 20.8 measured here.
+The renderer's documents quoted the 20.8 measured here until the eleventh round. They now quote
+22.0, measured again for that round's code in `../critic10-rerun/cpu-timing/` (this page no longer
+runs: it asks V8 about `_putMatrix`, which is `_put` now).

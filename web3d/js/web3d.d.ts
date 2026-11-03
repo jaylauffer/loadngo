@@ -20,13 +20,14 @@ export type Vector3 = Numbers;
 declare const brand: unique symbol;
 /**
  * Handles are whole numbers below 2^50 that name one kind of thing in one renderer, and no handle is
- * issued twice by the copies of web3d that share a home (the top window, or the highest same-origin
- * ancestor a frame can reach, or a worker); copies with different homes count from different random
- * starts. The Rust side refuses a handle of another kind or from another renderer, live or
- * disposed. The brands let TypeScript catch a swapped argument. A handle is at least 2^30, past the
- * small integers V8 stores as they are, so a caller that reads one from an Array of numbers or an
- * object property to pass it boxes it (12 bytes) each time; read from a variable or a constant, it
- * costs nothing.
+ * issued twice by the copies of web3d that share a home (the top window if a frame reaches it, else
+ * the last of its chain of same-origin parents, or a worker); copies with different homes count from
+ * different random starts. The Rust side refuses a handle of another kind or from another renderer,
+ * live or disposed. The brands let TypeScript catch a swapped argument. A handle is at least 2^30,
+ * past the small integers V8 stores as they are, so a caller that reads one from an Array of
+ * numbers, an object property or a Float64Array to pass it boxes it (about 12 bytes) each time; read
+ * from a variable, a constant, a Map value or an Array that also holds non-numbers, it costs nothing
+ * (docs/WEB3D.md, "No per-frame allocation").
  */
 export type MeshHandle = number & { readonly [brand]: 'mesh' };
 export type TextureHandle = number & { readonly [brand]: 'texture' };
@@ -111,8 +112,7 @@ export interface TextureOptions {
 }
 
 export interface MaterialOptions {
-  /** Linear RGBA (default white). */
-  /** 3 or 4 numbers. */
+  /** Linear RGB or RGBA, 3 or 4 numbers (default white; alpha 1 when 3 are given). */
   baseColor?: Numbers;
   texture?: TextureHandle;
   alphaMode?: 'opaque' | 'mask' | 'blend';
@@ -125,22 +125,25 @@ export interface MaterialOptions {
 export function compile(source?: RendererOptions['wasm']): Promise<WebAssembly.Module>;
 /**
  * One renderer per canvas while it is live, made by a copy of web3d in the canvas's own realm: a
- * canvas of another window's document, or an OffscreenCanvas of another window or worker, is
- * refused before anything touches it (so a frame cannot drive a canvas of the top document, nor the
- * top a frame's). A canvas keeps its first WebGL context and that context's antialias setting; a
- * later renderer on it must ask for the same, and the context needs a depth buffer. The renderer
- * puts the context's state back to its defaults (docs/WEB3D.md lists what is set and what is left
- * alone) and owns that state from then on.
+ * canvas element of another document than this window's, or an OffscreenCanvas of another window
+ * or worker, is refused before anything touches it (so a frame cannot drive a canvas of the top
+ * document, nor the top a frame's), and a driven element moved to another document is refused by
+ * frame(), resize() and the creates. A canvas keeps its first WebGL context and that context's
+ * antialias setting; a later renderer on it must ask for the same, and the context needs a depth
+ * buffer. The renderer puts the context's state back to its defaults (docs/WEB3D.md lists what is
+ * set and what is left alone) and owns that state from then on.
  */
 export function createRenderer(canvas: HTMLCanvasElement | OffscreenCanvas, options?: RendererOptions): Promise<Renderer>;
 
 /**
- * After dispose() every method throws "web3d: renderer disposed". Once the WebGL context is lost,
- * frame() returns false and every create* and resize throws; dispose the renderer, then create a new
- * one after onContextRestored (which is still called when the renderer was disposed while lost) and
- * upload everything again.
+ * Made only by createRenderer. After dispose() every method throws "web3d: renderer disposed" (the
+ * getters still answer, cpuMs and gpuMs with null). Once the WebGL context is lost, frame() returns
+ * false and every create* and resize throws; dispose the renderer, then create a new one after
+ * onContextRestored (which is still called when the renderer was disposed while lost) and upload
+ * everything again.
  */
 export class Renderer {
+  private constructor();
   readonly canvas: HTMLCanvasElement | OffscreenCanvas;
   readonly info: RendererInfo;
   /** True once the context has been lost; it stays true after a restore (create a new renderer). */
@@ -173,7 +176,10 @@ export class Renderer {
   setClearColor(r: number, g: number, b: number): void;
   /** Times frames on the CPU; off by default (two boxed numbers a frame in V8). */
   setCpuTiming(on: boolean): void;
-  /** Draws a frame; false from the context's loss on, for good: after a restore, create a new renderer. */
+  /**
+   * Draws a frame; false from the context's loss on, for good: after a restore, create a new
+   * renderer. Throws if the canvas element has been moved to another document.
+   */
   frame(): boolean;
   /** [cpuMs, gpuMs or NaN, GPU frame, draws, triangles, culled, program binds, material binds]; `out` holds at least 8. */
   readStats(out: Float64Array): Float64Array;

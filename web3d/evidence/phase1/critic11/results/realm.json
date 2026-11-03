@@ -1,0 +1,170 @@
+{
+  "page": "realm.html",
+  "host": "127.0.0.1",
+  "chrome": "156.0.8078.80",
+  "args": [],
+  "result": {
+    "A1 frame canvas adopted into the top document": {
+      "ownerIsTop": true,
+      "protoIsFrames": true,
+      "protoIsTops": false,
+      "topCopy": "web3d: this canvas belongs to another realm (another window's document, or an OffscreenCanvas of another window or worker); web3d drives a canvas only from a co",
+      "frameCopy": "accepted",
+      "frameCopyDraws": {
+        "drew": true,
+        "centre": [
+          32,
+          255,
+          33,
+          255
+        ],
+        "error": 0
+      }
+    },
+    "A2 frame's renderer on an adopted canvas, frame kept (control), then a loss": {
+      "drewFirst": true,
+      "centre": [
+        32,
+        255,
+        33,
+        255
+      ],
+      "lostEvents": 1,
+      "prevented": true,
+      "restored": true,
+      "isLost": true,
+      "errorAfterRestoreCall": 37442,
+      "lostAfter": false,
+      "lostHook": 1,
+      "restoredHook": 1,
+      "canvasStillInTop": true,
+      "topCopyAfter": "web3d: this canvas belongs to another realm (another window's document, or an OffscreenCanvas of another window or worker); web3d drives a canvas only from a co"
+    },
+    "A2 frame's renderer on an adopted canvas, frame removed, then a loss": {
+      "drewFirst": true,
+      "centre": [
+        32,
+        255,
+        33,
+        255
+      ],
+      "lostEvents": 1,
+      "prevented": false,
+      "restored": false,
+      "isLost": true,
+      "errorAfterRestoreCall": 37442,
+      "lostAfter": true,
+      "lostHook": 0,
+      "restoredHook": 0,
+      "canvasStillInTop": true,
+      "topCopyAfter": "web3d: this canvas belongs to another realm (another window's document, or an OffscreenCanvas of another window or worker); web3d drives a canvas only from a co"
+    },
+    "A3 top canvas adopted into a frame document": {
+      "ownerIsFrame": true,
+      "protoIsTops": true,
+      "protoIsFrames": false,
+      "topCopy": "accepted",
+      "frameCopy": "web3d: this canvas belongs to another realm (another window's document, or an OffscreenCanvas of another window or worker); web3d drives a canvas only from a co"
+    },
+    "A4 adoptNode / importNode / createElement through another document": {
+      "topAdoptNode": {
+        "owner": "top",
+        "proto": "frame"
+      },
+      "topImportNode": {
+        "owner": "top",
+        "proto": "top"
+      },
+      "frameDocImportNodeCalledFromTop": {
+        "owner": "frame",
+        "proto": "frame"
+      },
+      "frameDocCreateElementCalledFromTop": {
+        "proto": "frame"
+      },
+      "topDocCreateElementCalledFromFrame": {
+        "owner": "top",
+        "proto": "top"
+      },
+      "frameParsedCanvas": {
+        "proto": "frame"
+      },
+      "adoptNode: top copy": "web3d: this canvas belongs to another realm (another window's document, or an OffscreenCanvas of another window or worker); web3d drives a canvas only from a co",
+      "importNode: top copy": "accepted"
+    },
+    "A5 customised built-in canvas (is=)": {
+      "isX": true,
+      "top": "accepted"
+    },
+    "A5b subclass made in a frame, extending the top HTMLCanvasElement, registered here": {
+      "top": "accepted",
+      "frame": "web3d: this canvas belongs to another realm (another window's document, or an OffscreenCanvas of another window or worker); web3d drives a canvas only from a co"
+    },
+    "A6 Object.setPrototypeOf on a frame canvas": {
+      "topCopyOnFrameDocCanvas": "accepted"
+    },
+    "A7 about:blank frame": {
+      "ownCanvas": "accepted",
+      "topCanvas": "web3d: this canvas belongs to another realm (another window's document, or an OffscreenCanvas of another window or worker); web3d drives a canvas only from a co",
+      "topCopyOnItsCanvas": "web3d: this canvas belongs to another realm (another window's document, or an OffscreenCanvas of another window or worker); web3d drives a canvas only from a co",
+      "sharesHome": true
+    },
+    "A7b srcdoc frame": {
+      "ownCanvas": "accepted",
+      "topCanvas": "web3d: this canvas belongs to another realm (another window's document, or an OffscreenCanvas of another window or worker); web3d drives a canvas only from a co"
+    },
+    "A8 top renderer, canvas then moved into a frame, frame removed, then a loss": {
+      "drewInFrame": true,
+      "centre": [
+        32,
+        255,
+        33,
+        255
+      ],
+      "lostEvents": 0,
+      "prevented": null,
+      "restored": false,
+      "isLost": true,
+      "errorAfterRestoreCall": 37442,
+      "lostAfter": true,
+      "lostHook": 0,
+      "restoredHook": 0
+    },
+    "A9 window.open popup": {
+      "popupTopIsItself": true,
+      "popupCopyOnOpenerCanvas": "web3d: this canvas belongs to another realm (another window's document, or an OffscreenCanvas of another window or worker); web3d drives a canvas only from a co",
+      "openerCopyOnPopupCanvas": "web3d: this canvas belongs to another realm (another window's document, or an OffscreenCanvas of another window or worker); web3d drives a canvas only from a co",
+      "openerCopyOnItsCanvasNowInPopup": "accepted",
+      "popupCopyOnItsCanvasNowHere": "accepted",
+      "afterPopupClosed": {
+        "drewFirst": true,
+        "lostEvents": 1,
+        "prevented": false,
+        "restored": false,
+        "isLost": true,
+        "errorAfterRestoreCall": 37442,
+        "lostAfter": true,
+        "openerCopyOnIt": "web3d: this canvas belongs to another realm (another window's document, or an OffscreenCanvas of another window or worker); web3d drives a canvas only from a co"
+      }
+    },
+    "A10 worker: OffscreenCanvas made there, transferred there, and sent back": {
+      "own": {
+        "ok": true,
+        "homeIsSelf": true
+      },
+      "transferred": {
+        "ok": true
+      },
+      "sentBack": "received",
+      "windowCopyOnCanvasFromWorker": "accepted",
+      "windowOffscreenSentToWorkerNotTransferred": {
+        "op": "unknown"
+      }
+    }
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed",
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed"
+  ]
+}

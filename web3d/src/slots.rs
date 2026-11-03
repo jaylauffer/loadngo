@@ -11,9 +11,9 @@
 //! - 3 bits of kind ([`Kind`]: mesh, texture, material, object; never 0);
 //! - 20 bits of the renderer's serial, which the JS wrapper takes from a counter that starts at
 //!   random and never repeats. The copies of the wrapper with one home share one counter (the top
-//!   window, or the highest same-origin ancestor a frame can reach, or a worker: `HOME` in
-//!   `js/web3d.js`). So no two renderers sharing a counter ever share a serial, and two counters
-//!   give the same one only by chance.
+//!   window if a frame reaches it, else the last of its chain of same-origin parents, or a worker:
+//!   `HOME` in `js/web3d.js`; a realm keeps the home its first copy chose). So no two renderers
+//!   sharing a counter ever share a serial, and two counters give the same one only by chance.
 //!
 //! A table accepts only handles carrying its own kind and serial, so 0, a number without a kind,
 //! a handle of another kind and another renderer's handle are all refused. Freeing a slot bumps

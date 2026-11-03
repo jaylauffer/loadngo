@@ -98,10 +98,14 @@ export function createGl(gl, lostSince) {
 
   /**
    * Whether polygons are drawn as lines: one triangle far larger than a 1x1 framebuffer covers its
-   * one pixel when filled, and leaves it empty as lines, whose edges all lie outside. Runs once a
-   * renderer, after the rest of the reset (so nothing else the page left can hide the triangle),
-   * with objects of its own that it deletes, and raises no WebGL error. Skipped where the browser
-   * has no WEBGL_polygon_mode, since then no page can have changed the mode.
+   * one pixel when filled, and leaves it empty as lines: its edges all pass at least 1.4 pixels from
+   * that pixel's centre (2 pixels along x or y), which a line 1 pixel wide cannot reach (the reset
+   * sets the width first; a page's wide lines could). Runs once a renderer, after the rest of the
+   * reset (so nothing else the page left can hide the triangle), with objects of its own that it
+   * deletes, and raises no WebGL error. It leaves the viewport at 1x1, the clear colour at 0, blending,
+   * culling and the depth test off, the program, vertex array, framebuffer and TEXTURE0's 2D texture
+   * unbound, and TEXTURE0 active; the renderer sets each of those itself before it draws. Skipped
+   * where the browser has no WEBGL_polygon_mode, since then no page can have changed the mode.
    */
   const drawsLines = () => {
     if (!gl.getSupportedExtensions()?.includes('WEBGL_polygon_mode')) return false;
@@ -309,8 +313,8 @@ export function createGl(gl, lostSince) {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, minFilter);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, magFilter);
       } catch (error) {
-        // A cross-origin image or a closed ImageBitmap throws; report it rather than unwind
-        // through the wasm module.
+        // A tainted canvas (one drawn with a cross-origin image) or a closed ImageBitmap throws;
+        // report it rather than unwind through the wasm module.
         note(2, `web3d: texture upload failed: ${error}`);
         gl.deleteTexture(texture);
         return 0;
@@ -360,19 +364,23 @@ export function createGl(gl, lostSince) {
     // What WebGL and its extensions add to OpenGL ES's state, put back last (Renderer::init in
     // src/renderer.rs calls this at the end of its reset). First the colour spaces of uploads and of
     // the drawing buffer, and the drawing buffer's format: three.js r180's WebGLRenderer sets the
-    // two colour spaces on every context it uses, and a page may have stored an sRGB or float
-    // buffer, into which web3d's own sRGB encoding would be encoded again. drawingBufferStorage
-    // needs a context with alpha (on one without, the format is the one it was made with), and the
-    // format survives a canvas resize, so setting it once holds. Then, for each extension the
-    // browser has (getExtension returns the page's object where it enabled one, and enabling one here
-    // changes no state): EXT_clip_control's origin and depth mode, EXT_depth_clamp, and the clip
-    // distances.
+    // two colour spaces whenever the application assigns its outputColorSpace (its setter, not its
+    // constructor, sets them), and a page may have stored an sRGB or float buffer, into which web3d's
+    // own sRGB encoding would be encoded again. drawingBufferStorage needs a context with alpha (on
+    // one without, the format is the one it was made with), and a canvas resize keeps the format, so
+    // setting it once holds. Its size is the buffer's present one, which web3d.js has made the
+    // canvas's before init (a page's stored size is not kept). Then the line width at 1, its
+    // default, for the polygon-mode test draw below, which may draw lines. Then, for each extension
+    // the browser has (getExtension returns the page's object where it enabled one, and enabling one
+    // here changes no state): EXT_clip_control's origin and depth mode, EXT_depth_clamp, and the
+    // clip distances.
     reset_webgl_state() {
       if ('unpackColorSpace' in gl) gl.unpackColorSpace = 'srgb';
       if ('drawingBufferColorSpace' in gl) gl.drawingBufferColorSpace = 'srgb';
       if (typeof gl.drawingBufferStorage === 'function' && gl.getContextAttributes()?.alpha && gl.drawingBufferFormat !== gl.RGBA8) {
         gl.drawingBufferStorage(gl.RGBA8, gl.drawingBufferWidth, gl.drawingBufferHeight);
       }
+      gl.lineWidth(1);
       const clip = gl.getExtension('EXT_clip_control');
       if (clip) clip.clipControlEXT(clip.LOWER_LEFT_EXT, clip.NEGATIVE_ONE_TO_ONE_EXT);
       const clamp = gl.getExtension('EXT_depth_clamp');

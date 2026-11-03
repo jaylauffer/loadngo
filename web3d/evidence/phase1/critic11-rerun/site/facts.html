@@ -1,0 +1,123 @@
+<!doctype html><meta charset="utf-8"><title>web3d twelfth round: browser facts</title>
+<body><script type="module">
+// Browser facts the twelfth round's fixes rest on, measured with no web3d involved (raw WebGL):
+// F1. which realm a node's and a context's wrappers get, what ownerDocument answers across realms,
+//     and whether a context whose canvas wrapper a removed frame made still draws, loses and restores;
+// F4. what drawingBufferStorage and canvas resizing do to the drawing buffer's size.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const err = (e) => String(e?.message ?? e).slice(0, 200);
+const out = {};
+const T = async (name, f) => { try { out[name] = await f(); } catch (e) { out[name] = { threw: err(e) }; } };
+const OWNER = Object.getOwnPropertyDescriptor(Node.prototype, 'ownerDocument').get;
+const realmOf = (o, fw) => (Object.getPrototypeOf(o) === Object.getPrototypeOf(o).constructor.prototype && fw && o instanceof fw.Object ? 'frame' : o instanceof Object ? 'top' : fw && o instanceof fw.Object ? 'frame' : '?');
+async function frame() {
+  const f = document.createElement('iframe');
+  f.src = 'frame.html';
+  document.body.append(f);
+  await new Promise((r) => (f.onload = r));
+  while (!f.contentWindow.ready) await sleep(10);
+  return f;
+}
+const px = (gl) => { const p = new Uint8Array(4); WebGL2RenderingContext.prototype.readPixels.call(gl, 0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, p); return [...p]; };
+const clearTo = (gl, g) => { gl.clearColor(0, g, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); };
+
+await T('ownerDocument across realms', async () => {
+  const f = await frame();
+  const fw = f.contentWindow;
+  const a = fw.document.createElement('canvas');
+  document.body.append(a); // adopted: owner is this document, wrapper the frame's
+  const b = document.createElement('canvas');
+  fw.document.body.append(b); // adopted the other way
+  const r = {
+    adoptedHere: { ownerByOurGetter: OWNER.call(a) === document, ownerByFramesGetter: fw.eval('Object.getOwnPropertyDescriptor(Node.prototype, "ownerDocument").get').call(a) === document, wrapper: realmOf(a, fw) },
+    adoptedThere: { ownerByOurGetter: OWNER.call(b) === fw.document, wrapper: realmOf(b, fw) },
+    template: (() => { const t = document.createElement('template'); t.innerHTML = '<canvas></canvas>'; const c = t.content.firstChild; return { ownerIsOurs: OWNER.call(c) === document, wrapper: realmOf(c, fw), webgl2: !!c.getContext('webgl2') }; })(),
+    parsed: (() => { const d = new DOMParser().parseFromString('<canvas></canvas>', 'text/html'); const c = d.querySelector('canvas'); return { ownerIsOurs: OWNER.call(c) === document, webgl2: !!c.getContext('webgl2') }; })(),
+  };
+  f.remove();
+  return r;
+});
+
+// A canvas of this document that a frame's observer wraps first; this window makes the context.
+await T('first touch by a frame, context made here, frame removed', async () => {
+  const f = await frame();
+  const fw = f.contentWindow;
+  fw.eval("window.seen = null; new MutationObserver((rs) => { for (const r of rs) for (const n of r.addedNodes) if (n.nodeName === 'CANVAS') window.seen = n; }).observe(parent.document.body, { childList: true, subtree: true });");
+  document.body.insertAdjacentHTML('beforeend', '<canvas id="ft" width="8" height="8"></canvas>');
+  while (!fw.seen) await sleep(5);
+  const c = document.getElementById('ft');
+  const r = { canvasWrapper: realmOf(c, fw), owner: OWNER.call(c) === document ? 'this document' : 'other' };
+  const gl = HTMLCanvasElement.prototype.getContext.call(c, 'webgl2', { antialias: false });
+  r.contextWrapper = realmOf(gl, fw);
+  r.extensionWrapper = realmOf(gl.getExtension('WEBGL_lose_context'), fw);
+  clearTo(gl, 1);
+  r.before = px(gl);
+  let seen = { lost: 0, prevented: null, restored: 0 };
+  c.addEventListener('webglcontextlost', (e) => { e.preventDefault(); seen.lost++; seen.prevented = e.defaultPrevented; });
+  c.addEventListener('webglcontextrestored', () => seen.restored++);
+  f.remove();
+  await sleep(100);
+  r.frameGone = true;
+  // Draw through the context's own methods (its wrapper's realm) after that realm is gone.
+  try { gl.clearColor(0, 0.5, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); r.afterRemovalOwnMethods = px(gl); r.afterRemovalError = WebGL2RenderingContext.prototype.getError.call(gl); } catch (e) { r.afterRemovalOwnMethods = err(e); }
+  const lose = WebGL2RenderingContext.prototype.getExtension.call(gl, 'WEBGL_lose_context');
+  lose.loseContext();
+  await sleep(200);
+  try { lose.restoreContext(); } catch (e) { r.restoreThrew = err(e); }
+  await sleep(400);
+  r.events = seen;
+  r.lostAfter = gl.isContextLost();
+  try { clearTo(gl, 1); r.afterRestore = px(gl); } catch (e) { r.afterRestore = err(e); }
+  return r;
+});
+
+// The drawing buffer's size: drawingBufferStorage, then canvas sizes.
+await T('drawingBufferStorage and canvas sizes', async () => {
+  const mk = (w, h, attrs = {}) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return [c, c.getContext('webgl2', { alpha: true, antialias: false, ...attrs })]; };
+  const size = (gl) => [gl.drawingBufferWidth, gl.drawingBufferHeight];
+  const fmt = (gl) => ({ [gl.RGBA8]: 'RGBA8', [gl.SRGB8_ALPHA8]: 'SRGB8_ALPHA8', [gl.RGBA16F]: 'RGBA16F' })[gl.drawingBufferFormat] ?? gl.drawingBufferFormat;
+  const r = {};
+  {
+    const [c, gl] = mk(300, 150);
+    r.maxRenderbuffer = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE);
+    r.maxTexture = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    r.maxViewport = [...gl.getParameter(gl.MAX_VIEWPORT_DIMS)];
+    gl.drawingBufferStorage(gl.SRGB8_ALPHA8, 40, 30);
+    r.pageStorage = [...size(gl), fmt(gl)];
+    c.width = 300; c.height = 150; // the same size again
+    r.sameSizeSet = [...size(gl), fmt(gl)];
+    gl.drawingBufferStorage(gl.RGBA8, 300, 150);
+    r.storageAtCanvasSize = [...size(gl), fmt(gl), gl.getError()];
+    gl.drawingBufferStorage(gl.SRGB8_ALPHA8, 40, 30);
+    c.width = 301; c.width = 300; // another width, then back
+    r.toggled = [...size(gl), fmt(gl)];
+  }
+  {
+    const [c, gl] = mk(300, 150);
+    const big = r.maxRenderbuffer + 1;
+    gl.drawingBufferStorage(gl.RGBA8, big, 64);
+    r.storageOverMaxRenderbuffer = { asked: [big, 64], got: [...size(gl), fmt(gl)], error: gl.getError() };
+    c.width = big; c.height = 64;
+    r.canvasOverMax = { asked: [big, 64], got: size(gl), error: gl.getError() };
+    c.width = 20000; c.height = 20000;
+    r.canvas20000 = { got: size(gl), error: gl.getError() };
+    c.width = 0; c.height = 0;
+    r.canvas0 = { got: size(gl), error: gl.getError() };
+  }
+  {
+    const [c, gl] = mk(64, 64, { antialias: true });
+    r.msaaSamples = gl.getParameter(gl.SAMPLES);
+    gl.drawingBufferStorage(gl.SRGB8_ALPHA8, 40, 30);
+    c.width = 65; c.width = 64;
+    r.msaaToggled = { got: [...size(gl), fmt(gl)], samples: gl.getParameter(gl.SAMPLES) };
+  }
+  {
+    // Without alpha: drawingBufferStorage is refused, so a page cannot change the size that way.
+    const [c, gl] = mk(64, 64, { alpha: false });
+    gl.drawingBufferStorage(gl.RGBA8, 40, 30);
+    r.noAlpha = { got: [...size(gl), fmt(gl)], error: gl.getError() };
+  }
+  return r;
+});
+window.__done = Promise.resolve(out);
+</script></body>

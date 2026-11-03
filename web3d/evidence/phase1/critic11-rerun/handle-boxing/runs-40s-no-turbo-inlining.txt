@@ -1,0 +1,4 @@
+?held=array bytes/frame by function: {"/:18 array":11.4,"/:32 window.__status":1.1} status {"frames":3000,"setTransform":25,"put":41,"tick":25,"turbofanReference":41,"maglevReference":25}
+browser and server stopped
+?held=const bytes/frame by function: {"/:32 window.__status":1.2} status {"frames":3001,"setTransform":25,"put":41,"tick":25,"turbofanReference":41,"maglevReference":25}
+browser and server stopped

@@ -1,0 +1,48 @@
+{
+  "page": "dd.html",
+  "host": "a.localhost",
+  "chrome": "156.0.8078.80",
+  "args": [],
+  "result": {
+    "top": "http://a.localhost:5481",
+    "frameOrigin": "http://b.a.localhost:5481",
+    "firstHomeIsFrameWindow": true,
+    "topHasState": true,
+    "copy1Create": "accepted",
+    "copy2CreateWhileCopy1Live": "accepted (two live renderers on one canvas)",
+    "sameContext": true,
+    "draws": {
+      "first": {
+        "drew": true,
+        "centre": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "error": 0
+      },
+      "second": {
+        "drew": true,
+        "centre": [
+          32,
+          33,
+          255,
+          255
+        ],
+        "error": 0
+      }
+    },
+    "firstAgainCentre": [
+      32,
+      33,
+      255,
+      255
+    ],
+    "errorAfter": 0,
+    "restoredAfterLoss": true
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

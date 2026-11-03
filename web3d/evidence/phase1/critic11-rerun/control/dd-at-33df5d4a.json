@@ -1,0 +1,27 @@
+{
+  "page": "evidence/phase1/critic11-rerun/site/dd.html",
+  "host": "a.localhost",
+  "pkg": "web3d at 33df5d4a, built by ../../critic10-rerun/build-before-fix.sh outside the repository",
+  "chrome": "156.0.8078.80",
+  "result": {
+    "top": "http://a.localhost:5664",
+    "frameOrigin": "http://b.a.localhost:5664",
+    "topReachableAfter": true,
+    "realmHomeIsTheFrame": false,
+    "topStateMadeByTheFrame": true,
+    "copy1": "created",
+    "copy2WhileCopy1Live": "created (two live renderers on one canvas)",
+    "serial1": 186015,
+    "copy2AfterCopy1Disposed": "created",
+    "serial2": 858200,
+    "serialsInSequence": false,
+    "listeners": {
+      "webglcontextlost": 2,
+      "webglcontextrestored": 2
+    },
+    "pass": false
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

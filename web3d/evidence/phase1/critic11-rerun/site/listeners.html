@@ -1,0 +1,47 @@
+<!doctype html><meta charset="utf-8"><title>web3d twelfth round: listener counts over DevTools</title>
+<body><script type="module">
+// Whether DOMDebugger.getEventListeners (check.mjs's window.__listeners) counts listeners on a node of
+// a frame's document, and listeners whose functions belong to another realm: the counts XD relies on.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const f = document.createElement('iframe');
+f.src = 'frame.html';
+document.body.append(f);
+await new Promise((r) => (f.onload = r));
+while (!f.contentWindow.ready) await sleep(10);
+const fw = f.contentWindow;
+window.__targets = {};
+const count = async (name, o) => { window.__targets[name] = o; return window.__listeners(`@${name}`); };
+const out = {};
+const add = (c, realm) => (realm === 'frame' ? fw.EventTarget.prototype.addEventListener.call(c, 'webglcontextlost', fw.eval('() => {}')) : c.addEventListener('webglcontextlost', () => {}));
+for (const doc of ['top', 'frame']) {
+  for (const realm of ['top', 'frame']) {
+    const c = document.createElement('canvas');
+    (doc === 'top' ? document.body : fw.document.body).append(c);
+    add(c, realm);
+    out[`canvas in the ${doc} document, listener of the ${realm} realm`] = await count(`${doc}-${realm}`, c);
+  }
+}
+// A frame document's canvas, counted again once moved into this document (its listeners go with it).
+{
+  const c = document.createElement('canvas');
+  fw.document.body.append(c);
+  add(c, 'top');
+  add(c, 'frame');
+  out['canvas in the frame document, one listener of each realm'] = await count('frame-both', c);
+  document.body.append(c);
+  out['the same canvas, moved into the top document'] = await count('frame-both-moved', c);
+}
+// OffscreenCanvases, of each realm, with a listener of each realm.
+for (const made of ['top', 'frame']) {
+  for (const realm of ['top', 'frame']) {
+    const o = made === 'top' ? new OffscreenCanvas(4, 4) : new fw.OffscreenCanvas(4, 4);
+    add(o, realm);
+    out[`an OffscreenCanvas made by the ${made} realm, listener of the ${realm} realm`] = await count(`off-${made}-${realm}`, o);
+  }
+}
+{
+  const o = new OffscreenCanvas(4, 4);
+  out['an OffscreenCanvas with no listener'] = await count('off-none', o);
+}
+window.__done = Promise.resolve(out);
+</script></body>

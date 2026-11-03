@@ -1,0 +1,12 @@
+Critic 11: gates.sh's step_fails passes any non-zero exit. The blind run, on a port already taken
+(a dummy server on 127.0.0.1:5486), exits 1 at listen (EADDRINUSE) before any browser starts:
+
+  $ node web3d/demo/check.mjs --port 5486 --out ... --seconds 10 --steady 60 --blind
+  Error: listen EADDRINUSE: address already in use 127.0.0.1:5486  (node's unhandled rejection)
+  exit 1
+
+gates.sh would record this as "exit 1 (must not be 0: held)", although no profiler ran and the
+positive control was never tested blind. The same holds for any other early failure (Chrome not
+launching, PLAYWRIGHT_CORE unset, a probe failing). Fix: have check.mjs --blind exit with a code
+of its own (say 3) only when the control alone failed (sighted false, everything else held), and
+have gates.sh require that code.

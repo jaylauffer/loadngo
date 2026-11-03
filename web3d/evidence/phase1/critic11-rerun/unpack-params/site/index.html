@@ -1,0 +1,49 @@
+<!doctype html><meta charset="utf-8"><title>unpack parameters and every image source kind</title><link rel="icon" href="data:,"><body>
+<!-- The tenth rerun's unpack-params page (../../critic10-rerun/unpack-params/site/index.html) with all
+     six source kinds web3d takes: ImageBitmap, ImageData and a 2d canvas as there, and an
+     OffscreenCanvas with a 2d context, a canvas with a WebGL context, and a VideoFrame. Does
+     UNPACK_ROW_LENGTH, UNPACK_IMAGE_HEIGHT with UNPACK_SKIP_IMAGES, or UNPACK_ALIGNMENT, left on a
+     page-made context, change what a 2x2 upload gives? Run against a web3d that does not reset them
+     (994f9bc8), so the page's values are in effect, and against today's. Each line: the setting, the
+     source, and the texture's top-left, top-right and bottom-left as drawn (a texel t reads
+     encode(t + 0.04): 255 and 56), with getError after. -->
+<script type="module">
+import { createRenderer } from '/pkg/web3d.js';
+const IDENT = new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]); const ORTHO = new Float32Array([1,0,0,0,0,1,0,0,0,0,-2/9.9,0,0,0,-10.1/9.9,1]);
+const quad = { positions: new Float32Array([-1,-1,-5,1,-1,-5,1,1,-5,-1,1,-5]), normals: new Float32Array([0,0,1,0,0,1,0,0,1,0,0,1]), uvs: new Float32Array([0,1,1,1,1,0,0,0]), indices: new Uint32Array([0,1,2,0,2,3]) };
+const RGBW = [255,0,0,255, 0,255,0,255, 0,0,255,255, 255,255,255,255];
+const sources = {
+  bitmap: () => createImageBitmap(new ImageData(new Uint8ClampedArray(RGBW), 2, 2), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' }),
+  imagedata: async () => new ImageData(new Uint8ClampedArray(RGBW), 2, 2),
+  canvas2d: async () => { const k = document.createElement('canvas'); k.width = 2; k.height = 2; k.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(RGBW), 2, 2), 0, 0); return k; },
+  offscreen2d: async () => { const k = new OffscreenCanvas(2, 2); k.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(RGBW), 2, 2), 0, 0); return k; },
+  webglCanvas: async () => {
+    // The four texels drawn by scissored clears, top row first as the page sees it.
+    const k = document.createElement('canvas'); k.width = 2; k.height = 2;
+    const g = k.getContext('webgl2', { antialias: false, preserveDrawingBuffer: true, premultipliedAlpha: false });
+    g.enable(g.SCISSOR_TEST);
+    for (const [x, y, rgb] of [[0, 1, [1, 0, 0]], [1, 1, [0, 1, 0]], [0, 0, [0, 0, 1]], [1, 0, [1, 1, 1]]]) { g.scissor(x, y, 1, 1); g.clearColor(...rgb, 1); g.clear(g.COLOR_BUFFER_BIT); }
+    return k;
+  },
+  videoFrame: async () => new VideoFrame(new Uint8ClampedArray(RGBW), { format: 'RGBA', codedWidth: 2, codedHeight: 2, timestamp: 0 }),
+};
+const out = [];
+for (const [name, set] of [['none', () => {}], ['ROW_LENGTH 1', (gl) => gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 1)], ['ROW_LENGTH 3', (gl) => gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 3)], ['ROW_LENGTH 4', (gl) => gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 4)], ['ROW_LENGTH 8', (gl) => gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 8)], ['IMAGE_HEIGHT 1 + SKIP_IMAGES 1', (gl) => (gl.pixelStorei(gl.UNPACK_IMAGE_HEIGHT, 1), gl.pixelStorei(gl.UNPACK_SKIP_IMAGES, 1))], ['ALIGNMENT 8', (gl) => gl.pixelStorei(gl.UNPACK_ALIGNMENT, 8)]]) {
+  for (const kind of Object.keys(sources)) {
+    const c = document.createElement('canvas'); document.body.append(c);
+    const gl = c.getContext('webgl2', { antialias: false }); set(gl);
+    const r = await createRenderer(c, { width: 16, height: 16, antialias: false });
+    const src = await sources[kind]();
+    r.setCamera(IDENT, ORTHO); r.setKeyLight(0,0,1,0,0,0,0); r.setAmbient(1,1,1,1,1,1,Math.PI); r.setClearColor(0,0,0);
+    let res;
+    try { const t = r.createTexture(src, { mipmaps: false, wrapS: 'clamp', wrapT: 'clamp' }); r.createObject(r.createMesh(quad), r.createMaterial({ texture: t })); r.frame();
+      const px = (x, y) => { const p = new Uint8Array(4); gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, p); return [p[0], p[1], p[2]]; };
+      res = { tl: px(2, 13), tr: px(13, 13), bl: px(2, 2), err: gl.getError() };
+    } catch (e) { res = String(e.message).slice(0, 60); }
+    if (kind === 'videoFrame') src.close();
+    if (kind === 'webglCanvas') src.getContext('webgl2').getExtension('WEBGL_lose_context').loseContext();
+    out.push([name, kind, res]); r.dispose(); gl.getExtension('WEBGL_lose_context').loseContext();
+  }
+}
+window.__done = out;
+</script>

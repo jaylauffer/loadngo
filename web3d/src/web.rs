@@ -3,7 +3,8 @@
 //! **Imports** come from `js/gl.js` as module `web3d_gl`: plain functions over numbers. Byte
 //! slices cross as a pointer and a length into this module's memory, which the shim reads in
 //! place (`bufferSubData(target, offset, heap, ptr, len)`), so a frame allocates nothing on
-//! either side.
+//! either side, except with CPU timing on: the two `now` readings come back as numbers V8 boxes
+//! (docs/WEB3D.md, "No per-frame allocation").
 //!
 //! **Exports** are C-ABI functions taking a `*mut Web3d` from [`web3d_create`]. `js/web3d.js`
 //! wraps them in a `Renderer` class. Matrices and material values go through a fixed exchange

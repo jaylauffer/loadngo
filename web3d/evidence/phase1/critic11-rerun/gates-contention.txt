@@ -1,0 +1,32 @@
+# The GPU during ../gates.txt's run (2026-11-04): headless Google Chrome GPU processes alive, sampled about every
+# 10 s (ps), this round's own included while check.mjs ran (its log was last written at 02:40:47, the
+# blind run's at 02:43:01; the gates began at 02:38:25).
+# Other sessions' servers at the start: localhost:5561, 5571, 5581, 5582, 5583 (left alone). Counts:
+02:38:25 2
+02:38:35 3
+02:38:45 3
+02:38:55 3
+02:39:05 3
+02:39:15 3
+02:39:25 3
+02:39:35 3
+02:39:45 3
+02:39:55 3
+02:40:05 3
+02:40:15 3
+02:40:25 3
+02:40:35 4
+02:40:45 4
+02:40:55 4
+02:41:05 3
+02:41:16 3
+02:41:26 3
+02:41:36 4
+02:41:46 4
+02:41:56 4
+02:42:06 4
+02:42:16 4
+02:42:26 3
+02:42:36 3
+02:42:46 3
+02:42:56 3

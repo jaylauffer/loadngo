@@ -291,7 +291,7 @@ impl fmt::Display for Error {
             ),
             Error::TextureUpload => write!(
                 f,
-                "the browser refused the texture upload (the console has the reason: a cross-origin image, a closed ImageBitmap, a lost context, or a source whose pixels do not fit the size it reports or changed size)"
+                "the browser refused the texture upload (the console has the reason: a canvas or ImageBitmap holding a cross-origin image, a closed ImageBitmap, a lost context, or a source whose pixels do not fit the size it reports or changed size)"
             ),
             Error::Texture(why) => write!(f, "texture refused: {why}"),
             Error::GlObject(what) => write!(f, "WebGL could not create {what}"),
@@ -899,8 +899,8 @@ impl<G: Gl> Renderer<G> {
     /// buffer, and every unpack and pack parameter at its default; no vertex array; no sampler
     /// object on any texture unit; and every generic vertex attribute at (0, 0, 0, 1), the value an
     /// attribute whose array is off reads. Last what WebGL adds ([`Gl::reset_webgl_state`]: colour
-    /// spaces, the drawing buffer's format, extension state), whose polygon-mode test draw needs the
-    /// rest at its defaults.
+    /// spaces, the drawing buffer's format, the line width, extension state), whose polygon-mode
+    /// test draw needs the rest at its defaults.
     ///
     /// The renderer sets the rest itself: the viewport and clear colour on its first frame; the
     /// depth test, the blend function, and the depth-write, blend and cull switches and the front
@@ -908,8 +908,13 @@ impl<G: Gl> Renderer<G> {
     /// and uniform-buffer ranges it uses; and, at each texture upload, the WebGL unpack settings
     /// (flip, premultiply, colour conversion). What has no effect while its switch is off (the
     /// scissor box, the stencil function, operations and masks, the polygon offset and its clamp,
-    /// the coverage value) is left as it was, and so are the blend colour and line width, which no
-    /// draw uses. The page's own objects are not deleted, only unbound.
+    /// the coverage value) is left as it was, and so is the blend colour, which no blend function
+    /// the renderer sets reads. The page's own objects are not deleted. The bindings listed above
+    /// are cleared; the page's other bindings stay (its textures on each unit, its `ARRAY_BUFFER`,
+    /// copy, uniform and transform-feedback buffer bindings, its program) until the renderer binds
+    /// its own where it uses one (texture unit 0, its buffers, its programs), and the polygon-mode
+    /// test draw, where the browser has the extension, unbinds the program and `TEXTURE0`'s 2D
+    /// texture.
     fn reset_context_state(&mut self) {
         /// Loops over GL limits stop here, whatever a driver reports.
         const MOST: u32 = 256;

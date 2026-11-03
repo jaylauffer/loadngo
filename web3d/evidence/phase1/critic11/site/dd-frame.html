@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>critic 11 document.domain frame</title>
+<body><script type="module">
+// Copy 1 loads before this frame sets document.domain: the top (another origin) is out of reach.
+import * as first from '/pkg/web3d.js?copy=1';
+window.first = first;
+window.firstHomeIsSelf = self[Symbol.for('loadngo-web3d')] !== undefined;
+document.domain = 'a.localhost';
+// Copy 2, the same file under another URL, loads after: the top is now reachable.
+window.second = await import('/pkg/web3d.js?copy=2');
+window.ready = true;
+</script></body>

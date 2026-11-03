@@ -1,0 +1,34 @@
+<!doctype html><meta charset="utf-8"><title>critic 11 first wrapper</title>
+<body><script type="module">
+// A canvas this document's parser makes, which this window's script never touches before a
+// same-origin frame's MutationObserver sees it added. Whose prototype does it get?
+import * as web3d from '/pkg/web3d.js';
+import { until, frame, tryCreate } from './common.js';
+const f = await frame('frame.html');
+const fw = f.contentWindow;
+await until(() => fw.ready);
+fw.eval(`window.seen = null; new MutationObserver((records) => { for (const r of records) for (const n of r.addedNodes) if (n.nodeName === 'CANVAS') window.seen = n; }).observe(parent.document.body, { childList: true, subtree: true });`);
+document.body.insertAdjacentHTML('beforeend', '<canvas id="mine" width="64" height="64"></canvas>');
+await until(() => fw.seen);
+const c = document.getElementById('mine');
+const out = {
+  sameNode: c === fw.seen,
+  ownerIsThisDocument: c.ownerDocument === document,
+  protoIsThisWindows: Object.getPrototypeOf(c) === HTMLCanvasElement.prototype,
+  protoIsFramesWindows: Object.getPrototypeOf(c) === fw.HTMLCanvasElement.prototype,
+};
+let t = await tryCreate(web3d, c);
+out.thisWindowsCopy = t.ok ? 'accepted' : t.error;
+if (t.ok) t.r.dispose();
+t = await tryCreate(fw.web3d, c);
+out.framesCopy = t.ok ? 'accepted' : t.error;
+if (t.ok) t.r.dispose();
+// Control: the same, with no observer in the frame.
+document.body.insertAdjacentHTML('beforeend', '<canvas id="control" width="64" height="64"></canvas>');
+const k = document.getElementById('control');
+t = await tryCreate(web3d, k);
+out.controlThisWindowsCopy = t.ok ? 'accepted' : t.error;
+if (t.ok) t.r.dispose();
+f.remove();
+window.__done = Promise.resolve(out);
+</script></body>

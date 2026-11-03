@@ -1,0 +1,33 @@
+<!doctype html><html><head><meta charset="utf-8"><!-- Critic 11: where a page keeps the handle it passes to setTransform each frame. As critic10-rerun/cpu-timing/site, bare page only, more holders: array (an Array of handles, PACKED_DOUBLE), mixed (an Array of handles and objects), property (an object field), map (a Map value), f64 (a Float64Array), const, smi (a fake call with a Smi to show the wrapper path), and tierN (V8 status of a function optimised by each tier, to read the numbers). --><link rel="icon" href="data:,"></head><body><canvas id="c"></canvas>
+<script type="module">
+import { Renderer, createRenderer } from '/web3d/pkg/web3d.js';
+const r = await createRenderer(document.getElementById('c'), { width: 512, height: 288 });
+const quad = { positions: new Float32Array([-1,-1,0, 1,-1,0, 1,1,0, -1,1,0]), normals: new Float32Array([0,0,1, 0,0,1, 0,0,1, 0,0,1]), indices: new Uint32Array([0,1,2, 0,2,3]) };
+const mesh = r.createMesh(quad); const mat = r.createMaterial({});
+const objs = []; for (let i = 0; i < 60; i++) objs.push(r.createObject(mesh, mat, [1,0,0,0, 0,1,0,0, 0,0,1,0, (i % 10) - 5, Math.floor(i / 10) - 3, -10, 1]));
+const view = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]; const proj = [1.2,0,0,0, 0,2.1,0,0, 0,0,-1.002,-1, 0,0,-0.2002,0];
+const model = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,-10,1]; const stats = new Float64Array(8);
+let frames = 0;
+const held = new URLSearchParams(location.search).get('held') ?? 'array';
+const h0 = objs[0];
+const mixed = [objs[0], {}, 'x'];
+const holder = { h: objs[0] };
+const map = new Map([['a', objs[0]]]);
+const f64 = new Float64Array([objs[0]]);
+const ticks = {
+  array: () => { requestAnimationFrame(tick); r.setCamera(view, proj); r.setTransform(objs[0], model); r.frame(); r.readStats(stats); frames++; },
+  mixed: () => { requestAnimationFrame(tick); r.setCamera(view, proj); r.setTransform(mixed[0], model); r.frame(); r.readStats(stats); frames++; },
+  property: () => { requestAnimationFrame(tick); r.setCamera(view, proj); r.setTransform(holder.h, model); r.frame(); r.readStats(stats); frames++; },
+  map: () => { requestAnimationFrame(tick); r.setCamera(view, proj); r.setTransform(map.get('a'), model); r.frame(); r.readStats(stats); frames++; },
+  f64: () => { requestAnimationFrame(tick); r.setCamera(view, proj); r.setTransform(f64[0], model); r.frame(); r.readStats(stats); frames++; },
+  const: () => { requestAnimationFrame(tick); r.setCamera(view, proj); r.setTransform(h0, model); r.frame(); r.readStats(stats); frames++; },
+  loop60: () => { requestAnimationFrame(tick); r.setCamera(view, proj); for (let i = 0; i < 60; i++) r.setTransform(objs[i], model); r.frame(); r.readStats(stats); frames++; },
+};
+const tick = ticks[held];
+requestAnimationFrame(tick);
+const P = Renderer.prototype;
+function tf(x) { return x + 1; } function mg(x) { return x + 2; }
+%PrepareFunctionForOptimization(tf); tf(1); tf(2); %OptimizeFunctionOnNextCall(tf); tf(3);
+%PrepareFunctionForOptimization(mg); mg(1); mg(2); %OptimizeMaglevOnNextCall(mg); mg(3);
+window.__status = () => ({ frames, setTransform: %GetOptimizationStatus(P.setTransform), put: %GetOptimizationStatus(P._put), tick: %GetOptimizationStatus(tick), turbofanReference: %GetOptimizationStatus(tf), maglevReference: %GetOptimizationStatus(mg) });
+</script></body></html>

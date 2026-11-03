@@ -5,7 +5,24 @@
 //
 // BSD-3-Clause; see the repository's LICENSE.
 
-import { createRenderer } from '../pkg/web3d.js';
+import { createRenderer as createRendererOf } from '../pkg/web3d.js';
+
+/**
+ * Every WebGL context the probes make, through web3d or themselves, so that main() can release each
+ * probe's contexts once it is done (`releaseAll`). Chrome keeps at most 16 live WebGL contexts and
+ * loses the oldest past that ("Too many active WebGL contexts"), which could hit a context a probe
+ * was still using; check.mjs fails if the probe page logs that warning.
+ */
+const contexts = new Set();
+const track = (gl) => {
+  if (gl) contexts.add(gl);
+  return gl;
+};
+const createRenderer = async (canvas, options) => {
+  const r = await createRendererOf(canvas, options);
+  track(r.gl);
+  return r;
+};
 
 const out = { tests: [] };
 window.__probe = { done: null, out };
@@ -753,7 +770,7 @@ async function textureSize() {
  */
 async function foreignContext() {
   const c = document.getElementById('foreign');
-  const gl = c.getContext('webgl2', { antialias: false });
+  const gl = track(c.getContext('webgl2', { antialias: false }));
   const d = { pageAntialias: gl.getContextAttributes().antialias };
   d.askedForAntialias = await settle(createRenderer(c, { width: 16, height: 16, antialias: true }));
   const ok = await settle(createRenderer(c, { width: 16, height: 16, antialias: false }));
@@ -882,7 +899,7 @@ async function lossDefault() {
 /** K3: a context lost while the module is instantiated: the create says so, and the canvas recovers. */
 async function lossDuringCreate() {
   const c = document.getElementById('loss3');
-  const gl = c.getContext('webgl2');
+  const gl = track(c.getContext('webgl2'));
   const lose = gl.getExtension('WEBGL_lose_context');
   const real = WebAssembly.instantiate;
   // A GPU reset just after instantiation: the test hooks a built-in for one call.
@@ -924,7 +941,7 @@ async function lossDuringCreate() {
 async function contextAndSources() {
   const d = {};
   const c = document.getElementById('nodepth');
-  c.getContext('webgl2', { depth: false });
+  track(c.getContext('webgl2', { depth: false }));
   const nodepth = await settle(createRenderer(c, { width: 16, height: 16 }));
   d.noDepth = nodepth.ok ? 'created' : nodepth.message;
   const r = await createRenderer(document.getElementById('sources'), { width: 16, height: 16, antialias: false });
@@ -1169,7 +1186,7 @@ async function lossController() {
     // E11: a page-made context, lost while a create instantiates the module.
     {
       const c = document.getElementById('le11');
-      const gl = c.getContext('webgl2', { antialias: false });
+      const gl = track(c.getContext('webgl2', { antialias: false }));
       const lc = lose(gl);
       const real = WebAssembly.instantiate;
       WebAssembly.instantiate = async (...args) => {
@@ -1309,10 +1326,38 @@ async function realms() {
   );
 }
 
-// The tenth and eleventh rounds' probes: the ninth critic's findings N1 (LR), N8 (PS) and N11 (NC),
+// The tenth to twelfth rounds' probes: the ninth critic's findings N1 (LR), N8 (PS) and N11 (NC),
 // and its notes N7b' and N21 (MS); the tenth critic's F1 and F3 (XR, which replaced the tenth
-// round's RF), F2 and F4 (in PS). Each makes its own canvases, and releases their contexts when it
-// is done, so Chrome's limit on live contexts drops none of the others.
+// round's RF), F2 and F4 (in PS); the eleventh critic's F1 (XR), F4 (DB) and its line-width note
+// (in PS). Each makes its own canvases, and releases its contexts as it goes; main() releases every
+// context a probe made once it is done (releaseAll), and check.mjs fails if Chrome's limit on live
+// contexts loses any.
+
+// The refusals of a canvas of another realm: an element's is by its document, an OffscreenCanvas's
+// by its prototype.
+const FOREIGN_ELEMENT = /canvas element is in another document than this window's/;
+const FOREIGN_OFFSCREEN = /OffscreenCanvas belongs to another realm/;
+const MOVED = /has been moved to another document/;
+/**
+ * The event listeners on any object, counted by type over the DevTools protocol (check.mjs's
+ * window.__listeners, through window.__targets), or 'no driver' when the page runs without it.
+ */
+let targets = 0;
+async function listenersOf(object) {
+  if (typeof window.__listeners !== 'function') return 'no driver';
+  window.__targets ??= {};
+  const name = `t${++targets}`;
+  window.__targets[name] = object;
+  try {
+    return await window.__listeners(`@${name}`);
+  } finally {
+    delete window.__targets[name];
+  }
+}
+/** No listener at all (or no driver to count them). */
+const none = (counts) => counts === 'no driver' || (typeof counts === 'object' && counts !== null && !counts.error && Object.keys(counts).length === 0);
+/** web3d's two listeners, `n` times over (one loss controller per realm that drove the canvas). */
+const controllers = (counts, n) => counts === 'no driver' || (counts?.webglcontextlost === n && counts?.webglcontextrestored === n && Object.keys(counts).length === 2);
 
 /** A canvas in the document with an id (the check counts its listeners by id). */
 function canvasFor(id, w = 16, h = 16) {
@@ -1373,7 +1418,8 @@ function beginTransformFeedback(gl) {
  * context: the ninth critic's N8 (its nine draw states and three upload states), widened to the rest
  * of what src/renderer.rs resets that changes what is drawn, uploaded or read back. Every case reads
  * the canvas's own drawing buffer, raises no WebGL error, and (for objects the page made) leaves
- * them as they were, only unbound.
+ * them as they were, not deleted (a framebuffer and a vertex array are unbound, and still hold what
+ * the page put in them).
  */
 async function pageState() {
   const opts = { width: 16, height: 16, antialias: false };
@@ -1596,6 +1642,18 @@ async function pageState() {
       'offDiagonal',
     ],
     [
+      "WEBGL_polygon_mode: lines 8 wide (the eleventh critic's note: the test draw sets the width to 1 first)",
+      {},
+      (gl, keep) => {
+        const x = gl.getExtension('WEBGL_polygon_mode');
+        if (!x) return (keep.unsupported = true);
+        x.polygonModeWEBGL(gl.FRONT_AND_BACK, x.LINE_WEBGL);
+        gl.lineWidth(8);
+        keep.check = () => gl.getParameter(x.POLYGON_MODE_WEBGL) === x.FILL_WEBGL && gl.getParameter(gl.LINE_WIDTH) === 1;
+      },
+      'offDiagonal',
+    ],
+    [
       'EXT_clip_control: an upper-left origin and depth from 0 to 1',
       {},
       (gl, keep) => {
@@ -1732,9 +1790,10 @@ async function listenerOrder() {
 /**
  * XR: one realm drives a canvas (the tenth critic's F1 and F3, by the supported model). A copy of
  * web3d refuses a canvas of another realm before it touches it: a same-origin frame's copy given a
- * canvas of this document, or an OffscreenCanvas made here; this window's copy given the frame's
- * canvas, or an OffscreenCanvas the frame made. The refused canvases keep no context and no
- * listener. Under a top window of another origin (probe-xorigin.html, served from localhost while
+ * canvas of this document (an element is judged by its document), or an OffscreenCanvas made here
+ * (judged by its prototype); this window's copy given the frame's canvas, or an OffscreenCanvas the
+ * frame made. Each of the four refused canvases keeps no context and no listener (counted over the
+ * DevTools protocol in the canvas's own frame's context; XD covers adoption and first touch). Under a top window of another origin (probe-xorigin.html, served from localhost while
  * this page is 127.0.0.1): a same-origin child's copy, loaded before its parent's, is refused the
  * parent's canvas, before and after the parent draws there; the two copies share one home, the
  * parent (their serials follow one another); the parent's copy is refused the child's canvas; and
@@ -1743,8 +1802,9 @@ async function listenerOrder() {
 async function crossRealm() {
   const opts = { width: 16, height: 16, antialias: false };
   const d = {};
-  const foreign = (m) => /belongs to another realm/.test(m ?? '');
-  const listeners = async (c) => (typeof window.__listeners === 'function' ? window.__listeners(c.id) : 'no driver');
+  const foreign = (m) => FOREIGN_ELEMENT.test(m ?? '');
+  const foreignOffscreen = (m) => FOREIGN_OFFSCREEN.test(m ?? '');
+  const listeners = listenersOf;
   const untouched = (c) => {
     // A canvas with no context gets a 2d one now; one with a WebGL context would answer null.
     const two = c.getContext('2d');
@@ -1763,9 +1823,18 @@ async function crossRealm() {
     d.frameOnTopUntouched = untouched(c);
   }
   d.topOnFrame = (await settle(createRenderer(f.canvas, opts))).message ?? 'created';
+  d.topOnFrameListeners = await listeners(f.canvas);
   d.topOnFrameUntouched = untouched(f.canvas);
-  d.frameOnTopOffscreen = (await settle(f.createRenderer(new OffscreenCanvas(16, 16), opts))).message ?? 'created';
-  d.topOnFrameOffscreen = (await settle(createRenderer(new iframe.contentWindow.OffscreenCanvas(16, 16), opts))).message ?? 'created';
+  {
+    const ours = new OffscreenCanvas(16, 16);
+    d.frameOnTopOffscreen = (await settle(f.createRenderer(ours, opts))).message ?? 'created';
+    d.frameOnTopOffscreenListeners = await listeners(ours);
+    d.frameOnTopOffscreenUntouched = ours.getContext('2d') !== null;
+    const theirs = new iframe.contentWindow.OffscreenCanvas(16, 16);
+    d.topOnFrameOffscreen = (await settle(createRenderer(theirs, opts))).message ?? 'created';
+    d.topOnFrameOffscreenListeners = await listeners(theirs);
+    d.topOnFrameOffscreenUntouched = theirs.getContext('2d') !== null;
+  }
   // The supported cases beside them: each copy on a canvas of its own realm.
   {
     const theirs = await settle(f.createRenderer(iframe.contentDocument.createElement('canvas'), opts));
@@ -1794,13 +1863,230 @@ async function crossRealm() {
   const xo = typeof d.xorigin === 'object' ? d.xorigin : {};
   log(
     "XR one realm drives a canvas: a frame's copy is refused a canvas of this document and an OffscreenCanvas made here, this window's copy the frame's canvas and the frame's OffscreenCanvas, each leaving it untouched, while each copy draws on its own; under a top of another origin a same-origin child's copy, loaded first, is refused its parent's canvas before and after the parent draws there, the two share one home (serials in sequence), the parent is refused the child's canvas, and the parent recovers from a loss once the child has gone",
-    foreign(d.frameOnTop) && d.frameOnTopUntouched && (d.frameOnTopListeners === 'no driver' || Object.keys(d.frameOnTopListeners).length === 0) &&
-      foreign(d.topOnFrame) && d.topOnFrameUntouched && foreign(d.frameOnTopOffscreen) && foreign(d.topOnFrameOffscreen) &&
+    foreign(d.frameOnTop) && d.frameOnTopUntouched && none(d.frameOnTopListeners) &&
+      foreign(d.topOnFrame) && d.topOnFrameUntouched && none(d.topOnFrameListeners) &&
+      foreignOffscreen(d.frameOnTopOffscreen) && d.frameOnTopOffscreenUntouched && none(d.frameOnTopOffscreenListeners) &&
+      foreignOffscreen(d.topOnFrameOffscreen) && d.topOnFrameOffscreenUntouched && none(d.topOnFrameOffscreenListeners) &&
       isGreen(d.frameOnOwn) && isGreen(d.topOnOwn) &&
       xo.topReachable === false && foreign(xo.childOnOurs) && isGreen(xo.childDraw) && xo.childHomeIsThisWindow === true &&
       xo.ourSerial === (xo.childSerial % (2 ** 20 - 1)) + 1 && isGreen(xo.ourDraw) && foreign(xo.childAgain) && foreign(xo.oursOnChild) &&
       xo.prevented === true && xo.restored === 'webglcontextrestored' && xo.calls?.lost === 1 && xo.calls?.restored === 1 && isGreen(xo.next),
     d,
+  );
+}
+
+/**
+ * XD: an element's realm is its document's window, whatever its prototype says (the eleventh
+ * critic's F1). Chrome gives a node the prototype of the realm that touched it first and keeps it
+ * when the node moves to another document, so a canvas element is judged by its owner document:
+ * - a canvas the frame's document made, appended to this document: the frame's copy is refused it,
+ *   with no listener left; this window's copy draws on it;
+ * - a canvas this document made, appended to the frame's: this window's copy is refused it; the
+ *   frame's copy draws on it;
+ * - a canvas this document's parser makes, which the frame's MutationObserver touches first (so it
+ *   has the frame's prototype): the frame's copy is refused it; this window's copy draws on it;
+ * - then the frame goes, and each of this window's two renderers on canvases with the frame's
+ *   prototype still draws, has its loss cancelled, hears each hook once, and a new renderer draws;
+ * - a canvas moved into the frame's document while this window's renderer drives it: frame(),
+ *   resize() and the creates throw, the frame's copy is refused it (one live renderer a canvas,
+ *   owners being kept on the home both copies share), and moved back it draws again; disposed and
+ *   moved into the frame's document, the frame's copy draws on it, and the canvas then has a loss
+ *   controller from each window;
+ * - canvases of documents with no window (a template's, a DOMParser's): refused, untouched.
+ */
+async function crossDocument() {
+  const opts = { width: 16, height: 16, antialias: false };
+  const d = {};
+  const realm = (c, fw) => (Object.getPrototypeOf(c) === fw.HTMLCanvasElement.prototype ? 'frame' : Object.getPrototypeOf(c) === HTMLCanvasElement.prototype ? 'this window' : 'other');
+  const untouched = (c) => c.getContext('2d') !== null;
+  const iframe = document.createElement('iframe');
+  iframe.src = './probe-frame.html';
+  document.body.append(iframe);
+  await new Promise((res) => iframe.addEventListener('load', res, { once: true }));
+  for (let i = 0; i < 50 && !iframe.contentWindow.__frame; i++) await timeout(20);
+  const fw = iframe.contentWindow;
+  const f = fw.__frame;
+  // Renderers of this window's kept live past the frame's removal, with their hooks counted.
+  const kept = [];
+  const keep = async (name, c) => {
+    const calls = { lost: 0, restored: 0 };
+    const r = await settle(createRenderer(c, { ...opts, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++ }));
+    if (r.ok) kept.push({ name, c, r: r.r, calls });
+    return r.ok ? greenOn(r.r) : r.message;
+  };
+  // 1. Adopted into this document from the frame's.
+  {
+    const c = fw.document.createElement('canvas');
+    document.body.append(c);
+    d.adopted = { prototype: realm(c, fw), owner: c.ownerDocument === document ? 'this document' : 'other' };
+    d.adopted.frameCopy = (await settle(f.createRenderer(c, opts))).message ?? 'created';
+    d.adopted.frameCopyListeners = await listenersOf(c);
+    d.adopted.ours = await keep('adopted', c);
+  }
+  // 2. Adopted into the frame's document from this one.
+  {
+    const c = document.createElement('canvas');
+    fw.document.body.append(c);
+    d.there = { prototype: realm(c, fw), owner: c.ownerDocument === fw.document ? 'the frame' : 'other' };
+    d.there.ours = (await settle(createRenderer(c, opts))).message ?? 'created';
+    d.there.oursListeners = await listenersOf(c);
+    const theirs = await settle(f.createRenderer(c, opts));
+    d.there.frameCopy = theirs.ok ? greenOn(theirs.r) : theirs.message;
+    if (theirs.ok) theirs.r.dispose();
+    release(theirs.r?.gl);
+  }
+  // 3. Touched first by the frame's observer.
+  {
+    fw.eval("window.__seen = null; window.__observer = new MutationObserver((records) => { for (const r of records) for (const n of r.addedNodes) if (n.nodeName === 'CANVAS') window.__seen = n; }); window.__observer.observe(parent.document.body, { childList: true });");
+    document.body.insertAdjacentHTML('beforeend', '<canvas id="xd-first" width="16" height="16"></canvas>');
+    for (let i = 0; i < 100 && !fw.__seen; i++) await timeout(5);
+    fw.__observer.disconnect();
+    const c = document.getElementById('xd-first');
+    d.first = { seenByFrame: fw.__seen === c, prototype: realm(c, fw) };
+    d.first.frameCopy = (await settle(f.createRenderer(c, opts))).message ?? 'created';
+    d.first.frameCopyListeners = await listenersOf(c);
+    d.first.ours = await keep('first', c);
+  }
+  // 4. Moved while driven, then handed over.
+  {
+    const c = canvasFor('xd-moved');
+    const r = await createRenderer(c, opts);
+    d.moved = { before: greenOn(r) };
+    fw.document.body.append(c);
+    d.moved.frame = attempt(() => r.frame()).message ?? 'drew';
+    d.moved.resize = attempt(() => r.resize(16, 16)).message ?? 'resized';
+    d.moved.create = attempt(() => r.createMaterial({})).message ?? 'created';
+    d.moved.frameCopy = (await settle(f.createRenderer(c, opts))).message ?? 'created';
+    document.body.append(c);
+    d.moved.back = greenOn(r);
+    r.dispose();
+    fw.document.body.append(c);
+    const theirs = await settle(f.createRenderer(c, opts));
+    d.moved.handedOver = theirs.ok ? greenOn(theirs.r) : theirs.message;
+    d.moved.listeners = await listenersOf(c);
+    if (theirs.ok) theirs.r.dispose();
+    release(r.gl);
+  }
+  // 5. Documents with no window.
+  {
+    const t = document.createElement('template');
+    t.innerHTML = '<canvas></canvas>';
+    const tc = t.content.firstChild;
+    d.template = (await settle(createRenderer(tc, opts))).message ?? 'created';
+    d.templateListeners = await listenersOf(tc);
+    d.templateUntouched = untouched(tc);
+    const pc = new DOMParser().parseFromString('<canvas></canvas>', 'text/html').querySelector('canvas');
+    d.parsed = (await settle(createRenderer(pc, opts))).message ?? 'created';
+    d.parsedListeners = await listenersOf(pc);
+    d.parsedUntouched = untouched(pc);
+  }
+  // The frame goes; this window's renderers on canvases with the frame's prototype carry on.
+  iframe.remove();
+  await timeout(50);
+  for (const k of kept) {
+    const e = { listeners: await listenersOf(k.c), afterRemoval: greenOn(k.r) };
+    const lc = k.r.gl.getExtension('WEBGL_lose_context');
+    let prevented = null;
+    k.c.addEventListener('webglcontextlost', (ev) => (prevented = ev.defaultPrevented), { once: true });
+    const lost = eventOf(k.c, 'webglcontextlost');
+    lc.loseContext();
+    await Promise.race([lost, timeout(3000)]);
+    e.prevented = prevented;
+    k.r.dispose();
+    const restored = eventOf(k.c, 'webglcontextrestored');
+    try {
+      lc.restoreContext();
+    } catch (err) {
+      e.restoreThrew = String(err?.message ?? err);
+    }
+    e.restored = await Promise.race([restored, timeout(3000)]);
+    await timeout(20);
+    e.calls = k.calls;
+    const next = await settle(createRenderer(k.c, opts));
+    e.next = next.ok ? greenOn(next.r) : next.message;
+    if (next.ok) next.r.dispose();
+    d[`${k.name}AfterFrameGone`] = e;
+  }
+  const gone = (e) =>
+    e && controllers(e.listeners, 1) && isGreen(e.afterRemoval) && e.prevented === true && e.restored === 'webglcontextrestored' && e.calls.lost === 1 && e.calls.restored === 1 && isGreen(e.next);
+  log(
+    "XD a canvas element belongs to its document's window, whatever its prototype: adopted from the frame's document into this one (prototype the frame's), touched first by the frame's observer (the frame's), or adopted the other way, each is refused by the copy of the other window with no listener left and drawn on by its own; once the frame is gone, this window's renderers on the two canvases with the frame's prototype draw, lose and restore with each hook once, and a new renderer draws; a driven canvas moved to the frame's document is refused by frame(), resize() and the creates, and by the frame's copy, and draws again moved back; handed over between renderers it gets a controller from each window; canvases of documents with no window are refused, untouched",
+    d.adopted.prototype === 'frame' && d.adopted.owner === 'this document' && FOREIGN_ELEMENT.test(d.adopted.frameCopy) && none(d.adopted.frameCopyListeners) && isGreen(d.adopted.ours) &&
+      d.there.prototype === 'this window' && d.there.owner === 'the frame' && FOREIGN_ELEMENT.test(d.there.ours) && none(d.there.oursListeners) && isGreen(d.there.frameCopy) &&
+      d.first.seenByFrame && d.first.prototype === 'frame' && FOREIGN_ELEMENT.test(d.first.frameCopy) && none(d.first.frameCopyListeners) && isGreen(d.first.ours) &&
+      gone(d.adoptedAfterFrameGone) && gone(d.firstAfterFrameGone) &&
+      isGreen(d.moved.before) && MOVED.test(d.moved.frame) && MOVED.test(d.moved.resize) && MOVED.test(d.moved.create) && /already has a live renderer/.test(d.moved.frameCopy) &&
+      isGreen(d.moved.back) && isGreen(d.moved.handedOver) && controllers(d.moved.listeners, 2) &&
+      FOREIGN_ELEMENT.test(d.template) && none(d.templateListeners) && d.templateUntouched && FOREIGN_ELEMENT.test(d.parsed) && none(d.parsedListeners) && d.parsedUntouched,
+    d,
+  );
+}
+
+/**
+ * DB: a drawing buffer a page stored at another size than the canvas's (the eleventh critic's F4).
+ * Chrome keeps it when the canvas is set to the size it already has; web3d makes it again at the
+ * canvas's size (setting another width and this one back), with its samples, and stores RGBA8. A
+ * web3d-made context (no alpha, so no stored size) is sized once; the attribute sets are counted.
+ */
+async function drawingBufferSize() {
+  const results = [];
+  const widthSets = (c) => {
+    const records = [];
+    const o = new MutationObserver((rs) => records.push(...rs.filter((r) => r.attributeName === 'width')));
+    o.observe(c, { attributes: true, attributeFilter: ['width'] });
+    return () => {
+      records.push(...o.takeRecords());
+      o.disconnect();
+      return records.length;
+    };
+  };
+  const cases = [
+    { name: 'SRGB8_ALPHA8 stored at 8x4 on a 16x16 canvas, asked 16x16', attrs: { antialias: false }, store: 'SRGB8_ALPHA8', size: [16, 16], ask: { width: 16, height: 16 } },
+    { name: 'RGBA8 stored at 8x4 on a 16x16 canvas, the canvas size by default', attrs: { antialias: false }, store: 'RGBA8', size: [16, 16], ask: {} },
+    { name: 'SRGB8_ALPHA8 stored at 8x4 on a 16x16 multisampled canvas', attrs: { antialias: true }, store: 'SRGB8_ALPHA8', size: [16, 16], ask: { width: 16, height: 16, antialias: true } },
+    { name: 'RGBA8 stored at 40x30 on a 300x150 canvas, asked 300x150', attrs: { antialias: false }, store: 'RGBA8', storeSize: [40, 30], size: [300, 150], ask: { width: 300, height: 150 } },
+    { name: 'control: a page context with alpha, nothing stored', attrs: { antialias: false }, store: null, size: [16, 16], ask: { width: 16, height: 16 } },
+    { name: "control: web3d's own context (no alpha)", attrs: null, store: null, size: [16, 16], ask: { width: 16, height: 16 } },
+  ];
+  let n = 0;
+  for (const k of cases) {
+    const c = canvasFor(`db-${++n}`, ...k.size);
+    const gl = k.attrs ? c.getContext('webgl2', k.attrs) : null;
+    const [sw, sh] = k.storeSize ?? [8, 4];
+    if (gl && k.store) gl.drawingBufferStorage(gl[k.store], sw, sh);
+    const e = { name: k.name, stored: gl ? [gl.drawingBufferWidth, gl.drawingBufferHeight] : null, samplesBefore: gl ? gl.getParameter(gl.SAMPLES) : null };
+    const sets = widthSets(c);
+    const r = await settle(createRenderer(c, { antialias: false, ...k.ask }));
+    if (!r.ok) {
+      results.push({ ...e, created: r.message });
+      sets();
+      continue;
+    }
+    const g = r.r.gl;
+    e.widthSets = sets();
+    e.afterCreate = [g.drawingBufferWidth, g.drawingBufferHeight];
+    e.format = { [g.RGBA8]: 'RGBA8', [g.RGB8]: 'RGB8 (no alpha)' }[g.drawingBufferFormat] ?? g.drawingBufferFormat;
+    e.samples = g.getParameter(g.SAMPLES);
+    flat(r.r);
+    r.r.createObject(r.r.createMesh(quad(-1, -1, 1, 1, -5)), r.r.createMaterial({ baseColor: [0, 1, 0, 1] }));
+    r.r.frame();
+    e.corner = canvasPixel(g, 0.9, 0.9);
+    r.r.resize(...k.size);
+    e.afterResize = [g.drawingBufferWidth, g.drawingBufferHeight];
+    e.glError = g.getError();
+    r.r.dispose();
+    release(g);
+    const want = k.size;
+    const same = (a) => a[0] === want[0] && a[1] === want[1];
+    // A stored size makes web3d set the width twice more; otherwise the width is set once, by web3d.
+    const toggled = Boolean(k.store) && (e.stored[0] !== want[0] || e.stored[1] !== want[1]);
+    e.pass = same(e.afterCreate) && same(e.afterResize) && e.format === (k.attrs ? 'RGBA8' : 'RGB8 (no alpha)') && isGreen(e.corner) && e.glError === 0 && e.widthSets === (toggled ? 3 : 1) && (e.samplesBefore === null || e.samples === e.samplesBefore);
+    results.push(e);
+  }
+  log(
+    "DB a drawing buffer a page stored at another size than the canvas's (drawingBufferStorage; the eleventh critic's F4) is made again at the canvas's size, with its samples and in RGBA8, and drawn whole, also after resize; with nothing stored, or on web3d's own context, the canvas's width is set once",
+    results.length === cases.length && results.every((x) => x.pass),
+    results,
   );
 }
 
@@ -1924,36 +2210,50 @@ async function refusalMessages() {
   );
 }
 
+/** Releases every context the probes have made so far, once a probe is done with them. */
+const releaseAll = () => {
+  for (const gl of contexts) release(gl);
+  contexts.clear();
+};
+
 async function main() {
   const r = await createRenderer(document.getElementById('main'), { width: S, height: S, antialias: false });
   out.info = r.info;
   await rendering(r);
   r.dispose();
-  await disposal();
-  await sharing();
-  await contextLoss();
-  await typedArrays();
-  await kinds();
-  await compileCache();
-  await failedCreate();
-  await reentrancy();
-  await serials();
-  await arrays();
-  await textureSize();
-  await foreignContext();
-  await lossDefault();
-  await lossDuringCreate();
-  await contextAndSources();
-  await realms();
-  await lossAsDocumented();
-  await uploadsAndBytes();
-  await lossController();
-  await largestSerial();
+  releaseAll();
+  for (const probe of [
+    disposal,
+    sharing,
+    contextLoss,
+    typedArrays,
+    kinds,
+    compileCache,
+    failedCreate,
+    reentrancy,
+    serials,
+    arrays,
+    textureSize,
+    foreignContext,
+    lossDefault,
+    lossDuringCreate,
+    contextAndSources,
+    realms,
+    lossAsDocumented,
+    uploadsAndBytes,
+    lossController,
+    largestSerial,
+  ]) {
+    await probe();
+    releaseAll();
+  }
   // Each of these logs its own failure if it throws, so the rest still run.
   for (const [id, probe] of [
     ['PS', pageState],
     ['LR', listenerOrder],
     ['XR', crossRealm],
+    ['XD', crossDocument],
+    ['DB', drawingBufferSize],
     ['NC', contextlessCanvases],
     ['MS', refusalMessages],
   ]) {
@@ -1962,6 +2262,7 @@ async function main() {
     } catch (e) {
       log(`${id} ran to its end`, false, String(e?.stack ?? e));
     }
+    releaseAll();
   }
   out.passed = out.tests.filter((t) => t.pass).length;
   out.failed = out.tests.filter((t) => !t.pass).map((t) => t.name);

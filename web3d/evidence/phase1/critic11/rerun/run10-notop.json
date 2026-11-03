@@ -1,0 +1,13 @@
+{
+  "page": "notop",
+  "browser": "Chrome 156.0.8078.80 (headless, own instance)",
+  "console": [],
+  "pageErrors": [],
+  "out": {
+    "error": "Error: web3d: this canvas belongs to another realm (another window's document, or an OffscreenCanvas of another window or worker); web3d drives a canvas only from a copy of web3d loaded in the canvas's own realm, so load web3d there\n    at canvasKind (http://127.0.0.1:5484/web3d/pkg/web3d.js:319:60)\n    at readOptions (http://127.0.0.1:5484/web3d/pkg/web3d.js:479:16)\n    at Object.createRenderer (http://127.0.0.1:5484/web3d/pkg/web3d.js:519:13)\n    at run (http://127.0.0.1:5484/c/frames.js:83:29)",
+    "partial": {
+      "sharedStateBefore": false
+    }
+  },
+  "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)"
+}

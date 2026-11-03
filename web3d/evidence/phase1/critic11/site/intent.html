@@ -1,0 +1,52 @@
+<!doctype html><meta charset="utf-8"><title>critic 11 intents</title>
+<body><script type="module">
+import * as web3d from '/pkg/web3d.js';
+import { sleep, err, tryCreate } from './common.js';
+const out = {};
+const canvas = () => { const c = document.createElement('canvas'); c.width = 48; c.height = 24; document.body.appendChild(c); return c; };
+const event = (c, type) => new Promise((r) => c.addEventListener(type, r, { once: true }));
+// manyOnOneCanvas's intent (critic 8), without the old internal map: during a loss, failed creates
+// with their own hooks and two with one shared hook; the live renderer disposed; on the restore each
+// hook comes once, the shared one once, and a new renderer draws.
+{
+  const c = canvas();
+  const n = { a: 0, b: 0, c: 0, shared: 0 };
+  const a = await web3d.createRenderer(c, { width: 48, height: 24, antialias: false, onContextRestored: () => n.a++ });
+  const lc = a.gl.getExtension('WEBGL_lose_context');
+  const lost = event(c, 'webglcontextlost');
+  lc.loseContext();
+  const fb = await tryCreate(web3d, c, { width: 48, height: 24, onContextRestored: () => n.b++ });
+  const fc = await tryCreate(web3d, c, { width: 48, height: 24, onContextRestored: () => n.c++ });
+  await lost;
+  await sleep(0); // out of the lost event's dispatch: Chrome refuses a restore until it has returned
+  a.dispose();
+  const shared = () => n.shared++;
+  const f1 = await tryCreate(web3d, c, { width: 48, height: 24, onContextRestored: shared });
+  const f2 = await tryCreate(web3d, c, { width: 48, height: 24, onContextRestored: shared });
+  const restored = event(c, 'webglcontextrestored');
+  lc.restoreContext();
+  await Promise.race([restored, sleep(3000)]);
+  await sleep(50);
+  const next = await tryCreate(web3d, c, { width: 48, height: 24 });
+  out.manyOnOneCanvas = { n, creates: [fb, fc, f1, f2].map((x) => (x.ok ? 'created' : x.error.slice(0, 50))), nextAfterRestore: next.ok ? next.r.frame() : next.error, pass: n.a === 1 && n.b === 1 && n.c === 1 && n.shared === 1 && next.ok };
+  if (next.ok) next.r.dispose();
+}
+// G14's intent (critic 6), with the counter that goes round: the renderer limit (2^20 - 1 made in a
+// home) refuses the next create, which leaves the canvas unclaimed and its size as it was.
+{
+  const pool = window[Symbol.for('loadngo-web3d')].serials;
+  const saved = { ...pool };
+  pool.made = 2 ** 20 - 2; // one renderer left
+  const c1 = canvas();
+  const last = await tryCreate(web3d, c1, { width: 64, height: 32 });
+  const c2 = canvas();
+  const refused = await tryCreate(web3d, c2, { width: 64, height: 32 });
+  const size = [c2.width, c2.height];
+  pool.made = saved.made; // put the counter back, then the same canvas must be free
+  const after = await tryCreate(web3d, c2, { width: 64, height: 32 });
+  out.G14intent = { last: last.ok ? 'created' : last.error, refused: refused.ok ? 'created' : refused.error, sizeAfterRefusal: size, freeAfter: after.ok, pass: last.ok && !refused.ok && size[0] === 48 && size[1] === 24 && after.ok };
+  if (last.ok) last.r.dispose();
+  if (after.ok) after.r.dispose();
+}
+window.__done = Promise.resolve(out);
+</script></body>

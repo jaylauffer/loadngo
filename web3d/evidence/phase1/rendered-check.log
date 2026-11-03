@@ -1,9 +1,9 @@
-serving web3d on http://127.0.0.1:5674/
+serving web3d on http://127.0.0.1:5669/
 Chrome 156.0.8078.80 (headless, launched by this script)
-low-1024x576: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.87 p50 0.867 p95 0.892 ms (602 readings), CPU mean 0.134 p95 0.22 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,241,231
-full-1366x768: 1366x768 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.049 p50 1.048 p95 1.064 ms (602 readings), CPU mean 0.14 p95 0.225 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 240,238,228
-low-1024x576-no-msaa: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.566 p50 0.565 p95 0.578 ms (602 readings), CPU mean 0.024 p95 0.045 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,240,230
-probes: 72 passed, 0 failed; INVALID_OPERATION warnings: 0; pending GL errors: 2 (2 raised on purpose)
+low-1024x576: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.949 p50 0.48 p95 6.118 ms (600 readings), CPU mean 0.055 p95 0.07 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,241,231
+full-1366x768: 1366x768 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 2.554 p50 2.407 p95 4.796 ms (602 readings), CPU mean 0.05 p95 0.065 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 240,238,228
+low-1024x576-no-msaa: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.275 p50 0.323 p95 7.281 ms (598 readings), CPU mean 0.069 p95 0.085 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,240,230
+probes: 74 passed, 0 failed; INVALID_OPERATION warnings: 0; pending GL errors: 2 (2 raised on purpose); contexts lost to Chrome's limit: 0
   pass  A output is sRGB-encoded (white under a uniform hemisphere)
   pass  A2 the clear colour is linear and encoded
   pass  B1 texture upright: top-left red, top-right green, bottom-left blue
@@ -74,11 +74,13 @@ probes: 72 passed, 0 failed; INVALID_OPERATION warnings: 0; pending GL errors: 2
   pass  PS a page-made context that suits, left with state of the page's (each of the ninth critic's N8 cases and every other state the renderer resets): web3d draws, uploads and reads back as on a new context, with no WebGL error, and the page's own objects are kept
   pass  LR a page's own restored listener that runs before web3d's disposes the live renderer: onContextRestored comes once (N1); disposed in the page's lost listener instead: once, and no onContextLost; disposed after the restore was handled: no second call
   pass  XR one realm drives a canvas: a frame's copy is refused a canvas of this document and an OffscreenCanvas made here, this window's copy the frame's canvas and the frame's OffscreenCanvas, each leaving it untouched, while each copy draws on its own; under a top of another origin a same-origin child's copy, loaded first, is refused its parent's canvas before and after the parent draws there, the two share one home (serials in sequence), the parent is refused the child's canvas, and the parent recovers from a loss once the child has gone
+  pass  XD a canvas element belongs to its document's window, whatever its prototype: adopted from the frame's document into this one (prototype the frame's), touched first by the frame's observer (the frame's), or adopted the other way, each is refused by the copy of the other window with no listener left and drawn on by its own; once the frame is gone, this window's renderers on the two canvases with the frame's prototype draw, lose and restore with each hook once, and a new renderer draws; a driven canvas moved to the frame's document is refused by frame(), resize() and the creates, and by the frame's copy, and draws again moved back; handed over between renderers it gets a controller from each window; canvases of documents with no window are refused, untouched
+  pass  DB a drawing buffer a page stored at another size than the canvas's (drawingBufferStorage; the eleventh critic's F4) is made again at the canvas's size, with its samples and in RGBA8, and drawn whole, also after resize; with nothing stored, or on web3d's own context, the canvas's width is set once
   pass  NC as documented: a canvas with no context uploads and then has a '2d' context for good (no webgl2 or bitmaprenderer context, no transfer, later 2d options ignored), an OffscreenCanvas too; a canvas with its own 2d or WebGL context is unchanged and uploads its pixels; a bitmaprenderer canvas is refused and stays one
   pass  MS a detached OffscreenCanvas is refused as detached, a placeholder canvas as transferred (N21); a loss before web3d's first use: the message says web3d cancels a lost event still to come, as it does when the loss is in the create's own task (the hook comes once), and none comes for one already dispatched (N7b')
-allocation, cold (first frames): 601 frames; page scripts 625.06 sampled bytes a frame; by file {"(native or internal)":79.8,"/demo/demo.js":335.4,"/pkg/web3d.js":28.7,"/pkg/loadngo_web3d.wasm":258.9,"/pkg/gl.js":2.1}
-allocation, steady (after 70 s of frames): 601 frames; page scripts 0 sampled bytes a frame; by file {"(native or internal)":30.4}
-allocation, positive control (one short-lived Array of 8 numbers a frame): 601 frames; page scripts 87.4 sampled bytes a frame; by file {"(native or internal)":30,"/demo/demo.js":87.4}
-allocation, CPU timing on (reported, not gated): 601 frames; page scripts 189.01 sampled bytes a frame; by file {"(native or internal)":32.5,"/demo/demo.js":165.1,"/pkg/web3d.js":23.9}
+allocation, cold (first frames): 601 frames; page scripts 622.02 sampled bytes a frame; by file {"(native or internal)":78.3,"/demo/demo.js":334.2,"/pkg/web3d.js":29.8,"/pkg/loadngo_web3d.wasm":255.8,"/pkg/gl.js":2.2}
+allocation, steady (after 70 s of frames): 601 frames; page scripts 0.09 sampled bytes a frame; by file {"(native or internal)":31,"/demo/demo.js":0.1}
+allocation, positive control (one short-lived Array of 8 numbers a frame): 601 frames; page scripts 89.68 sampled bytes a frame; by file {"(native or internal)":30.6,"/demo/demo.js":89.7}
+allocation, CPU timing on (reported, not gated): 601 frames; page scripts 189.92 sampled bytes a frame; by file {"(native or internal)":31.5,"/demo/demo.js":164.2,"/pkg/web3d.js":25.7}
 browser and server stopped
 wrote web3d/evidence/phase1/rendered-check.json

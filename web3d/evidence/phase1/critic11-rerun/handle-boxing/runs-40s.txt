@@ -1,0 +1,14 @@
+?held=array bytes/frame by function: {"/:18 array":11.8,"/:32 window.__status":1.4} status {"frames":3000,"setTransform":25,"put":41,"tick":25,"turbofanReference":41,"maglevReference":25}
+browser and server stopped
+?held=mixed bytes/frame by function: {"/:32 window.__status":1} status {"frames":3000,"setTransform":25,"put":41,"tick":25,"turbofanReference":41,"maglevReference":25}
+browser and server stopped
+?held=property bytes/frame by function: {"/:20 property":11.2,"/:32 window.__status":1} status {"frames":2999,"setTransform":25,"put":41,"tick":25,"turbofanReference":41,"maglevReference":25}
+browser and server stopped
+?held=map bytes/frame by function: {"/:32 window.__status":1.2} status {"frames":3000,"setTransform":25,"put":41,"tick":25,"turbofanReference":41,"maglevReference":25}
+browser and server stopped
+?held=f64 bytes/frame by function: {"/:22 f64":12.1,"/:32 window.__status":1} status {"frames":3000,"setTransform":25,"put":41,"tick":25,"turbofanReference":41,"maglevReference":25}
+browser and server stopped
+?held=const bytes/frame by function: {"/:32 window.__status":1.2} status {"frames":3001,"setTransform":25,"put":41,"tick":25,"turbofanReference":41,"maglevReference":25}
+browser and server stopped
+?held=loop60 bytes/frame by function: {"/:24 loop60":737.1,"/:32 window.__status":1} status {"frames":2999,"setTransform":41,"put":41,"tick":41,"turbofanReference":41,"maglevReference":25}
+browser and server stopped

@@ -1,0 +1,9 @@
+<!doctype html><meta charset="utf-8"><title>critic 11 no warning</title>
+<body><script type="module">
+import * as web3d from '/pkg/web3d.js';
+const c = document.createElement('canvas');
+const r = await web3d.createRenderer(c, { width: 64, height: 64, antialias: false });
+const ok = r.frame();
+r.dispose();
+window.__done = Promise.resolve({ ok, note: 'any console message here is web3d\'s own, on a page that never enabled WEBGL_polygon_mode' });
+</script></body>

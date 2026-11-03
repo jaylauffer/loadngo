@@ -1,0 +1,18 @@
+{
+  "page": "observe.html",
+  "host": "127.0.0.1",
+  "chrome": "156.0.8078.80",
+  "args": [],
+  "result": {
+    "sameNode": true,
+    "ownerIsThisDocument": true,
+    "protoIsThisWindows": false,
+    "protoIsFramesWindows": true,
+    "thisWindowsCopy": "web3d: this canvas belongs to another realm (another window's document, or an OffscreenCanvas of another window or worker); web3d drives a canvas only from a co",
+    "framesCopy": "accepted",
+    "controlThisWindowsCopy": "accepted"
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

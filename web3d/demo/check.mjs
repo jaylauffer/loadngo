@@ -8,9 +8,9 @@
 // its pixels are right (the exact clear colour above the horizon, a lit object at the centre), and
 // it reports no GL error and no page error; and unless every probe in demo/probe.html passes
 // (pixel-exact rendering, lighting against three.js r180, refusals, use after dispose, context loss
-// and recovery, page-made contexts and frames) with no WebGL INVALID_OPERATION warning. The probe
-// page gets window.__listeners(id), which counts a canvas's event listeners over the DevTools
-// protocol.
+// and recovery, page-made contexts and frames) with no WebGL INVALID_OPERATION warning, and with no
+// context lost to Chrome's limit on live contexts. The probe page gets window.__listeners(id), which
+// counts a canvas's event listeners over the DevTools protocol.
 //
 // A last run samples JS heap allocation while frames are drawn: once in the first seconds (V8
 // still interpreting the JS and using its generic wasm call wrappers, which box fractional numbers)
@@ -25,7 +25,10 @@
 //     node web3d/demo/check.mjs --port 5397 --out web3d/evidence/phase1 [--seconds 10] [--steady 60] [--blind]
 //
 // --blind samples without the "objects already collected" flags, as a Chrome that ignored them
-// would: a test of the positive control, after which the check must fail.
+// would: a test of the positive control. It exits 3 when the positive control was not seen and
+// everything else held (the blind run's one expected failure), 1 when anything else failed, and 0
+// when even the blind profiler saw the control (so the control proves nothing). gates.sh requires 3.
+// Any failure before the browser starts (a port taken, Chrome missing) exits 1, never 3.
 //
 // Build first (web3d/build.sh). Needs Google Chrome installed (playwright's channel 'chrome').
 // BSD-3-Clause; see the repository's LICENSE.
@@ -61,7 +64,7 @@ const RUNS = [
 const VIEWPORT = { width: 1366, height: 768 };
 const SCENE = { draws: 64, triangles: 320000 };
 const srgbByte = (c) => Math.round((c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055) * 255);
-// CPU timing off (cputime=0): its two clock readings a frame are boxed numbers by design (20.8
+// CPU timing off (cputime=0): its two clock readings a frame are boxed numbers by design (22
 // sampled bytes a frame, see Renderer.setCpuTiming). The readout off (hud=0) and frames counted without
 // statistics (frames()), so nothing the page runs per frame should allocate: the check fails if the
 // page's own scripts (demo/ and pkg/) average more than ALLOCATION_LIMIT sampled bytes a frame at
@@ -147,7 +150,9 @@ const report = {
 
 await mkdir(outDir, { recursive: true });
 let browser;
-let failed = false;
+// Each failure by name; the control's own is 'blind', so --blind can tell it from the rest.
+const failures = [];
+const fail = (what) => failures.push(what);
 try {
   browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--enable-gpu', '--ignore-gpu-blocklist'] });
   report.browser = `Chrome ${browser.version()} (headless, launched by this script)`;
@@ -210,7 +215,7 @@ try {
     if (messages.some((m) => PENDING_ERROR.test(m))) problems.push('a WebGL error was pending before a texture upload');
     record.problems = problems;
     if (problems.length) {
-      failed = true;
+      fail(`run ${run.name}`);
       console.log(`  FAILED: ${problems.join('; ')}`);
     }
     await context.close();
@@ -224,35 +229,56 @@ try {
     page.on('console', (m) => messages.push(`${m.type()}: ${m.text()}`));
     page.on('pageerror', (e) => messages.push(`pageerror: ${e.message}`));
     // window.__listeners(id): a canvas's event listeners counted by type, through the DevTools
-    // protocol (DOMDebugger.getEventListeners), so probe XR can see that a canvas web3d refused has
-    // no listener of web3d's.
+    // protocol (DOMDebugger.getEventListeners), so probes XR and XD can see that a canvas web3d
+    // refused has no listener of web3d's. `id` is an element id in the probe page's document, or
+    // '@name' for the object at the probe page's window.__targets[name] (a canvas of a frame's
+    // document, or an OffscreenCanvas). DevTools lists an object's listeners only when the object is
+    // resolved in its own frame's context: a node of a frame's document, or an OffscreenCanvas a
+    // frame made, reads as having none from the top's
+    // (evidence/phase1/critic11-rerun/results/listeners.json). So the object is resolved in every
+    // frame's main context, and the longest list is the object's.
     const cdp = await context.newCDPSession(page);
+    const frames = new Set();
+    cdp.on('Runtime.executionContextCreated', ({ context: c }) => c.auxData?.isDefault && frames.add(c.id));
+    cdp.on('Runtime.executionContextDestroyed', ({ executionContextId }) => frames.delete(executionContextId));
+    cdp.on('Runtime.executionContextsCleared', () => frames.clear());
+    await cdp.send('Runtime.enable');
     await page.exposeFunction('__listeners', async (id) => {
-      const { result } = await cdp.send('Runtime.evaluate', { expression: `document.getElementById(${JSON.stringify(String(id))})` });
-      if (!result.objectId) return { error: `no element ${id}` };
-      const { listeners } = await cdp.send('DOMDebugger.getEventListeners', { objectId: result.objectId });
-      await cdp.send('Runtime.releaseObject', { objectId: result.objectId });
+      const key = String(id);
+      const expression = key.startsWith('@') ? `globalThis.top.__targets[${JSON.stringify(key.slice(1))}]` : `globalThis.top.document.getElementById(${JSON.stringify(key)})`;
+      let best = null;
+      for (const contextId of [...frames]) {
+        const { result } = await cdp.send('Runtime.evaluate', { expression, contextId }).catch(() => ({ result: {} }));
+        if (!result?.objectId) continue;
+        const { listeners } = await cdp.send('DOMDebugger.getEventListeners', { objectId: result.objectId });
+        await cdp.send('Runtime.releaseObject', { objectId: result.objectId });
+        if (!best || listeners.length > best.length) best = listeners;
+      }
+      if (!best) return { error: `no object ${key}` };
       const counts = {};
-      for (const l of listeners) counts[l.type] = (counts[l.type] ?? 0) + 1;
+      for (const l of best) counts[l.type] = (counts[l.type] ?? 0) + 1;
       return counts;
     });
     await page.goto(`http://127.0.0.1:${port}/demo/probe.html`);
     const probe = await page.evaluate(() => window.__probe.done);
     if (SOFTWARE.test(probe.info?.renderer ?? '')) throw new Error(`WebGL is software-rendered here (${probe.info.renderer})`);
     const invalid = messages.filter((m) => /INVALID_OPERATION|does not belong/.test(m));
+    // Chrome loses its oldest WebGL context past its limit on live ones, which could hit a context a
+    // probe still uses: the probe page releases each probe's contexts, and none may be lost this way.
+    const evicted = messages.filter((m) => /Too many active WebGL contexts/.test(m));
     // Pending GL errors drained before an upload: only those a probe raised on purpose, as many as it
     // declared (probe.expectedPending); any other was raised by web3d or a probe by mistake.
     const pending = messages.filter((m) => PENDING_ERROR.test(m));
     const pendingOk = pending.length === (probe.expectedPending ?? 0);
     const failedProbes = [...(probe.failed ?? []), ...(probe.error ? [probe.error] : [])];
-    report.probes = { ...probe, invalidOperationWarnings: invalid, pendingErrorWarnings: pending, messages };
+    report.probes = { ...probe, invalidOperationWarnings: invalid, pendingErrorWarnings: pending, contextsLostToTheLimit: evicted.length, messages };
     console.log(
-      `probes: ${probe.passed} passed, ${failedProbes.length} failed; INVALID_OPERATION warnings: ${invalid.length}; pending GL errors: ${pending.length} (${probe.expectedPending ?? 0} raised on purpose)`,
+      `probes: ${probe.passed} passed, ${failedProbes.length} failed; INVALID_OPERATION warnings: ${invalid.length}; pending GL errors: ${pending.length} (${probe.expectedPending ?? 0} raised on purpose); contexts lost to Chrome's limit: ${evicted.length}`,
     );
     for (const t of probe.tests ?? []) console.log(`  ${t.pass ? 'pass' : 'FAIL'}  ${t.name}`);
-    if (failedProbes.length || invalid.length || !pendingOk || messages.some((m) => m.startsWith('pageerror'))) {
-      failed = true;
-      console.log(`  FAILED: ${[...failedProbes, ...invalid, ...(pendingOk ? [] : pending)].join('; ')}`);
+    if (failedProbes.length || invalid.length || !pendingOk || evicted.length || messages.some((m) => m.startsWith('pageerror'))) {
+      fail('probes');
+      console.log(`  FAILED: ${[...failedProbes, ...invalid, ...(pendingOk ? [] : pending), ...evicted.slice(0, 1)].join('; ')}`);
     }
     await context.close();
   }
@@ -293,7 +319,7 @@ try {
     const minFrames = Math.floor(seconds * 60 * MIN_FRAME_SHARE);
     const enoughFrames = cold.frames >= minFrames && warm.frames >= minFrames;
     if (!enoughFrames) {
-      failed = true;
+      fail('allocation frames');
       console.log(`  FAILED: a sampling window drew ${Math.min(cold.frames, warm.frames)} frames, fewer than ${minFrames}`);
     }
     await page.evaluate(() => window.__web3d.control(true));
@@ -305,7 +331,7 @@ try {
     const controlBytes = control.sampledBytesPerFrameByFile['/demo/demo.js'] ?? 0;
     const sighted = control.frames >= minFrames && controlBytes >= CONTROL_MIN;
     if (!sighted) {
-      failed = true;
+      fail(control.frames >= minFrames ? 'blind' : 'control frames');
       console.log(`  FAILED: the positive control read ${controlBytes} sampled bytes a frame from demo.js (at least ${CONTROL_MIN} expected): the profiler is blind to short-lived objects, so the gate proves nothing`);
     }
     const allocationOk = enoughFrames && sighted && warm.pageScriptBytesPerFrame <= ALLOCATION_LIMIT;
@@ -323,7 +349,7 @@ try {
       windows: [cold, warm, control, timing],
     };
     if (enoughFrames && sighted && !allocationOk) {
-      failed = true;
+      fail('allocation');
       console.log(`  FAILED: the page's scripts allocate ${warm.pageScriptBytesPerFrame} sampled bytes a frame at steady state (limit ${ALLOCATION_LIMIT})`);
     }
     await context.close();
@@ -336,7 +362,20 @@ try {
 }
 await writeFile(path.join(outDir, 'rendered-check.json'), `${JSON.stringify(report, null, 2)}\n`);
 console.log(`wrote ${path.relative(process.cwd(), path.join(outDir, 'rendered-check.json'))}`);
-if (failed) {
-  console.error('FAILED: see the lines marked FAILED above');
+if (blind) {
+  // The blind run must fail on the control alone: anything else failing means it tested nothing.
+  if (failures.length === 1 && failures[0] === 'blind') {
+    console.error('FAILED as a blind run must: the positive control was not seen, and everything else held (exit 3)');
+    process.exit(3);
+  }
+  if (failures.length === 0) {
+    console.error('FAILED: the blind profiler saw the positive control, so the control cannot tell a blind profiler (exit 0 for gates.sh to refuse)');
+    process.exit(0);
+  }
+  console.error(`FAILED: the blind run failed on more than the control (${failures.join(', ')}): see the lines marked FAILED above`);
+  process.exit(1);
+}
+if (failures.length) {
+  console.error(`FAILED (${failures.join(', ')}): see the lines marked FAILED above`);
   process.exit(1);
 }

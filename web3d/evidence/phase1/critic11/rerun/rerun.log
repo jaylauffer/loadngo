@@ -1,0 +1,73 @@
+== critic1-run
+}
+>>> exit 0
+== critic1-loss
+browser and server stopped
+>>> exit 0
+== critic1-wasm-edge
+material handle before: 402653185, after 1024 create/destroy cycles: 469762049; stale 402653185 now destroys the new material -> refused: 402653185 is not a valid material handle: not live in this renderer (destroyed, never created, or another renderer's)
+>>> exit 0
+== critic2-run
+browser and server stopped
+>>> exit 0
+== critic2-abi-edge
+destroy made: {"vertex_array_delete":2,"buffer_delete":9,"program_delete":3,"query_delete":8}
+>>> exit 0
+== critic3-run
+browser and server stopped
+>>> exit 0
+== critic4-run
+browser and server stopped
+>>> exit 0
+== critic5-main
+browser and server stopped
+>>> exit 0
+== critic5-exhaust
+browser and server stopped
+>>> exit 0
+== critic6-main
+browser and servers stopped
+>>> exit 0
+== critic6-extra
+browser and servers stopped
+>>> exit 0
+== critic7-main
+browser and servers stopped
+>>> exit 0
+== critic8-main
+browser and server stopped
+>>> exit 0
+== critic8-batch2
+browser and server stopped
+>>> exit 0
+== critic8-batch3
+browser and server stopped
+>>> exit 0
+== critic9-main
+browser and server stopped
+>>> exit 0
+== critic9-batch2
+browser and server stopped
+>>> exit 0
+== critic9-frame-first
+browser and server stopped
+>>> exit 0
+== critic10-state
+browsers and servers stopped
+>>> exit 0
+== critic10-state2
+browsers and servers stopped
+>>> exit 0
+== critic10-pm
+browsers and servers stopped
+>>> exit 0
+== critic10-notop
+browsers and servers stopped
+>>> exit 0
+== critic10-xtop
+browsers and servers stopped
+>>> exit 0
+== critic10-bf
+browsers and servers stopped
+>>> exit 0
+all done
