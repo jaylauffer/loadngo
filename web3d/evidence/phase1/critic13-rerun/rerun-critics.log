@@ -1,0 +1,222 @@
+== critic1-run: node ../critic/run.mjs 5666 ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/rerun/critic1
+ }
+}
+>>> exit 0
+== critic1-loss: node ../critic/run-loss.mjs 5666
+}
+browser and server stopped
+>>> exit 0
+== critic1-wasm-edge: node ../critic/wasm-edge.mjs
+non-zero bytes written into the first 4 KiB of linear memory (stack bottom): 0
+material handle before: 402653185, after 1024 create/destroy cycles: 469762049; stale 402653185 now destroys the new material -> refused: 402653185 is not a valid material handle: not live in this renderer (destroyed, never created, or another renderer's)
+>>> exit 0
+== critic2-run: node ../critic2/run-critic.mjs 5666 ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/rerun/critic2
+14 passed, 0 failed; INVALID_OPERATION warnings 0; renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)
+browser and server stopped
+>>> exit 0
+== critic2-abi-edge: node ../critic2/abi-edge.mjs
+clock readings in a frame with timing on: 2 stats [0.005124999999999602,2.5,6,1,1,0,0,0]
+destroy made: {"vertex_array_delete":2,"buffer_delete":9,"program_delete":3,"query_delete":8}
+>>> exit 0
+== critic3-run: node ../critic3/run3.mjs 5666 ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/rerun/critic3.json
+renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); error none; messages 1
+browser and server stopped
+>>> exit 0
+== critic4-run: node ../critic4/run4.mjs 5666 ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/rerun/critic4.json
+cputime=1, with the flags again: 601 frames, page scripts 21.19 sampled bytes a frame (gate limit 1)
+browser and server stopped
+>>> exit 0
+== critic5-main: node ../critic5/run5.mjs 5666 ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/rerun/critic5-main.json x8 main heap cap
+FAIL  K1 a 33rd live renderer is refused, its failed create leaves no listener, and a slot freed by dispose is usable
+browser and server stopped
+>>> exit 0
+== critic5-exhaust: node ../critic5/run5.mjs 5666 ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/rerun/critic5-exhaust.json exhaust
+FAIL  E1 an object table issues 32,767 x 128 handles in its life (here 1 kept + 32,766 x 128), none twice, then refuses cleanly and keeps drawing
+browser and server stopped
+>>> exit 0
+== critic6-main: node ../critic6/run6.mjs 5666 ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/rerun/critic6.json
+14 passed; failed: ["G1","G8a","G12"]; renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); console messages 37
+browser and servers stopped
+>>> exit 0
+== critic6-extra: node ../critic6/run6.mjs 5666 ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/rerun/critic6-extra.json extra.html
+2 passed; failed: ["G14"]; renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); console messages 0
+browser and servers stopped
+>>> exit 0
+== critic7-main: node ../critic7/run7.mjs 5666 ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/rerun/critic7.json
+22 passed; failed: ["LC5"]; renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); console messages 18
+browser and servers stopped
+>>> exit 0
+== critic8-main: node ../critic8/run8.mjs 5666 ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/rerun/critic8.json
+passed 13 of 14; page errors 0
+browser and server stopped
+>>> exit 0
+== critic8-batch2: node ../critic8/run8.mjs 5666 ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/rerun/critic8-batch2.json batch2.html
+passed 3 of 3; page errors 0
+browser and server stopped
+>>> exit 0
+== critic8-batch3: node ../critic8/run8.mjs 5666 ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/rerun/critic8-batch3.json batch3.html
+passed undefined of 1; page errors 0
+browser and server stopped
+>>> exit 0
+== critic9-main: node ../critic9/run9.mjs 5666 ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/rerun/run9.json
+passed 12 of 15; page errors 0
+browser and server stopped
+>>> exit 0
+== critic9-batch2: node ../critic9/run9.mjs 5666 ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/rerun/run9-batch2.json batch2.html
+passed 3 of 5; page errors 0
+browser and server stopped
+>>> exit 0
+== critic9-frame-first: node ../critic9/run9.mjs 5666 ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/rerun/run9-frame-first.json frame-first.html
+passed 1 of 1; page errors 0
+browser and server stopped
+>>> exit 0
+== critic10-state: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/run10-copy.mjs 5666 5667 state
+== state: Chrome 157.0.8103.38 (headless, own instance); gpu ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); page errors 0
+browsers and servers stopped
+>>> exit 0
+== critic10-state2: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/run10-copy.mjs 5666 5667 state2
+== state2: Chrome 157.0.8103.38 (headless, own instance); gpu ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); page errors 0
+browsers and servers stopped
+>>> exit 0
+== critic10-pm: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/run10-copy.mjs 5666 5667 pm
+== pm: Chrome 157.0.8103.38 (headless, own instance); gpu ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); page errors 0
+browsers and servers stopped
+>>> exit 0
+== critic10-notop: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/run10-copy.mjs 5666 5667 notop
+== notop: Chrome 157.0.8103.38 (headless, own instance); gpu ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); page errors 0
+browsers and servers stopped
+>>> exit 0
+== critic10-xtop: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/run10-copy.mjs 5666 5667 xtop
+== xtop: Chrome 157.0.8103.38 (headless, own instance); gpu ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); page errors 0
+browsers and servers stopped
+>>> exit 0
+== critic10-bf: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/run10-copy.mjs 5666 5667 bf
+== bf: Chrome 157.0.8103.38 (headless, own instance); gpu ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); page errors 0
+browsers and servers stopped
+>>> exit 0
+== critic11-realm: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 realm.html --site evidence/phase1/critic11/site --out rerun-critic11-realm --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic11-observe: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 observe.html --site evidence/phase1/critic11/site --out rerun-critic11-observe --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic11-reset: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 reset.html --site evidence/phase1/critic11/site --out rerun-critic11-reset --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic11-nowarn: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 nowarn.html --site evidence/phase1/critic11/site --out rerun-critic11-nowarn --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic11-intent: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 intent.html --site evidence/phase1/critic11/site --out rerun-critic11-intent --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic11-dd: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 dd.html --site evidence/phase1/critic11/site --out rerun-critic11-dd --host a.localhost --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== round12-intent: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 intent.html --site evidence/phase1/critic11-rerun/site --out rerun-round12-intent --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== round12-dd: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 dd.html --site evidence/phase1/critic11-rerun/site --out rerun-round12-dd --host a.localhost --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== round12-facts: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 facts.html --site evidence/phase1/critic11-rerun/site --out rerun-round12-facts --timeout 170000
+  warning: WebGL: INVALID_OPERATION: drawingBufferStorage: alpha is required for drawingBufferStorage
+browser and server stopped
+>>> exit 0
+== round12-listeners: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 listeners.html --site evidence/phase1/critic11-rerun/site --out rerun-round12-listeners --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic12-adopt: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 adopt.html --site evidence/phase1/critic12/site --out rerun-critic12-adopt --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic12-blank: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 blank.html --site evidence/phase1/critic12/site --out rerun-critic12-blank --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic12-counter: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 counter.html --site evidence/phase1/critic12/site --out rerun-critic12-counter --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic12-docopen: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 docopen.html --site evidence/phase1/critic12/site --out rerun-critic12-docopen --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic12-f4: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 f4.html --site evidence/phase1/critic12/site --out rerun-critic12-f4 --timeout 170000
+  warning: WebGL: INVALID_OPERATION: drawingBufferStorage: alpha is required for drawingBufferStorage
+browser and server stopped
+>>> exit 0
+== critic12-midcreate: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 midcreate.html --site evidence/phase1/critic12/site --out rerun-critic12-midcreate --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic12-nav: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 nav.html --site evidence/phase1/critic12/site --out rerun-critic12-nav --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic12-override: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 override.html --site evidence/phase1/critic12/site --out rerun-critic12-override --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic12-per: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 per.html --site evidence/phase1/critic12/site --out rerun-critic12-per --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic12-transfer: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 transfer.html --site evidence/phase1/critic12/site --out rerun-critic12-transfer --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic12-dd2: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 dd2.html --site evidence/phase1/critic12/site --out rerun-critic12-dd2 --host a.localhost --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic12-bf: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 bf.html --site evidence/phase1/critic12/site --out rerun-critic12-bf --bfcache --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic13-f1: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 f1.html --site evidence/phase1/critic13/site --out rerun-critic13-f1 --timeout 170000
+  warning: WebGL: INVALID_OPERATION: restoreContext: context not lost
+browser and server stopped
+>>> exit 0
+== critic13-f1b: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 f1b.html --site evidence/phase1/critic13/site --out rerun-critic13-f1b --timeout 170000
+  warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed
+browser and server stopped
+>>> exit 0
+== critic13-f2: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 f2.html --site evidence/phase1/critic13/site --out rerun-critic13-f2 --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic13-f2b: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 f2b.html --site evidence/phase1/critic13/site --out rerun-critic13-f2b --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic13-f2c: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 f2c.html --site evidence/phase1/critic13/site --out rerun-critic13-f2c --timeout 170000
+  warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.
+browser and server stopped
+>>> exit 0
+== critic13-f2-fix: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 f2-fix.html --site evidence/phase1/critic13/site --out rerun-critic13-f2-fix --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic13-f3: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 f3.html --site evidence/phase1/critic13/site --out rerun-critic13-f3 --timeout 170000
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
+== critic13-f4: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 f4.html --site evidence/phase1/critic13/site --out rerun-critic13-f4 --timeout 170000
+  warning: WebGL: INVALID_ENUM: getProgramParameter: invalid parameter name
+browser and server stopped
+>>> exit 0
+== round14-reopen-paths: node ~/pudding/loadngo/web3d/evidence/phase1/critic13-rerun/tools/run.mjs 5666 reopen-paths.html --site evidence/phase1/critic13-rerun/site --out reopen-paths --timeout 170000
+  warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed
+browser and server stopped
+>>> exit 0
+all done
+rerun exit 0

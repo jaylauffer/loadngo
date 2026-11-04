@@ -1,0 +1,91 @@
+<!doctype html><meta charset="utf-8"><title>critic 13: attacks on the record kept on the canvas</title>
+<body><script type="module">
+// The record { owner, antialias, losses } lives on the canvas under Symbol.for('loadngo-web3d').
+// What the page does before web3d loads and after: prototypes, freezing, proxies, its own global.
+import { sleep, err, settle, attempt, OPTS, frameOf, green, page, until, listenersOf } from './common.js';
+const KEY = Symbol.for('loadngo-web3d');
+const make = () => document.body.appendChild(Object.assign(document.createElement('canvas'), { width: 16, height: 16 }));
+page(async (out) => {
+  // P. Before web3d loads: an accessor under KEY on HTMLCanvasElement.prototype; then web3d is
+  // imported. (A value under KEY on EventTarget.prototype, which the window inherits, stops the
+  // module loading: globalThis[KEY] ??= {} takes the inherited value. Patching built-ins: out of scope.)
+  let ran = 0;
+  Object.defineProperty(HTMLCanvasElement.prototype, KEY, { get() { ran++; return { owner: { _holds: () => true }, antialias: true, losses: 0 }; }, set() { ran++; }, configurable: true });
+  const web3d = await import('/pkg/web3d.js');
+  {
+    const c = make();
+    const m = await settle(web3d.createRenderer(c, OPTS));
+    out.P_prototypePropertiesBeforeLoad = { create: m.ok ? (green(m.r).isGreen ? 'created, draws' : 'created') : m.message, ownRecord: Object.getOwnPropertyDescriptor(c, KEY) !== undefined, pageAccessorRan: ran };
+    if (m.ok) {
+      const second = await settle(web3d.createRenderer(c, OPTS));
+      out.P_prototypePropertiesBeforeLoad.secondWhileLive = second.message ?? 'created';
+      m.r.dispose();
+    }
+  }
+  delete HTMLCanvasElement.prototype[KEY];
+  // Q. After load: the same on the prototype, a canvas made after.
+  {
+    ran = 0;
+    Object.defineProperty(HTMLCanvasElement.prototype, KEY, { get() { ran++; return null; }, configurable: true });
+    const c = make();
+    const m = await settle(web3d.createRenderer(c, OPTS));
+    out.Q_prototypeAccessorAfterLoad = { create: m.ok ? 'created' : m.message, pageAccessorRan: ran };
+    if (m.ok) m.r.dispose();
+    delete HTMLCanvasElement.prototype[KEY];
+  }
+  // F. Object.freeze and Object.seal before a create; freeze after one (then dispose and create again).
+  for (const how of ['freeze', 'seal']) {
+    const c = make();
+    Object[how](c);
+    out[`F_${how}Before`] = { create: (await settle(web3d.createRenderer(c, OPTS))).message ?? 'created', listeners: await listenersOf(c) };
+  }
+  {
+    const c = make();
+    const r = await web3d.createRenderer(c, OPTS);
+    Object.freeze(c);
+    const e = { drawsFrozen: green(r).isGreen };
+    r.dispose();
+    const n = await settle(web3d.createRenderer(c, OPTS));
+    e.createAgain = n.ok ? (green(n.r).isGreen ? 'created, draws' : 'created') : n.message;
+    if (n.ok) n.r.dispose();
+    out.F_freezeAfterCreate = e;
+  }
+  // X. A Proxy over a canvas, and a canvas with a record-shaped property of the page's.
+  {
+    const c = make();
+    out.X_proxy = (await settle(web3d.createRenderer(new Proxy(c, {}), OPTS))).message ?? 'created';
+    const d = make();
+    Object.defineProperty(d, KEY, { value: { owner: { _holds: () => true }, antialias: null, losses: 0 } });
+    out.X_pageMadeRecordShaped = (await settle(web3d.createRenderer(d, OPTS))).message ?? 'created';
+  }
+  // G. A frame's page writes its global's KEY after its copy loaded: every create is refused, and
+  // the message says the window navigated away.
+  {
+    const f = await frameOf('frame.html');
+    const fw = f.contentWindow;
+    fw[KEY] = {};
+    out.G_globalOverwritten = (await settle(fw.web3d.createRenderer(fw.document.getElementById('own'), OPTS))).message ?? 'created';
+    f.remove();
+  }
+  // S. structuredClone of a canvas; an OffscreenCanvas web3d drove, then transferred.
+  {
+    out.S_structuredClone = attempt(() => structuredClone(make())).message ?? 'cloned';
+    const oc = new OffscreenCanvas(16, 16);
+    const r = await web3d.createRenderer(oc, OPTS);
+    green(r);
+    r.dispose();
+    out.S_transferDrivenOffscreen = attempt(() => structuredClone(oc, { transfer: [oc] })).message ?? 'transferred';
+  }
+  // I. A copy of web3d in an isolated world (an extension's content script stands here), over
+  // the DevTools protocol, given a canvas this window's copy drives.
+  if (typeof window.__isolated === 'function') {
+    const c = make();
+    c.id = 'c13-isolated';
+    const r = await web3d.createRenderer(c, OPTS);
+    green(r);
+    out.I_isolatedWorld = await window.__isolated(`import('/pkg/web3d.js').then((m) => m.createRenderer(document.getElementById('c13-isolated'), { width: 16, height: 16, antialias: false })).then((r2) => { r2.setClearColor(0, 0, 1); r2.frame(); return 'second renderer created'; }, (e) => 'refused: ' + String(e.message).slice(0, 100))`);
+    out.I_isolatedWorld = { isolated: out.I_isolatedWorld, firstStillDraws: attempt(() => green(r).isGreen).v ?? 'threw' };
+    r.dispose();
+  } else out.I_isolatedWorld = 'no driver hook';
+});
+</script></body>

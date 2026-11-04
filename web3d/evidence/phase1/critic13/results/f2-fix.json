@@ -1,0 +1,14 @@
+{
+  "page": "evidence/phase1/critic13/site/f2-fix.html",
+  "host": "127.0.0.1",
+  "chrome": "156.0.8078.80",
+  "args": [],
+  "result": {
+    "precompiled": "created, draws, created, draws, created, draws",
+    "neverModule": "created, draws, created, draws, created, draws",
+    "attachedFrameCreates": "created, draws"
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

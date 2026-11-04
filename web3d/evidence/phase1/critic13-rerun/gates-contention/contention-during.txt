@@ -1,0 +1,57 @@
+# every 5 s during: bash web3d/evidence/phase1/gates.sh 5668 5669
+2026-11-04T01:07:45.039Z browsers: other desktop pid 1228; other headless pid 24023; other headless pid 24210; gpu processes: 4
+2026-11-04T01:07:50.073Z browsers: other desktop pid 1228; other headless pid 24023; other headless pid 24210; this run headless pid 24702; gpu processes: 5
+2026-11-04T01:07:55.074Z browsers: other desktop pid 1228; other headless pid 24023; other headless pid 24210; this run headless pid 24702; gpu processes: 5
+2026-11-04T01:08:00.075Z browsers: other desktop pid 1228; other headless pid 24023; other headless pid 24210; this run headless pid 24702; gpu processes: 5
+2026-11-04T01:08:05.073Z browsers: other desktop pid 1228; other headless pid 24023; other headless pid 24210; this run headless pid 24702; gpu processes: 5
+2026-11-04T01:08:10.079Z browsers: other desktop pid 1228; other headless pid 24023; other headless pid 24210; this run headless pid 24702; gpu processes: 5
+2026-11-04T01:08:15.075Z browsers: other desktop pid 1228; other headless pid 24023; other headless pid 24210; this run headless pid 24702; gpu processes: 5
+2026-11-04T01:08:20.088Z browsers: other desktop pid 1228; other headless pid 24023; other headless pid 24210; this run headless pid 24702; gpu processes: 5
+2026-11-04T01:08:25.106Z browsers: other desktop pid 1228; other headless pid 24023; other headless pid 24210; this run headless pid 24702; gpu processes: 5
+2026-11-04T01:08:30.088Z browsers: other desktop pid 1228; other headless pid 24023; other headless pid 24210; this run headless pid 24702; gpu processes: 5
+2026-11-04T01:08:35.092Z browsers: other desktop pid 1228; other headless pid 24023; other headless pid 24210; this run headless pid 24702; gpu processes: 5
+2026-11-04T01:08:40.084Z browsers: other desktop pid 1228; other headless pid 24023; other headless pid 24210; this run headless pid 24702; gpu processes: 5
+2026-11-04T01:08:45.089Z browsers: other desktop pid 1228; other headless pid 24023; other headless pid 24210; this run headless pid 24702; gpu processes: 5
+2026-11-04T01:08:50.103Z browsers: other desktop pid 1228; other headless pid 24023; other headless pid 24210; this run headless pid 24702; gpu processes: 5
+2026-11-04T01:08:55.100Z browsers: other desktop pid 1228; other headless pid 24023; other headless pid 24210; this run headless pid 24702; gpu processes: 5
+2026-11-04T01:09:00.101Z browsers: other desktop pid 1228; other headless pid 24023; this run headless pid 24702; other headless pid 28098; gpu processes: 4
+2026-11-04T01:09:05.097Z browsers: other desktop pid 1228; other headless pid 24023; this run headless pid 24702; other headless pid 28098; gpu processes: 5
+2026-11-04T01:09:10.098Z browsers: other desktop pid 1228; other headless pid 24023; this run headless pid 24702; other headless pid 28098; gpu processes: 5
+2026-11-04T01:09:15.098Z browsers: other desktop pid 1228; other headless pid 24023; this run headless pid 24702; other headless pid 28098; gpu processes: 5
+2026-11-04T01:09:20.100Z browsers: other desktop pid 1228; other headless pid 24023; this run headless pid 24702; other headless pid 28098; gpu processes: 5
+2026-11-04T01:09:25.099Z browsers: other desktop pid 1228; other headless pid 24023; this run headless pid 24702; other headless pid 28098; gpu processes: 5
+2026-11-04T01:09:30.107Z browsers: other desktop pid 1228; other headless pid 24023; this run headless pid 24702; other headless pid 28098; gpu processes: 5
+2026-11-04T01:09:35.101Z browsers: other desktop pid 1228; other headless pid 24023; this run headless pid 24702; other headless pid 28098; gpu processes: 5
+2026-11-04T01:09:40.107Z browsers: other desktop pid 1228; other headless pid 24023; this run headless pid 24702; other headless pid 28098; other headless pid 28470; gpu processes: 6
+2026-11-04T01:09:45.106Z browsers: other desktop pid 1228; other headless pid 24023; this run headless pid 24702; other headless pid 28098; other headless pid 28529; gpu processes: 6
+2026-11-04T01:09:50.111Z browsers: other desktop pid 1228; other headless pid 24023; this run headless pid 24702; other headless pid 28098; other headless pid 28580; gpu processes: 6
+2026-11-04T01:09:55.109Z browsers: other desktop pid 1228; other headless pid 24023; this run headless pid 24702; other headless pid 28098; other headless pid 28682; gpu processes: 6
+2026-11-04T01:10:00.112Z browsers: other desktop pid 1228; other headless pid 24023; this run headless pid 24702; other headless pid 28098; gpu processes: 5
+2026-11-04T01:10:05.121Z browsers: other desktop pid 1228; other headless pid 28098; other headless pid 28751; other headless pid 28811; other headless pid 28915; gpu processes: 6
+2026-11-04T01:10:10.115Z browsers: other desktop pid 1228; other headless pid 28098; other headless pid 28751; other headless pid 28811; other headless pid 28915; this run headless pid 28946; gpu processes: 7
+2026-11-04T01:10:15.118Z browsers: other desktop pid 1228; other headless pid 28098; other headless pid 28811; other headless pid 28915; this run headless pid 28946; other headless pid 28998; gpu processes: 7
+2026-11-04T01:10:20.127Z browsers: other desktop pid 1228; other headless pid 28098; other headless pid 28811; other headless pid 28915; this run headless pid 28946; other headless pid 29050; gpu processes: 7
+2026-11-04T01:10:25.121Z browsers: other desktop pid 1228; other headless pid 28098; other headless pid 28811; other headless pid 28915; this run headless pid 28946; other headless pid 29050; gpu processes: 7
+2026-11-04T01:10:30.137Z browsers: other desktop pid 1228; other headless pid 28098; other headless pid 28811; other headless pid 28915; this run headless pid 28946; other headless pid 29135; gpu processes: 7
+2026-11-04T01:10:35.126Z browsers: other desktop pid 1228; other headless pid 28098; other headless pid 28811; other headless pid 28915; this run headless pid 28946; other headless pid 29135; gpu processes: 7
+2026-11-04T01:10:40.147Z browsers: other desktop pid 1228; other headless pid 28811; this run headless pid 28946; other headless pid 29256; other headless pid 29280; other headless pid 29290; gpu processes: 7
+2026-11-04T01:10:45.128Z browsers: other desktop pid 1228; other headless pid 28811; this run headless pid 28946; other headless pid 29256; other headless pid 29280; other headless pid 29290; gpu processes: 7
+2026-11-04T01:10:50.131Z browsers: other desktop pid 1228; other headless pid 28811; this run headless pid 28946; other headless pid 29280; other headless pid 29290; other headless pid 29375; gpu processes: 7
+2026-11-04T01:10:55.134Z browsers: other desktop pid 1228; other headless pid 28811; this run headless pid 28946; other headless pid 29280; other headless pid 29290; gpu processes: 6
+2026-11-04T01:11:00.135Z browsers: other desktop pid 1228; other headless pid 28811; this run headless pid 28946; other headless pid 29280; other headless pid 29290; other headless pid 29498; gpu processes: 7
+2026-11-04T01:11:05.138Z browsers: other desktop pid 1228; other headless pid 28811; this run headless pid 28946; other headless pid 29280; other headless pid 29290; other headless pid 29498; gpu processes: 7
+2026-11-04T01:11:10.138Z browsers: other desktop pid 1228; other headless pid 28811; this run headless pid 28946; other headless pid 29280; other headless pid 29290; other headless pid 29498; gpu processes: 7
+2026-11-04T01:11:15.146Z browsers: other desktop pid 1228; other headless pid 28811; this run headless pid 28946; other headless pid 29280; other headless pid 29290; other headless pid 29498; gpu processes: 7
+2026-11-04T01:11:20.150Z browsers: other desktop pid 1228; other headless pid 28811; this run headless pid 28946; other headless pid 29280; other headless pid 29290; other headless pid 29498; gpu processes: 7
+2026-11-04T01:11:25.148Z browsers: other desktop pid 1228; other headless pid 28811; this run headless pid 28946; other headless pid 29280; other headless pid 29290; other headless pid 29498; gpu processes: 7
+2026-11-04T01:11:30.157Z browsers: other desktop pid 1228; other headless pid 28811; this run headless pid 28946; other headless pid 29280; other headless pid 29498; gpu processes: 6
+2026-11-04T01:11:35.144Z browsers: other desktop pid 1228; other headless pid 28811; this run headless pid 28946; other headless pid 29280; other headless pid 29498; gpu processes: 6
+2026-11-04T01:11:40.147Z browsers: other desktop pid 1228; other headless pid 28811; this run headless pid 28946; other headless pid 29280; other headless pid 29498; gpu processes: 6
+2026-11-04T01:11:45.144Z browsers: other desktop pid 1228; other headless pid 28811; this run headless pid 28946; other headless pid 29280; other headless pid 29498; gpu processes: 6
+2026-11-04T01:11:50.143Z browsers: other desktop pid 1228; other headless pid 28811; this run headless pid 28946; other headless pid 29280; other headless pid 29498; gpu processes: 6
+2026-11-04T01:11:55.149Z browsers: other desktop pid 1228; other headless pid 28811; this run headless pid 28946; other headless pid 29280; other headless pid 29498; gpu processes: 6
+2026-11-04T01:12:00.164Z browsers: other desktop pid 1228; other headless pid 28811; this run headless pid 28946; other headless pid 29280; other headless pid 29498; gpu processes: 6
+2026-11-04T01:12:05.150Z browsers: other desktop pid 1228; this run headless pid 28946; other headless pid 29280; other headless pid 29498; other headless pid 30056; gpu processes: 6
+2026-11-04T01:12:10.153Z browsers: other desktop pid 1228; this run headless pid 28946; other headless pid 29280; other headless pid 29498; other headless pid 30056; gpu processes: 6
+2026-11-04T01:12:15.172Z browsers: other desktop pid 1228; this run headless pid 28946; other headless pid 29280; other headless pid 29498; other headless pid 30056; other headless pid 30242; gpu processes: 7
+2026-11-04T01:12:20.085Z browsers: other desktop pid 1228; other headless pid 29280; other headless pid 29498; other headless pid 30056; other headless pid 30242; gpu processes: 6

@@ -1,0 +1,58 @@
+# The fourteenth round's rerun against the thirteenth critic's (node ../critic11/tools/bool-diff.mjs <critic's file> <this round's file>), every boolean leaf by path
+## rerun/critic3.json: 22 booleans; 0 differ
+## rerun/critic4.json: 41 booleans; 0 differ
+## rerun/critic5-exhaust.json: 8 booleans; 0 differ
+## rerun/critic5-main.json: 51 booleans; 0 differ
+## rerun/critic6-extra.json: 5 booleans; 0 differ
+## rerun/critic6.json: 110 booleans; 0 differ
+## rerun/critic7.json: 102 booleans; 0 differ
+## rerun/critic8-batch2.json: 3 booleans; 0 differ
+## rerun/critic8-batch3.json: 1 booleans; 0 differ
+## rerun/critic8.json: 24 booleans; 0 differ
+## rerun/run9.json: 44 booleans; 0 differ
+## rerun/run9-batch2.json: 7 booleans; 0 differ
+## rerun/run9-frame-first.json: 2 booleans; 0 differ
+## rerun/run10-bf.json: 6 booleans; 0 differ
+## rerun/run10-notop.json: 1 booleans; 0 differ
+## rerun/run10-pm.json: 4 booleans; 0 differ
+## rerun/run10-state.json: 58 booleans; 0 differ
+## rerun/run10-state2.json: 0 booleans; 0 differ
+## rerun/run10-xtop.json: 3 booleans; 0 differ
+## rerun/critic1/probe-report.json: 87 booleans; 0 differ
+## rerun/critic2/report-probe.json: 63 booleans; 0 differ
+## results/rerun-critic11-dd.json: 2 booleans; 0 differ
+## results/rerun-critic11-intent.json: 4 booleans; 0 differ
+## results/rerun-critic11-nowarn.json: 1 booleans; 0 differ
+## results/rerun-critic11-observe.json: 4 booleans; 0 differ
+## results/rerun-critic11-realm.json: 12 booleans; 0 differ
+## results/rerun-critic11-reset.json: 9 booleans; 0 differ
+## results/rerun-critic12-adopt.json: 24 booleans; 0 differ
+## results/rerun-critic12-bf.json: 26 booleans; 0 differ
+## results/rerun-critic12-blank.json: 28 booleans; 0 differ
+## results/rerun-critic12-counter.json: 13 booleans; 0 differ
+## results/rerun-critic12-dd2.json: 12 booleans; 0 differ
+## results/rerun-critic12-docopen.json: 16 booleans; 0 differ
+## results/rerun-critic12-f4.json: 11 booleans; 0 differ
+## results/rerun-critic12-midcreate.json: 8 booleans; 0 differ
+## results/rerun-critic12-nav.json: 35 booleans; 0 differ
+## results/rerun-critic12-override.json: 1 booleans; 0 differ
+## results/rerun-critic12-per.json: 0 booleans; 0 differ
+## results/rerun-critic12-transfer.json: 0 booleans; 0 differ
+## results/rerun-round12-dd.json: 5 booleans; 0 differ
+## results/rerun-round12-facts.json: 10 booleans; 0 differ
+## results/rerun-round12-intent.json: 19 booleans; 0 differ
+## results/rerun-round12-listeners.json: 0 booleans; 0 differ
+## critic13/results/f1.json vs results/rerun-critic13-f1.json: 68 booleans; 0 differ
+## critic13/results/f1b.json vs results/rerun-critic13-f1b.json: 29 booleans; 0 differ
+## critic13/results/f2.json vs results/rerun-critic13-f2.json: 14 booleans; 6 differ
+  /result/verdict/R1_topRefusedCanvasClaimedByRemovedFrame: true -> false
+  /result/verdict/R1b: true -> false
+  /result/R1_claimOfRemovedFrame/top/loss/restored: only in the second
+  /result/R1_claimOfRemovedFrame/top/loss/recovered: only in the second
+  /result/R1b_claimOfRemovedFrameSameTask/top/loss/restored: only in the second
+  /result/R1b_claimOfRemovedFrameSameTask/top/loss/recovered: only in the second
+## critic13/results/f2b.json vs results/rerun-critic13-f2b.json: 6 booleans; 0 differ
+## critic13/results/f2c.json vs results/rerun-critic13-f2c.json: 0 booleans; 0 differ
+## critic13/results/f2-fix.json vs results/rerun-critic13-f2-fix.json: 0 booleans; 0 differ
+## critic13/results/f3.json vs results/rerun-critic13-f3.json: 3 booleans; 0 differ
+## critic13/results/f4.json vs results/rerun-critic13-f4.json: 5 booleans; 0 differ

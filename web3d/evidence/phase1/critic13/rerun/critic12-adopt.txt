@@ -1,0 +1,126 @@
+{
+ "topAdoptsFrameCanvas": {
+  "owner": "top",
+  "ours": "draws",
+  "theirs": "not tried (ours live)",
+  "ok": true
+ },
+ "frameAdoptsTopCanvas": {
+  "owner": "frame",
+  "ours": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOM",
+  "theirs": "draws",
+  "ok": true
+ },
+ "topCallsFrameAdopt": {
+  "owner": "frame",
+  "ours": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOM",
+  "theirs": "draws",
+  "ok": true
+ },
+ "frameCallsTopAdopt": {
+  "owner": "top",
+  "ours": "draws",
+  "theirs": "not tried (ours live)",
+  "ok": true
+ },
+ "topImportsFrameCanvas": {
+  "owner": "top",
+  "ours": "draws",
+  "theirs": "not tried (ours live)",
+  "ok": true
+ },
+ "frameImportsTopCanvas": {
+  "owner": "frame",
+  "ours": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOM",
+  "theirs": "draws",
+  "ok": true
+ },
+ "templateCanvas": {
+  "owner": "windowless",
+  "ours": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOM",
+  "theirs": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOM",
+  "listeners": {},
+  "untouched": true,
+  "ok": true
+ },
+ "templateImported": {
+  "owner": "top",
+  "ours": "draws",
+  "theirs": "not tried (ours live)",
+  "ok": true
+ },
+ "domParserCanvas": {
+  "owner": "windowless",
+  "ours": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOM",
+  "theirs": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOM",
+  "listeners": {},
+  "untouched": true,
+  "ok": true
+ },
+ "domParserAdopted": {
+  "owner": "top",
+  "ours": "draws",
+  "theirs": "not tried (ours live)",
+  "ok": true
+ },
+ "createHTMLDocumentCanvas": {
+  "owner": "windowless",
+  "ours": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOM",
+  "theirs": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOM",
+  "listeners": {},
+  "untouched": true,
+  "ok": true
+ },
+ "createHTMLDocumentAdopted": {
+  "owner": "top",
+  "ours": "draws",
+  "theirs": "not tried (ours live)",
+  "ok": true
+ },
+ "newDocumentCanvas": {
+  "owner": "windowless",
+  "ours": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOM",
+  "theirs": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOM",
+  "listeners": {},
+  "untouched": true,
+  "ok": true
+ },
+ "frameTemplateCanvas": {
+  "owner": "windowless",
+  "ours": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOM",
+  "theirs": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOM",
+  "listeners": {},
+  "untouched": true,
+  "ok": true
+ },
+ "openShadowHere": {
+  "owner": "top",
+  "ours": "draws",
+  "theirs": "not tried (ours live)",
+  "ok": true
+ },
+ "closedShadowHere": {
+  "owner": "top",
+  "ours": "draws",
+  "theirs": "not tried (ours live)",
+  "ok": true
+ },
+ "closedShadowInFrame": {
+  "owner": "frame",
+  "ours": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOM",
+  "theirs": "draws",
+  "ok": true
+ },
+ "declarativeShadowHere": {
+  "owner": "top",
+  "ours": "draws",
+  "theirs": "not tried (ours live)",
+  "ok": true
+ },
+ "allOk": true,
+ "notOk": []
+}
+messages: 1
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0

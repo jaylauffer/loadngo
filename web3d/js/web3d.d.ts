@@ -129,8 +129,8 @@ export function compile(source?: RendererOptions['wasm']): Promise<WebAssembly.M
  * canvas element of another document than this window's, or an OffscreenCanvas whose prototype is
  * another realm's, is refused before anything touches it (so a frame cannot drive a canvas of the
  * top document, nor the top a frame's), as is every canvas once the copy's window has navigated
- * away. The canvas is checked again after the module loads and after each size set, and one moved
- * meanwhile is refused; a driven element moved to another document is refused by frame(), resize()
+ * away or its frame has been removed. The canvas is checked again after the module loads and after
+ * its width and height are set, and one moved meanwhile is refused; a driven element moved to another document is refused by frame(), resize()
  * and the creates. Every copy reads one record of the canvas, kept on it under
  * Symbol.for('loadngo-web3d'): leave that property alone. A canvas keeps its first WebGL context and
  * that context's antialias setting; a later renderer on it must ask for the same, and the context
@@ -183,7 +183,7 @@ export class Renderer {
   /**
    * Draws a frame; false from the context's loss on, for good: after a restore, create a new
    * renderer. Throws if the canvas element has been moved to another document, or the copy's
-   * window has navigated away.
+   * window has navigated away or its frame has been removed.
    */
   frame(): boolean;
   /** [cpuMs, gpuMs or NaN, GPU frame, draws, triangles, culled, program binds, material binds]; `out` holds at least 8. */

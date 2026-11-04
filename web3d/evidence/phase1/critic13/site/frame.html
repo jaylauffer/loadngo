@@ -1,0 +1,9 @@
+<!doctype html><meta charset="utf-8"><title>critic 13: a same-origin frame with its own copy of web3d</title>
+<body><canvas id="own" width="16" height="16"></canvas><script type="module">
+import * as web3d from '/pkg/web3d.js';
+window.web3d = web3d;
+window.page = 'frame.html';
+// A function of this realm that reads this realm's global's document, for the top to call later.
+window.readGlobalDocument = () => globalThis.document;
+window.ready = true;
+</script></body>

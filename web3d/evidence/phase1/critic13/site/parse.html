@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8"><title>critic 13: a frame that drives its canvas while its document is still parsing</title>
+<body><canvas id="own" width="16" height="16"></canvas>
+<script type="module" async>
+// Runs while the parser waits for the slow script below, so a renderer drives the canvas before the
+// document has finished parsing.
+import * as web3d from '/pkg/web3d.js';
+window.web3d = web3d;
+const opts = { width: 16, height: 16, antialias: false };
+window.calls = { lost: 0, restored: 0 };
+window.r = await web3d.createRenderer(document.getElementById('own'), { ...opts, onContextLost: () => window.calls.lost++, onContextRestored: () => window.calls.restored++ });
+window.created = true;
+window.ready = true;
+</script>
+<script>document.currentScript.dataset.ran = '1';</script>
+<script id="slow"></script>
+<script>
+// The slow script: a parser-inserted script, so a document.write() in it writes into the parse and
+// does not reopen the document. ?write=0 makes it write nothing (the top then writes from outside).
+const q = new URLSearchParams(location.search);
+document.write(`<script src="/slow.js?ms=${q.get('ms') ?? 1500}&write=${q.get('write') ?? 1}"><\/script>`);
+</script>
+<p id="after">parsed after the slow script</p>
+<script>window.parsed = true;</script>
+</body>

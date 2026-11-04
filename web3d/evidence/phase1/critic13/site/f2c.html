@@ -1,0 +1,43 @@
+<!doctype html><meta charset="utf-8"><title>critic 13: when a removed frame's claim holds</title>
+<body><script type="module">
+// f2.html R1 and R1b found a removed frame's create claim holding its canvas for good; f2b.html's
+// same case did not. This varies what differs between them, three trials each.
+import * as web3d from '/pkg/web3d.js';
+import { sleep, err, settle, attempt, OPTS, frameOf, page } from './common.js';
+const KEY = Symbol.for('loadngo-web3d');
+async function trial({ precompile, keepPromise, keepRealmFunction, never, waitMs }) {
+  const f = await frameOf('frame.html');
+  const fw = f.contentWindow;
+  if (precompile) (await fw.web3d.createRenderer(fw.document.body.appendChild(fw.document.createElement('canvas')), OPTS)).dispose();
+  const c = fw.document.getElementById('own');
+  const opts = never ? { ...OPTS, wasm: new fw.Response(new fw.ReadableStream({ start() {} }), { headers: { 'Content-Type': 'application/wasm' } }) } : OPTS;
+  const p = fw.web3d.createRenderer(c, opts);
+  let kept = null;
+  if (keepPromise) { kept = p; p.then(() => {}, () => {}); }
+  const read = keepRealmFunction ? fw.eval('() => globalThis') : null;
+  f.remove();
+  document.body.append(c);
+  await sleep(waitMs);
+  const m = await settle(web3d.createRenderer(c, OPTS));
+  if (m.ok) m.r.dispose();
+  void kept; void read;
+  return m.ok ? 'created' : /already has a live renderer/.test(m.message) ? 'REFUSED' : m.message;
+}
+page(async (out) => {
+  const cases = {
+    plain: {},
+    precompiled: { precompile: true },
+    keepPromise: { keepPromise: true },
+    keepRealmFunction: { keepRealmFunction: true },
+    neverModule: { never: true },
+    precompiledKeepPromise: { precompile: true, keepPromise: true },
+  };
+  for (const [name, o] of Object.entries(cases)) {
+    for (const waitMs of [0, 300]) {
+      const runs = [];
+      for (let i = 0; i < 3; i++) runs.push(await trial({ ...o, waitMs }));
+      out[`${name}, wait ${waitMs} ms`] = runs.join(', ');
+    }
+  }
+});
+</script></body>

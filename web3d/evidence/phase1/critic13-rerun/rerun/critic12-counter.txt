@@ -1,0 +1,126 @@
+{
+ "cases": {
+  "topCanvasBothRealms": {
+   "got": {
+    "a": 1,
+    "b": 1
+   },
+   "expect": {
+    "a": 1,
+    "b": 1
+   },
+   "ok": true
+  },
+  "frameCanvasBothRealms": {
+   "got": {
+    "a": 1,
+    "b": 1
+   },
+   "expect": {
+    "a": 1,
+    "b": 1
+   },
+   "ok": true
+  },
+  "twoOfOneType": {
+   "got": {
+    "a": 2
+   },
+   "expect": {
+    "a": 2
+   },
+   "ok": true
+  },
+  "templateCanvas": {
+   "got": {
+    "a": 1
+   },
+   "expect": {
+    "a": 1
+   },
+   "ok": true
+  },
+  "domParserCanvas": {
+   "got": {
+    "a": 1
+   },
+   "expect": {
+    "a": 1
+   },
+   "ok": true
+  },
+  "createHTMLDocumentCanvas": {
+   "got": {
+    "a": 1
+   },
+   "expect": {
+    "a": 1
+   },
+   "ok": true
+  },
+  "offscreenHere": {
+   "got": {
+    "a": 1
+   },
+   "expect": {
+    "a": 1
+   },
+   "ok": true
+  },
+  "offscreenOfFrame": {
+   "got": {
+    "a": 1,
+    "b": 1
+   },
+   "expect": {
+    "a": 1,
+    "b": 1
+   },
+   "ok": true
+  },
+  "nestedFrameCanvas": {
+   "got": {
+    "a": 1
+   },
+   "expect": {
+    "a": 1
+   },
+   "ok": true
+  },
+  "frameCanvasBeforeRemoval": {
+   "got": {
+    "a": 1
+   },
+   "expect": {
+    "a": 1
+   },
+   "ok": true
+  },
+  "frameCanvasAfterRemoval": {
+   "got": {},
+   "expect": {
+    "a": 1
+   },
+   "ok": false
+  },
+  "web3dCanvas": {
+   "got": {
+    "webglcontextlost": 2,
+    "webglcontextrestored": 1
+   },
+   "expect": {
+    "webglcontextlost": 2,
+    "webglcontextrestored": 1
+   },
+   "ok": true
+  }
+ },
+ "allExact": false,
+ "blindSpots": [
+  "frameCanvasAfterRemoval"
+ ]
+}
+messages: 1
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0

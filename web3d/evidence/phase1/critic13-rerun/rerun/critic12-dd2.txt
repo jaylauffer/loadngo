@@ -1,0 +1,66 @@
+{
+ "frameOrigin": "http://b.a.localhost:5666",
+ "topReachableAtFrameLoad": false,
+ "topReachableAfter": true,
+ "frameHomeIsTheFrame": true,
+ "topHomeIsTheTop": true,
+ "r1": {
+  "drew": true,
+  "centre": [
+   56,
+   255,
+   56,
+   255
+  ],
+  "corner": [
+   255,
+   0,
+   0,
+   255
+  ],
+  "isGreen": true
+ },
+ "r1WhileAway": "web3d: this renderer's canvas has been moved to another document than this window's, which web3d does not support (its context-loss listener",
+ "frameCopyWhileR1Live": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)",
+ "r1AfterMoveBack": {
+  "drew": true,
+  "centre": [
+   56,
+   255,
+   56,
+   255
+  ],
+  "corner": [
+   255,
+   0,
+   0,
+   255
+  ],
+  "isGreen": true
+ },
+ "s1": {
+  "drew": true,
+  "centre": [
+   56,
+   255,
+   56,
+   255
+  ],
+  "corner": [
+   255,
+   0,
+   0,
+   255
+  ],
+  "isGreen": true
+ },
+ "topCopyWhileS1Live": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)",
+ "gap": {
+  "forward": false,
+  "reverse": false
+ }
+}
+messages: 1
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0

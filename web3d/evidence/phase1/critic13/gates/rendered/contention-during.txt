@@ -1,0 +1,29 @@
+# every 5 s during: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/phase1/critic13/gates/rendered --seconds 10 --steady 60
+2026-11-04T00:13:00.568Z browsers: other desktop pid 1228; gpu processes: 2
+2026-11-04T00:13:05.595Z browsers: other desktop pid 1228; this run headless pid 48821; gpu processes: 3
+2026-11-04T00:13:10.616Z browsers: other desktop pid 1228; this run headless pid 48821; gpu processes: 3
+2026-11-04T00:13:15.607Z browsers: other desktop pid 1228; this run headless pid 48821; gpu processes: 3
+2026-11-04T00:13:20.601Z browsers: other desktop pid 1228; this run headless pid 48821; gpu processes: 3
+2026-11-04T00:13:25.599Z browsers: other desktop pid 1228; this run headless pid 48821; gpu processes: 3
+2026-11-04T00:13:30.599Z browsers: other desktop pid 1228; this run headless pid 48821; gpu processes: 3
+2026-11-04T00:13:35.601Z browsers: other desktop pid 1228; this run headless pid 48821; gpu processes: 3
+2026-11-04T00:13:40.603Z browsers: other desktop pid 1228; this run headless pid 48821; gpu processes: 3
+2026-11-04T00:13:45.613Z browsers: other desktop pid 1228; this run headless pid 48821; gpu processes: 3
+2026-11-04T00:13:50.606Z browsers: other desktop pid 1228; this run headless pid 48821; gpu processes: 3
+2026-11-04T00:13:55.611Z browsers: other desktop pid 1228; this run headless pid 48821; other headless pid 50730; gpu processes: 4
+2026-11-04T00:14:00.607Z browsers: other desktop pid 1228; this run headless pid 48821; other headless pid 50730; gpu processes: 4
+2026-11-04T00:14:05.607Z browsers: other desktop pid 1228; this run headless pid 48821; other headless pid 50730; gpu processes: 4
+2026-11-04T00:14:10.607Z browsers: other desktop pid 1228; this run headless pid 48821; other headless pid 50730; gpu processes: 4
+2026-11-04T00:14:15.608Z browsers: other desktop pid 1228; this run headless pid 48821; other headless pid 50730; gpu processes: 4
+2026-11-04T00:14:20.609Z browsers: other desktop pid 1228; this run headless pid 48821; other headless pid 50730; gpu processes: 4
+2026-11-04T00:14:25.611Z browsers: other desktop pid 1228; this run headless pid 48821; other headless pid 50730; gpu processes: 4
+2026-11-04T00:14:30.613Z browsers: other desktop pid 1228; this run headless pid 48821; other headless pid 50730; gpu processes: 4
+2026-11-04T00:14:35.636Z browsers: other desktop pid 1228; this run headless pid 48821; gpu processes: 3
+2026-11-04T00:14:40.613Z browsers: other desktop pid 1228; this run headless pid 48821; gpu processes: 3
+2026-11-04T00:14:45.613Z browsers: other desktop pid 1228; this run headless pid 48821; gpu processes: 3
+2026-11-04T00:14:50.615Z browsers: other desktop pid 1228; this run headless pid 48821; gpu processes: 3
+2026-11-04T00:14:55.616Z browsers: other desktop pid 1228; this run headless pid 48821; gpu processes: 3
+2026-11-04T00:15:00.617Z browsers: other desktop pid 1228; this run headless pid 48821; gpu processes: 3
+2026-11-04T00:15:05.617Z browsers: other desktop pid 1228; this run headless pid 48821; gpu processes: 3
+2026-11-04T00:15:10.618Z browsers: other desktop pid 1228; this run headless pid 48821; gpu processes: 3
+2026-11-04T00:15:14.905Z browsers: other desktop pid 1228; gpu processes: 2

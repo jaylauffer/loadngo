@@ -1,0 +1,129 @@
+<!doctype html><meta charset="utf-8"><title>critic 13: the restored event, other documents reopened, and writes while parsing</title>
+<body><script type="module">
+// Follow-ups to f1.html. Each case is a fresh same-origin frame whose own copy drives its canvas.
+import { sleep, err, settle, attempt, OPTS, frameOf, green, redraw, listenersOf, page, until } from './common.js';
+async function fresh(src = 'frame.html') {
+  const f = await frameOf(src);
+  const fw = f.contentWindow;
+  return { f, fw, doc: fw.document, w: fw.web3d, c: fw.document.getElementById('own') };
+}
+const REOPEN = "document.open(); document.write('<!doctype html><body></body>'); document.close();";
+async function live(w, c, log, tag) {
+  const calls = { lost: 0, restored: 0 };
+  const r = await w.createRenderer(c, { ...OPTS, onContextLost: () => { calls.lost++; log?.push(`${tag} onContextLost`); }, onContextRestored: () => { calls.restored++; log?.push(`${tag} onContextRestored`); } });
+  return { r, calls, gl: r.gl, lc: r.gl.getExtension('WEBGL_lose_context'), drew: green(r).isGreen };
+}
+/** Loses the context, waits (polling the context, not a listener a reopening could erase), disposes, restores. */
+async function cycle(t, c) {
+  t.lc.loseContext();
+  await until(() => t.gl.isContextLost(), 3000);
+  await sleep(50);
+  attempt(() => t.r.dispose());
+  const e = { restoreCall: attempt(() => t.lc.restoreContext()).ok ? 'ok' : 'threw' };
+  e.restored = !!(await until(() => !t.gl.isContextLost(), 2000));
+  await sleep(50);
+  e.calls = { ...t.calls };
+  e.recovered = e.restored && t.calls.lost === 1 && t.calls.restored === 1;
+  return e;
+}
+page(async (out) => {
+  // E. The page's restored listener on the canvas, added before web3d's, reopens the document while
+  // the restored event is dispatched. Then a page that waits for onContextRestored waits; one that
+  // creates anyway, and later loses again, gets the first renderer's hook at the second restore.
+  {
+    const log = [];
+    const { f, fw, w, c } = await fresh();
+    c.addEventListener('webglcontextrestored', () => { log.push('page restored listener reopens'); fw.eval(REOPEN); fw.document.body.append(c); }, { once: true });
+    const t = await live(w, c, log, 'first');
+    const e = { first: await cycle(t, c) };
+    e.restoredContextNotLost = !t.gl.isContextLost();
+    e.listenersAfter = await listenersOf(c);
+    await sleep(500);
+    e.firstRestoredHookAfter500ms = t.calls.restored;
+    const t2 = await settle(live(w, c, log, 'second'));
+    e.createAnyway = t2.ok ? (t2.r.drew ? 'created, draws' : 'created, no draw') : t2.message;
+    if (t2.ok) e.second = await cycle(t2.r, c);
+    e.firstRestoredHookAfterSecondRestore = t.calls.restored;
+    e.log = log;
+    out.E_restoredListenerBeforeWeb3dReopens = e;
+    f.remove();
+  }
+  // E0. The control: the same page, no reopening.
+  {
+    const log = [];
+    const { f, fw, w, c } = await fresh();
+    c.addEventListener('webglcontextrestored', () => log.push('page restored listener'), { once: true });
+    const t = await live(w, c, log, 'first');
+    out.E0_control = { first: await cycle(t, c), log };
+    f.remove();
+  }
+  // I3/I4. A live renderer's canvas moved into another document, that document reopened, the canvas
+  // moved back: WEB3D.md says frame() and the rest "work again once it is back".
+  for (const kind of ['createHTMLDocument', 'another frame']) {
+    const { f, fw, doc, w, c } = await fresh();
+    const t = await live(w, c);
+    let other, otherFrame;
+    if (kind === 'createHTMLDocument') other = doc.implementation.createHTMLDocument('x');
+    else { otherFrame = document.body.appendChild(document.createElement('iframe')); other = otherFrame.contentDocument; }
+    other.body.append(c);
+    const e = { frameWhileAway: attempt(() => t.r.frame()).message ?? 'drew' };
+    e.reopened = attempt(() => { other.open(); other.write('<!doctype html><body></body>'); other.close(); return true; }).ok;
+    doc.body.append(c);
+    e.listenersBack = await listenersOf(c);
+    e.frameAfterBack = attempt(() => redraw(t.r).isGreen).v ?? 'threw';
+    Object.assign(e, await cycle(t, c));
+    e.createAfter = (await settle(w.createRenderer(c, OPTS))).message ?? 'created';
+    out[`I_${kind.replace(' ', '-')}`] = e;
+    otherFrame?.remove();
+    f.remove();
+  }
+  // J. document.write() from the frame's own parser-inserted script while the document is parsing,
+  // after a renderer drives the canvas: no reopening, the listeners stay.
+  {
+    const f = document.createElement('iframe');
+    f.src = 'parse.html?ms=1500&write=1';
+    document.body.append(f);
+    await until(() => f.contentWindow?.created, 8000);
+    const fw = f.contentWindow;
+    const c = fw.document.getElementById('own');
+    const e = { createdBeforeParsed: !!fw.created && !fw.parsed, before: await listenersOf(c) };
+    await until(() => fw.parsed, 8000);
+    e.wroteWhileParsing = !!fw.__wroteWhileParsing && !!fw.document.getElementById('written');
+    e.after = await listenersOf(c);
+    const t = { r: fw.r, calls: fw.calls, gl: fw.r.gl, lc: fw.r.gl.getExtension('WEBGL_lose_context') };
+    Object.assign(e, await cycle(t, c));
+    out.J_writeWhileParsing = e;
+    f.remove();
+  }
+  // K. document.write() from this window into the frame while it is still parsing (blocked on the
+  // slow script): the insertion point is undefined, so write() reopens the document.
+  {
+    const f = document.createElement('iframe');
+    f.src = 'parse.html?ms=4000&write=0';
+    document.body.append(f);
+    await until(() => f.contentWindow?.created, 8000);
+    const fw = f.contentWindow;
+    const doc = fw.document;
+    const c = doc.getElementById('own');
+    const e = { createdBeforeParsed: !!fw.created && !fw.parsed, before: await listenersOf(c) };
+    doc.write('<!doctype html><body></body>');
+    doc.close();
+    e.reopened = !c.isConnected;
+    fw.document.body.append(c);
+    const t = { r: fw.r, calls: fw.calls, gl: fw.r.gl, lc: fw.r.gl.getExtension('WEBGL_lose_context') };
+    Object.assign(e, await cycle(t, c));
+    e.listenersAfter = await listenersOf(c);
+    out.K_writeFromTopWhileParsing = e;
+    f.remove();
+  }
+  out.verdict = {
+    E_hookOnTheRestore: out.E_restoredListenerBeforeWeb3dReopens.first.calls.restored === 1,
+    E_hookLate: out.E_restoredListenerBeforeWeb3dReopens.firstRestoredHookAfterSecondRestore,
+    E0_control: out.E0_control.first.recovered,
+    I_createHTMLDocument: out['I_createHTMLDocument'].recovered,
+    I_anotherFrame: out['I_another-frame'].recovered,
+    J: out.J_writeWhileParsing.recovered,
+    K: out.K_writeFromTopWhileParsing.recovered,
+  };
+});
+</script></body>

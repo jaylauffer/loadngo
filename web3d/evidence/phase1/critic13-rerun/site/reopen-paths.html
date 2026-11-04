@@ -1,0 +1,65 @@
+<!doctype html><meta charset="utf-8"><title>round 14: where a page's reopening listener sits</title>
+<body><script type="module">
+// The fourteenth round's check of what WEB3D.md now states for the thirteenth critic's F2: a listener
+// of the page's that reopens the document while a lost or a restored event is being dispatched. Each
+// case is a fresh same-origin frame whose own copy of web3d drives the frame's canvas, held in a <div>
+// in the frame's body, or in an open shadow root. The page's listener (once) goes on the window, the
+// document or the div, capturing, or on the shadow root, capturing, or on the canvas itself, added
+// before web3d's or after; the control has none. The listener reopens the document and puts the
+// canvas's holder back. For each case: whether the context came back after restoreContext() (so the
+// loss was cancelled), and how often each hook was called, 300 ms after the restore. The page follows
+// WEB3D.md's recovery: it disposes the renderer once the context is lost, then restores.
+import { sleep, attempt, OPTS, frameOf, green, page, until } from '../../critic13/site/common.js';
+const REOPEN = "document.open(); document.write('<!doctype html><body></body>'); document.close();";
+const FRAME = '../../critic13/site/frame.html';
+async function trial(type, where) {
+  const f = await frameOf(FRAME);
+  const fw = f.contentWindow;
+  const c = fw.document.getElementById('own');
+  const holder = fw.document.createElement('div');
+  let parent = holder;
+  if (where === 'shadow root') parent = holder.attachShadow({ mode: 'open' });
+  parent.append(c);
+  fw.document.body.append(holder);
+  let reopened = 0;
+  const reopen = () => {
+    reopened++;
+    fw.eval(REOPEN);
+    fw.document.body.append(holder);
+  };
+  const event = type === 'lost' ? 'webglcontextlost' : 'webglcontextrestored';
+  const once = { once: true };
+  if (where === 'canvas, before web3d') c.addEventListener(event, reopen, once);
+  const calls = { lost: 0, restored: 0 };
+  const r = await fw.web3d.createRenderer(c, { ...OPTS, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++ });
+  const drew = green(r).isGreen;
+  if (where === 'window') fw.addEventListener(event, reopen, { capture: true, once: true });
+  if (where === 'document') fw.document.addEventListener(event, reopen, { capture: true, once: true });
+  if (where === 'div') holder.addEventListener(event, reopen, { capture: true, once: true });
+  if (where === 'shadow root') parent.addEventListener(event, reopen, { capture: true, once: true });
+  if (where === 'canvas, after web3d') c.addEventListener(event, reopen, once);
+  const gl = r.gl;
+  const lc = gl.getExtension('WEBGL_lose_context');
+  lc.loseContext();
+  await until(() => gl.isContextLost(), 3000);
+  await sleep(50);
+  attempt(() => r.dispose());
+  const restoreCall = attempt(() => lc.restoreContext()).ok ? 'ok' : 'threw';
+  const restored = !!(await until(() => !gl.isContextLost(), 2000));
+  await sleep(300);
+  f.remove();
+  return { drew, reopened, restoreCall, restored, calls: { ...calls } };
+}
+page(async (out) => {
+  const wheres = ['none', 'window', 'document', 'div', 'shadow root', 'canvas, after web3d', 'canvas, before web3d'];
+  for (const type of ['lost', 'restored']) {
+    for (const where of wheres) {
+      const e = await trial(type, where);
+      // Covered: the loss cancelled (the context back) and each hook once.
+      e.covered = e.drew && e.restored && e.calls.lost === 1 && e.calls.restored === 1 && e.reopened === (where === 'none' ? 0 : 1);
+      out[`${type}: ${where}`] = e;
+    }
+  }
+  out.verdict = Object.fromEntries(Object.entries(out).map(([k, v]) => [k, v.covered]));
+});
+</script></body>

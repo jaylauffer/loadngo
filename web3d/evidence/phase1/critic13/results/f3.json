@@ -1,0 +1,42 @@
+{
+  "page": "evidence/phase1/critic13/site/f3.html",
+  "host": "127.0.0.1",
+  "chrome": "156.0.8078.80",
+  "args": [],
+  "result": {
+    "P_prototypePropertiesBeforeLoad": {
+      "create": "created, draws",
+      "ownRecord": true,
+      "pageAccessorRan": 0,
+      "secondWhileLive": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)"
+    },
+    "Q_prototypeAccessorAfterLoad": {
+      "create": "created",
+      "pageAccessorRan": 0
+    },
+    "F_freezeBefore": {
+      "create": "web3d: this canvas is not extensible (Object.preventExtensions, seal or freeze), so web3d cannot keep its record of the canvas on it; pass a",
+      "listeners": {}
+    },
+    "F_sealBefore": {
+      "create": "web3d: this canvas is not extensible (Object.preventExtensions, seal or freeze), so web3d cannot keep its record of the canvas on it; pass a",
+      "listeners": {}
+    },
+    "F_freezeAfterCreate": {
+      "drawsFrozen": true,
+      "createAgain": "created, draws"
+    },
+    "X_proxy": "web3d: the canvas must be an HTMLCanvasElement or OffscreenCanvas, not an object",
+    "X_pageMadeRecordShaped": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)",
+    "G_globalOverwritten": "web3d: this copy of web3d belongs to a page that its window has navigated away from, so it drives no canvas any more; use a copy of web3d lo",
+    "S_structuredClone": "Failed to execute 'structuredClone' on 'Window': HTMLCanvasElement object could not be cloned.",
+    "S_transferDrivenOffscreen": "Failed to execute 'structuredClone' on 'Window': An OffscreenCanvas could not be transferred because it had a rendering context.",
+    "I_isolatedWorld": {
+      "isolated": "second renderer created",
+      "firstStillDraws": false
+    }
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

@@ -1,0 +1,53 @@
+<!doctype html><meta charset="utf-8"><title>critic 13: a removed frame's claim, its control, and a signal that tells a removed frame</title>
+<body><script type="module">
+import * as web3d from '/pkg/web3d.js';
+import { sleep, err, settle, attempt, OPTS, frameOf, green, page, until } from './common.js';
+page(async (out) => {
+  // Control for f2.html R1: the frame removed with no create begun, its canvas adopted here.
+  {
+    const f = await frameOf('frame.html');
+    const c = f.contentWindow.document.getElementById('own');
+    f.remove();
+    document.body.append(c);
+    const m = await settle(web3d.createRenderer(c, OPTS));
+    out.control = m.ok ? (green(m.r).isGreen ? 'created, draws' : 'created, no draw') : m.message;
+    if (m.ok) m.r.dispose();
+  }
+  // R1 again (the module compiled in the frame first, as in f2c.html), and after it a raw WebGL2 context from this window on the same canvas: the canvas
+  // itself is fine; only web3d's stale claim refuses it.
+  {
+    const f = await frameOf('frame.html');
+    const fw = f.contentWindow;
+    (await fw.web3d.createRenderer(fw.document.body.appendChild(fw.document.createElement('canvas')), OPTS)).dispose(); // the module compiled
+    const c = fw.document.getElementById('own');
+    fw.web3d.createRenderer(c, OPTS);
+    f.remove();
+    document.body.append(c);
+    await sleep(100);
+    out.claimed = { web3d: (await settle(web3d.createRenderer(c, OPTS))).message ?? 'created' };
+    const gl = c.getContext('webgl2', { antialias: false });
+    out.claimed.rawContext = gl ? (gl.isContextLost() ? 'lost' : 'live') : 'none';
+  }
+  // Signals, read by a function of the frame's realm after the frame is removed, and after a
+  // navigation (through a function kept from the old page).
+  {
+    const f = await frameOf('frame.html');
+    const fw = f.contentWindow;
+    const read = fw.eval("() => { const g = globalThis; const t = (k) => { try { return g[k] === null ? 'null' : g[k] === g ? 'itself' : typeof g[k] === 'object' ? 'an object' : g[k]; } catch (e) { return 'threw'; } }; return { closed: t('closed'), parent: t('parent'), top: t('top'), defaultViewIsNull: (() => { try { return g.document.defaultView === null; } catch (e) { return 'threw'; } })() }; }");
+    out.signals = { attached: read() };
+    f.remove();
+    out.signals.removed = read();
+  }
+  {
+    const f = await frameOf('frame.html');
+    const fw = f.contentWindow;
+    const read = fw.eval("() => { try { return { closed: globalThis.closed }; } catch (e) { return 'threw'; } }");
+    const loaded = new Promise((res) => f.addEventListener('load', res, { once: true }));
+    f.src = 'frame.html?navigated';
+    await loaded;
+    out.signals.navigatedSameOrigin = read();
+    f.remove();
+  }
+  out.signals.topWindow = { closed: window.closed };
+});
+</script></body>

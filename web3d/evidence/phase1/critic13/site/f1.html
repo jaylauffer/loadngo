@@ -1,0 +1,238 @@
+<!doctype html><meta charset="utf-8"><title>critic 13: attacks on the re-arming after document.open()</title>
+<body><script type="module">
+// The thirteenth round re-arms web3d's two loss listeners after document.open() with one
+// MutationObserver a realm (childList on each document), "before any lost event can be
+// dispatched". Each case is a fresh same-origin frame whose own copy drives its own canvas.
+import { sleep, err, settle, attempt, OPTS, frameOf, green, redraw, listenersOf, page } from './common.js';
+const KEY = Symbol.for('loadngo-web3d');
+async function fresh(src = 'frame.html') {
+  const f = await frameOf(src);
+  const fw = f.contentWindow;
+  return { f, fw, doc: fw.document, w: fw.web3d, c: fw.document.getElementById('own') };
+}
+const REOPEN = "document.open(); document.write('<!doctype html><body></body>'); document.close();";
+/** A live renderer on c with counting hooks. */
+async function live(w, c, extra = {}) {
+  const calls = { lost: 0, restored: 0 };
+  const r = await w.createRenderer(c, { ...OPTS, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++, ...extra });
+  return { r, calls, gl: r.gl, lc: r.gl.getExtension('WEBGL_lose_context'), drew: green(r).isGreen };
+}
+/** Waits for the lost event (observed after dispatch), disposes, restores; what happened. */
+async function afterLoss(t, c) {
+  let ev = null;
+  c.addEventListener('webglcontextlost', (e) => (ev = e));
+  const end = performance.now() + 3000;
+  while (!ev && !t.gl.isContextLost() && performance.now() < end) await sleep(10);
+  while (!ev && performance.now() < end) await sleep(10);
+  await sleep(0);
+  const e = { lostEvent: ev ? 'seen' : 'none', prevented: ev ? ev.defaultPrevented : null, listenersAtLoss: await listenersOf(c) };
+  attempt(() => t.r.dispose());
+  let restored = false;
+  c.addEventListener('webglcontextrestored', () => (restored = true));
+  e.restoreCall = attempt(() => t.lc.restoreContext()).ok ? 'ok' : 'threw';
+  const end2 = performance.now() + 2000;
+  while (!restored && performance.now() < end2) await sleep(10);
+  await sleep(30);
+  e.restored = restored;
+  e.calls = { ...t.calls };
+  e.recovered = e.prevented === true && e.restoreCall === 'ok' && restored && t.calls.lost === 1 && t.calls.restored === 1;
+  return e;
+}
+page(async (out) => {
+  // P. loseContext() first, then the reopening, in the same task.
+  {
+    const { f, fw, doc, w, c } = await fresh();
+    const t = await live(w, c);
+    t.lc.loseContext();
+    fw.eval(REOPEN);
+    fw.document.body.append(c);
+    out.P_loseThenReopenSameTask = await afterLoss(t, c);
+    f.remove();
+  }
+  // A. Three reopenings in one task, then the canvas back and a loss, same task.
+  {
+    const { f, fw, w, c } = await fresh();
+    const t = await live(w, c);
+    fw.eval(REOPEN + REOPEN + REOPEN);
+    fw.document.body.append(c);
+    t.lc.loseContext();
+    out.A_threeReopeningsOneTask = await afterLoss(t, c);
+    f.remove();
+  }
+  // B. From a microtask.
+  {
+    const { f, fw, w, c } = await fresh();
+    const t = await live(w, c);
+    fw.queueMicrotask(() => { fw.eval(REOPEN); fw.document.body.append(c); t.lc.loseContext(); });
+    await sleep(0);
+    out.B_fromMicrotask = await afterLoss(t, c);
+    f.remove();
+  }
+  // C. From the page's own MutationObserver callback (the frame's realm).
+  {
+    const { f, fw, doc, w, c } = await fresh();
+    const t = await live(w, c);
+    const mo = new fw.MutationObserver(() => { mo.disconnect(); fw.eval(REOPEN); fw.document.body.append(c); t.lc.loseContext(); });
+    mo.observe(doc.body, { childList: true });
+    doc.body.append(doc.createElement('div'));
+    await sleep(0);
+    out.C_fromPageObserver = await afterLoss(t, c);
+    f.remove();
+  }
+  // P2. loseContext(), then a reopening in a message task that may run before the lost event's task.
+  {
+    const { f, fw, w, c } = await fresh();
+    const t = await live(w, c);
+    const ch = new fw.MessageChannel();
+    ch.port1.onmessage = () => { fw.eval(REOPEN); fw.document.body.append(c); };
+    ch.port2.postMessage(0);
+    t.lc.loseContext();
+    out.P2_reopenInMessageTaskAfterLose = await afterLoss(t, c);
+    f.remove();
+  }
+  // G. Reopened inside the page's onContextLost (inside web3d's own listener): restore after.
+  {
+    const { f, fw, w, c } = await fresh();
+    const calls = { lost: 0, restored: 0 };
+    const r = await w.createRenderer(c, { ...OPTS, onContextLost: () => { calls.lost++; fw.eval(REOPEN); fw.document.body.append(c); }, onContextRestored: () => calls.restored++ });
+    const t = { r, calls, gl: r.gl, lc: r.gl.getExtension('WEBGL_lose_context') };
+    green(r);
+    t.lc.loseContext();
+    out.G_reopenInOnContextLost = await afterLoss(t, c);
+    f.remove();
+  }
+  // D. A lost listener of the page's, added before web3d's, that reopens (the documented gap).
+  {
+    const { f, fw, w, c } = await fresh();
+    c.addEventListener('webglcontextlost', () => { fw.eval(REOPEN); fw.document.body.append(c); });
+    const t = await live(w, c);
+    t.lc.loseContext();
+    out.D_lostListenerBeforeWeb3dReopens = await afterLoss(t, c);
+    f.remove();
+  }
+  // D2. A capture listener on the frame's window that reopens: it runs before any of the canvas's.
+  {
+    const { f, fw, w, c } = await fresh();
+    const t = await live(w, c);
+    fw.addEventListener('webglcontextlost', () => { fw.eval(REOPEN); fw.document.body.append(c); }, { capture: true, once: true });
+    t.lc.loseContext();
+    out.D2_windowCaptureLostReopens = await afterLoss(t, c);
+    f.remove();
+  }
+  // E. A restored listener of the page's, added before web3d's, that reopens: web3d's restored
+  // listener is erased mid-dispatch, so the hooks it owes are not called on this restore.
+  async function restoredCase(addListener) {
+    const { f, fw, w, c } = await fresh();
+    addListener(fw, c);
+    const t = await live(w, c);
+    t.lc.loseContext();
+    const e = await afterLoss(t, c);
+    e.listenersAfterRestore = await listenersOf(c);
+    // What a page that follows the documented recovery (create in onContextRestored) sees: nothing.
+    // A create made anyway, then a second loss and restore, with fresh hooks.
+    const t2 = await settle(live(w, c));
+    e.nextCreate = t2.ok ? (t2.r.drew ? 'created, draws' : 'created, no draw') : t2.message;
+    if (t2.ok) e.second = await afterLoss(t2.r, c);
+    e.firstRendererRestoredHookAfterSecondCycle = t.calls.restored;
+    f.remove();
+    return e;
+  }
+  out.E_restoredListenerBeforeWeb3dReopens = await restoredCase((fw, c) => c.addEventListener('webglcontextrestored', () => { fw.eval(REOPEN); fw.document.body.append(c); }, { once: true }));
+  out.E2_windowCaptureRestoredReopens = await restoredCase((fw, c) => fw.addEventListener('webglcontextrestored', () => { fw.eval(REOPEN); fw.document.body.append(c); }, { capture: true, once: true }));
+  // E3, the control: the same listener added after web3d's.
+  {
+    const { f, fw, w, c } = await fresh();
+    const t = await live(w, c);
+    c.addEventListener('webglcontextrestored', () => { fw.eval(REOPEN); fw.document.body.append(c); }, { once: true });
+    t.lc.loseContext();
+    out.E3_restoredListenerAfterWeb3dReopens = await afterLoss(t, c);
+    f.remove();
+  }
+  // H. A canvas in an open shadow root and in a closed one.
+  for (const mode of ['open', 'closed']) {
+    const { f, fw, doc, w } = await fresh();
+    const host = doc.body.appendChild(doc.createElement('div'));
+    const root = host.attachShadow({ mode });
+    const c = root.appendChild(doc.createElement('canvas'));
+    const t = await live(w, c);
+    const before = await listenersOf(c);
+    fw.eval(REOPEN);
+    fw.document.body.append(host);
+    t.lc.loseContext();
+    out[`H_shadow_${mode}`] = { before, ...(await afterLoss(t, c)) };
+    f.remove();
+  }
+  // M. Reopened while a create on the canvas awaits its module: listeners on at the claim, erased,
+  // put back by the observer, and the create resolves.
+  {
+    const { f, fw, w, c } = await fresh();
+    const calls = { lost: 0, restored: 0 };
+    const p = w.createRenderer(c, { ...OPTS, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++ });
+    fw.eval(REOPEN);
+    fw.document.body.append(c);
+    const made = await settle(p);
+    if (made.ok) {
+      const t = { r: made.r, calls, gl: made.r.gl, lc: made.r.gl.getExtension('WEBGL_lose_context') };
+      green(made.r);
+      t.lc.loseContext();
+      out.M_reopenDuringCreate = await afterLoss(t, c);
+    } else out.M_reopenDuringCreate = { create: made.message };
+    f.remove();
+  }
+  // O. A second copy of web3d in the frame's realm (another URL): its canvas is re-armed by the
+  // observer the first copy made.
+  {
+    const { f, fw, doc, w } = await fresh();
+    (await w.createRenderer(doc.getElementById('own'), OPTS)).dispose(); // the first copy makes the observer
+    const w2 = await fw.eval("import('/pkg/web3d.js?second-copy')");
+    const c2 = doc.body.appendChild(doc.createElement('canvas'));
+    const t = await live(w2, c2);
+    out.O_secondCopy = { differentModule: w2.createRenderer !== w.createRenderer };
+    fw.eval(REOPEN);
+    fw.document.body.append(c2);
+    t.lc.loseContext();
+    Object.assign(out.O_secondCopy, await afterLoss(t, c2));
+    f.remove();
+  }
+  // I. Another document reopened while the canvas is in it. I1: a disposed canvas in a template's
+  // content (a windowless document), whose document is reopened. I2: the same with a live renderer
+  // (a driven canvas moved away and back, which WEB3D.md says works again once it is back).
+  for (const liveRenderer of [false, true]) {
+    const { f, fw, doc, w, c } = await fresh();
+    const tpl = doc.body.appendChild(doc.createElement('template'));
+    const tdoc = tpl.content.ownerDocument;
+    let t = await live(w, c);
+    if (!liveRenderer) t.r.dispose();
+    tpl.content.append(c);
+    const reopened = attempt(() => { tdoc.open(); tdoc.write('<!doctype html><body></body>'); tdoc.close(); return true; });
+    doc.body.append(c);
+    const e = { otherDocReopened: reopened.ok ? true : reopened.message, listenersBack: await listenersOf(c) };
+    if (liveRenderer) {
+      e.frameAfterBack = attempt(() => redraw(t.r).isGreen).v ?? 'threw';
+      t.lc.loseContext();
+      Object.assign(e, await afterLoss(t, c));
+      e.createAfter = (await settle(w.createRenderer(c, OPTS))).message ?? 'created';
+    }
+    out[liveRenderer ? 'I2_liveCanvasInTemplateDocReopened' : 'I1_canvasInTemplateDocReopened'] = e;
+    f.remove();
+  }
+  out.verdict = {
+    P: out.P_loseThenReopenSameTask.recovered,
+    A: out.A_threeReopeningsOneTask.recovered,
+    B: out.B_fromMicrotask.recovered,
+    C: out.C_fromPageObserver.recovered,
+    P2: out.P2_reopenInMessageTaskAfterLose.recovered,
+    G: out.G_reopenInOnContextLost.recovered,
+    D_documentedGap: out.D_lostListenerBeforeWeb3dReopens.recovered,
+    D2: out.D2_windowCaptureLostReopens.recovered,
+    E_restoredHookCalled: out.E_restoredListenerBeforeWeb3dReopens.calls.restored === 1,
+    E2_restoredHookCalled: out.E2_windowCaptureRestoredReopens.calls.restored === 1,
+    E3_control: out.E3_restoredListenerAfterWeb3dReopens.recovered,
+    H_open: out.H_shadow_open.recovered,
+    H_closed: out.H_shadow_closed.recovered,
+    M: out.M_reopenDuringCreate.recovered,
+    O: out.O_secondCopy.recovered,
+    I2_liveRendererRecovers: out.I2_liveCanvasInTemplateDocReopened.recovered,
+  };
+});
+</script></body>

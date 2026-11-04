@@ -1,0 +1,15 @@
+pass  X1 a handle of one kind is refused where another kind is meant
+pass  X2 a handle from another renderer is refused
+pass  X3 a Proxy positions array cannot write past its staging allocation
+pass  X3b a subclass with a changing length cannot make wasm read past the staged floats
+pass  X4 a failed create leaves nothing behind: its loss hook never fires
+pass  X5 a failed wasm fetch does not poison every later create
+pass  X6 a renderer on a canvas another renderer used draws as on a fresh canvas
+pass  X7 an argument whose valueOf disposes the renderer does not run the export on the freed renderer
+FAIL  X8 odd handle values are all refused by the wrapper, and the object stays drawn
+unknown parameter: accepted; wrong type for a real flag: refused: cdpSession.send: Protocol error (HeapProfiler.startSampling): Invalid parameters
+cputime=1, with the flags: 601 frames, page scripts 176.31 sampled bytes a frame (gate limit 1)
+cputime=1, without the flags: 601 frames, page scripts 0 sampled bytes a frame (gate limit 1)
+cputime=1, with the flags again: 601 frames, page scripts 21.19 sampled bytes a frame (gate limit 1)
+browser and server stopped
+>>> exit 0

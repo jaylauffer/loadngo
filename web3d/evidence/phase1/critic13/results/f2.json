@@ -1,0 +1,60 @@
+{
+  "page": "evidence/phase1/critic13/site/f2.html",
+  "host": "127.0.0.1",
+  "chrome": "156.0.8078.80",
+  "args": [],
+  "result": {
+    "R0_ownRealmInRemovedFrame": {
+      "stateStillItsOwn": true
+    },
+    "R1_claimOfRemovedFrame": {
+      "frameCreateSettled": "never",
+      "ownerIsAClaim": true,
+      "top": {
+        "create": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)"
+      },
+      "after1s": {
+        "frameCreateSettled": "never",
+        "top": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)"
+      }
+    },
+    "R1b_claimOfRemovedFrameSameTask": {
+      "frameCreateSettled": "never",
+      "top": {
+        "create": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)"
+      }
+    },
+    "R2_liveRendererOfRemovedFrame": {
+      "frameAfterRemoval": {
+        "ok": true,
+        "v": false
+      },
+      "topWhileLive": "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore",
+      "dispose": "ok",
+      "topAfterDispose": {
+        "create": "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore"
+      }
+    },
+    "R3_initialAboutBlank": {
+      "createdInBlank": true,
+      "markerKept": false,
+      "stateKept": true,
+      "oldRendererFrame": {
+        "ok": true,
+        "v": false
+      },
+      "oldCopyOnNewCanvas": "never settled",
+      "recordMadeByOldCopy": false,
+      "newCopy": "created, draws"
+    },
+    "verdict": {
+      "R0_removedFrameStillOwnRealm": true,
+      "R1_topRefusedCanvasClaimedByRemovedFrame": true,
+      "R1b": true,
+      "R2_refusedWhileLive": false
+    }
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

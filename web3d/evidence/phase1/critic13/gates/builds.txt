@@ -1,0 +1,46 @@
+== build 1: workspace target/
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+== cargo rustc (target dir: <home>/pudding/loadngo/target)
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           108137  gzip   38787
+pkg/loadngo_web3d.wasm                70249  gzip   32174
+pkg/gl.js                             22570  gzip    7617
+pkg/web3d.js                          66468  gzip   20570
+>>> exit 0
+6542cb394eccf017f3756fc59b03c5dd2b0c1d04e71d4b89781fba21466eb902  web3d/pkg/gl.js
+4d6594b5a0d5841f5f94c02fa91b0ede0ee75460b32927bebfc0bc7f230c95bc  web3d/pkg/loadngo_web3d.wasm
+c46f3cc24501379d0cb9590dfa0f11bf52a7ebbf9d6f054620bdce90db6a37c1  web3d/pkg/web3d.d.ts
+65bb9a0c5193f8f4a8e47206010bc2367dc4fdb0cc871358694517ab017183c4  web3d/pkg/web3d.js
+== build 2: workspace target/
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+== cargo rustc (target dir: <home>/pudding/loadngo/target)
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           108137  gzip   38787
+pkg/loadngo_web3d.wasm                70249  gzip   32174
+pkg/gl.js                             22570  gzip    7617
+pkg/web3d.js                          66468  gzip   20570
+>>> exit 0
+6542cb394eccf017f3756fc59b03c5dd2b0c1d04e71d4b89781fba21466eb902  web3d/pkg/gl.js
+4d6594b5a0d5841f5f94c02fa91b0ede0ee75460b32927bebfc0bc7f230c95bc  web3d/pkg/loadngo_web3d.wasm
+c46f3cc24501379d0cb9590dfa0f11bf52a7ebbf9d6f054620bdce90db6a37c1  web3d/pkg/web3d.d.ts
+65bb9a0c5193f8f4a8e47206010bc2367dc4fdb0cc871358694517ab017183c4  web3d/pkg/web3d.js
+== build 3: CARGO_TARGET_DIR new, 0 entries
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+== cargo rustc (target dir: <empty>)
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           108137  gzip   38787
+pkg/loadngo_web3d.wasm                70249  gzip   32174
+pkg/gl.js                             22570  gzip    7617
+pkg/web3d.js                          66468  gzip   20570
+>>> exit 0
+6542cb394eccf017f3756fc59b03c5dd2b0c1d04e71d4b89781fba21466eb902  web3d/pkg/gl.js
+4d6594b5a0d5841f5f94c02fa91b0ede0ee75460b32927bebfc0bc7f230c95bc  web3d/pkg/loadngo_web3d.wasm
+c46f3cc24501379d0cb9590dfa0f11bf52a7ebbf9d6f054620bdce90db6a37c1  web3d/pkg/web3d.d.ts
+65bb9a0c5193f8f4a8e47206010bc2367dc4fdb0cc871358694517ab017183c4  web3d/pkg/web3d.js
+== identical: yes
+== local paths in pkg/ (strings -n 4 wasm; grep -a every file):
+(end)
+== the empty target dir was used: release wasm32-unknown-unknown 

@@ -1,0 +1,29 @@
+<!doctype html><meta charset="utf-8"><title>critic 13: the removed frame's claim, with the trial fix</title>
+<body><script type="module">
+// f2c.html's refused cases against critic13/fix-pkg/ (ownRealm also requires !closed), and the
+// navigated-away case NV covers, to show the change keeps it.
+import * as web3d from '/evidence/phase1/critic13/fix-pkg/web3d.js';
+import { sleep, err, settle, attempt, OPTS, frameOf, green, page } from './common.js';
+async function trial(never) {
+  const f = await frameOf('frame-fix.html');
+  const fw = f.contentWindow;
+  (await fw.web3d.createRenderer(fw.document.body.appendChild(fw.document.createElement('canvas')), OPTS)).dispose();
+  const c = fw.document.getElementById('own');
+  fw.web3d.createRenderer(c, never ? { ...OPTS, wasm: new fw.Response(new fw.ReadableStream({ start() {} }), { headers: { 'Content-Type': 'application/wasm' } }) } : OPTS);
+  f.remove();
+  document.body.append(c);
+  const m = await settle(web3d.createRenderer(c, OPTS));
+  const drew = m.ok ? green(m.r).isGreen : false;
+  if (m.ok) m.r.dispose();
+  return m.ok ? (drew ? 'created, draws' : 'created') : m.message;
+}
+page(async (out) => {
+  out.precompiled = [await trial(false), await trial(false), await trial(false)].join(', ');
+  out.neverModule = [await trial(true), await trial(true), await trial(true)].join(', ');
+  // The frame itself still works while attached.
+  const f = await frameOf('frame-fix.html');
+  const r = await settle(f.contentWindow.web3d.createRenderer(f.contentWindow.document.getElementById('own'), OPTS));
+  out.attachedFrameCreates = r.ok ? (green(r.r).isGreen ? 'created, draws' : 'created') : r.message;
+  f.remove();
+});
+</script></body>

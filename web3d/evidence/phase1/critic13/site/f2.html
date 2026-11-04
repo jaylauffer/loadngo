@@ -1,0 +1,125 @@
+<!doctype html><meta charset="utf-8"><title>critic 13: removed frames and the initial about:blank</title>
+<body><script type="module">
+// F2 made a navigated-away copy drive nothing: ownRealm() is GLOBAL[KEY] === REALM_STATE. These
+// cases remove a frame instead of navigating it, and load a copy into a frame's initial about:blank.
+import * as web3d from '/pkg/web3d.js';
+import { sleep, err, settle, attempt, OPTS, frameOf, green, redraw, listenersOf, page, until } from './common.js';
+const KEY = Symbol.for('loadngo-web3d');
+const ownerOf = (c) => Object.getOwnPropertyDescriptor(c, KEY)?.value?.owner ?? null;
+async function cycle(r, c, calls) {
+  const gl = r.gl;
+  const lc = gl.getExtension('WEBGL_lose_context');
+  lc.loseContext();
+  await until(() => gl.isContextLost(), 3000);
+  await sleep(50);
+  attempt(() => r.dispose());
+  const restoreCall = attempt(() => lc.restoreContext()).ok ? 'ok' : 'threw';
+  const restored = !!(await until(() => !gl.isContextLost(), 2000));
+  await sleep(50);
+  return { restoreCall, restored, calls: { ...calls }, recovered: restored && calls.lost === 1 && calls.restored === 1 };
+}
+async function topCreate(c) {
+  const calls = { lost: 0, restored: 0 };
+  const made = await settle(web3d.createRenderer(c, { ...OPTS, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++ }));
+  if (!made.ok) return { create: made.message };
+  return { create: green(made.r).isGreen ? 'created, draws' : 'created, no draw', loss: await cycle(made.r, c, calls) };
+}
+page(async (out) => {
+  // R0. What ownRealm() reads in a removed frame: the frame's own read of its global's state, kept
+  // as a function of that realm and called after the frame is gone.
+  {
+    const f = await frameOf('frame.html');
+    const fw = f.contentWindow;
+    const read = fw.eval("() => { try { return globalThis[Symbol.for('loadngo-web3d')]; } catch (e) { return 'threw'; } }");
+    const state = fw[KEY];
+    f.remove();
+    out.R0_ownRealmInRemovedFrame = { stateStillItsOwn: read() === state };
+  }
+  // R1. A frame's create on its own canvas, its module never arriving, and the frame removed while
+  // it waits (a page that tears down a frame mid-load). The canvas, adopted into this document, is
+  // this realm's now: is this window's copy refused it?
+  {
+    const f = await frameOf('frame.html');
+    const fw = f.contentWindow;
+    const c = fw.document.getElementById('own');
+    const never = new fw.Response(new fw.ReadableStream({ start() {} }), { headers: { 'Content-Type': 'application/wasm' } });
+    const pending = fw.web3d.createRenderer(c, { ...OPTS, wasm: never });
+    let settled = 'never';
+    pending.then(() => (settled = 'resolved'), (e) => (settled = 'rejected: ' + err(e)));
+    await sleep(50);
+    f.remove();
+    document.body.append(c);
+    await sleep(200);
+    out.R1_claimOfRemovedFrame = { frameCreateSettled: settled, ownerIsAClaim: ownerOf(c) !== null && !('canvas' in (ownerOf(c) ?? {})), top: await topCreate(c) };
+    await sleep(1000);
+    out.R1_claimOfRemovedFrame.after1s = { frameCreateSettled: settled, top: (await settle(web3d.createRenderer(c, OPTS))).message ?? 'created' };
+  }
+  // R1b. The same with the default module (already compiled in that realm), the frame removed in
+  // the same task as the call.
+  {
+    const f = await frameOf('frame.html');
+    const fw = f.contentWindow;
+    (await fw.web3d.createRenderer(fw.document.body.appendChild(fw.document.createElement('canvas')), OPTS)).dispose(); // compiled
+    const c = fw.document.getElementById('own');
+    const pending = fw.web3d.createRenderer(c, OPTS);
+    let settled = 'never';
+    pending.then(() => (settled = 'resolved'), (e) => (settled = 'rejected: ' + err(e)));
+    f.remove();
+    document.body.append(c);
+    await sleep(300);
+    out.R1b_claimOfRemovedFrameSameTask = { frameCreateSettled: settled, top: await topCreate(c) };
+  }
+  // R2. A frame's live renderer, the frame removed without disposing it, its canvas then adopted
+  // here: refused while it lives, and free once disposed from here.
+  {
+    const f = await frameOf('frame.html');
+    const fw = f.contentWindow;
+    const c = fw.document.getElementById('own');
+    const r = await fw.web3d.createRenderer(c, OPTS);
+    green(r);
+    f.remove();
+    const e = { frameAfterRemoval: attempt(() => r.frame()) };
+    document.body.append(c);
+    e.topWhileLive = (await settle(web3d.createRenderer(c, OPTS))).message ?? 'created';
+    e.dispose = attempt(() => r.dispose()).ok ? 'ok' : 'threw';
+    e.topAfterDispose = await topCreate(c);
+    out.R2_liveRendererOfRemovedFrame = e;
+  }
+  // R3. The initial about:blank: a copy loaded into a frame's first document, which then loads a
+  // page of this origin. Is its window, and so its realm's state, kept?
+  {
+    const f = document.body.appendChild(document.createElement('iframe'));
+    const fw0 = f.contentWindow;
+    fw0.__marker = 1;
+    const w0 = await fw0.eval("import('/pkg/web3d.js')");
+    const c0 = fw0.document.body.appendChild(fw0.document.createElement('canvas'));
+    const r0 = await settle(w0.createRenderer(c0, OPTS));
+    const e = { createdInBlank: r0.ok };
+    const loaded = new Promise((res) => f.addEventListener('load', res, { once: true }));
+    f.src = 'frame.html';
+    await loaded;
+    await until(() => f.contentWindow.ready);
+    const fw = f.contentWindow;
+    e.markerKept = fw.__marker === 1;
+    e.stateKept = fw[KEY] !== undefined && r0.ok;
+    e.oldRendererFrame = r0.ok ? attempt(() => r0.r.frame()) : null;
+    const c = fw.document.getElementById('own');
+    const tried = w0.createRenderer(c, OPTS);
+    const s = await Promise.race([settle(tried).then((x) => x.message ?? 'created'), sleep(300).then(() => 'never settled')]);
+    e.oldCopyOnNewCanvas = s;
+    e.recordMadeByOldCopy = Object.getOwnPropertyDescriptor(c, KEY) !== undefined;
+    const n = await settle(fw.web3d.createRenderer(c, OPTS));
+    e.newCopy = n.ok ? (green(n.r).isGreen ? 'created, draws' : 'no draw') : n.message;
+    if (n.ok) n.r.dispose();
+    out.R3_initialAboutBlank = e;
+    f.remove();
+  }
+  out.verdict = {
+    R0_removedFrameStillOwnRealm: out.R0_ownRealmInRemovedFrame.stateStillItsOwn,
+    R1_topRefusedCanvasClaimedByRemovedFrame: /already has a live renderer/.test(out.R1_claimOfRemovedFrame.top.create ?? ''),
+    R1b: /already has a live renderer/.test(out.R1b_claimOfRemovedFrameSameTask.top.create ?? ''),
+    R2_refusedWhileLive: /already has a live renderer/.test(out.R2_liveRendererOfRemovedFrame.topWhileLive),
+    R2_freeAfterDispose: out.R2_liveRendererOfRemovedFrame.topAfterDispose.loss?.recovered,
+  };
+});
+</script></body>

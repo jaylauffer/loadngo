@@ -1,0 +1,111 @@
+<!doctype html><meta charset="utf-8"><title>critic 13: page code during a create's size sets, and what a failed create leaves</title>
+<body><script type="module">
+import * as web3d from '/pkg/web3d.js';
+import { sleep, err, settle, attempt, OPTS, frameOf, green, page, until, listenersOf } from './common.js';
+const KEY = Symbol.for('loadngo-web3d');
+const ownerOf = (c) => Object.getOwnPropertyDescriptor(c, KEY)?.value?.owner ?? null;
+const hooks = new WeakMap();
+customElements.define('c13-canvas', class extends HTMLCanvasElement {
+  static observedAttributes = ['width', 'height'];
+  attributeChangedCallback(name, old, value) {
+    const h = hooks.get(this);
+    if (h) h(this, name, old, value);
+  }
+}, { extends: 'canvas' });
+function canvas(w = 20, h = 10) {
+  const c = document.createElement('canvas', { is: 'c13-canvas' });
+  c.width = w;
+  c.height = h;
+  document.body.append(c);
+  return c;
+}
+page(async (out) => {
+  const f = await frameOf('frame.html');
+  const fdoc = f.contentWindow.document;
+  // H1. Moved away on the height set (after the width set's check point): refused?
+  {
+    const c = canvas();
+    const log = [];
+    hooks.set(c, (el, name, old, value) => { log.push(`${name} ${old}->${value}`); if (name === 'height' && value === '16') fdoc.body.append(el); });
+    const m = await settle(web3d.createRenderer(c, OPTS));
+    hooks.delete(c);
+    out.H1_movedOnHeightSet = { create: m.ok ? 'created' : m.message, log, size: [c.width, c.height], inThisDocument: c.ownerDocument === document, owner: ownerOf(c) === null ? 'none' : 'held', listeners: await listenersOf(c) };
+    if (m.ok) m.r.dispose();
+  }
+  // H2. Moved away on the width set and back on the height set: in this document at the check.
+  {
+    const c = canvas();
+    const log = [];
+    hooks.set(c, (el, name, old, value) => {
+      log.push(`${name} ${old}->${value} in ${el.ownerDocument === document ? 'this' : 'the frame\'s'} document`);
+      if (name === 'width' && value === '16') fdoc.body.append(el);
+      if (name === 'height' && value === '16') document.body.append(el);
+    });
+    const m = await settle(web3d.createRenderer(c, OPTS));
+    hooks.delete(c);
+    out.H2_awayOnWidthBackOnHeight = { create: m.ok ? (green(m.r).isGreen ? 'created, draws' : 'created') : m.message, log, listeners: await listenersOf(c) };
+    if (m.ok) m.r.dispose();
+  }
+  // L. The context lost by page code on the width set (the page asks the canvas for the context web3d
+  // just made): the create fails "lost", its listeners stay, and its onContextRestored comes.
+  {
+    const c = canvas();
+    let lc = null;
+    hooks.set(c, (el, name, old, value) => { if (name === 'width' && value === '16' && !lc) { lc = el.getContext('webgl2').getExtension('WEBGL_lose_context'); lc.loseContext(); } });
+    const calls = { lost: 0, restored: 0 };
+    const m = await settle(web3d.createRenderer(c, { ...OPTS, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++ }));
+    hooks.delete(c);
+    const e = { create: m.ok ? 'created' : m.message, size: [c.width, c.height], listeners: await listenersOf(c) };
+    await sleep(50);
+    e.restoreCall = attempt(() => lc.restoreContext()).ok ? 'ok' : 'threw';
+    await until(() => !c.getContext('webgl2').isContextLost(), 2000);
+    await sleep(50);
+    e.calls = { ...calls };
+    const n = await settle(web3d.createRenderer(c, OPTS));
+    e.next = n.ok ? (green(n.r).isGreen ? 'created, draws' : 'created') : n.message;
+    if (n.ok) n.r.dispose();
+    out.L_lostOnWidthSet = e;
+  }
+  // X. What a create that fails after the context leaves on a page's context: extensions enabled.
+  {
+    const c = canvas();
+    const gl = c.getContext('webgl2', { antialias: false });
+    const probe = () => {
+      while (gl.getError()) {}
+      gl.getParameter(0x8fbb); // GPU_DISJOINT_EXT: INVALID_ENUM unless EXT_disjoint_timer_query_webgl2 is enabled
+      const timer = gl.getError() === 0;
+      const p = gl.createProgram();
+      gl.getProgramParameter(p, 0x91b1); // COMPLETION_STATUS_KHR: INVALID_ENUM unless KHR_parallel_shader_compile is enabled
+      const parallel = gl.getError() === 0;
+      gl.deleteProgram(p);
+      return { timerQueryEnabled: timer, parallelCompileEnabled: parallel };
+    };
+    const before = probe();
+    hooks.set(c, (el, name, old, value) => { if (name === 'width' && value === '16') fdoc.body.append(el); });
+    const m = await settle(web3d.createRenderer(c, OPTS));
+    hooks.delete(c);
+    document.body.append(c);
+    out.X_failedAfterContext = { create: m.ok ? 'created' : m.message, before, after: probe() };
+    if (m.ok) m.r.dispose();
+  }
+  // R. Re-entrancy from the height set's callback: a create on the same canvas, and dispose of
+  // another renderer.
+  {
+    const other = await web3d.createRenderer(canvas(16, 16), OPTS);
+    const c = canvas();
+    const seen = {};
+    hooks.set(c, (el, name, old, value) => {
+      if (name === 'height' && value === '16') {
+        web3d.createRenderer(el, OPTS).then(() => (seen.inner = 'created'), (e) => (seen.inner = err(e)));
+        seen.disposeOther = attempt(() => other.dispose()).ok ? 'ok' : 'threw';
+      }
+    });
+    const m = await settle(web3d.createRenderer(c, OPTS));
+    hooks.delete(c);
+    await sleep(20);
+    out.R_reentrantOnHeightSet = { create: m.ok ? (green(m.r).isGreen ? 'created, draws' : 'created') : m.message, ...seen };
+    if (m.ok) m.r.dispose();
+  }
+  f.remove();
+});
+</script></body>

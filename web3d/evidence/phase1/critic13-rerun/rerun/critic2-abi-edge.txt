@@ -1,0 +1,73 @@
+exports: memory web3d_alloc web3d_caps web3d_create web3d_destroy web3d_error_len web3d_error_ptr web3d_frame web3d_free web3d_init web3d_io web3d_material_create web3d_material_destroy web3d_mesh_create web3d_mesh_destroy web3d_object_create web3d_object_destroy web3d_object_set_transform web3d_object_set_visible web3d_resize web3d_set_ambient web3d_set_camera web3d_set_camera_look_at web3d_set_clear_color web3d_set_cpu_timing web3d_set_key_light web3d_stats web3d_texture_create web3d_texture_destroy
+NULL POINTER:
+  init: 1
+  error_ptr/len: 1056245/56 "no renderer (a null pointer: disposed, or never created)"
+  io: 0
+  stats: 0
+  caps: 0
+  set_cpu_timing: undefined
+  resize: 1
+  mesh_create: 0
+  mesh_destroy: 1
+  texture_create: 0
+  texture_destroy: 1
+  material_create: 0
+  material_create bad mode: 0
+  material_destroy: 1
+  object_create: 0
+  object_set_transform: 1
+  object_set_visible: 1
+  object_destroy: 1
+  set_camera: 1
+  set_camera_look_at: 1
+  set_key_light: 1
+  set_ambient: 1
+  set_clear_color: 1
+  frame: undefined
+  destroy: undefined
+  free: undefined
+  low 1 KiB bytes changed: 0; GL calls made: 0
+init 0 ""
+mesh 134217729 
+material: first 402653186, 3,001 cycles later new 465108995; duplicates 0; max handle 536805378 (< 2^30: true); stale first -> refused: 402653186 is not a valid material handle: not live in this renderer (destroyed, never created, or another renderer's)
+object: first 536870913, 3,001 cycles later new 599326722; duplicates 0; max handle 671023105 (< 2^30: true); stale first -> refused: 536870913 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)
+EDGES:
+  mesh: 0 positions: 0 "mesh refused: positions must hold x, y, z for at least one vertex"
+  mesh: null positions: 0 "mesh refused: positions must hold x, y, z for at least one vertex"
+  mesh: null indices: 0 "mesh refused: indices must list whole triangles"
+  mesh: morph targets 0x55555556 with 6 deltas: 0 "mesh refused: a mesh may have 1 to 256 morph targets"
+  mesh: morph targets usize::MAX: 0 "mesh refused: a mesh may have 1 to 256 morph targets"
+  mesh: morph count without deltas: 0 "mesh refused: morph target count given without deltas"
+  mesh: infinite morph delta: 0 "mesh refused: morph deltas must be finite"
+  mesh: weights 1.75 each: 0 "mesh refused: weights must lie between 0 and 1"
+  mesh: weights NaN: 0 "mesh refused: weights must lie between 0 and 1"
+  mesh: weights all zero (unskinned vertex): 0 "mesh refused: each vertex's four weights must sum to 1"
+  mesh: weights sum 1.019: 134217730 
+  mesh: joints without weights: 0 "mesh refused: joints and weights come together"
+  mesh: index u32::MAX: 0 "mesh refused: an index is past the last vertex"
+  mesh: NaN normal (accepted? packs as +Y): 0 "mesh refused: normals must be finite"
+  mesh: NaN uv: 0 "mesh refused: uvs must be finite"
+  texture: 0x0: 0 "texture is 0x0; this GPU allows 1 to 4096 pixels a side (resize it first, for example with createImageBitmap's resizeWidth)"
+  texture: 4097 wide: 0 "texture is 4097x4; this GPU allows 1 to 4096 pixels a side (resize it first, for example with createImageBitmap's resizeWidth)"
+  texture: wrap bits 3 (invalid) -> ?: 0 "texture refused: wrap modes are 0 (repeat), 1 (clamp) or 2 (mirror)"
+  material: alpha mode 3: 0 "material refused: alpha mode must be 0 (opaque), 1 (mask) or 2 (blend)"
+  material: stale texture handle 12345: 0 "12345 is not a valid texture handle"
+  material: NaN base colour: 0 "material refused: every value must be finite"
+  object: mesh handle 0: 0 "0 is not a valid mesh handle"
+  object: handle u32::MAX: 1 "0 is not a valid object handle"
+  camera: zero view matrix: 1 "camera refused: the view matrix is not invertible"
+  look-at: eye == target: 0 "camera refused: the view matrix is not invertible"
+  look-at: fov 0: 1 "camera refused: the field of view must be between 0 and pi radians"
+  look-at: near 0: 1 "camera refused: near and far must satisfy 0 < near < far"
+  look-at: up zero: 0 "camera refused: near and far must satisfy 0 < near < far"
+  key light: zero direction: 1 "light refused: the direction must be non-zero"
+  key light: infinite intensity: 1 "light refused: colour and intensity must be finite"
+  key light: negative intensity: 0 "light refused: colour and intensity must be finite"
+  ambient: NaN: 1 "light refused: colours and intensity must be finite"
+  resize to 0x0 then frame: ok 
+  resize to 2^31+ (u32 > i32): viewport import received undefined 
+stats, cpu timing off: [null,2.5,4,1,1,0,0,0]
+clock readings in a frame with timing off: 0
+clock readings in a frame with timing on: 2 stats [0.005124999999999602,2.5,6,1,1,0,0,0]
+destroy made: {"vertex_array_delete":2,"buffer_delete":9,"program_delete":3,"query_delete":8}
+>>> exit 0

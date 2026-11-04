@@ -1,5 +1,5 @@
 {
-  "date": "2026-11-03T23:55:01.638Z",
+  "date": "2026-11-04T01:07:49.660Z",
   "machine": {
     "platform": "darwin 25.6.0",
     "cpu": "Apple M4 Pro",
@@ -14,7 +14,7 @@
     {
       "name": "low-1024x576",
       "note": "a 1366x768 window drawn at pixel ratio 0.75",
-      "url": "http://127.0.0.1:5666/demo/?still=1&scale=0.75",
+      "url": "http://127.0.0.1:5668/demo/?still=1&scale=0.75",
       "crossOriginIsolated": true,
       "seconds": 10.016,
       "frames": 601,
@@ -28,17 +28,17 @@
       },
       "cpuMs": {
         "n": 601,
-        "mean": 0.041,
-        "p50": 0.04,
-        "p95": 0.055,
-        "max": 0.235
+        "mean": 0.055,
+        "p50": 0.05,
+        "p95": 0.08,
+        "max": 0.265
       },
       "gpuMs": {
-        "n": 602,
-        "mean": 3.589,
-        "p50": 3.587,
-        "p95": 7.655,
-        "max": 12.137
+        "n": 601,
+        "mean": 1.206,
+        "p50": 0.475,
+        "p95": 4.681,
+        "max": 14.092
       },
       "draws": 64,
       "triangles": 320000,
@@ -74,7 +74,7 @@
         "centreIsLit": true
       },
       "sceneOk": true,
-      "hud": "web3d phase 1 · ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)\n60.0 fps   frame p50 16.7 / p95 16.7 ms\nGPU 1.35 ms   CPU 0.04 ms\n64 draws   320k tris   0 culled   1024×576   MSAA 4x",
+      "hud": "web3d phase 1 · ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)\n60.0 fps   frame p50 16.7 / p95 16.7 ms\nGPU 1.01 ms   CPU 0.05 ms\n64 draws   320k tris   0 culled   1024×576   MSAA 4x",
       "messages": [],
       "screenshot": "demo-low-1024x576.png",
       "problems": []
@@ -82,7 +82,7 @@
     {
       "name": "full-1366x768",
       "note": "the same window at pixel ratio 1",
-      "url": "http://127.0.0.1:5666/demo/?still=1&scale=1",
+      "url": "http://127.0.0.1:5668/demo/?still=1&scale=1",
       "crossOriginIsolated": true,
       "seconds": 10.016,
       "frames": 601,
@@ -96,17 +96,17 @@
       },
       "cpuMs": {
         "n": 601,
-        "mean": 0.041,
-        "p50": 0.04,
-        "p95": 0.06,
-        "max": 0.235
+        "mean": 0.058,
+        "p50": 0.055,
+        "p95": 0.075,
+        "max": 0.275
       },
       "gpuMs": {
-        "n": 599,
-        "mean": 1.093,
-        "p50": 0.584,
-        "p95": 4.782,
-        "max": 12.087
+        "n": 602,
+        "mean": 0.451,
+        "p50": 0.318,
+        "p95": 0.642,
+        "max": 13.52
       },
       "draws": 64,
       "triangles": 320000,
@@ -142,7 +142,7 @@
         "centreIsLit": true
       },
       "sceneOk": true,
-      "hud": "web3d phase 1 · ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)\n60.0 fps   frame p50 16.7 / p95 16.7 ms\nGPU 0.95 ms   CPU 0.03 ms\n64 draws   320k tris   0 culled   1366×768   MSAA 4x",
+      "hud": "web3d phase 1 · ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)\n60.0 fps   frame p50 16.7 / p95 16.7 ms\nGPU 0.47 ms   CPU 0.05 ms\n64 draws   320k tris   0 culled   1366×768   MSAA 4x",
       "messages": [],
       "screenshot": "demo-full-1366x768.png",
       "problems": []
@@ -150,7 +150,7 @@
     {
       "name": "low-1024x576-no-msaa",
       "note": "pixel ratio 0.75 without multisampling",
-      "url": "http://127.0.0.1:5666/demo/?still=1&scale=0.75&aa=0",
+      "url": "http://127.0.0.1:5668/demo/?still=1&scale=0.75&aa=0",
       "crossOriginIsolated": true,
       "seconds": 10.016,
       "frames": 601,
@@ -164,17 +164,17 @@
       },
       "cpuMs": {
         "n": 601,
-        "mean": 0.045,
-        "p50": 0.045,
-        "p95": 0.065,
-        "max": 0.24
+        "mean": 0.065,
+        "p50": 0.065,
+        "p95": 0.08,
+        "max": 0.285
       },
       "gpuMs": {
-        "n": 598,
-        "mean": 0.763,
-        "p50": 0.431,
-        "p95": 1.918,
-        "max": 15.658
+        "n": 599,
+        "mean": 1.92,
+        "p50": 0.569,
+        "p95": 7.423,
+        "max": 15.733
       },
       "draws": 64,
       "triangles": 320000,
@@ -210,13 +210,13 @@
         "centreIsLit": true
       },
       "sceneOk": true,
-      "hud": "web3d phase 1 · ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)\n60.0 fps   frame p50 16.7 / p95 16.7 ms\nGPU 0.92 ms   CPU 0.04 ms\n64 draws   320k tris   0 culled   1024×576   no MSAA",
+      "hud": "web3d phase 1 · ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)\n60.0 fps   frame p50 16.7 / p95 16.7 ms\nGPU 4.03 ms   CPU 0.06 ms\n64 draws   320k tris   0 culled   1024×576   no MSAA",
       "messages": [],
       "screenshot": "demo-low-1024x576-no-msaa.png",
       "problems": []
     }
   ],
-  "browser": "Chrome 156.0.8078.80 (headless, launched by this script)",
+  "browser": "Chrome 157.0.8103.38 (headless, launched by this script)",
   "probes": {
     "tests": [
       {
@@ -493,7 +493,7 @@
         "name": "M a GPU timer reading is present",
         "pass": true,
         "detail": {
-          "gpuMs": 0.025124,
+          "gpuMs": 0.036916,
           "timerQuery": true
         }
       },
@@ -558,7 +558,7 @@
         "pass": true,
         "detail": {
           "threw": true,
-          "message": "web3d: 569507428958218 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
+          "message": "web3d: 91997259956234 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
         }
       },
       {
@@ -590,7 +590,7 @@
         "pass": true,
         "detail": {
           "threw": false,
-          "value": 569507429023754
+          "value": 91997260021770
         }
       },
       {
@@ -614,7 +614,7 @@
         "pass": true,
         "detail": {
           "threw": false,
-          "value": 569507428958219
+          "value": 91997259956235
         }
       },
       {
@@ -678,15 +678,15 @@
         "pass": true,
         "detail": {
           "threw": true,
-          "message": "web3d: 569507697393676 is not a valid material handle: not live in this renderer (destroyed, never created, or another renderer's)"
+          "message": "web3d: 91997528391692 is not a valid material handle: not live in this renderer (destroyed, never created, or another renderer's)"
         }
       },
       {
         "name": "I handles are not reissued",
         "pass": true,
         "detail": {
-          "first": 569507697393676,
-          "later": 569507769548812
+          "first": 91997528391692,
+          "later": 91997600546828
         }
       },
       {
@@ -696,19 +696,19 @@
           "tries": [
             {
               "threw": true,
-              "message": "web3d: 569512126578709 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 92001957576725 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             {
               "threw": true,
-              "message": "web3d: 569507831611413.8 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: 91997662609429.75 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
             },
             {
               "threw": true,
-              "message": "web3d: \"569507831611413\" is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: \"91997662609429\" is not a valid object handle (a whole number from 1 to 2^50 - 1)"
             },
             {
               "threw": true,
-              "message": "web3d: -569507831611413 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: -91997662609429 is not a valid object handle (a whole number from 1 to 2^50 - 1)"
             },
             {
               "threw": true,
@@ -726,23 +726,23 @@
           "others": [
             {
               "threw": true,
-              "message": "web3d: 569512126578709 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 92001957576725 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             {
               "threw": true,
-              "message": "web3d: \"569507831611413\" is not a valid object handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: \"91997662609429\" is not a valid object handle (a whole number from 1 to 2^50 - 1)"
             },
             {
               "threw": true,
-              "message": "web3d: 569507428958209.5 is not a valid mesh handle (a whole number from 1 to 2^50 - 1)"
+              "message": "web3d: 91997259956225.5 is not a valid mesh handle (a whole number from 1 to 2^50 - 1)"
             },
             {
               "threw": true,
-              "message": "web3d: 569511858143233 is not a valid texture handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 92001689141249 is not a valid texture handle: not live in this renderer (destroyed, never created, or another renderer's)"
             },
             {
               "threw": true,
-              "message": "web3d: 569511723925505 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
+              "message": "web3d: 92001554923521 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)"
             }
           ],
           "pixel": [
@@ -970,7 +970,7 @@
           },
           "lyingAccepted": {
             "threw": false,
-            "value": 569514945150978
+            "value": 92004776148994
           },
           "lyingGetterCalls": 0,
           "rawOutside": 0,
@@ -987,7 +987,7 @@
           ],
           "later": {
             "threw": false,
-            "value": 569514945150979
+            "value": 92004776148995
           },
           "glError": 0
         }
@@ -997,22 +997,22 @@
         "pass": true,
         "detail": {
           "handles": {
-            "left": 569516018892801,
-            "right": 569516018892802,
-            "red": 569516287328257,
-            "green": 569516287328258
+            "left": 92005849890817,
+            "right": 92005849890818,
+            "red": 92006118326273,
+            "green": 92006118326274
           },
           "swapped": {
             "threw": true,
-            "message": "web3d: 569516287328258 is not a valid mesh handle: it is a material handle"
+            "message": "web3d: 92006118326274 is not a valid mesh handle: it is a material handle"
           },
           "destroyMaterialWithMesh": {
             "threw": true,
-            "message": "web3d: 569516018892802 is not a valid material handle: it is a mesh handle"
+            "message": "web3d: 92005849890818 is not a valid material handle: it is a mesh handle"
           },
           "setVisibleWithMesh": {
             "threw": true,
-            "message": "web3d: 569516018892801 is not a valid object handle: it is a mesh handle"
+            "message": "web3d: 92005849890817 is not a valid object handle: it is a mesh handle"
           },
           "small": [
             {
@@ -1044,11 +1044,11 @@
           "handlesDiffer": true,
           "foreignSetVisible": {
             "threw": true,
-            "message": "web3d: 569516421545985 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            "message": "web3d: 92006252544001 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
           },
           "foreignDestroy": {
             "threw": true,
-            "message": "web3d: 569516421545985 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            "message": "web3d: 92006252544001 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
           },
           "ownStillWorks": {
             "threw": false
@@ -1061,11 +1061,11 @@
         "detail": {
           "first": {
             "ok": false,
-            "message": "web3d: fetching the wasm failed: 404 http://127.0.0.1:5666/pkg/missing.wasm"
+            "message": "web3d: fetching the wasm failed: 404 http://127.0.0.1:5668/pkg/missing.wasm"
           },
           "retry": {
             "ok": false,
-            "message": "web3d: fetching the wasm failed: 404 http://127.0.0.1:5666/pkg/missing.wasm"
+            "message": "web3d: fetching the wasm failed: 404 http://127.0.0.1:5668/pkg/missing.wasm"
           },
           "missingFetches": 2,
           "byDefault": "created",
@@ -1139,11 +1139,11 @@
         "detail": {
           "handles": 406,
           "twice": 0,
-          "firstObject": 569565813669889,
-          "lastObject": 569674261594113,
+          "firstObject": 92055644667905,
+          "lastObject": 92164092592129,
           "staleOnLast": {
             "threw": true,
-            "message": "web3d: 569565813669889 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            "message": "web3d: 92055644667905 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
           },
           "pixel": [
             56,
@@ -1202,7 +1202,7 @@
         "detail": {
           "grownInGetter": {
             "threw": false,
-            "value": 569676140642305
+            "value": 92165971640321
           },
           "errorAfterGrow": 0,
           "pixel": [
@@ -1271,7 +1271,7 @@
           },
           "frame": {
             "threw": false,
-            "value": 569682583093249
+            "value": 92172414091265
           },
           "errorAfterFrame": 0,
           "pixels": [
@@ -1293,13 +1293,13 @@
         "name": "RM a same-origin iframe's renderer takes the next serial from the shared counter, and its handle is refused here",
         "pass": true,
         "detail": {
-          "ourSerial": 530560,
-          "theirSerial": 530559,
-          "ourObject": 569684999012353,
-          "theirObject": 569683925270529,
+          "ourSerial": 85844,
+          "theirSerial": 85843,
+          "ourObject": 92174830010369,
+          "theirObject": 92173756268545,
           "theirsOnOurs": {
             "threw": true,
-            "message": "web3d: 569683925270529 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            "message": "web3d: 92173756268545 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
           },
           "pixel": [
             56,
@@ -1348,12 +1348,12 @@
           ],
           "withPending": {
             "threw": false,
-            "value": 569690099286017
+            "value": 92179930284033
           },
           "errorAfter": 0,
           "turned": {
             "threw": false,
-            "value": 569690099286018
+            "value": 92179930284034
           },
           "errorAfterTurned": 0,
           "bitmaprendererSmaller": {
@@ -1366,7 +1366,7 @@
           },
           "blankCanvas": {
             "threw": false,
-            "value": 569690099286019
+            "value": 92179930284035
           },
           "errorAfterCanvases": 0,
           "dataView": "created",
@@ -2105,14 +2105,14 @@
           "xorigin": {
             "topReachable": false,
             "childOnOurs": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d drives a canvas element only from a copy of web3d loaded in the window whose document holds it, so load web3d there",
-            "childSerial": 368975,
+            "childSerial": 843278,
             "childDraw": [
               56,
               255,
               56
             ],
             "childHomeIsThisWindow": true,
-            "ourSerial": 368976,
+            "ourSerial": 843279,
             "ourDraw": [
               56,
               255,
@@ -2557,7 +2557,7 @@
         }
       },
       {
-        "name": "NV a frame's copy after its frame navigates: refused the new page's canvas before recording anything, which the new page's copy takes, draws on and recovers; the old copy's renderers no longer draw; a canvas whose create it had begun and one its live renderer drove, moved into this document, are taken here, drawn on and recovered",
+        "name": "NV a frame's copy after its frame navigates: refused the new page's canvas before recording anything, which the new page's copy takes, draws on and recovers; the old copy's renderers no longer draw; a canvas whose create it had begun and one its live renderer drove, moved into this document, are taken here, drawn on and recovered; likewise after a frame is removed during two creates (its module compiled, and never arriving), whose copy, called after the removal, is refused its own document's canvas before recording anything",
         "pass": true,
         "detail": {
           "ownBefore": [
@@ -2595,7 +2595,7 @@
           },
           "awayAfter": {
             "threw": true,
-            "message": "web3d: this copy of web3d belongs to a page that its window has navigated away from, so it drives no canvas any more; use a copy of web3d loaded in the window's present page"
+            "message": "web3d: this copy of web3d belongs to a page that its window has navigated away from, or to a frame that has been removed (its window is closed), so it drives no canvas any more; use a copy of web3d loaded in the present page of an open window"
           },
           "pending": {
             "created": [
@@ -2627,6 +2627,85 @@
             "calls": {
               "lost": 1,
               "restored": 1
+            }
+          },
+          "removed": {
+            "awayBefore": [
+              56,
+              255,
+              56
+            ],
+            "awayMoved": "web3d: this renderer's canvas has been moved to another document than this window's, which web3d does not support (its context-loss listeners belong to this window, and would stop when that document's window goes); move it back, or dispose this renderer and create one from a copy of web3d in the window whose document holds it",
+            "claimedAtRemoval": true,
+            "closed": true,
+            "recordMadeAfterRemoval": "none",
+            "awayAfter": {
+              "threw": true,
+              "message": "web3d: this copy of web3d belongs to a page that its window has navigated away from, or to a frame that has been removed (its window is closed), so it drives no canvas any more; use a copy of web3d loaded in the present page of an open window"
+            },
+            "begun": {
+              "created": [
+                56,
+                255,
+                56
+              ],
+              "loss": {
+                "prevented": true,
+                "restoreThrew": false,
+                "restored": "webglcontextrestored"
+              },
+              "calls": {
+                "lost": 1,
+                "restored": 1
+              }
+            },
+            "never": {
+              "created": [
+                56,
+                255,
+                56
+              ],
+              "loss": {
+                "prevented": true,
+                "restoreThrew": false,
+                "restored": "webglcontextrestored"
+              },
+              "calls": {
+                "lost": 1,
+                "restored": 1
+              }
+            },
+            "away": {
+              "created": [
+                56,
+                255,
+                56
+              ],
+              "loss": {
+                "prevented": true,
+                "restoreThrew": false,
+                "restored": "webglcontextrestored"
+              },
+              "calls": {
+                "lost": 1,
+                "restored": 1
+              }
+            },
+            "after": {
+              "created": [
+                56,
+                255,
+                56
+              ],
+              "loss": {
+                "prevented": true,
+                "restoreThrew": false,
+                "restored": "webglcontextrestored"
+              },
+              "calls": {
+                "lost": 1,
+                "restored": 1
+              }
             }
           }
         }
@@ -2867,19 +2946,19 @@
       "warning: WebGL: INVALID_ENUM: enable: invalid capability",
       "warning: web3d: WebGL error 0x500 was pending before a texture upload; an earlier call raised it, not the upload",
       "warning: web3d: WebGL error 0x501 was pending before a texture upload; an earlier call raised it, not the upload",
-      "warning: [.WebGL-0x114000d6800] GL_INVALID_VALUE: glLineWidth: Invalid width.",
+      "warning: [.WebGL-0x11400515a00] GL_INVALID_VALUE: glLineWidth: Invalid width.",
       "warning: WebGL: this extension has very low support on mobile devices; do not rely on it for rendering effects without implementing a fallback path: WEBGL_polygon_mode",
       "warning: WebGL: this extension has very low support on mobile devices; do not rely on it for rendering effects without implementing a fallback path: WEBGL_polygon_mode"
     ]
   },
   "allocation": {
-    "url": "http://127.0.0.1:5666/demo/?scale=0.75&cputime=0&hud=0&arrays=1",
+    "url": "http://127.0.0.1:5668/demo/?scale=0.75&cputime=0&hud=0&arrays=1",
     "samplingIntervalBytes": 32,
     "flags": "objects already collected by minor and major GC included",
     "limitBytesPerFrame": 1,
     "minFrames": 540,
     "controlMinBytesPerFrame": 40,
-    "controlBytesPerFrame": 86.1,
+    "controlBytesPerFrame": 88.9,
     "sighted": true,
     "steadyOk": true,
     "note": "Sampled: each sample stands for about 32 bytes on average. CPU timing and the readout are off; the gate is on the page scripts (demo/ and pkg/) at steady state, and holds only if the positive control is seen.",
@@ -2887,84 +2966,88 @@
       {
         "label": "cold (first frames)",
         "frames": 601,
-        "pageScriptBytesPerFrame": 632.47,
+        "pageScriptBytesPerFrame": 627.53,
         "sampledBytesByFile": {
-          "(native or internal)": 48992,
-          "/demo/demo.js": 204984,
-          "/pkg/web3d.js": 18348,
-          "/pkg/loadngo_web3d.wasm": 155384,
-          "/pkg/gl.js": 1396
+          "(native or internal)": 47532,
+          "/demo/demo.js": 203200,
+          "/pkg/web3d.js": 17956,
+          "/pkg/loadngo_web3d.wasm": 154824,
+          "/pkg/gl.js": 1168
         },
         "sampledBytesPerFrameByFile": {
-          "(native or internal)": 81.5,
-          "/demo/demo.js": 341.1,
-          "/pkg/web3d.js": 30.5,
-          "/pkg/loadngo_web3d.wasm": 258.5,
-          "/pkg/gl.js": 2.3
+          "(native or internal)": 79.1,
+          "/demo/demo.js": 338.1,
+          "/pkg/web3d.js": 29.9,
+          "/pkg/loadngo_web3d.wasm": 257.6,
+          "/pkg/gl.js": 1.9
         },
         "topFunctions": {
-          "/pkg/loadngo_web3d.wasm:1 js-to-wasm:i:": 154756,
-          "/demo/demo.js:479 record": 94116,
-          "/demo/demo.js:184 composeAt": 52144,
-          "/demo/demo.js:544 orbit": 36904,
-          "/demo/demo.js:561 tick": 21768,
-          "/pkg/web3d.js:1005 _put": 17304,
-          "/pkg/loadngo_web3d.wasm:1 js-to-wasm:id:i": 628,
-          "/pkg/gl.js:423 query_begin": 420,
-          "/pkg/web3d.js:1280 setCameraLookAt": 292,
-          "/pkg/web3d.js:992 _statsView": 220,
-          "/pkg/web3d.js:1361 frame": 212,
-          "/pkg/web3d.js:1235 setTransform": 180
+          "/pkg/loadngo_web3d.wasm:1 js-to-wasm:i:": 154164,
+          "/demo/demo.js:479 record": 93352,
+          "/demo/demo.js:184 composeAt": 51988,
+          "/demo/demo.js:544 orbit": 37624,
+          "/demo/demo.js:561 tick": 20040,
+          "/pkg/web3d.js:1021 _put": 16800,
+          "/pkg/loadngo_web3d.wasm:1 js-to-wasm:id:i": 660,
+          "/pkg/web3d.js:1296 setCameraLookAt": 292,
+          "/pkg/web3d.js:1426 readStats": 268,
+          "/pkg/web3d.js:1251 setTransform": 212,
+          "/pkg/web3d.js:1378 frame": 212,
+          "/pkg/gl.js:423 query_begin": 188
         }
       },
       {
         "label": "steady (after 70 s of frames)",
         "frames": 601,
-        "pageScriptBytesPerFrame": 0,
+        "pageScriptBytesPerFrame": 0.09,
         "sampledBytesByFile": {
-          "(native or internal)": 18120
+          "(native or internal)": 18000,
+          "/demo/demo.js": 56
         },
         "sampledBytesPerFrameByFile": {
-          "(native or internal)": 30.1
+          "(native or internal)": 30,
+          "/demo/demo.js": 0.1
         },
-        "topFunctions": {}
+        "topFunctions": {
+          "/demo/demo.js:426 window.__web3d.frames": 56
+        }
       },
       {
         "label": "positive control (one short-lived Array of 8 numbers a frame)",
         "frames": 601,
-        "pageScriptBytesPerFrame": 86.1,
+        "pageScriptBytesPerFrame": 88.9,
         "sampledBytesByFile": {
-          "(native or internal)": 18064,
-          "/demo/demo.js": 51748
+          "(native or internal)": 17940,
+          "/demo/demo.js": 53428
         },
         "sampledBytesPerFrameByFile": {
-          "(native or internal)": 30.1,
-          "/demo/demo.js": 86.1
+          "(native or internal)": 29.9,
+          "/demo/demo.js": 88.9
         },
         "topFunctions": {
-          "/demo/demo.js:561 tick": 51748
+          "/demo/demo.js:561 tick": 53332,
+          "/demo/demo.js:426 window.__web3d.frames": 96
         }
       },
       {
         "label": "CPU timing on (reported, not gated)",
         "frames": 601,
-        "pageScriptBytesPerFrame": 192.11,
+        "pageScriptBytesPerFrame": 187.47,
         "sampledBytesByFile": {
-          "(native or internal)": 18036,
-          "/demo/demo.js": 100456,
-          "/pkg/web3d.js": 15000
+          "(native or internal)": 18592,
+          "/demo/demo.js": 98476,
+          "/pkg/web3d.js": 14196
         },
         "sampledBytesPerFrameByFile": {
-          "(native or internal)": 30,
-          "/demo/demo.js": 167.1,
-          "/pkg/web3d.js": 25
+          "(native or internal)": 30.9,
+          "/demo/demo.js": 163.9,
+          "/pkg/web3d.js": 23.6
         },
         "topFunctions": {
-          "/demo/demo.js:479 record": 99240,
-          "/pkg/web3d.js:1361 frame": 15000,
-          "/demo/demo.js:427 (anonymous)": 672,
-          "/demo/demo.js:561 tick": 488,
-          "/demo/demo.js:426 window.__web3d.frames": 56
+          "/demo/demo.js:479 record": 97236,
+          "/pkg/web3d.js:1378 frame": 14196,
+          "/demo/demo.js:427 (anonymous)": 752,
+          "/demo/demo.js:561 tick": 488
         }
       }
     ]

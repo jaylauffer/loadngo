@@ -1,0 +1,337 @@
+{
+  "page": "evidence/phase1/critic13/site/f1.html",
+  "host": "127.0.0.1",
+  "chrome": "156.0.8078.80",
+  "args": [],
+  "result": {
+    "P_loseThenReopenSameTask": {
+      "lostEvent": "seen",
+      "prevented": true,
+      "listenersAtLoss": {
+        "webglcontextlost": 2,
+        "webglcontextrestored": 1
+      },
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "recovered": true
+    },
+    "A_threeReopeningsOneTask": {
+      "lostEvent": "seen",
+      "prevented": true,
+      "listenersAtLoss": {
+        "webglcontextlost": 2,
+        "webglcontextrestored": 1
+      },
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "recovered": true
+    },
+    "B_fromMicrotask": {
+      "lostEvent": "seen",
+      "prevented": true,
+      "listenersAtLoss": {
+        "webglcontextlost": 2,
+        "webglcontextrestored": 1
+      },
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "recovered": true
+    },
+    "C_fromPageObserver": {
+      "lostEvent": "seen",
+      "prevented": true,
+      "listenersAtLoss": {
+        "webglcontextlost": 2,
+        "webglcontextrestored": 1
+      },
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "recovered": true
+    },
+    "P2_reopenInMessageTaskAfterLose": {
+      "lostEvent": "none",
+      "prevented": null,
+      "listenersAtLoss": {
+        "webglcontextlost": 1,
+        "webglcontextrestored": 1
+      },
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "recovered": false
+    },
+    "G_reopenInOnContextLost": {
+      "lostEvent": "none",
+      "prevented": null,
+      "listenersAtLoss": {
+        "webglcontextlost": 1,
+        "webglcontextrestored": 1
+      },
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "recovered": false
+    },
+    "D_lostListenerBeforeWeb3dReopens": {
+      "lostEvent": "none",
+      "prevented": null,
+      "listenersAtLoss": {
+        "webglcontextlost": 1,
+        "webglcontextrestored": 1
+      },
+      "restoreCall": "ok",
+      "restored": false,
+      "calls": {
+        "lost": 0,
+        "restored": 0
+      },
+      "recovered": false
+    },
+    "D2_windowCaptureLostReopens": {
+      "lostEvent": "none",
+      "prevented": null,
+      "listenersAtLoss": {
+        "webglcontextlost": 1,
+        "webglcontextrestored": 1
+      },
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "recovered": false
+    },
+    "E_restoredListenerBeforeWeb3dReopens": {
+      "lostEvent": "seen",
+      "prevented": true,
+      "listenersAtLoss": {
+        "webglcontextrestored": 2,
+        "webglcontextlost": 2
+      },
+      "restoreCall": "ok",
+      "restored": false,
+      "calls": {
+        "lost": 1,
+        "restored": 0
+      },
+      "recovered": false,
+      "listenersAfterRestore": {
+        "webglcontextlost": 1,
+        "webglcontextrestored": 1
+      },
+      "nextCreate": "created, draws",
+      "second": {
+        "lostEvent": "none",
+        "prevented": null,
+        "listenersAtLoss": {
+          "webglcontextlost": 2,
+          "webglcontextrestored": 1
+        },
+        "restoreCall": "ok",
+        "restored": false,
+        "calls": {
+          "lost": 0,
+          "restored": 0
+        },
+        "recovered": false
+      },
+      "firstRendererRestoredHookAfterSecondCycle": 0
+    },
+    "E2_windowCaptureRestoredReopens": {
+      "lostEvent": "seen",
+      "prevented": true,
+      "listenersAtLoss": {
+        "webglcontextlost": 2,
+        "webglcontextrestored": 1
+      },
+      "restoreCall": "ok",
+      "restored": false,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "recovered": false,
+      "listenersAfterRestore": {
+        "webglcontextlost": 1,
+        "webglcontextrestored": 1
+      },
+      "nextCreate": "created, draws",
+      "second": {
+        "lostEvent": "none",
+        "prevented": null,
+        "listenersAtLoss": {
+          "webglcontextlost": 2,
+          "webglcontextrestored": 1
+        },
+        "restoreCall": "ok",
+        "restored": false,
+        "calls": {
+          "lost": 0,
+          "restored": 0
+        },
+        "recovered": false
+      },
+      "firstRendererRestoredHookAfterSecondCycle": 1
+    },
+    "E3_restoredListenerAfterWeb3dReopens": {
+      "lostEvent": "seen",
+      "prevented": true,
+      "listenersAtLoss": {
+        "webglcontextlost": 2,
+        "webglcontextrestored": 2
+      },
+      "restoreCall": "ok",
+      "restored": false,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "recovered": false
+    },
+    "H_shadow_open": {
+      "before": {
+        "webglcontextlost": 1,
+        "webglcontextrestored": 1
+      },
+      "lostEvent": "seen",
+      "prevented": true,
+      "listenersAtLoss": {
+        "webglcontextlost": 2,
+        "webglcontextrestored": 1
+      },
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "recovered": true
+    },
+    "H_shadow_closed": {
+      "before": {
+        "webglcontextlost": 1,
+        "webglcontextrestored": 1
+      },
+      "lostEvent": "seen",
+      "prevented": true,
+      "listenersAtLoss": {
+        "webglcontextlost": 2,
+        "webglcontextrestored": 1
+      },
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "recovered": true
+    },
+    "M_reopenDuringCreate": {
+      "lostEvent": "seen",
+      "prevented": true,
+      "listenersAtLoss": {
+        "webglcontextlost": 2,
+        "webglcontextrestored": 1
+      },
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "recovered": true
+    },
+    "O_secondCopy": {
+      "differentModule": true,
+      "lostEvent": "seen",
+      "prevented": true,
+      "listenersAtLoss": {
+        "webglcontextlost": 2,
+        "webglcontextrestored": 1
+      },
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "recovered": true
+    },
+    "I1_canvasInTemplateDocReopened": {
+      "otherDocReopened": true,
+      "listenersBack": {
+        "webglcontextlost": 1,
+        "webglcontextrestored": 1
+      }
+    },
+    "I2_liveCanvasInTemplateDocReopened": {
+      "otherDocReopened": true,
+      "listenersBack": {
+        "webglcontextlost": 1,
+        "webglcontextrestored": 1
+      },
+      "frameAfterBack": true,
+      "lostEvent": "seen",
+      "prevented": true,
+      "listenersAtLoss": {
+        "webglcontextlost": 2,
+        "webglcontextrestored": 1
+      },
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "recovered": true,
+      "createAfter": "created"
+    },
+    "verdict": {
+      "P": true,
+      "A": true,
+      "B": true,
+      "C": true,
+      "P2": false,
+      "G": false,
+      "D_documentedGap": false,
+      "D2": false,
+      "E_restoredHookCalled": false,
+      "E2_restoredHookCalled": true,
+      "E3_control": false,
+      "H_open": true,
+      "H_closed": true,
+      "M": true,
+      "O": true,
+      "I2_liveRendererRecovers": true
+    }
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed",
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context not lost",
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context not lost"
+  ]
+}

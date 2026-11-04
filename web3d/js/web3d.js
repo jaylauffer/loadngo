@@ -22,12 +22,13 @@
 //
 // One realm drives a canvas. createRenderer takes only a canvas of its own realm (an element whose
 // document is this window's, or an OffscreenCanvas whose prototype is this realm's), from a copy
-// whose window has not navigated away, and refuses any other before it touches it: a frame cannot
-// drive a canvas of the top document, nor the top a frame's. It checks the canvas again after each
-// await and after each size it sets, and refuses one moved meanwhile; it takes the context only
-// after its last await. A driven canvas element moved to another document is refused by frame(),
-// resize() and the creates from then on. Every copy that can touch a canvas reads one record of it,
-// kept on the canvas itself: which renderer owns it, its context's antialias, and its losses.
+// whose window has not navigated away and whose frame has not been removed, and refuses any other
+// before it touches it: a frame cannot drive a canvas of the top document, nor the top a frame's.
+// It checks the canvas again after its last await, which is before it takes the context, and after
+// it sets the canvas's width and height (one check for the pair), and refuses one moved meanwhile.
+// A driven canvas element moved to another document is refused by frame(), resize() and the creates
+// from then on. Every copy that can touch a canvas reads one record of it, kept on the canvas
+// itself: which renderer owns it, its context's antialias, and its losses.
 //
 // The boundary. Every argument is checked before it reaches wasm:
 // - typed arrays are recognised by their internal slots, never by `instanceof` or their own
@@ -311,8 +312,11 @@ const IS_PROTOTYPE_OF = Object.prototype.isPrototypeOf;
 // WindowProxy, which names whatever window its frame holds now, so after the frame navigates, this
 // realm's code (called through a reference kept from before) reads the new page's document through
 // it. So the document is compared only while `ownRealm()` holds; then `GLOBAL.document`, which is
-// unforgeable, is the window's own document, the one it has now.
+// unforgeable, is the window's own document, the one it has now. A removed frame's global still
+// reads its own state, but its window reads `closed` (taken here, so the page's own property is
+// never read); a worker has no `closed`.
 const GLOBAL = globalThis;
+const CLOSED = getter(globalThis, 'closed');
 const OWNER_DOCUMENT = globalThis.Node && getter(globalThis.Node.prototype, 'ownerDocument');
 const FOREIGN_ELEMENT =
   "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d drives a canvas element only from a copy of web3d loaded in the window whose document holds it, so load web3d there";
@@ -323,25 +327,26 @@ const MOVED =
 const MOVED_AT_CREATE =
   "web3d: this canvas element was moved to another document than this window's while createRenderer was making its renderer, so the create is refused; web3d drives a canvas element only from the window whose document holds it (move it back and create again, or create from a copy of web3d in the window that holds it now)";
 const NAVIGATED =
-  "web3d: this copy of web3d belongs to a page that its window has navigated away from, so it drives no canvas any more; use a copy of web3d loaded in the window's present page";
+  "web3d: this copy of web3d belongs to a page that its window has navigated away from, or to a frame that has been removed (its window is closed), so it drives no canvas any more; use a copy of web3d loaded in the present page of an open window";
 
 /**
- * Whether this copy's realm is still its window's own (always, in a worker): false once the window
- * has navigated away, to a page of this origin (whose window holds its own state) or of another
- * (the read throws). Allocates nothing.
+ * Whether this copy's realm is still its window's own and its window is open (always, in a worker):
+ * false once the window has navigated away, to a page of this origin (whose window holds its own
+ * state) or of another (the read throws), and once its frame has been removed (the window reads
+ * `closed`; its global still reads this realm's state). Allocates nothing.
  */
 function ownRealm() {
   try {
-    return GLOBAL[SHARED_KEY] === REALM_STATE;
+    return GLOBAL[SHARED_KEY] === REALM_STATE && !(CLOSED !== undefined && CLOSED.call(GLOBAL));
   } catch {
     return false;
   }
 }
 
-/** Whether `canvas`, an element, is in this window's document now, in this realm's own window. Allocates nothing. */
+/** Whether `canvas`, an element, is in this window's document now, in this realm's own open window. Allocates nothing. */
 function inThisDocument(canvas) {
   try {
-    return GLOBAL[SHARED_KEY] === REALM_STATE && OWNER_DOCUMENT.call(canvas) === GLOBAL.document;
+    return ownRealm() && OWNER_DOCUMENT.call(canvas) === GLOBAL.document;
   } catch {
     return false;
   }
@@ -350,10 +355,11 @@ function inThisDocument(canvas) {
 /**
  * The canvas's kind, recognised by a built-in getter (which also accepts another realm's canvas);
  * then a canvas of another realm is refused, and every canvas once this copy's window has navigated
- * away. An element's realm is its document's window: its owner document must be this window's (its
- * prototype is that of whichever realm touched it first). An OffscreenCanvas is taken when its
- * prototype is this realm's: where it was made or transferred to, or, for one made by an element's
- * transferControlToOffscreen(), the realm that touched the element first (docs/WEB3D.md).
+ * away or its frame has been removed. An element's realm is its document's window: its owner
+ * document must be this window's (its prototype is that of whichever realm touched it first). An
+ * OffscreenCanvas is taken when its prototype is this realm's: where it was made or transferred to,
+ * or, for one made by an element's transferControlToOffscreen(), the realm that touched the element
+ * first (docs/WEB3D.md).
  */
 function canvasKind(canvas) {
   if (typeof canvas === 'object' && canvas !== null) {
@@ -464,8 +470,10 @@ function recordOf(canvas) {
 
 /**
  * The owner a create records while it runs, so that a second create on the canvas is refused
- * meanwhile. An owner holds the canvas while its `_holds()` says so; a claim, while this copy's
- * window has not navigated away (a navigated-away realm's awaits never finish).
+ * meanwhile. An owner holds the canvas while its `_holds()` says so; a claim, while `ownRealm()`
+ * holds. A realm whose window has navigated away never finishes its awaits, nor does a removed
+ * frame's once its copy has compiled the module (the thirteenth critic's F1), so the claim's own
+ * release (createRenderer's catch) would never run.
  */
 const CLAIM = Object.freeze({ __proto__: null, _holds: () => ownRealm() });
 
@@ -658,7 +666,10 @@ export async function createRenderer(canvas, options) {
 /**
  * The rest of createRenderer, after its last await: it takes the context and makes the renderer.
  * The only page code that can run inside it is a customized built-in canvas's
- * attributeChangedCallback, when the canvas is sized, so the canvas is checked again after each.
+ * attributeChangedCallback, when the canvas is sized, so the canvas is checked again after its width
+ * and height are set (once for the pair: a canvas moved away at the width set and back at the
+ * height set passes, and no event can come in between), and after the two width sets that remake a
+ * page's stored drawing buffer.
  */
 function take(canvas, o, record, controller, create, shim, x) {
   if (!(x.memory instanceof WebAssembly.Memory) || typeof x.web3d_create !== 'function') {
@@ -739,7 +750,7 @@ function take(canvas, o, record, controller, create, shim, x) {
   }
 }
 
-/** Refuses a canvas element moved out of this window's document during the create, or a copy whose window navigated away meanwhile. */
+/** Refuses a canvas element moved out of this window's document during the create, or a copy whose window navigated away or whose frame was removed meanwhile. */
 function stillInPlace(canvas, kind) {
   if (!ownRealm()) throw new Error(NAVIGATED);
   if (kind.element && !inThisDocument(canvas)) throw new Error(MOVED_AT_CREATE);
@@ -775,7 +786,10 @@ function contextMismatch(antialias) {
  * that drives the canvas (`canvasKind`; a driven element moved to another document is refused by
  * `frame()`, `resize()` and the creates), so they run as long as the canvas's document or worker does.
  * document.open() erases them, with every listener in the document's tree (the twelfth critic's F1);
- * the observer `arm` sets up puts them back before any lost event can be dispatched.
+ * the observer `arm` sets up puts them back at the next microtask checkpoint, before any later
+ * event. An event already at the canvas when a listener of the page's ahead of web3d's reopens
+ * the document does not reach them (docs/WEB3D.md, "When the listeners are on", says what that
+ * costs).
  *
  * - on `webglcontextlost` it cancels the event, so the context can be restored, counts the loss
  *   (which finishes every renderer made before it), and calls the live renderer's `onContextLost`;
@@ -824,7 +838,8 @@ const WATCH = Object.freeze({ __proto__: null, childList: true });
  * records the canvas as armed in this realm, and, for an element, watches its document's own
  * children: document.open(), which erases every listener in the document's tree, takes them away,
  * and the observer puts back every armed canvas's listeners at the next microtask checkpoint, before
- * the next task, so before any lost event can be dispatched.
+ * the next task, so before any later lost or restored event is dispatched, and before one being
+ * dispatched reaches the canvas from a listener on the window or another node ahead of it.
  */
 function arm(c, canvas, element) {
   ADD_LISTENER.call(canvas, 'webglcontextlost', c.lostListener);
@@ -934,8 +949,8 @@ export class Renderer {
 
   /**
    * Whether this renderer holds its canvas, so that another create on it is refused: while it is
-   * live (not disposed, its context not lost) and its window has not navigated away. Read by any
-   * copy of web3d through the canvas's record.
+   * live (not disposed, its context not lost) and `ownRealm()` holds (its window has not navigated
+   * away, nor its frame been removed). Read by any copy of web3d through the canvas's record.
    */
   _holds() {
     return this._w !== 0 && !this._shim.lost() && ownRealm();
@@ -957,8 +972,9 @@ export class Renderer {
 
   /**
    * Refuses a canvas element that is no longer in this window's document, and any canvas once this
-   * copy's window has navigated away: one realm drives a canvas, and its listeners are this realm's.
-   * Two property reads and one getter call; allocates nothing unless it throws.
+   * copy's window has navigated away or its frame has been removed: one realm drives a canvas, and
+   * its listeners are this realm's. Two property reads and two getter calls; allocates nothing
+   * unless it throws.
    */
   _inPlace() {
     if (this._element ? !inThisDocument(this.canvas) : !ownRealm()) throw new Error(ownRealm() ? MOVED : NAVIGATED);
@@ -1354,9 +1370,10 @@ export class Renderer {
    * `gl.isContextLost()` says so, or web3d's listeners (of any realm) have counted a loss on the
    * canvas since this renderer was made, whichever comes first (the lost event can come later).
    * Throws if the canvas element has been moved to another document, or this copy's window has
-   * navigated away. With CPU timing on, wasm reads the clock twice around its work; each reading is
-   * a number V8 boxes (22 sampled bytes a frame for the two, measured in
-   * evidence/phase1/critic10-rerun/cpu-timing/), which is why timing is off unless asked for.
+   * navigated away or its frame has been removed. With CPU timing on, wasm reads the clock twice
+   * around its work; each reading is a number V8 boxes (22 sampled bytes a frame for the two,
+   * measured in evidence/phase1/critic10-rerun/cpu-timing/), which is why timing is off unless asked
+   * for.
    */
   frame() {
     this._enter(false);

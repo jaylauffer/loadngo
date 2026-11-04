@@ -2221,7 +2221,8 @@ async function refusalMessages() {
 // The thirteenth round's probes, for the twelfth critic's findings: F1 (DO), F2 (NV), F3 (RC; the
 // document.domain arrangement itself needs Origin-Agent-Cluster ?0, which this cross-origin
 // isolated page cannot have, so it runs in evidence/phase1/critic12-rerun/), F4 (MC), the
-// OffscreenCanvas of F5 (TO), and web3d's listeners ignoring events the page dispatches (SY).
+// OffscreenCanvas of F5 (TO), and web3d's listeners ignoring events the page dispatches (SY). The
+// fourteenth round adds the thirteenth critic's F1, a frame removed during a create, to NV.
 
 const KEY = Symbol.for('loadngo-web3d');
 /** A same-origin frame with its own copy of web3d (probe-frame.html unless `src` says), once it is ready. */
@@ -2367,7 +2368,8 @@ async function documentReopened() {
  * copy is refused the new page's canvas before it records anything, and the new page's copy takes
  * it; the old copy's renderer no longer draws; a canvas whose create the old copy had begun (its
  * module never arriving) and one its live renderer drove, both moved into this document, are taken
- * by this window's copy.
+ * by this window's copy. Then the same for a frame removed instead (the thirteenth critic's F1),
+ * with a create begun after its copy compiled the module.
  */
 async function navigatedAway() {
   const opts = { width: 16, height: 16, antialias: false };
@@ -2421,13 +2423,55 @@ async function navigatedAway() {
   attempt(() => rOwn.dispose());
   attempt(() => rAway.dispose());
   iframe.remove();
+  // The frame removed instead of navigated (the thirteenth critic's F1). Its global still reads its
+  // own realm's state, but its window reads `closed`. Once its copy has compiled the module, a
+  // create's awaits never finish after the removal, so a claim that held while the realm reads its
+  // own state would hold the canvas for good. Here the copy has compiled the module (for its renderer
+  // on a canvas it then moves into this document); it begins a create whose module never arrives,
+  // and one on its own canvas, and the frame is removed in that same task. Called after the removal,
+  // it is refused a canvas of its own document before recording anything. Its renderer no longer
+  // draws, and this window's copy takes all four canvases, draws on each and recovers it.
+  const gone = await frameWithCopy();
+  const gw = gone.contentWindow;
+  const g = gw.__frame;
+  const gDoc = gw.document;
+  const rGone = tracked(await g.createRenderer(gDoc.body.appendChild(gDoc.createElement('canvas')), opts));
+  const gAway = rGone.canvas;
+  const rm = { awayBefore: greenOn(rGone) };
+  document.body.append(gAway);
+  rm.awayMoved = attempt(() => rGone.frame()).message;
+  const gNever = gDoc.body.appendChild(gDoc.createElement('canvas'));
+  g.createRenderer(gNever, { ...opts, wasm: new Response(new ReadableStream({ start() {} }), { headers: { 'Content-Type': 'application/wasm' } }) });
+  const gBegun = g.canvas;
+  g.createRenderer(gBegun, opts);
+  rm.claimedAtRemoval = ownerOf(gBegun) !== null && ownerOf(gNever) !== null;
+  gone.remove();
+  rm.closed = gw.closed;
+  const gAfter = gDoc.body.appendChild(gDoc.createElement('canvas'));
+  g.createRenderer(gAfter, opts).then(undefined, () => {});
+  rm.recordMadeAfterRemoval = Object.getOwnPropertyDescriptor(gAfter, KEY) === undefined ? 'none' : 'made';
+  rm.awayAfter = attempt(() => rGone.frame());
+  document.body.append(gBegun, gNever, gAfter);
+  for (const [name, c] of [['begun', gBegun], ['never', gNever], ['away', gAway], ['after', gAfter]]) {
+    const calls = { lost: 0, restored: 0 };
+    const made = await settle(createRenderer(c, { ...opts, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++ }));
+    const e = { created: made.ok ? greenOn(made.r) : made.message };
+    if (made.ok) e.loss = await lossOf(made.r, c);
+    e.calls = calls;
+    rm[name] = e;
+  }
+  attempt(() => rGone.dispose());
+  for (const c of [gBegun, gNever, gAway, gAfter]) c.remove();
+  d.removed = rm;
   const takenHere = (e) => isGreen(e.created) && recovered(e.loss) && e.calls.lost === 1 && e.calls.restored === 1;
   const noDraw = (t) => (t.threw && /navigated away/.test(t.message)) || (!t.threw && t.value === false);
   log(
-    "NV a frame's copy after its frame navigates: refused the new page's canvas before recording anything, which the new page's copy takes, draws on and recovers; the old copy's renderers no longer draw; a canvas whose create it had begun and one its live renderer drove, moved into this document, are taken here, drawn on and recovered",
+    "NV a frame's copy after its frame navigates: refused the new page's canvas before recording anything, which the new page's copy takes, draws on and recovers; the old copy's renderers no longer draw; a canvas whose create it had begun and one its live renderer drove, moved into this document, are taken here, drawn on and recovered; likewise after a frame is removed during two creates (its module compiled, and never arriving), whose copy, called after the removal, is refused its own document's canvas before recording anything",
     isGreen(d.ownBefore) && isGreen(d.awayBefore) && MOVED.test(d.awayMoved ?? '') && /already has a live renderer/.test(d.pendingClaimed ?? '') && d.newRealm &&
       d.oldCopyRecordOnNewCanvas === 'none' && isGreen(d.newCopy) && controllers(d.newListeners, 1) && recovered(d.newLoss) &&
-      noDraw(d.ownAfter) && noDraw(d.awayAfter) && takenHere(d.pending) && takenHere(d.away),
+      noDraw(d.ownAfter) && noDraw(d.awayAfter) && takenHere(d.pending) && takenHere(d.away) &&
+      isGreen(rm.awayBefore) && MOVED.test(rm.awayMoved ?? '') && rm.claimedAtRemoval && rm.closed === true && rm.recordMadeAfterRemoval === 'none' &&
+      noDraw(rm.awayAfter) && takenHere(rm.begun) && takenHere(rm.never) && takenHere(rm.away) && takenHere(rm.after),
     d,
   );
 }

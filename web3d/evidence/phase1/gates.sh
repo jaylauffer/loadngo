@@ -4,13 +4,14 @@
 # step) and for the crate on wasm32, aarch64 Linux, Windows MSVC and the host; the tests, debug and
 # release; build.sh twice in place and once from an empty target directory, compared byte for byte,
 # with no local path in pkg/; the three.js reference check; the CI step's YAML (found by its name,
-# then checked by its commands: the wasm32 clippy command run here); the rendered check,
+# then checked by its commands, exactly the wasm32 clippy command run here, and by what could let
+# it pass when that fails: ci-step.rb); the rendered check,
 # which must pass; and the rendered check with --blind, which must fail on its positive control
 # alone, which check.mjs reports as exit 3 (any other failure, such as a port taken or Chrome
 # missing, exits 1, and is not counted as the blind run holding). Each gate is judged by its exit
 # status (and the builds by their hashes); the script exits 1 if any gate did not hold, and the last
 # lines of gates.txt name each one that did not. It does not run the critics' probe scripts:
-# critic12-rerun/rerun-critics.sh does. Uses the Mac's GPU: claim it first.
+# critic13-rerun/rerun-critics.sh does. Uses the Mac's GPU: claim it first.
 #   PLAYWRIGHT_CORE=.../playwright-core/index.mjs THREE_DIR=.../node_modules/three \
 #     bash web3d/evidence/phase1/gates.sh <port> <port for --blind>
 set -u
@@ -92,23 +93,11 @@ else
   echo "none" >> "$out"
 fi
 step node web3d/tools/three-reference.mjs --check
-# The CI step: found by its name, then checked by what it runs: the wasm32 target added and the
-# same clippy command as the local gate above, on a matrix row that exists, in a workflow that runs
-# on pushes and pull requests. (YAML 1.1 reads the key `on` as true.)
-step env WASM_CLIPPY="$wasm_clippy" ruby -e '
-  require "yaml"
-  d = YAML.load_file(".github/workflows/ci.yml")
-  job = d["jobs"]["check"]
-  s = job["steps"].find { |x| x["name"] == "cargo clippy (web3d, wasm32)" } or abort "no step named cargo clippy (web3d, wasm32)"
-  run = s["run"].to_s.lines.map(&:strip).reject(&:empty?)
-  abort "the step does not add the wasm32 target: #{run}" unless run.include?("rustup target add wasm32-unknown-unknown")
-  abort "the step does not run: #{ENV["WASM_CLIPPY"]}" unless run.include?(ENV["WASM_CLIPPY"])
-  rows = job["strategy"]["matrix"]["include"].map { |m| m["os"] }
-  abort "the step runs on no matrix row: #{s["if"]}" unless s["if"] == "matrix.os == '"'"'ubuntu-latest'"'"'" && rows.include?("ubuntu-latest")
-  on = d["on"] || d[true]
-  abort "the workflow does not run on push and pull_request: #{on.keys}" unless on.key?("push") && on.key?("pull_request")
-  puts "step: #{s["name"]}; if: #{s["if"]}; rows: #{rows.join(", ")}; runs: #{run.join(" && ")}; on: #{on.keys.join(", ")}"
-'
+# The CI step: found by its name, then checked by what it runs (exactly the wasm32 target added and
+# the same clippy command as the local gate above) and by what could let it pass when that command
+# fails (continue-on-error, a shell of its own), on a matrix row that exists, in a workflow that runs
+# on pushes and pull requests (ci-step.rb beside this script).
+step env WASM_CLIPPY="$wasm_clippy" ruby web3d/evidence/phase1/ci-step.rb .github/workflows/ci.yml
 # The rendered check, which must pass, and its blind run, which must fail on the control alone (exit
 # 3); their logs are also kept beside their JSON.
 step bash -c "set -o pipefail; node web3d/demo/check.mjs --port $port --out web3d/evidence/phase1 --seconds 10 --steady 60 2>&1 | tee web3d/evidence/phase1/rendered-check.log"
