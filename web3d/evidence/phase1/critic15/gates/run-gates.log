@@ -1,0 +1,15 @@
+cargo fmt --check: exit 0
+cargo clippy --locked --workspace --all-targets --all-features --exclude loadngo-gfx-dx12 --exclude gui-win32 --exclude proactor-harness -- -D warnings: exit 0
+cargo clippy --locked -p loadngo-web3d --target wasm32-unknown-unknown --all-targets -- -D warnings: exit 0
+cargo clippy --locked --offline -p loadngo-web3d --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings: exit 0
+cargo clippy --locked --offline -p loadngo-web3d --target aarch64-unknown-linux-gnu --all-targets --all-features -- -D warnings: exit 0
+cargo clippy --locked --offline -p loadngo-web3d --target x86_64-pc-windows-msvc --all-targets --all-features -- -D warnings: exit 0
+cargo clippy --locked --offline -p loadngo-web3d --all-targets --all-features -- -D warnings: exit 0
+cargo test --locked -p loadngo-web3d: exit 0
+cargo test --locked -p loadngo-web3d --release: exit 0
+web3d/build.sh: exit 0
+web3d/build.sh: exit 0
+web3d/build.sh: exit 0
+env THREE_DIR=<a three.js r180 package> node web3d/tools/three-reference.mjs --check: exit 0
+env WASM_CLIPPY=cargo clippy --locked -p loadngo-web3d --target wasm32-unknown-unknown --all-targets -- -D warnings ruby web3d/evidence/phase1/ci-step.rb .github/workflows/ci.yml: exit 0
+failed: 0

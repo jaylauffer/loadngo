@@ -1,0 +1,73 @@
+{
+ "R0_ownRealmInRemovedFrame": {
+  "stateStillItsOwn": true
+ },
+ "R1_claimOfRemovedFrame": {
+  "frameCreateSettled": "never",
+  "ownerIsAClaim": true,
+  "top": {
+   "create": "created, draws",
+   "loss": {
+    "restoreCall": "ok",
+    "restored": true,
+    "calls": {
+     "lost": 1,
+     "restored": 1
+    },
+    "recovered": true
+   }
+  },
+  "after1s": {
+   "frameCreateSettled": "never",
+   "top": "created"
+  }
+ },
+ "R1b_claimOfRemovedFrameSameTask": {
+  "frameCreateSettled": "never",
+  "top": {
+   "create": "created, draws",
+   "loss": {
+    "restoreCall": "ok",
+    "restored": true,
+    "calls": {
+     "lost": 1,
+     "restored": 1
+    },
+    "recovered": true
+   }
+  }
+ },
+ "R2_liveRendererOfRemovedFrame": {
+  "frameAfterRemoval": {
+   "ok": true,
+   "v": false
+  },
+  "topWhileLive": "web3d: the canvas's WebGL context is lost; it was lost before web3d first used this canvas, and it is restored if its lost event is cancelle",
+  "dispose": "ok",
+  "topAfterDispose": {
+   "create": "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore"
+  }
+ },
+ "R3_initialAboutBlank": {
+  "createdInBlank": true,
+  "markerKept": false,
+  "stateKept": true,
+  "oldRendererFrame": {
+   "ok": true,
+   "v": false
+  },
+  "oldCopyOnNewCanvas": "never settled",
+  "recordMadeByOldCopy": false,
+  "newCopy": "created, draws"
+ },
+ "verdict": {
+  "R0_removedFrameStillOwnRealm": true,
+  "R1_topRefusedCanvasClaimedByRemovedFrame": false,
+  "R1b": false,
+  "R2_refusedWhileLive": false
+ }
+}
+messages: 1
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0

@@ -1,0 +1,140 @@
+{
+  "page": "evidence/phase1/critic15/site/s1-restored-create.html?pkg=fix",
+  "host": "127.0.0.1",
+  "chrome": "157.0.8103.38",
+  "args": [],
+  "result": {
+    "S1 canvas, added before web3d: dispose, then create": {
+      "pkg": "../fix-pkg/web3d.js",
+      "drew1": true,
+      "r2Created": true,
+      "r2Draws": true,
+      "createAfterR2": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)",
+      "r2FrameAfterSecondLoss": {
+        "ok": true,
+        "v": false
+      },
+      "log": [
+        "r1 onContextLost",
+        "page listener: context lost false",
+        "page: recreate called",
+        "r2 created",
+        "r1 onContextRestored",
+        "(restore 1: restoreContext ok, restored true)",
+        "r2 onContextLost",
+        "r2 onContextRestored",
+        "(restore 2, of r2: restoreContext ok, restored true)"
+      ]
+    },
+    "S1 canvas, added before web3d: create without disposing": {
+      "pkg": "../fix-pkg/web3d.js",
+      "drew1": true,
+      "r2Created": true,
+      "r2Draws": true,
+      "createAfterR2": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)",
+      "r2FrameAfterSecondLoss": {
+        "ok": true,
+        "v": false
+      },
+      "log": [
+        "r1 onContextLost",
+        "page listener: context lost false",
+        "page: recreate called",
+        "r2 created",
+        "r1 onContextRestored",
+        "(restore 1: restoreContext ok, restored true)",
+        "r2 onContextLost",
+        "r2 onContextRestored",
+        "(restore 2, of r2: restoreContext ok, restored true)"
+      ]
+    },
+    "S1 window, capturing: dispose, then create": {
+      "pkg": "../fix-pkg/web3d.js",
+      "drew1": true,
+      "r2Created": true,
+      "r2Draws": true,
+      "createAfterR2": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)",
+      "r2FrameAfterSecondLoss": {
+        "ok": true,
+        "v": false
+      },
+      "log": [
+        "r1 onContextLost",
+        "page listener: context lost false",
+        "page: recreate called",
+        "r2 created",
+        "r1 onContextRestored",
+        "(restore 1: restoreContext ok, restored true)",
+        "r2 onContextLost",
+        "r2 onContextRestored",
+        "(restore 2, of r2: restoreContext ok, restored true)"
+      ]
+    },
+    "S1 canvas, added after web3d (control): dispose, then create": {
+      "pkg": "../fix-pkg/web3d.js",
+      "drew1": true,
+      "r2Created": true,
+      "r2Draws": true,
+      "createAfterR2": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)",
+      "r2FrameAfterSecondLoss": {
+        "ok": true,
+        "v": false
+      },
+      "log": [
+        "r1 onContextLost",
+        "r1 onContextRestored",
+        "page listener: context lost false",
+        "page: recreate called",
+        "r2 created",
+        "(restore 1: restoreContext ok, restored true)",
+        "r2 onContextLost",
+        "r2 onContextRestored",
+        "(restore 2, of r2: restoreContext ok, restored true)"
+      ]
+    },
+    "S1 in onContextRestored, as WEB3D.md says (control)": {
+      "pkg": "../fix-pkg/web3d.js",
+      "drew1": true,
+      "r2Created": true,
+      "r2Draws": true,
+      "createAfterR2": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)",
+      "r2FrameAfterSecondLoss": {
+        "ok": true,
+        "v": false
+      },
+      "log": [
+        "r1 onContextLost",
+        "r1 onContextRestored",
+        "page: recreate called",
+        "r2 created",
+        "(restore 1: restoreContext ok, restored true)",
+        "r2 onContextLost",
+        "r2 onContextRestored",
+        "(restore 2, of r2: restoreContext ok, restored true)"
+      ]
+    },
+    "S1 canvas, added before web3d: dispose only, then create in onContextRestored (probe LR, control)": {
+      "pkg": "../fix-pkg/web3d.js",
+      "drew1": true,
+      "r2Created": true,
+      "r2Draws": true,
+      "createAfterR2": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)",
+      "r2FrameAfterSecondLoss": {
+        "ok": true,
+        "v": false
+      },
+      "log": [
+        "r1 onContextLost",
+        "page listener: context lost false; dispose only",
+        "r1 onContextRestored",
+        "page: recreate called",
+        "r2 created",
+        "(restore 1: restoreContext ok, restored true)",
+        "r2 onContextLost",
+        "r2 onContextRestored",
+        "(restore 2, of r2: restoreContext ok, restored true)"
+      ]
+    }
+  },
+  "messages": []
+}

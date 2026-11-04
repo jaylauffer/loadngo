@@ -1,0 +1,20 @@
+<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><title>critic 15: a worker that defines its own closed</title>
+<body><script type="module">
+// Critic 15, S2 (BSD-3-Clause; see the repository's LICENSE). WEB3D.md's page contract, item 2,
+// names one thing a worker must not do: give its global a `top` getter before web3d loads. web3d
+// takes two getters of its global at load, `top` and `closed`. Does a worker that defines its own
+// `closed` accessor (not a built-in there) fare as one that defines `top`?
+import { page } from '../../critic13/site/common.js';
+page(async (out) => {
+  for (const mode of ['none', 'data', 'accessor', 'accessor-false']) {
+    const wk = new Worker(`worker-closed.js?mode=${mode}`, { type: 'module' });
+    const next = () => new Promise((res) => { wk.onmessage = (e) => res(e.data); wk.onerror = (e) => res({ error: e.message }); setTimeout(() => res({ error: 'timeout' }), 8000); });
+    const ready = await next();
+    const oc = new OffscreenCanvas(16, 16);
+    const result = next();
+    wk.postMessage({ canvas: oc }, [oc]);
+    out[`S2 worker, closed ${mode}`] = { ready, result: await result };
+    wk.terminate();
+  }
+});
+</script></body>

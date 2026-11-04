@@ -1,0 +1,27 @@
+pass  LC1 Following the LOST message literally ("dispose this renderer, then create a new one once the context is restored (onContextRestored)") reaches onContextRestored
+pass  LC2 A lost renderer cannot change the canvas that a new renderer (made beside it after the restore) now owns
+pass  LC3 A loss whose event arrives while the module instantiates: the create says lost, the canvas is restorable and the next create draws
+pass  LC3b A create that fails does not call the page's onContextLost hook (it has no renderer to dispose)
+pass  LC4 A loss during init: the create says lost (not a shader failure), the canvas is restorable, the next create draws with getError 0
+FAIL  LC5 A loss whose event is still pending when the renderer is disposed stays restorable (one preventDefault), and the one-shot listener does not outlive it
+pass  LC6 Dispose while lost, then restore: a new renderer draws, getError 0
+pass  LC7 Once the context is lost (isContextLost true, before the event), frame() returns false, as WEB3D.md says, consistent with r.lost and the creates
+pass  LC8 After a loss and restore, a new renderer's first texture is accepted and draws
+pass  D1 A page-made context without depth is refused for depth, every time, with the size kept
+pass  D2 A page context with other attributes (stencil, alpha, unpremultiplied, preserved) but depth and matching antialias is accepted and draws near over far
+pass  T1 A good texture is not refused for a GL error that was already pending in the context (an error the page left), and that error is not swallowed
+pass  T2 Pending GL errors from before the upload are not reported as the upload's
+pass  T3 Every canvas source is sized by what WebGL uploads (WEB3D: "sources whose upload size is exactly knowable"): a texture either fills with the source or is refused
+pass  T4 A VideoFrame is sized by its visible rectangle and uploads exactly that region (offset rect, rotation), or is refused cleanly
+pass  T5 An <img> from another realm, a detached ImageData, an SVG <image> and a transferred OffscreenCanvas are refused cleanly (no handle, getError 0)
+pass  S1 A same-origin frame shares the top window's counter (its serial follows ours, one more renderer counted); a frame nested in a cross-origin frame, back at this origin, shares it too
+pass  S2 A cross-origin frame and a worker keep their own counters (random starts) and draw; every foreign handle is refused by our renderer, which still draws
+pass  S3 The counter goes round (2^20 - 1, then 1), refuses once it has made 2^20 - 1 renderers, and the refusal leaves the canvas usable
+pass  H1 At the largest serial, handles are whole numbers below 2^50; every fraction a double holds there (halves, quarters, eighths) is refused, by the wrapper and by the raw export; the object stays drawn
+pass  H2 A slot serves 2,048 generations then retires; no handle is issued twice; 65,535 live values then a clean refusal; a freed slot is reused with a new generation; getError 0
+pass  W1 The wasm option takes another realm's Module, URL, Response, bytes and ArrayBuffer, and draws
+pass  W2 Anything else is refused before it is used (no toString runs): an object with toString, a String object, a Proxy over a Response, a Promise, a Blob, a symbol, a number
+seconds 1.8
+22 passed; failed: ["LC5"]; renderer ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); console messages 18
+browser and servers stopped
+>>> exit 0

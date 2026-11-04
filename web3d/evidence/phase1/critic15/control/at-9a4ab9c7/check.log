@@ -1,0 +1,96 @@
+# pkg/web3d.js sha256 91f5bc13, wasm 4d6594b5, gl.js 6542cb39; demo/ and probe page as in the working tree
+serving ../../../../private/var/folders/x0/vq6dbxcs3wn5cf9lhgr03g180000gn/T/tmp.NyRUkVW5BC on http://127.0.0.1:5488/
+Chrome 157.0.8103.38 (headless, launched by this script)
+low-1024x576: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.871 p50 0.866 p95 0.892 ms (602 readings), CPU mean 0.159 p95 0.235 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,241,231
+full-1366x768: 1366x768 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.054 p50 1.05 p95 1.062 ms (602 readings), CPU mean 0.191 p95 0.265 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 240,238,228
+low-1024x576-no-msaa: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.583 p50 0.581 p95 0.602 ms (602 readings), CPU mean 0.134 p95 0.19 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,240,230
+probes: 79 passed, 1 failed; INVALID_OPERATION warnings: 0; pending GL errors: 2 (2 raised on purpose); contexts lost to Chrome's limit: 0
+  pass  A output is sRGB-encoded (white under a uniform hemisphere)
+  pass  A2 the clear colour is linear and encoded
+  pass  B1 texture upright: top-left red, top-right green, bottom-left blue
+  pass  B2 the sRGB texture is decoded (128 is linear 0.216)
+  pass  C alpha mask: left discarded (red behind shows), right drawn (green)
+  pass  D blend over opaque, drawn last, blended in encoded space
+  pass  E depth: the near quad wins, the far one shows around it
+  pass  F a single-sided back face is culled; double-sided draws it, lit from the front
+  pass  G a mirrored single-sided quad is still drawn and lit
+  pass  H an object outside the view is culled
+  pass  N a 65,537-vertex mesh with u32 indices draws
+  pass  P1 a 65,535-vertex mesh draws its triangle on vertex 65,534
+  pass  P2 a 65,536-vertex mesh draws its triangle on vertex 65,535
+  pass  P3 a 65,537-vertex mesh draws its triangle on vertex 65,536
+  pass  R1 lighting matches three.js r180: lambert-60deg
+  pass  R2 lighting matches three.js r180: hemisphere-side
+  pass  R3 lighting matches three.js r180: glossy-highlight
+  pass  R4 lighting matches three.js r180: metal-key
+  pass  M a GPU timer reading is present
+  pass  I1 an index past the end is refused
+  pass  I2 positions not a multiple of 3 are refused
+  pass  I3 a texture over MAX_TEXTURE_SIZE is refused
+  pass  I4 destroying a texture in use is refused
+  pass  I5 destroying a mesh in use is refused
+  pass  I6 an unknown alpha mode is refused
+  pass  I7 a non-finite transform is refused
+  pass  I8 a stale mesh handle is refused
+  pass  I9 a NaN position is refused
+  pass  I10 Int16 (quantised) positions are refused
+  pass  I11 a plain Array of positions is refused
+  pass  I12 Uint8 normalised weights are dequantised and accepted
+  pass  I13 weights of 1.75 (7 a vertex) are refused
+  pass  I14 weights summing to 2 are refused
+  pass  I15 joint index 65535 is accepted until phase 3 has skeletons
+  pass  I16 morph deltas of the wrong length are refused
+  pass  I17 an unknown wrap mode is refused
+  pass  I18 a wrap mode named after Object.prototype ('toString') is refused
+  pass  I19 a NaN normal is refused
+  pass  I20 a drawing buffer of 0x80000001 pixels is refused
+  pass  I21 a fractional drawing-buffer size is refused
+  pass  I22 257 morph targets are refused
+  pass  I23 after 1,100 create/destroy cycles the first handle is still refused
+  pass  I handles are not reissued
+  pass  HF forged handles (plus 2^32, fractional, a string, out of range) are refused, and the object stays drawn
+  pass  Z no GL error on the main renderer
+  pass  J every call after dispose() throws "renderer disposed"; disposing twice is harmless
+  pass  S a second renderer on a canvas with a live one is refused; the canvas is free again after dispose
+  pass  KL loss: frame() returns false and every create throws "context is lost", a new renderer too
+  pass  KR restore: the old renderer stays finished; a new one draws
+  pass  KD disposing the old renderer sends nothing into the restored context (getError stays 0)
+  pass  Q a Proxy typed array is refused and nothing is written past staging; a lying subclass stages its real length; Rust refuses an array outside staging
+  pass  W a handle of another kind, a bare small number, or another renderer's handle is refused; the right object still draws
+  pass  L a failed wasm fetch is not cached (fetched again, and the default still loads); a later wasm option is fetched, not ignored
+  pass  Y a failed create (for its options, or for a module that is not web3d, both refused before the context is taken) leaves no claim behind, and calls no hook; a canvas refuses other context settings
+  pass  U a getter or descriptor that calls the renderer is refused; numbers, in arguments and in Arrays, are never converted, so no valueOf runs; the renderer stays live and drawn
+  pass  H6 102 renderers on one canvas issue 406 handles, none twice; the first renderer's handle is refused by the last, whose object stays drawn
+  pass  AR Array matrices, vectors and colours must hold numbers (no valueOf runs) and their length is read once; plain number Arrays work
+  pass  T a texture option getter that resizes the source gets a texture of the new size with no GL error; the shim refuses a size that is not the source's
+  pass  Y2 a canvas whose page-made context has no antialias refuses a renderer that asks for it, and accepts one that does not; a failed create puts the canvas size back
+  pass  K2 with default options: a create during a loss says the context is lost; after the restore and dispose(), a default create works and draws
+  pass  K3 a context lost during the create: the error says the context is lost, the context can be restored, and the next create draws
+  pass  CX a context without depth is refused; an <img> is refused (decode it first); a VideoFrame is sized by its visible rectangle and fills the texture
+  pass  RM a same-origin iframe's renderer takes the next serial from the shared counter, and its handle is refused here
+  pass  K4 dispose in onContextLost, then onContextRestored still comes and a new renderer draws; frame() is false at once after a loss; a lost renderer cannot resize a canvas a new one owns
+  pass  TU pending page errors are reported as pending and do not refuse a good texture; a turned VideoFrame uploads at its turned size; bitmaprenderer canvases are refused, a blank canvas uploads; a DataView of the module compiles, a detached one is refused
+  pass  LE one loss controller a canvas: a throwing hook does not stop the next (E1); one function runs once (E4b); a lost renderer left undisposed hears no later loss (E6); a page-made context lost during a create, and a canvas lost with no renderer, are restored (E11, E12); a loss cancelled and restored while a create loads its module leaves the create the restored context, which it draws on, with no hook called (ET)
+  pass  H7 at the largest serial a handle is below 2^50, a handle plus 0.5 or minus 0.25 is refused as a fraction, and the next serial wraps round to 1
+  pass  PS a page-made context that suits, left with state of the page's (each of the ninth critic's N8 cases and every other state the renderer resets): web3d draws, uploads and reads back as on a new context, with no WebGL error, and the page's own objects are kept
+  pass  LR a page's own restored listener that runs before web3d's disposes the live renderer: onContextRestored comes once (N1); disposed in the page's lost listener instead: once, and no onContextLost; disposed after the restore was handled: no second call
+  pass  XR one realm drives a canvas: a frame's copy is refused a canvas of this document and an OffscreenCanvas made here, this window's copy the frame's canvas and the frame's OffscreenCanvas, each leaving it untouched, while each copy draws on its own; under a top of another origin a same-origin child's copy, loaded first, is refused its parent's canvas before and after the parent draws there, the two share one home (serials in sequence), the parent is refused the child's canvas, and the parent recovers from a loss once the child has gone
+  pass  XD a canvas element belongs to its document's window, whatever its prototype: adopted from the frame's document into this one (prototype the frame's), touched first by the frame's observer (the frame's), or adopted the other way, each is refused by the copy of the other window with no listener left and drawn on by its own; once the frame is gone, this window's renderers on the two canvases with the frame's prototype draw, lose and restore with each hook once, and a new renderer draws; a driven canvas moved to the frame's document is refused by frame(), resize() and the creates, and by the frame's copy, and draws again moved back; handed over between renderers it gets a controller from each window; canvases of documents with no window are refused, untouched
+  pass  DB a drawing buffer a page stored at another size than the canvas's (drawingBufferStorage; the eleventh critic's F4) is made again at the canvas's size, with its samples and in RGBA8, and drawn whole, also after resize; with nothing stored, or on web3d's own context, the canvas's width is set once
+  pass  NC as documented: a canvas with no context uploads and then has a '2d' context for good (no webgl2 or bitmaprenderer context, no transfer, later 2d options ignored), an OffscreenCanvas too; a canvas with its own 2d or WebGL context is unchanged and uploads its pixels; a bitmaprenderer canvas is refused and stays one
+  pass  MS a detached OffscreenCanvas is refused as detached, a placeholder canvas as transferred (N21); a loss before web3d's first use: the message says web3d cancels a lost event still to come, as it does when the loss is in the create's own task (the hook comes once), and none comes for one already dispatched (N7b')
+  pass  DO document.open() and document.write() after load erase every node's listeners, and web3d puts its two back before a lost event can come: a live renderer's canvas lost in the reopening's task is cancelled and restored, each hook once, and a new renderer draws; a canvas with no renderer, after a second reopening by the frame's own write(), likewise; a canvas that was in another document when that one was reopened has its listeners back at its next create
+  FAIL  NV a frame's copy after its frame navigates: refused the new page's canvas before recording anything, which the new page's copy takes, draws on and recovers; the old copy's renderers no longer draw; a canvas whose create it had begun and one its live renderer drove, moved into this document, are taken here, drawn on and recovered; likewise after a frame is removed during two creates (its module compiled, and never arriving), whose copy, called after the removal, is refused its own document's canvas before recording anything; and after a frame whose page declared function closed() {} is removed during a create, both its canvases taken here, drawn on and recovered
+  pass  MC a canvas moved during createRenderer is refused: by a getter of its options, before anything is recorded on it; right after the call, before any context, with no claim or listener (and the frame's copy then takes it); moved and back, created; by its own attributeChangedCallback at web3d's width set, with its size put back, no claim, and no listener unless this window had driven it; a module that is not web3d is refused before any context; page code in that callback that calls the renderer or creates again is refused; a MutationObserver's move, after the create, is a driven canvas moved
+  pass  RC one record of a canvas, on the canvas, for every copy: private (non-enumerable, non-writable, non-configurable) and the same object from the frame; a frame whose copy has a home of its own is refused this window's driven canvas moved into its document, and this window's copy the frame's, and moved back each clears to its own colour; a sealed canvas, and one with a property there web3d did not make (writable, or a getter, which never runs), are refused untouched
+  pass  TO an OffscreenCanvas made here by transferControlToOffscreen() from a canvas a frame's observer touched first has the frame's prototype: refused here, with a message naming that case and no listener, and drawn on by the frame's copy
+  pass  SY lost and restored events the page dispatches itself are ignored by web3d's listeners: not cancelled, the renderer not finished and still drawing, no hook called; a real loss after them is cancelled and restored, each hook once
+  FAILED: NV a frame's copy after its frame navigates: refused the new page's canvas before recording anything, which the new page's copy takes, draws on and recovers; the old copy's renderers no longer draw; a canvas whose create it had begun and one its live renderer drove, moved into this document, are taken here, drawn on and recovered; likewise after a frame is removed during two creates (its module compiled, and never arriving), whose copy, called after the removal, is refused its own document's canvas before recording anything; and after a frame whose page declared function closed() {} is removed during a create, both its canvases taken here, drawn on and recovered
+allocation, cold (first frames): 601 frames; page scripts 640.42 sampled bytes a frame; by file {"(native or internal)":79.8,"/demo/demo.js":343.1,"/pkg/web3d.js":31.1,"/pkg/loadngo_web3d.wasm":263.7,"/pkg/gl.js":2.5}
+allocation, steady (after 70 s of frames): 601 frames; page scripts 0.07 sampled bytes a frame; by file {"(native or internal)":31.5,"/demo/demo.js":0.1}
+allocation, positive control (one short-lived Array of 8 numbers a frame): 601 frames; page scripts 90.82 sampled bytes a frame; by file {"(native or internal)":31.4,"/demo/demo.js":90.8}
+allocation, CPU timing on (reported, not gated): 601 frames; page scripts 191.98 sampled bytes a frame; by file {"(native or internal)":31.5,"/demo/demo.js":166.8,"/pkg/web3d.js":25.2}
+browser and server stopped
+wrote web3d/evidence/phase1/critic15/control/at-9a4ab9c7/rendered-check.json
+FAILED (probes): see the lines marked FAILED above
+>>> exit 1

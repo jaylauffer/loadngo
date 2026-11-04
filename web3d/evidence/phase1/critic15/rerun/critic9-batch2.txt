@@ -1,0 +1,9 @@
+Chrome 157.0.8103.38 (headless, own instance)
+FAIL  N10C  the probe ran to its end
+FAIL  N10E  the probe ran to its end
+pass  N7b'  a page-made context lost in the same task as the create (its event not yet dispatched): the create's message says it 'can be restored only if the page cancelled the lost event'; the page cancelled nothing
+pass  N13  a worker's copy: an OffscreenCanvas draws, is lost, its renderer disposed while lost gets onContextRestored once, a new renderer draws
+pass  N21  texture sources that cannot be read are refused with a message that names their state
+passed 3 of 5; page errors 0
+browser and server stopped
+>>> exit 0

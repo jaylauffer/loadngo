@@ -1,0 +1,95 @@
+<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><title>critic 15: a page's own restored listener that creates the next renderer</title>
+<body><script type="module">
+// Critic 15, S1 (BSD-3-Clause; see the repository's LICENSE). A cooperative page: it stops no
+// event, reopens no document, patches no built-in and moves no canvas. It recreates its renderer
+// from a webglcontextrestored listener of its own, the usual WebGL recovery pattern. Where that
+// listener runs before web3d's (on the canvas, added before web3d's first create; or capturing on
+// the window), does the new renderer get the hooks WEB3D.md promises ("its hooks are for later
+// losses"), and does the renderer live at the loss get its onContextRestored once?
+// Each case logs, in order: the page's listener, each hook call, the create's resolution, and then
+// a second loss and restore of the new renderer. ?pkg=fix runs it against ../fix-pkg/ (critic 15's
+// trial fix of the restored listener), ?pkg=old against ../at-9a4ab9c7-pkg/ (web3d.js as the
+// fourteenth critic judged it, beside the same gl.js and wasm), instead of web3d/pkg/.
+import { sleep, err, settle, attempt, OPTS, green, page, until } from '../../critic13/site/common.js';
+const PKG = { fix: '../fix-pkg/web3d.js', old: '../at-9a4ab9c7-pkg/web3d.js' }[new URLSearchParams(location.search).get('pkg')] ?? '/pkg/web3d.js';
+const web3d = await import(PKG);
+
+async function lossAndRestore(gl, log, tag) {
+  const lc = gl.getExtension('WEBGL_lose_context');
+  lc.loseContext();
+  await until(() => gl.isContextLost(), 3000);
+  await sleep(50);
+  const call = attempt(() => lc.restoreContext());
+  const restored = !!(await until(() => !gl.isContextLost(), 1500));
+  await sleep(150);
+  log.push(`(${tag}: restoreContext ${call.ok ? 'ok' : call.message}, restored ${restored})`);
+  return restored;
+}
+
+const fresh = (id) => {
+  const c = document.createElement('canvas');
+  c.id = id;
+  c.width = c.height = 16;
+  document.body.append(c);
+  return c;
+};
+
+page(async (out) => {
+  const cases = [
+    // [label, where the page's listener sits, whether it disposes the old renderer first]
+    ['canvas, added before web3d: dispose, then create', 'canvas-before', true],
+    ['canvas, added before web3d: create without disposing', 'canvas-before', false],
+    ['window, capturing: dispose, then create', 'window-capture', true],
+    ['canvas, added after web3d (control): dispose, then create', 'canvas-after', true],
+    ['in onContextRestored, as WEB3D.md says (control)', 'hook', true],
+    ['canvas, added before web3d: dispose only, then create in onContextRestored (probe LR, control)', 'canvas-before-dispose', true],
+  ];
+  for (const [label, where, disposeFirst] of cases) {
+    const c = fresh(`s1-${where}-${disposeFirst}`);
+    const log = [];
+    const state = { r1: null, r2: null, created: null };
+    const recreate = () => {
+      log.push('page: recreate called');
+      if (disposeFirst) state.r1.dispose();
+      web3d
+        .createRenderer(c, { ...OPTS, onContextLost: () => log.push('r2 onContextLost'), onContextRestored: () => log.push('r2 onContextRestored') })
+        .then(
+          (r) => { state.r2 = r; log.push('r2 created'); },
+          (e) => { state.created = err(e); log.push(`r2 create refused: ${err(e)}`); },
+        );
+    };
+    const listener = () => { log.push(`page listener: context lost ${state.r1.gl.isContextLost()}`); recreate(); };
+    const disposer = () => { log.push(`page listener: context lost ${state.r1.gl.isContextLost()}; dispose only`); state.r1.dispose(); };
+    if (where === 'canvas-before') c.addEventListener('webglcontextrestored', listener, { once: true });
+    if (where === 'canvas-before-dispose') c.addEventListener('webglcontextrestored', disposer, { once: true });
+    if (where === 'window-capture') window.addEventListener('webglcontextrestored', listener, { capture: true, once: true });
+    state.r1 = await web3d.createRenderer(c, {
+      ...OPTS,
+      onContextLost: () => log.push('r1 onContextLost'),
+      onContextRestored: () => { log.push('r1 onContextRestored'); if (where === 'hook' || where === 'canvas-before-dispose') recreate(); },
+    });
+    if (where === 'canvas-after') c.addEventListener('webglcontextrestored', listener, { once: true });
+    const drew1 = green(state.r1).isGreen;
+    const gl = state.r1.gl;
+    await lossAndRestore(gl, log, 'restore 1');
+    await sleep(100);
+    const t = { pkg: PKG, drew1, r2Created: !!state.r2 };
+    if (state.r2) {
+      t.r2Draws = green(state.r2).isGreen;
+      // What a page that recreates on onContextRestored would do now: create again.
+      const again = await settle(web3d.createRenderer(c, OPTS));
+      t.createAfterR2 = again.ok ? 'created (r2 was not holding the canvas)' : again.message;
+      if (again.ok) again.r.dispose();
+      await lossAndRestore(gl, log, 'restore 2, of r2');
+      await sleep(100);
+      t.r2FrameAfterSecondLoss = attempt(() => state.r2.frame());
+    }
+    t.log = log;
+    out[`S1 ${label}`] = t;
+    attempt(() => state.r1.dispose());
+    if (state.r2) attempt(() => state.r2.dispose());
+    window.removeEventListener('webglcontextrestored', listener, { capture: true });
+    c.remove();
+  }
+});
+</script></body>

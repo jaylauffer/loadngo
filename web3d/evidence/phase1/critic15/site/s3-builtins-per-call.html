@@ -1,0 +1,72 @@
+<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><title>critic 15: which built-ins web3d reads at each call</title>
+<body><canvas id="c" width="16" height="16"></canvas><canvas id="d" width="16" height="16"></canvas><script type="module">
+// Critic 15, S3 (BSD-3-Clause; see the repository's LICENSE). WEB3D.md's page contract, item 2:
+// "It reads the rest at each call: the global functions and constructors it calls (WebAssembly's,
+// fetch, Object's, Reflect's and Number's statics, crypto.getRandomValues, reportError,
+// setTimeout, performance.now) and every WebGL2 method js/gl.js calls". This page, after web3d has
+// loaded, replaces six other globals with wrappers that count their calls and otherwise behave as
+// the built-in, makes web3d do ordinary work, and counts what reached each wrapper. A count above
+// 0 is a built-in web3d reads at the call, which the list leaves out. (This is a page outside the
+// contract by construction; it only measures the list.)
+import { settle, attempt, OPTS, green, page, until, sleep } from '../../critic13/site/common.js';
+import * as web3d from '/pkg/web3d.js';
+
+page(async (out) => {
+  const counts = { Set: 0, URL: 0, Error: 0, TextDecoder: 0, 'ArrayBuffer.isView': 0, WeakRef: 0 };
+  const saved = { Set, URL, Error, TextDecoder, WeakRef, isView: ArrayBuffer.isView };
+  // A warm create first, so the module is compiled before anything is replaced.
+  const warm = await web3d.createRenderer(document.getElementById('d'), OPTS);
+  warm.dispose();
+  const wasmBytes = new Uint8Array(await (await fetch('/pkg/loadngo_web3d.wasm')).arrayBuffer());
+  const wrap = (name, Base) => {
+    const W = class extends Base { constructor(...a) { counts[name]++; super(...a); } };
+    Object.defineProperty(W, 'name', { value: Base.name });
+    return W;
+  };
+  globalThis.Set = wrap('Set', saved.Set);
+  globalThis.URL = wrap('URL', saved.URL);
+  globalThis.Error = wrap('Error', saved.Error);
+  globalThis.TextDecoder = wrap('TextDecoder', saved.TextDecoder);
+  globalThis.WeakRef = wrap('WeakRef', saved.WeakRef);
+  ArrayBuffer.isView = function isView(v) { counts['ArrayBuffer.isView']++; return saved.isView(v); };
+  const steps = {};
+  try {
+    // 1. A create on a canvas this realm has not armed, from the default URL: compile resolves the URL.
+    const c = document.getElementById('c');
+    const lost = [];
+    const r = await web3d.createRenderer(c, { ...OPTS, onContextLost: () => lost.push('lost'), onContextRestored: () => lost.push('restored') });
+    steps.create = { ...counts };
+    steps.draws = green(r).isGreen;
+    // 2. A refused call (a mesh with a string for positions): the wrapper throws its message.
+    steps.refusedCall = attempt(() => r.createMesh({ positions: 'x', indices: new Uint16Array(3) })).message;
+    steps.afterRefusal = { ...counts };
+    // 3. A call the Rust side refuses (a handle of the right kind, never issued): its message is decoded.
+    const mesh = r.createMesh({ positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), indices: new Uint16Array([0, 1, 2]) });
+    steps.rustRefusal = attempt(() => r.destroyMesh(mesh + 1)).message;
+    steps.afterRustRefusal = { ...counts };
+    // 4. A loss and restore: the controller handles both events.
+    const lc = r.gl.getExtension('WEBGL_lose_context');
+    lc.loseContext();
+    await until(() => r.gl.isContextLost(), 3000);
+    await sleep(30);
+    lc.restoreContext();
+    await until(() => !r.gl.isContextLost(), 3000);
+    await sleep(50);
+    steps.hooks = [...lost];
+    steps.afterRestore = { ...counts };
+    r.dispose();
+    // 5. compile() given the module's bytes.
+    steps.compileBytes = (await settle(web3d.compile(wasmBytes))).ok;
+    steps.afterCompileBytes = { ...counts };
+  } finally {
+    globalThis.Set = saved.Set;
+    globalThis.URL = saved.URL;
+    globalThis.Error = saved.Error;
+    globalThis.TextDecoder = saved.TextDecoder;
+    globalThis.WeakRef = saved.WeakRef;
+    ArrayBuffer.isView = saved.isView;
+  }
+  out['S3 steps, with the counts after each'] = steps;
+  out['S3 globals web3d read at a call, outside WEB3D.md\'s list'] = Object.entries(counts).filter(([, n]) => n > 0).map(([k, n]) => `${k} (${n})`);
+});
+</script></body>

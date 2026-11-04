@@ -1,0 +1,36 @@
+{
+  "groups": {
+    "exhaust": {
+      "tests": [
+        {
+          "name": "E1 an object table issues 32,767 x 128 handles in its life (here 1 kept + 32,766 x 128), none twice, then refuses cleanly and keeps drawing",
+          "pass": false,
+          "detail": {
+            "keep": 795516526919681,
+            "ms": 26535,
+            "issued": 134213633,
+            "error": "web3d: too many objects",
+            "lowSlotHandles": 81919,
+            "firstRefused": true,
+            "midRefused": true,
+            "lastRefused": true,
+            "keepStillWorks": true,
+            "frame": {
+              "threw": false,
+              "value": true
+            },
+            "pixel": [
+              56,
+              255,
+              56
+            ],
+            "otherKindsStillWork": true,
+            "glError": 0
+          }
+        }
+      ],
+      "messages": []
+    }
+  },
+  "browser": "157.0.8103.38"
+}

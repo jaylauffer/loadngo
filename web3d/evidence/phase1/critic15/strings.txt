@@ -1,0 +1,59 @@
+# the fifteenth critic's rerun against the round's, every string or null leaf of each page's result (node tools/leaf-diff.mjs <round's file> <this rerun's file>)
+## results/rerun-critic11-dd.json: 4 string leaves; 2 differ
+  /top: "http://a.localhost:5664" -> "http://a.localhost:5484"
+  /frameOrigin: "http://b.a.localhost:5664" -> "http://b.a.localhost:5484"
+## results/rerun-critic11-intent.json: 6 string leaves; 0 differ
+## results/rerun-critic11-nowarn.json: 1 string leaves; 0 differ
+## results/rerun-critic11-observe.json: 3 string leaves; 0 differ
+## results/rerun-critic11-realm.json: 35 string leaves; 0 differ
+## results/rerun-critic11-reset.json: 15 string leaves; 0 differ
+## results/rerun-critic12-adopt.json: 54 string leaves; 0 differ
+## results/rerun-critic12-bf.json: 7 string leaves; 0 differ
+## results/rerun-critic12-blank.json: 15 string leaves; 0 differ
+## results/rerun-critic12-counter.json: 1 string leaves; 0 differ
+## results/rerun-critic12-dd2.json: 4 string leaves; 1 differ
+  /frameOrigin: "http://b.a.localhost:5664" -> "http://b.a.localhost:5484"
+## results/rerun-critic12-docopen.json: 10 string leaves; 0 differ
+## results/rerun-critic12-f4.json: 30 string leaves; 0 differ
+## results/rerun-critic12-midcreate.json: 7 string leaves; 0 differ
+## results/rerun-critic12-nav.json: 25 string leaves; 0 differ
+## results/rerun-critic12-override.json: 8 string leaves; 0 differ
+## results/rerun-critic12-per.json: 19 string leaves; 13 differ
+  /topCanvasTopListener/0/origin: "http://127.0.0.1:5664" -> "http://127.0.0.1:5484"
+  /topCanvasTopListener/0/frameId: "21DFC0" -> "E95A56"
+  /topCanvasTopListener/1/origin: "http://127.0.0.1:5664" -> "http://127.0.0.1:5484"
+  /topCanvasTopListener/1/frameId: "9D7940" -> "C3A790"
+  /frameCanvasOneListenerOfEachRealm/0/origin: "http://127.0.0.1:5664" -> "http://127.0.0.1:5484"
+  /frameCanvasOneListenerOfEachRealm/0/frameId: "21DFC0" -> "E95A56"
+  /frameCanvasOneListenerOfEachRealm/1/origin: "http://127.0.0.1:5664" -> "http://127.0.0.1:5484"
+  /frameCanvasOneListenerOfEachRealm/1/frameId: "9D7940" -> "C3A790"
+  /frameOffscreenTopListener/0/origin: "http://127.0.0.1:5664" -> "http://127.0.0.1:5484"
+  /frameOffscreenTopListener/0/frameId: "21DFC0" -> "E95A56"
+  /frameOffscreenTopListener/1/origin: "http://127.0.0.1:5664" -> "http://127.0.0.1:5484"
+  /frameOffscreenTopListener/1/frameId: "9D7940" -> "C3A790"
+  /topOrigin: "http://127.0.0.1:5664" -> "http://127.0.0.1:5484"
+## results/rerun-critic12-transfer.json: 9 string leaves; 0 differ
+## results/rerun-critic13-f1.json: 45 string leaves; 0 differ
+## results/rerun-critic13-f1b.json: 20 string leaves; 0 differ
+## results/rerun-critic13-f2-fix.json: 3 string leaves; 0 differ
+## results/rerun-critic13-f2.json: 13 string leaves; 0 differ
+## results/rerun-critic13-f2b.json: 7 string leaves; 0 differ
+## results/rerun-critic13-f2c.json: 12 string leaves; 0 differ
+## results/rerun-critic13-f3.json: 12 string leaves; 0 differ
+## results/rerun-critic13-f4.json: 16 string leaves; 0 differ
+## results/rerun-critic14-c1-closed.json: 33 string leaves; 0 differ
+## results/rerun-critic14-c2-prerender.json: 2 string leaves; 0 differ
+## results/rerun-critic14-c3-reopen.json: 47 string leaves; 0 differ
+## results/rerun-critic14-c4-top.json: 3 string leaves; 0 differ
+## results/rerun-critic14-c5-top-fix.json: 21 string leaves; 0 differ
+## results/rerun-critic14-c6-r4-fix.json: 26 string leaves; 0 differ
+## results/rerun-critic14-c7-restore-gap.json: 0 string leaves; 0 differ
+## results/rerun-critic14-prerender-no-devtools.json: 2 string leaves; 0 differ
+## results/rerun-round12-dd.json: 5 string leaves; 2 differ
+  /top: "http://a.localhost:5664" -> "http://a.localhost:5484"
+  /frameOrigin: "http://b.a.localhost:5664" -> "http://b.a.localhost:5484"
+## results/rerun-round12-facts.json: 13 string leaves; 0 differ
+## results/rerun-round12-intent.json: 36 string leaves; 0 differ
+## results/rerun-round12-listeners.json: 0 string leaves; 0 differ
+## results/rerun-round14-reopen-paths.json: 14 string leaves; 0 differ
+## ../critic14-rerun/results/r15.json vs results/rerun-round15-r15.json: 149 string leaves; 0 differ

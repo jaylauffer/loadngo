@@ -1,0 +1,22 @@
+{
+ "duringPrerender": {
+  "prerendering": true,
+  "closed": false,
+  "create": "created",
+  "draws": true,
+  "stillPrerendering": true
+ },
+ "afterActivation": {
+  "activationStart": 6317.599999964237,
+  "closed": false,
+  "draws": true,
+  "recovered": true,
+  "calls": {
+   "lost": 1,
+   "restored": 1
+  }
+ },
+ "userAgent": "Chrome/157.0.0.0"
+}
+chrome and server stopped
+>>> exit 0
