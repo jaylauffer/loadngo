@@ -203,6 +203,32 @@ pub fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Whether Windows would not create `name` as an ordinary file: a device name (`CON`,
+/// `NUL`, `COM1`... with or without an extension) or a character Windows forbids. Trees
+/// may hold these (git on Linux does), so a checkout on Windows refuses them.
+#[must_use]
+pub fn is_windows_unsafe(name: &str) -> bool {
+    if name
+        .chars()
+        .any(|c| matches!(c, '<' | '>' | '"' | '|' | '?' | '*') || u32::from(c) < 0x20)
+    {
+        return true;
+    }
+    let base = name
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches(' ')
+        .to_ascii_uppercase();
+    matches!(
+        base.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || ((base.starts_with("COM") || base.starts_with("LPT"))
+        && base.len() == 4
+        && base.as_bytes()[3].is_ascii_digit()
+        && base.as_bytes()[3] != b'0')
+}
+
 /// Code points HFS+ ignores when comparing names (as git's `is_hfs_dotgit` does).
 fn is_hfs_ignorable(c: char) -> bool {
     matches!(

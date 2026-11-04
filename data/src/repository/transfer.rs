@@ -21,6 +21,7 @@ use crate::cas::CasHash;
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashSet;
 use std::ffi::OsString;
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -93,6 +94,7 @@ pub fn send(
     remote: &Remote,
     remote_store: &str,
     remote_trust: Option<&str>,
+    everything: bool,
 ) -> Result<SendReport> {
     let (head, signed) = repository.trusted_head(branch, trust)?;
     let listing = run(
@@ -133,6 +135,10 @@ pub fn send(
         if known {
             known_versions.push(version);
         }
+    }
+    // `everything`: send every object, so a receiver holding damaged copies repairs them.
+    if everything {
+        known_versions.clear();
     }
     let plan = repository.plan_send(head, &known_versions)?;
     let mut args = vec!["receive".to_string(), "--store".into(), remote_store.into()];
@@ -383,25 +389,7 @@ pub fn receive(root: &Path, input: &mut impl Read, trust: &Trust) -> Result<Rece
                 let hash = CasHash::from_bytes(hash);
                 let length = read_length(&mut input)?;
                 crate::disk::ensure_room(root, length, crate::disk::floor_from_env())?;
-                // A copy already here that is damaged would be taken as present (the
-                // store checks only its size); replace it with the bytes arriving.
-                let object = crate::archive_cas::ArchiveObject { hash, size: length };
-                if store.has_object(hash) && store.verify_object(object).is_err() {
-                    store
-                        .remove_object(hash)
-                        .with_context(|| format!("failed to replace the damaged copy of {hash}"))?;
-                }
-                let mut body = (&mut input).take(length);
-                let stored = store.add_stream(&mut body)?;
-                if stored.object.size != length {
-                    bail!("object {hash} is cut short");
-                }
-                if stored.object.hash != hash {
-                    bail!(
-                        "object {hash} arrived as bytes hashing to {}",
-                        stored.object.hash
-                    );
-                }
+                receive_object(&store, hash, length, &mut input)?;
                 objects += 1;
             }
             b'H' => {
@@ -430,6 +418,14 @@ pub fn receive(root: &Path, input: &mut impl Read, trust: &Trust) -> Result<Rece
         .head(&head.branch)?
         .map(|current| current.version);
     if current == Some(version) {
+        // Nothing to move, but say so only if what the branch names is intact here.
+        repository.check_closure(version).with_context(|| {
+            format!(
+                "branch {} is already at {version}, but this store's copy is damaged; \
+                 send again with --all to repair it",
+                head.branch
+            )
+        })?;
         return Ok(ReceiveReport {
             repository_id: head.repository_id,
             branch: head.branch,
@@ -456,6 +452,84 @@ pub fn receive(root: &Path, input: &mut impl Read, trust: &Trust) -> Result<Rece
         objects,
         moved: true,
     })
+}
+
+/// Stores one object frame. The bytes go to a partial file first and must hash to
+/// `hash`; only then is the store touched. A copy already stored is kept when it reads
+/// back intact and replaced by the proven bytes when it does not, so a stream can only
+/// ever put back the one correct content, never remove it.
+fn receive_object(
+    store: &crate::archive_cas::ArchiveCasStorage,
+    hash: CasHash,
+    length: u64,
+    input: &mut impl Read,
+) -> Result<()> {
+    let partial = store.scratch_path("receive");
+    let result = (|| -> Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&partial)
+            .with_context(|| format!("failed to create {}", partial.display()))?;
+        let mut hasher = blake3::Hasher::new();
+        let mut buffer = vec![0_u8; 1 << 20];
+        let mut body = input.take(length);
+        let mut copied = 0_u64;
+        loop {
+            let read = body.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+            file.write_all(&buffer[..read])?;
+            copied += read as u64;
+        }
+        if copied != length {
+            bail!("object {hash} is cut short");
+        }
+        let actual = CasHash::from_bytes(*hasher.finalize().as_bytes());
+        if actual != hash {
+            bail!("object {hash} arrived as bytes hashing to {actual}");
+        }
+        file.sync_all()?;
+        drop(file);
+        if store.has_object(hash) {
+            if stored_copy_is_intact(store, hash) {
+                return Ok(());
+            }
+            store
+                .remove_object(hash)
+                .with_context(|| format!("failed to replace the damaged copy of {hash}"))?;
+        }
+        let stored = store
+            .add_stream(&mut File::open(&partial)?)
+            .with_context(|| format!("failed to store {hash}"))?;
+        if stored.object.hash != hash {
+            bail!("object {hash} changed while it was stored");
+        }
+        Ok(())
+    })();
+    let _ = fs::remove_file(&partial);
+    result
+}
+
+/// Whether the stored copy of `hash` reads back hashing to it.
+fn stored_copy_is_intact(store: &crate::archive_cas::ArchiveCasStorage, hash: CasHash) -> bool {
+    let Ok(mut reader) = store.open_object(hash) else {
+        return false;
+    };
+    let mut hasher = blake3::Hasher::new();
+    let mut buffer = vec![0_u8; 1 << 20];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                hasher.update(&buffer[..read]);
+            }
+            Err(_) => return false,
+        }
+    }
+    CasHash::from_bytes(*hasher.finalize().as_bytes()) == hash
 }
 
 fn read_length(input: &mut impl Read) -> Result<u64> {

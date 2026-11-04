@@ -36,7 +36,9 @@ a few KB, where an archive manifest lists every entry again.
 Names a tree may not hold: empty, `.`, `..`; anything with `/`, `\`, `:` or NUL, or
 ending in a dot or space (path syntax or aliases on Windows); `.git` and
 `.loadngo-repo` in any case, with HFS+'s ignored code points removed, and `git~1`
-(NTFS's short name for `.git`), so a checkout can never plant either.
+(NTFS's short name for `.git`), so a checkout can never plant either. Windows device
+names (`CON`, `NUL`, `COM1`... with or without an extension) and `<>"|?*` may be held
+(git on Linux has them, e.g. `aux.c`); a checkout on Windows refuses them.
 
 ## What a signature proves
 
@@ -83,7 +85,7 @@ old objects.
 | `status [--tree <folder>]` | `created`, `changed` or `deleted` and a path for each difference from the tree's version |
 | `commit [--tree <folder>] --path P... --message M --author A` | records the changes under the named paths as a new signed version; refuses if the branch moved since the tree was based on it |
 | `verify --repository R --branch B` | the head's signature, then every version, tree (with its totals) and file hash |
-| `send --repository R --branch B (--to <store> \| --to-ssh <host> --remote-store <folder> [--remote-program <path>])` | sends what the other store lacks; it checks everything and moves its branch forward |
+| `send --repository R --branch B (--to <store> \| --to-ssh <host> --remote-store <folder> [--remote-program <path>]) [--all]` | sends what the other store lacks (with `--all`, everything, which repairs its damaged copies); it checks everything and moves its branch forward |
 
 A checkout holds `.loadngo-repo` at its top: the store (absolute path), repository,
 branch and the version the tree is based on.
@@ -116,9 +118,12 @@ names that are not UTF-8 or a tree may not hold.
 
 `send` asks the receiver (`loadngo-repo heads`) what it has, then writes one stream to
 `loadngo-repo receive` there: the missing file objects, trees and versions, then the
-signed head. The receiver hashes every object as it stores it, verifies the head's
-signature against its own trusted key, checks every object below it, and moves its
-branch only forward. Over ssh the key exchange is pinned to the post-quantum hybrids
+signed head. The receiver takes each object into a partial file and stores it only if
+its bytes hash to the name it arrived under; a copy it already holds is replaced only
+when that copy does not read back intact, so a stream can never remove a good object.
+It then verifies the head's signature against its own trusted key, checks every object
+below it (also when the branch is already there, so a damaged replica is reported, not
+called up to date), and moves its branch only forward. Over ssh the key exchange is pinned to the post-quantum hybrids
 `mlkem768x25519-sha256` and `sntrup761x25519-sha512@openssh.com`: macOS's ssh otherwise
 picks `ecdh-sha2-nistp256` first for dolores (checked 2026-11-04), although both ends
 support ML-KEM. Remote paths are absolute or relative to the remote home.

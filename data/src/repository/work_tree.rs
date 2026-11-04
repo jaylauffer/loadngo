@@ -178,6 +178,13 @@ fn write_tree(
     buffer: &mut [u8],
 ) -> Result<()> {
     for entry in repository.tree(hash)?.entries {
+        #[cfg(windows)]
+        if super::is_windows_unsafe(entry.name()) {
+            bail!(
+                "{:?} cannot be created as a file on Windows (a device name or a forbidden character)",
+                entry.name()
+            );
+        }
         let path = folder.join(entry.name());
         match &entry {
             TreeEntry::File { object, .. } => {

@@ -125,12 +125,16 @@ fn allowed(command: &str) -> &'static [(&'static str, bool)] {
             ("--remote-program", false),
             ("--remote-trusted-public-key", false),
             ("--trusted-public-key", false),
+            ("--all", false),
         ],
         "receive" => &[("--store", false), ("--trusted-public-key", false)],
         "heads" => &[("--store", false), ("--repository", false)],
         _ => &[],
     }
 }
+
+/// Flags that take no value.
+const SWITCHES: &[&str] = &["--all"];
 
 struct Flags {
     values: BTreeMap<&'static str, Vec<String>>,
@@ -149,9 +153,13 @@ impl Flags {
             let Some(&(flag, repeatable)) = allowed.iter().find(|(flag, _)| flag == arg) else {
                 bail!("{command} does not take {arg:?}\n{}", usage().hint());
             };
-            let value = args
-                .next()
-                .ok_or_else(|| anyhow!("{flag} needs a value\n{}", usage().hint()))?;
+            // Switches take no value.
+            let value = if SWITCHES.contains(&flag) {
+                &String::new()
+            } else {
+                args.next()
+                    .ok_or_else(|| anyhow!("{flag} needs a value\n{}", usage().hint()))?
+            };
             let list = values.entry(flag).or_default();
             if !list.is_empty() && !repeatable {
                 bail!("{flag} is given twice");
@@ -421,6 +429,7 @@ fn send(flags: &Flags) -> Result<()> {
         &remote,
         &remote_store,
         flags.get("--remote-trusted-public-key"),
+        flags.get("--all").is_some(),
     )?;
     println!(
         "Sent {branch} of {} at {}: {} versions, {} objects, {} bytes.",
@@ -498,6 +507,7 @@ fn usage() -> Usage {
         ArgDoc::optional("send --remote-store", "<folder>", "with --to-ssh: the store there (absolute, or relative to its home)"),
         ArgDoc::optional("send --remote-program", "<path>", "with --to-ssh: loadngo-repo there; default loadngo-repo on its PATH"),
         ArgDoc::optional("send --remote-trusted-public-key", "<file.pub>", "the key the receiver should trust (a path where it runs)"),
+        ArgDoc::switch("send --all", "send every object of the history, not only what the receiver lacks: repairs a receiver's damaged copies"),
     ];
     const NOTES: &[&str] = &[
         "Commands: init, import, log, checkout, status, commit, verify, send, receive (reads a stream on stdin; send runs it), heads (lists a store's heads; send runs it).",

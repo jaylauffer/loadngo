@@ -784,6 +784,78 @@ fn receive_replaces_a_damaged_copy_it_already_holds() {
     bytes[0] ^= 1;
     fs::write(&object, bytes).unwrap();
     assert!(received.verify("main", &trusted).is_err());
+    // Sending nothing new does not claim the damaged branch is fine.
+    let mut nothing = Vec::new();
+    source
+        .write_stream(
+            &source.plan_send(head, &[head]).unwrap(),
+            &signed,
+            &mut nothing,
+        )
+        .unwrap();
+    let error = receive(&target, &mut nothing.as_slice(), &trusted).unwrap_err();
+    assert!(format!("{error:#}").contains("damaged"), "{error:#}");
+    // Every object again repairs it.
     receive(&target, &mut stream.as_slice(), &trusted).unwrap();
     assert!(received.verify("main", &trusted).is_ok());
+}
+
+#[test]
+fn a_hostile_stream_never_removes_a_good_object() {
+    let dir = tempdir().unwrap();
+    let key = signer("test-key");
+    let trusted = trust(&key);
+    let root = dir.path().join("store");
+    let repository = Repository::open(&root, "sample", true).unwrap();
+    let work = dir.path().join("work");
+    write(&work.join("a.txt"), "the bytes of a\n");
+    let first = work_tree::init(
+        &repository,
+        "main",
+        &work,
+        "first",
+        "tester",
+        &key,
+        &trusted,
+    )
+    .unwrap();
+    let file = CasHash::digest(b"the bytes of a\n");
+    for (target, length, body) in [
+        (file, 0_u64, Vec::new()),
+        (file, 1, b"x".to_vec()),
+        (file, 15, b"not the bytes!\n".to_vec()),
+        (first.version, 1, b"x".to_vec()),
+    ] {
+        let mut stream = b"loadngo-repository-stream-v1\n".to_vec();
+        stream.push(b'O');
+        stream.extend(target.as_bytes());
+        stream.extend(length.to_le_bytes());
+        stream.extend(&body);
+        stream.push(b'E');
+        assert!(receive(&root, &mut stream.as_slice(), &trusted).is_err());
+        assert!(
+            repository.verify("main", &trusted).is_ok(),
+            "a stream claiming {target} removed it"
+        );
+    }
+}
+
+#[test]
+fn windows_device_names_and_forbidden_characters_are_known() {
+    use data::repository::is_windows_unsafe;
+    for bad in [
+        "CON", "con.txt", "Aux.c", "NUL", "com1", "LPT9.log", "a<b", "q?", "tab\t",
+    ] {
+        assert!(is_windows_unsafe(bad), "{bad:?}");
+    }
+    for good in [
+        "console",
+        "com0",
+        "COM10",
+        "auxiliary.c",
+        "README.md",
+        "lpt",
+    ] {
+        assert!(!is_windows_unsafe(good), "{good:?}");
+    }
 }
