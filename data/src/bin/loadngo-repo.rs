@@ -27,12 +27,16 @@ fn main() {
 
 fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
+    if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h" | "help") {
         usage().print();
         return Ok(());
     }
     let command = args[0].as_str();
-    let flags = Flags::parse(command, &args[1..])?;
+    // `--help` where a flag goes; a value that happens to be `-h` is just a value.
+    let Some(flags) = Flags::parse(command, &args[1..])? else {
+        usage().print();
+        return Ok(());
+    };
     match command {
         "init" => init(&flags),
         "import" => import_command(&flags),
@@ -44,10 +48,6 @@ fn run() -> Result<()> {
         "send" => send(&flags),
         "receive" => receive(&flags),
         "heads" => heads(&flags),
-        "help" => {
-            usage().print();
-            Ok(())
-        }
         other => bail!("unknown command {other:?}\n{}", usage().hint()),
     }
 }
@@ -67,6 +67,7 @@ fn allowed(command: &str) -> &'static [(&'static str, bool)] {
             ("--tree", false),
             ("--message", false),
             ("--author", false),
+            ("--trusted-public-key", false),
             SIGNING[0],
             SIGNING[1],
             SIGNING[2],
@@ -136,11 +137,15 @@ struct Flags {
 }
 
 impl Flags {
-    fn parse(command: &str, args: &[String]) -> Result<Self> {
+    /// `None` when `--help` or `-h` stands where a flag goes.
+    fn parse(command: &str, args: &[String]) -> Result<Option<Self>> {
         let allowed = allowed(command);
         let mut values: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
         let mut args = args.iter();
         while let Some(arg) = args.next() {
+            if arg == "--help" || arg == "-h" {
+                return Ok(None);
+            }
             let Some(&(flag, repeatable)) = allowed.iter().find(|(flag, _)| flag == arg) else {
                 bail!("{command} does not take {arg:?}\n{}", usage().hint());
             };
@@ -153,7 +158,7 @@ impl Flags {
             }
             list.push(value.clone());
         }
-        Ok(Self { values })
+        Ok(Some(Self { values }))
     }
 
     fn get(&self, flag: &str) -> Option<&str> {
@@ -225,6 +230,7 @@ fn init(flags: &Flags) -> Result<()> {
         flags.required("--message")?,
         flags.required("--author")?,
         &flags.signer()?,
+        &flags.trust()?,
     )?;
     println!(
         "Recorded {} paths of {} as version {} on {} of {}; the folder is now its checkout.",

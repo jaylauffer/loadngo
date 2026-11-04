@@ -181,13 +181,34 @@ pub fn validate_name(name: &str) -> Result<()> {
     if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\0') {
         bail!("{name:?} is not a valid file name in a tree");
     }
+    // `\` and `:` are path syntax on Windows (`..\x`, `C:x`, `name::$DATA`), and Windows
+    // drops a trailing dot or space, so `a.` would land on `a`.
+    if name.contains('\\') || name.contains(':') || name.ends_with('.') || name.ends_with(' ') {
+        bail!("{name:?} cannot be checked out safely on every platform");
+    }
+    // What a file system may treat as one of the reserved names: any case, HFS+'s
+    // ignored code points, and NTFS's short name for `.git`.
+    let folded: String = name
+        .chars()
+        .filter(|c| !is_hfs_ignorable(*c))
+        .collect::<String>()
+        .to_ascii_lowercase();
     if RESERVED_NAMES
         .iter()
-        .any(|reserved| name.eq_ignore_ascii_case(reserved))
+        .any(|reserved| folded == reserved.to_ascii_lowercase())
+        || folded == "git~1"
     {
         bail!("{name:?} is reserved and cannot be held in a tree");
     }
     Ok(())
+}
+
+/// Code points HFS+ ignores when comparing names (as git's `is_hfs_dotgit` does).
+fn is_hfs_ignorable(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200c}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{206a}'..='\u{206f}' | '\u{feff}'
+    )
 }
 
 /// Where an imported version came from.
@@ -748,8 +769,14 @@ impl Repository {
         validate_id(&head.signer_identity, "signer identity")?;
         let heads = self.heads_dir();
         let signatures = self.signatures_dir();
-        fs::create_dir_all(&heads)?;
-        fs::create_dir_all(&signatures)?;
+        if !heads.is_dir() || !signatures.is_dir() {
+            fs::create_dir_all(&heads)?;
+            fs::create_dir_all(&signatures)?;
+            // New folders survive a power cut only once their parents are synced.
+            for folder in [&self.dir, &self.dir.join(".."), &self.dir.join("../..")] {
+                sync_dir(folder)?;
+            }
+        }
         let lock_path = heads.join(format!("{}.lock", head.branch));
         let _lock = HeadLock::take(&lock_path)?;
         let current = self.head(&head.branch)?.map(|head| head.version);
@@ -1159,7 +1186,14 @@ pub fn live_objects(store: &ArchiveCasStorage) -> Result<BTreeSet<CasHash>> {
     };
     for entry in entries {
         let entry = entry?;
-        if !entry.file_type()?.is_dir() {
+        let kind = entry.file_type()?;
+        if kind.is_symlink() {
+            bail!(
+                "{} is a symlink; refusing to work out what it needs",
+                entry.path().display()
+            );
+        }
+        if !kind.is_dir() {
             continue;
         }
         let Some(id) = entry.file_name().to_str().map(str::to_string) else {
@@ -1179,14 +1213,18 @@ pub fn live_objects(store: &ArchiveCasStorage) -> Result<BTreeSet<CasHash>> {
         }
         let mut trees = HashMap::new();
         let mut files = BTreeMap::new();
+        // Per repository: `live` also holds other repositories' objects, and one of
+        // those may have the same bytes as a version here.
+        let mut walked = HashSet::new();
         for start in starts {
-            if live.contains(&start) {
+            if walked.contains(&start) {
                 continue;
             }
             for (hash, version) in repository
                 .ancestry(start)
                 .with_context(|| format!("repository {id}: the history of {start}"))?
             {
+                walked.insert(hash);
                 live.insert(hash);
                 repository
                     .check_tree(version.tree, &mut trees, &mut files)
@@ -1232,19 +1270,41 @@ fn write_file_synced(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| anyhow!("{} has no parent", path.display()))?;
+    // A unique name, created exclusively: a tree cannot plant a symlink at it to have
+    // this write land outside the folder (create_new refuses an existing path,
+    // symlinks included).
     let temporary = parent.join(format!(
-        ".{}.{}.partial",
+        ".{}.{}-{}.partial",
         path.file_name().and_then(|n| n.to_str()).unwrap_or("file"),
-        std::process::id()
+        std::process::id(),
+        unique_suffix()
     ));
     {
-        let mut file = File::create(&temporary)
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
             .with_context(|| format!("failed to create {}", temporary.display()))?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
+        let written = file.write_all(bytes).and_then(|()| file.sync_all());
+        if let Err(error) = written {
+            let _ = fs::remove_file(&temporary);
+            return Err(error).with_context(|| format!("failed to write {}", temporary.display()));
+        }
     }
-    fs::rename(&temporary, path).with_context(|| format!("failed to write {}", path.display()))?;
+    if let Err(error) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error).with_context(|| format!("failed to write {}", path.display()));
+    }
     sync_dir(parent)
+}
+
+/// A suffix no other call in this process returns.
+fn unique_suffix() -> u128 {
+    static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    (nanos << 32) | u128::from(COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
 }
 
 #[cfg(unix)]

@@ -238,7 +238,19 @@ impl Repository {
             trees: Vec::new(),
             versions: Vec::new(),
         };
-        let (versions, _) = self.ancestry_until(head, |hash| known_versions.contains(&hash))?;
+        // Every version the receiver lacks: a known version ends that line of the walk,
+        // not the walk (the other side of a merge may still be unknown).
+        let mut versions = Vec::new();
+        let mut seen = HashSet::new();
+        let mut queue = std::collections::VecDeque::from([head]);
+        while let Some(hash) = queue.pop_front() {
+            if known_versions.contains(&hash) || !seen.insert(hash) {
+                continue;
+            }
+            let version = self.version(hash)?;
+            queue.extend(version.parents.iter().copied());
+            versions.push((hash, version));
+        }
         for (hash, version) in versions.iter().rev() {
             self.collect(
                 version.tree,
@@ -371,6 +383,14 @@ pub fn receive(root: &Path, input: &mut impl Read, trust: &Trust) -> Result<Rece
                 let hash = CasHash::from_bytes(hash);
                 let length = read_length(&mut input)?;
                 crate::disk::ensure_room(root, length, crate::disk::floor_from_env())?;
+                // A copy already here that is damaged would be taken as present (the
+                // store checks only its size); replace it with the bytes arriving.
+                let object = crate::archive_cas::ArchiveObject { hash, size: length };
+                if store.has_object(hash) && store.verify_object(object).is_err() {
+                    store
+                        .remove_object(hash)
+                        .with_context(|| format!("failed to replace the damaged copy of {hash}"))?;
+                }
                 let mut body = (&mut input).take(length);
                 let stored = store.add_stream(&mut body)?;
                 if stored.object.size != length {

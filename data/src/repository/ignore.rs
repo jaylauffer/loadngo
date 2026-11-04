@@ -141,6 +141,8 @@ fn parse(base: &str, line: &str) -> Option<Rule> {
 fn match_parts(parts: &[String], names: &[&str]) -> bool {
     match parts.split_first() {
         None => names.is_empty(),
+        // A trailing `**` matches everything inside, not the folder itself.
+        Some((first, rest)) if first == "**" && rest.is_empty() => !names.is_empty(),
         Some((first, rest)) if first == "**" => {
             (0..=names.len()).any(|skip| match_parts(rest, &names[skip..]))
         }
@@ -310,6 +312,7 @@ mod tests {
         assert!(r.is_ignored("a/z", false));
         assert!(r.is_ignored("a/b/c/z", false));
         assert!(r.is_ignored("logs/a/b", false));
+        assert!(!r.is_ignored("logs", true));
         assert!(r.is_ignored("Build", true));
         assert!(r.is_ignored("x/build", true));
         assert!(r.is_ignored("file7.txt", false));

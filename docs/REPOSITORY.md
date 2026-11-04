@@ -33,8 +33,10 @@ A change to one file writes new trees only along that file's path. A commit to
 `docs/REPOSITORY.md` writes the file, two trees (`docs/` and the root) and a version,
 a few KB, where an archive manifest lists every entry again.
 
-Names a tree may not hold: empty, `.`, `..`, anything with `/` or NUL, `.git` (in any
-case, so a checkout can never plant one) and `.loadngo-repo`.
+Names a tree may not hold: empty, `.`, `..`; anything with `/`, `\`, `:` or NUL, or
+ending in a dot or space (path syntax or aliases on Windows); `.git` and
+`.loadngo-repo` in any case, with HFS+'s ignored code points removed, and `git~1`
+(NTFS's short name for `.git`), so a checkout can never plant either.
 
 ## What a signature proves
 
@@ -49,6 +51,8 @@ signature verifies against a trusted key (`--trusted-public-key`, or the one
 `*.dilithium2.pub` in `~/.loadngo/keys`). Every object is hash-checked as it is read, so
 a trusted head vouches for every byte below it. `checkout`, `log`, `commit`, `send` and
 `receive` refuse anything not trusted; `verify` re-hashes a branch's whole history.
+`init`, `import` and `commit` also refuse to sign with a key the trusted keys do not
+hold, which would leave the branch where no later command could move it.
 
 What it does not prove yet:
 
@@ -90,7 +94,12 @@ branch and the version the tree is based on.
 the tree's `.gitignore` files ignore them (git's rules: `!`, `/` anchoring, folder-only
 rules, `*`, `?`, `[...]`, `**`; not `.git/info/exclude` or global excludes), inside a
 build cache (`CACHEDIR.TAG`) or another checkout, or named `.git`. Executable bits are
-read where the platform has them.
+read where the platform has them. On a volume without them (exFAT or NTFS mounted on
+macOS, where every file reads as executable) `status` reports every plain file as
+changed; there is no setting like git's `core.fileMode` yet.
+
+A checkout's own files (`.loadngo-repo` and its temporary) are created exclusively, so
+a symlink in the tree cannot have them written outside the folder.
 
 `commit` records only the paths named with `--path`, never the whole tree unasked:
 several agents share checkouts in this workspace (`COLLABORATION.md`, rule 3).

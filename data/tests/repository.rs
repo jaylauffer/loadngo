@@ -67,7 +67,16 @@ fn init_status_commit_and_checkout_round_trip() {
     let work = dir.path().join("work");
     sample_tree(&work);
 
-    let first = work_tree::init(&repository, "main", &work, "first", "tester", &key).unwrap();
+    let first = work_tree::init(
+        &repository,
+        "main",
+        &work,
+        "first",
+        "tester",
+        &key,
+        &trusted,
+    )
+    .unwrap();
     let recorded: Vec<&str> = first.changes.iter().map(Change::path).collect();
     assert_eq!(
         recorded,
@@ -195,7 +204,16 @@ fn executable_bits_and_symlinks_are_kept() {
     fs::set_permissions(work.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
     write(&work.join("data.txt"), "d\n");
     std::os::unix::fs::symlink("data.txt", work.join("link")).unwrap();
-    work_tree::init(&repository, "main", &work, "first", "tester", &key).unwrap();
+    work_tree::init(
+        &repository,
+        "main",
+        &work,
+        "first",
+        "tester",
+        &key,
+        &trusted,
+    )
+    .unwrap();
 
     fs::set_permissions(work.join("data.txt"), fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(
@@ -234,7 +252,16 @@ fn tampering_and_untrusted_keys_are_refused_leaving_nothing() {
     let work = dir.path().join("work");
     write(&work.join("a.txt"), "the bytes of a\n");
     write(&work.join("b.txt"), "b\n");
-    let first = work_tree::init(&repository, "main", &work, "first", "tester", &key).unwrap();
+    let first = work_tree::init(
+        &repository,
+        "main",
+        &work,
+        "first",
+        "tester",
+        &key,
+        &trusted,
+    )
+    .unwrap();
     write(&work.join("b.txt"), "b2\n");
     work_tree::commit(&work, &["b.txt".into()], "second", "tester", &key, &trusted).unwrap();
     assert!(repository.verify("main", &trusted).is_ok());
@@ -298,7 +325,7 @@ fn a_stream_moves_a_branch_forward_only_and_checks_every_object() {
     let source = Repository::open(&dir.path().join("a"), "sample", true).unwrap();
     let work = dir.path().join("work");
     write(&work.join("a.txt"), "a\n");
-    let first = work_tree::init(&source, "main", &work, "first", "tester", &key).unwrap();
+    let first = work_tree::init(&source, "main", &work, "first", "tester", &key, &trusted).unwrap();
 
     let stream_for = |known: &[CasHash]| {
         let (head, signed) = source.trusted_head("main", &trusted).unwrap();
@@ -366,7 +393,16 @@ fn store_upkeep_keeps_what_repositories_need() {
     let work = dir.path().join("work");
     write(&work.join("a.txt"), "a\n");
     write(&work.join("sub/b.txt"), "b\n");
-    work_tree::init(&repository, "main", &work, "first", "tester", &key).unwrap();
+    work_tree::init(
+        &repository,
+        "main",
+        &work,
+        "first",
+        "tester",
+        &key,
+        &trusted,
+    )
+    .unwrap();
     write(&work.join("a.txt"), "a2\n");
     work_tree::commit(&work, &["a.txt".into()], "second", "tester", &key, &trusted).unwrap();
 
@@ -401,6 +437,13 @@ fn invalid_names_are_refused() {
         ".GIT",
         ".loadngo-repo",
         "nul\0",
+        "..\\..\\x",
+        "C:x",
+        ".git::$INDEX_ALLOCATION",
+        "trailing.",
+        "trailing ",
+        "GIT~1",
+        ".g\u{200c}it",
     ] {
         assert!(validate_name(bad).is_err(), "{bad:?}");
     }
@@ -470,6 +513,52 @@ mod git {
             .lines()
             .map(str::to_string)
             .collect()
+    }
+
+    #[test]
+    fn a_send_after_a_merge_carries_both_sides() {
+        let dir = tempdir().unwrap();
+        let key = signer("test-key");
+        let trusted = trust(&key);
+        let source = dir.path().join("git");
+        fs::create_dir_all(&source).unwrap();
+        git(&source, &["init", "-q", "-b", "main"]);
+        git(&source, &["config", "commit.gpgsign", "false"]);
+        write(&source.join("a.txt"), "a\n");
+        git(&source, &["add", "-A"]);
+        git(&source, &["commit", "-q", "-m", "A"]);
+        git(&source, &["checkout", "-q", "-b", "side"]);
+        write(&source.join("c.txt"), "c\n");
+        git(&source, &["add", "-A"]);
+        git(&source, &["commit", "-q", "-m", "C"]);
+        git(&source, &["checkout", "-q", "main"]);
+        write(&source.join("b.txt"), "b\n");
+        git(&source, &["add", "-A"]);
+        git(&source, &["commit", "-q", "-m", "B"]);
+        git(&source, &["merge", "-q", "--no-ff", "-m", "M", "side"]);
+
+        let repository = Repository::open(&dir.path().join("a"), "sample", true).unwrap();
+        let send = |target: &Path, known: &[CasHash]| {
+            let (head, signed) = repository.trusted_head("main", &trusted).unwrap();
+            let mut stream = Vec::new();
+            repository
+                .write_stream(
+                    &repository.plan_send(head, known).unwrap(),
+                    &signed,
+                    &mut stream,
+                )
+                .unwrap();
+            receive(target, &mut stream.as_slice(), &trusted).unwrap()
+        };
+        let target = dir.path().join("b");
+        let before = import_git(&repository, "main", &source, "main~1", &key, &trusted).unwrap();
+        send(&target, &[]);
+        let merged = import_git(&repository, "main", &source, "main", &key, &trusted).unwrap();
+        assert_eq!(repository.version(merged.head).unwrap().parents.len(), 2);
+        let report = send(&target, &[before.head]);
+        assert_eq!(report.head, merged.head);
+        let received = Repository::open(&target, "sample", false).unwrap();
+        assert_eq!(received.verify("main", &trusted).unwrap().versions, 4);
     }
 
     #[test]
@@ -554,4 +643,147 @@ mod git {
         assert!(!copy.join("src").exists());
         assert!(whole.verify("main", &trusted).is_ok());
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_checkout_never_writes_through_a_symlink_the_tree_holds() {
+    let dir = tempdir().unwrap();
+    let key = signer("test-key");
+    let trusted = trust(&key);
+    let repository = Repository::open(&dir.path().join("store"), "sample", true).unwrap();
+    let victim = dir.path().join("victim.txt");
+    fs::write(&victim, "untouched\n").unwrap();
+    let work = dir.path().join("work");
+    write(&work.join("a.txt"), "a\n");
+    // Names the old temporary-file scheme would have used, pointing outside the tree.
+    for pid in [std::process::id(), std::process::id() + 1] {
+        std::os::unix::fs::symlink(&victim, work.join(format!("..loadngo-repo.{pid}.partial")))
+            .unwrap();
+    }
+    work_tree::init(
+        &repository,
+        "main",
+        &work,
+        "first",
+        "tester",
+        &key,
+        &trusted,
+    )
+    .unwrap();
+    let copy = dir.path().join("copy");
+    work_tree::checkout(&repository, &Target::Branch("main".into()), &trusted, &copy).unwrap();
+    write(&copy.join("a.txt"), "a2\n");
+    work_tree::commit(&copy, &["a.txt".into()], "second", "tester", &key, &trusted).unwrap();
+    assert_eq!(fs::read_to_string(&victim).unwrap(), "untouched\n");
+    assert!(!fs::symlink_metadata(copy.join(".loadngo-repo"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+}
+
+#[test]
+fn a_key_the_trusted_keys_do_not_hold_never_signs_a_head() {
+    let dir = tempdir().unwrap();
+    let key = signer("test-key");
+    let trusted = trust(&key);
+    let stranger = signer("stranger");
+    let repository = Repository::open(&dir.path().join("store"), "sample", true).unwrap();
+    let work = dir.path().join("work");
+    write(&work.join("a.txt"), "a\n");
+    assert!(work_tree::init(
+        &repository,
+        "main",
+        &work,
+        "first",
+        "tester",
+        &stranger,
+        &trusted
+    )
+    .is_err());
+    assert!(repository.head("main").unwrap().is_none());
+    assert!(!work.join(".loadngo-repo").exists());
+    let first = work_tree::init(
+        &repository,
+        "main",
+        &work,
+        "first",
+        "tester",
+        &key,
+        &trusted,
+    )
+    .unwrap();
+    write(&work.join("a.txt"), "a2\n");
+    assert!(
+        work_tree::commit(&work, &["a.txt".into()], "m", "tester", &stranger, &trusted).is_err()
+    );
+    assert_eq!(
+        repository.trusted_head("main", &trusted).unwrap().0,
+        first.version
+    );
+    work_tree::commit(&work, &["a.txt".into()], "m", "tester", &key, &trusted).unwrap();
+}
+
+#[test]
+fn store_upkeep_walks_each_repository_on_its_own() {
+    // Both orders of names, so the folder listing's order cannot hide the case.
+    for (first_id, second_id) in [("aa", "zz"), ("zz", "aa")] {
+        let dir = tempdir().unwrap();
+        let key = signer("test-key");
+        let trusted = trust(&key);
+        let root = dir.path().join("store");
+        let first = Repository::open(&root, first_id, true).unwrap();
+        let work = dir.path().join("first");
+        write(&work.join("a.txt"), "a\n");
+        write(&work.join("sub/b.txt"), "b\n");
+        let report =
+            work_tree::init(&first, "main", &work, "first", "tester", &key, &trusted).unwrap();
+        // The other repository holds a file whose bytes are this one's version object.
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(
+            &mut first.store().open_object(report.version).unwrap(),
+            &mut bytes,
+        )
+        .unwrap();
+        let second = Repository::open(&root, second_id, true).unwrap();
+        let other = dir.path().join("second");
+        fs::create_dir_all(&other).unwrap();
+        fs::write(other.join("copy.json"), &bytes).unwrap();
+        work_tree::init(&second, "main", &other, "first", "tester", &key, &trusted).unwrap();
+        let live = live_objects(first.store()).unwrap();
+        for (hash, _) in first.store().list_objects().unwrap() {
+            assert!(
+                live.contains(&hash),
+                "{first_id} then {second_id}: {hash} would be deleted"
+            );
+        }
+    }
+}
+
+#[test]
+fn receive_replaces_a_damaged_copy_it_already_holds() {
+    let dir = tempdir().unwrap();
+    let key = signer("test-key");
+    let trusted = trust(&key);
+    let source = Repository::open(&dir.path().join("a"), "sample", true).unwrap();
+    let work = dir.path().join("work");
+    write(&work.join("a.txt"), "the bytes of a\n");
+    work_tree::init(&source, "main", &work, "first", "tester", &key, &trusted).unwrap();
+    let (head, signed) = source.trusted_head("main", &trusted).unwrap();
+    let mut stream = Vec::new();
+    source
+        .write_stream(&source.plan_send(head, &[]).unwrap(), &signed, &mut stream)
+        .unwrap();
+    let target = dir.path().join("b");
+    receive(&target, &mut stream.as_slice(), &trusted).unwrap();
+    let received = Repository::open(&target, "sample", false).unwrap();
+    let object = received
+        .store()
+        .object_path(CasHash::digest(b"the bytes of a\n"));
+    let mut bytes = fs::read(&object).unwrap();
+    bytes[0] ^= 1;
+    fs::write(&object, bytes).unwrap();
+    assert!(received.verify("main", &trusted).is_err());
+    receive(&target, &mut stream.as_slice(), &trusted).unwrap();
+    assert!(received.verify("main", &trusted).is_ok());
 }

@@ -50,6 +50,10 @@ pub fn import_git(
     trust: &Trust,
 ) -> Result<ImportReport> {
     super::validate_id(branch, "branch")?;
+    super::work_tree::refuse_untrusted(
+        &SignedHead::sign(repository.id(), branch, CasHash::digest(b""), signer, 0)?,
+        trust,
+    )?;
     let target = git_text(
         git_dir,
         &[
@@ -119,6 +123,7 @@ pub fn import_git(
     let moved = current != Some(head);
     if moved {
         let signed = SignedHead::sign(repository.id(), branch, head, signer, now_unix_secs())?;
+        super::work_tree::refuse_untrusted(&signed, trust)?;
         repository.set_head(&signed, current)?;
     }
     Ok(ImportReport {

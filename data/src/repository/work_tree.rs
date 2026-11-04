@@ -509,6 +509,10 @@ pub fn commit(
     })?;
     let repository = &status.repository;
     let (head, _) = repository.trusted_head(&branch, trust)?;
+    refuse_untrusted(
+        &SignedHead::sign(repository.id(), &branch, CasHash::digest(b""), signer, 0)?,
+        trust,
+    )?;
     if head != status.marker.version {
         bail!(
             "branch {branch} is at {head}, but this tree is based on {}; it has moved since",
@@ -565,6 +569,7 @@ pub fn commit(
         author,
     )?;
     let signed = SignedHead::sign(repository.id(), &branch, version, signer, now_unix_secs())?;
+    refuse_untrusted(&signed, trust)?;
     repository.set_head(&signed, Some(head))?;
     let mut marker = status.marker.clone();
     marker.version = version;
@@ -590,8 +595,15 @@ pub fn init(
     message: &str,
     author: &str,
     signer: &Signer,
+    trust: &Trust,
 ) -> Result<CommitReport> {
     super::validate_id(branch, "branch")?;
+    // Refuse before writing anything: a head no trusted key verifies would leave the
+    // branch stuck.
+    refuse_untrusted(
+        &SignedHead::sign(repository.id(), branch, CasHash::digest(b""), signer, 0)?,
+        trust,
+    )?;
     if tree.join(MARKER_FILE).exists() {
         bail!("{} is a checkout already", tree.display());
     }
@@ -611,6 +623,7 @@ pub fn init(
     }
     let version = record(repository, &leaves, None, message, author)?;
     let signed = SignedHead::sign(repository.id(), branch, version, signer, now_unix_secs())?;
+    refuse_untrusted(&signed, trust)?;
     repository.set_head(&signed, None)?;
     CheckoutMarker {
         format: MARKER_FORMAT.to_string(),
@@ -625,6 +638,17 @@ pub fn init(
         parent: None,
         branch: branch.to_string(),
         changes: found.into_keys().map(Change::Created).collect(),
+    })
+}
+
+/// Refuses a head the trusted keys would not verify: once written, the branch could not
+/// be moved again without editing the store by hand.
+pub(super) fn refuse_untrusted(head: &SignedHead, trust: &Trust) -> Result<()> {
+    head.verify(trust).map(|_| ()).with_context(|| {
+        format!(
+            "{} would sign with a key the trusted keys do not hold; name a trusted key, or sign with one",
+            head.signer_identity
+        )
     })
 }
 
