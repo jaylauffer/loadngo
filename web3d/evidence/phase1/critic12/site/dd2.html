@@ -1,0 +1,67 @@
+<!doctype html><meta charset="utf-8"><title>critic 12: F2, two homes joined by document.domain, a driven canvas moved</title>
+<body><script>document.domain = 'a.localhost';</script><script type="module">
+// The gap the twelfth round names: two realms with different homes that reach each other through
+// document.domain. The top's renderer drives a top canvas; the page moves it into the frame's
+// document; the frame's copy is asked for a renderer on it; then the canvas is moved back. Two live
+// renderers on one context would share its state: the top's state cache would then be stale.
+import { sleep, err, settle, attempt, OPTS, until, green, redraw, listenersOf, page } from './common.js';
+page(async (out) => {
+  const web3d = await import('/pkg/web3d.js');
+  const key = Symbol.for('loadngo-web3d');
+  const f = document.createElement('iframe');
+  f.src = `http://b.a.localhost:${location.port}/evidence/phase1/critic12/site/dd2-frame.html`;
+  document.body.append(f);
+  await new Promise((r) => f.addEventListener('load', r, { once: true }));
+  await until(() => f.contentWindow.ready);
+  const fw = f.contentWindow;
+  out.frameOrigin = fw.location.origin;
+  out.topReachableAtFrameLoad = fw.topReachableAtLoad;
+  out.topReachableAfter = fw.topReachableAfter;
+  out.frameHomeIsTheFrame = fw[key]?.home === fw;
+  out.topHomeIsTheTop = window[key]?.home === window;
+  // 1. The top drives a top canvas: red clear, green quad.
+  const c = document.createElement('canvas');
+  document.body.append(c);
+  const r1 = await web3d.createRenderer(c, OPTS);
+  out.r1 = green(r1, [1, 0, 0]);
+  // 2. Moved into the frame's document while r1 drives it.
+  fw.document.body.append(c);
+  out.r1WhileAway = attempt(() => r1.frame()).message ?? 'drew';
+  // 3. The frame's copy asked for a renderer on it.
+  const t = await settle(fw.web3d.createRenderer(c, OPTS));
+  out.frameCopyWhileR1Live = t.ok ? 'CREATED: a second live renderer on one context' : t.message;
+  if (t.ok) {
+    out.r2 = green(t.r, [0, 0, 1]);
+    // 4. Moved back: r1 draws again, with whatever state r2 left in the context.
+    document.body.append(c);
+    out.r2AfterMoveBack = attempt(() => t.r.frame()).message ?? 'drew';
+    out.r1AfterMoveBack = redraw(r1);
+    out.r1CornerShouldBeRed = out.r1AfterMoveBack.corner;
+    out.r1ClearWrong = !(out.r1AfterMoveBack.corner[0] > 200 && out.r1AfterMoveBack.corner[2] < 50);
+    out.listeners = await listenersOf(c);
+    out.serials = { r1: r1._serial, r2: t.r._serial };
+    attempt(() => t.r.dispose());
+  } else {
+    document.body.append(c);
+    out.r1AfterMoveBack = redraw(r1);
+  }
+  r1.dispose();
+  // 5. The reverse: the frame's copy drives a frame canvas, moved into the top's document.
+  const d = fw.document.createElement('canvas');
+  fw.document.body.append(d);
+  const s1 = await fw.web3d.createRenderer(d, OPTS);
+  out.s1 = green(s1, [1, 0, 0]);
+  document.body.append(d);
+  const s2 = await settle(web3d.createRenderer(d, OPTS));
+  out.topCopyWhileS1Live = s2.ok ? 'CREATED: a second live renderer on one context' : s2.message;
+  if (s2.ok) {
+    out.s2 = green(s2.r, [0, 0, 1]);
+    fw.document.body.append(d);
+    out.s1AfterMoveBack = redraw(s1);
+    out.s1ClearWrong = !(out.s1AfterMoveBack.corner[0] > 200 && out.s1AfterMoveBack.corner[2] < 50);
+    attempt(() => s2.r.dispose());
+  }
+  s1.dispose();
+  out.gap = { forward: t.ok, reverse: s2.ok };
+});
+</script></body>

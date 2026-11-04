@@ -1,0 +1,161 @@
+{
+ "topHasCopyAtStart": false,
+ "prototypes": {
+  "plain": "top",
+  "adopted": "frame",
+  "first": "frame"
+ },
+ "frameCopy": {
+  "plain": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a",
+  "adopted": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a",
+  "first": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a"
+ },
+ "frameOwnKept": {
+  "cycles": [
+   {
+    "drew": "green",
+    "prevented": true,
+    "restored": "webglcontextrestored",
+    "calls": {
+     "lost": 1,
+     "restored": 1
+    }
+   }
+  ],
+  "next": "green"
+ },
+ "topCopyLoadedAfterFrame": true,
+ "topCopyWhileFrameKept": {
+  "plain": "green",
+  "adopted": "green",
+  "first": "green"
+ },
+ "topCanvasesRecoverWhileKept": {
+  "plain": {
+   "cycles": [
+    {
+     "drew": "green",
+     "prevented": true,
+     "restored": "webglcontextrestored",
+     "calls": {
+      "lost": 1,
+      "restored": 1
+     }
+    }
+   ],
+   "next": "green"
+  },
+  "adopted": {
+   "cycles": [
+    {
+     "drew": "green",
+     "prevented": true,
+     "restored": "webglcontextrestored",
+     "calls": {
+      "lost": 1,
+      "restored": 1
+     }
+    }
+   ],
+   "next": "green"
+  },
+  "first": {
+   "cycles": [
+    {
+     "drew": "green",
+     "prevented": true,
+     "restored": "webglcontextrestored",
+     "calls": {
+      "lost": 1,
+      "restored": 1
+     }
+    }
+   ],
+   "next": "green"
+  }
+ },
+ "afterFrameRemoved": {
+  "plain": {
+   "cycles": [
+    {
+     "drew": "green",
+     "prevented": true,
+     "restored": "webglcontextrestored",
+     "calls": {
+      "lost": 1,
+      "restored": 1
+     }
+    },
+    {
+     "drew": "green",
+     "prevented": true,
+     "restored": "webglcontextrestored",
+     "calls": {
+      "lost": 1,
+      "restored": 1
+     }
+    }
+   ],
+   "next": "green"
+  },
+  "adopted": {
+   "cycles": [
+    {
+     "drew": "green",
+     "prevented": true,
+     "restored": "webglcontextrestored",
+     "calls": {
+      "lost": 1,
+      "restored": 1
+     }
+    },
+    {
+     "drew": "green",
+     "prevented": true,
+     "restored": "webglcontextrestored",
+     "calls": {
+      "lost": 1,
+      "restored": 1
+     }
+    }
+   ],
+   "next": "green"
+  },
+  "first": {
+   "cycles": [
+    {
+     "drew": "green",
+     "prevented": true,
+     "restored": "webglcontextrestored",
+     "calls": {
+      "lost": 1,
+      "restored": 1
+     }
+    },
+    {
+     "drew": "green",
+     "prevented": true,
+     "restored": "webglcontextrestored",
+     "calls": {
+      "lost": 1,
+      "restored": 1
+     }
+    }
+   ],
+   "next": "green"
+  }
+ },
+ "verdict": {
+  "frameCopyRefusedEveryArrangement": true,
+  "frameOwnCanvasRecoversWhileKept_N10c": true,
+  "topCanvasesRecoverWhileKept_N10c": true,
+  "topCopyDrawsEach": true,
+  "afterFrameRemovedEachRecoversTwice_N10_N10e": true,
+  "topLoadedLazily_notop": true
+ },
+ "pass": true
+}
+messages: 1
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0

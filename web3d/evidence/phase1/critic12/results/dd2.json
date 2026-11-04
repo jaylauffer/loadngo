@@ -1,0 +1,136 @@
+{
+  "page": "evidence/phase1/critic12/site/dd2.html",
+  "host": "a.localhost",
+  "chrome": "156.0.8078.80",
+  "args": [],
+  "result": {
+    "frameOrigin": "http://b.a.localhost:5483",
+    "topReachableAtFrameLoad": false,
+    "topReachableAfter": true,
+    "frameHomeIsTheFrame": true,
+    "topHomeIsTheTop": true,
+    "r1": {
+      "drew": true,
+      "centre": [
+        56,
+        255,
+        56,
+        255
+      ],
+      "corner": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "isGreen": true
+    },
+    "r1WhileAway": "web3d: this renderer's canvas has been moved to another document than this window's, which web3d does not support (its context-loss listener",
+    "frameCopyWhileR1Live": "CREATED: a second live renderer on one context",
+    "r2": {
+      "drew": true,
+      "centre": [
+        56,
+        255,
+        56,
+        255
+      ],
+      "corner": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "isGreen": true
+    },
+    "r2AfterMoveBack": "web3d: this renderer's canvas has been moved to another document than this window's, which web3d does not support (its context-loss listener",
+    "r1AfterMoveBack": {
+      "drew": true,
+      "centre": [
+        56,
+        255,
+        56,
+        255
+      ],
+      "corner": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "isGreen": true
+    },
+    "r1CornerShouldBeRed": [
+      0,
+      0,
+      255,
+      255
+    ],
+    "r1ClearWrong": true,
+    "listeners": {
+      "webglcontextlost": 2,
+      "webglcontextrestored": 2
+    },
+    "serials": {
+      "r1": 510768,
+      "r2": 611960
+    },
+    "s1": {
+      "drew": true,
+      "centre": [
+        56,
+        255,
+        56,
+        255
+      ],
+      "corner": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "isGreen": true
+    },
+    "topCopyWhileS1Live": "CREATED: a second live renderer on one context",
+    "s2": {
+      "drew": true,
+      "centre": [
+        56,
+        255,
+        56,
+        255
+      ],
+      "corner": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "isGreen": true
+    },
+    "s1AfterMoveBack": {
+      "drew": true,
+      "centre": [
+        56,
+        255,
+        56,
+        255
+      ],
+      "corner": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "isGreen": true
+    },
+    "s1ClearWrong": true,
+    "gap": {
+      "forward": true,
+      "reverse": true
+    }
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

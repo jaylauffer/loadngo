@@ -1,0 +1,32 @@
+{
+ "manyOnOneCanvas": {
+  "n": {
+   "a": 1,
+   "b": 1,
+   "c": 1,
+   "shared": 1
+  },
+  "creates": [
+   "web3d: the canvas's WebGL context is lost; create ",
+   "web3d: the canvas's WebGL context is lost; create ",
+   "web3d: the canvas's WebGL context is lost; create ",
+   "web3d: the canvas's WebGL context is lost; create "
+  ],
+  "nextAfterRestore": true,
+  "pass": true
+ },
+ "G14intent": {
+  "last": "created",
+  "refused": "web3d: this page has made 1048575 renderers, the most it may",
+  "sizeAfterRefusal": [
+   48,
+   24
+  ],
+  "freeAfter": true,
+  "pass": true
+ }
+}
+messages: 1
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0

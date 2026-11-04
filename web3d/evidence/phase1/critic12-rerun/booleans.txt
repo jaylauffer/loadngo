@@ -1,0 +1,70 @@
+# The thirteenth round's rerun against the twelfth critic's (node ../critic11/tools/bool-diff.mjs <critic's file> <this round's>), every boolean leaf by path
+# critic12/rerun/<f> vs critic12-rerun/rerun/<f>; critic12/results/rerun-<f> vs critic12-rerun/results/rerun-<f>; critic12/results/<page> vs critic12-rerun/results/rerun-critic12-<page>
+## critic3.json: 22 booleans; 0 differ
+## critic4.json: 41 booleans; 0 differ
+## critic5-exhaust.json: 8 booleans; 0 differ
+## critic5-main.json: 51 booleans; 0 differ
+## critic6-extra.json: 5 booleans; 0 differ
+## critic6.json: 110 booleans; 0 differ
+## critic7.json: 102 booleans; 0 differ
+## critic8-batch2.json: 3 booleans; 0 differ
+## critic8-batch3.json: 1 booleans; 0 differ
+## critic8.json: 24 booleans; 0 differ
+## run9.json: 44 booleans; 2 differ
+  /probes/N7a/detail/bPrevented: false -> true
+  /probes/N7b/detail/bPrevented: false -> true
+## run9-batch2.json: 7 booleans; 0 differ
+## run9-frame-first.json: 2 booleans; 0 differ
+## run10-bf.json: 6 booleans; 0 differ
+## run10-notop.json: 1 booleans; 0 differ
+## run10-pm.json: 4 booleans; 0 differ
+## run10-state.json: 58 booleans; 0 differ
+## run10-state2.json: 0 booleans; 0 differ
+## run10-xtop.json: 3 booleans; 0 differ
+## rerun-critic11-realm: 12 booleans; 0 differ
+## rerun-critic11-observe: 4 booleans; 0 differ
+## rerun-critic11-reset: 9 booleans; 0 differ
+## rerun-critic11-nowarn: 1 booleans; 0 differ
+## rerun-critic11-intent: 4 booleans; 0 differ
+## rerun-critic11-dd: 2 booleans; 0 differ
+## rerun-round12-intent: 19 booleans; 0 differ
+## rerun-round12-dd: 5 booleans; 0 differ
+## rerun-round12-facts: 10 booleans; 0 differ
+## rerun-round12-listeners: 0 booleans; 0 differ
+## adopt: 24 booleans; 0 differ
+## bf: 26 booleans; 0 differ
+## blank: 27 booleans; 3 differ
+  /result/b2top/cycleOnOldCanvas/prevented: false -> true
+  /result/b2top/cycleOnOldCanvas/ok: false -> true
+  /result/b2top/cycleOnOldCanvas/after: only in the second
+## counter: 13 booleans; 0 differ
+## dd2: 20 booleans; 10 differ
+  /result/gap/forward: true -> false
+  /result/gap/reverse: true -> false
+  /result/r2/drew: only in the first
+  /result/r2/isGreen: only in the first
+  /result/r1ClearWrong: only in the first
+  /result/s2/drew: only in the first
+  /result/s2/isGreen: only in the first
+  /result/s1AfterMoveBack/drew: only in the first
+  /result/s1AfterMoveBack/isGreen: only in the first
+  /result/s1ClearWrong: only in the first
+## docopen: 16 booleans; 7 differ
+  /result/lossOnDriven/prevented: false -> true
+  /result/newRendererOnUsedCanvas/loss/prevented: false -> true
+  /result/verdict/listenersErased: true -> false
+  /result/verdict/lossNotCancelled: true -> false
+  /result/verdict/contextLostForGood: true -> false
+  /result/verdict/hooksNeverCalled: true -> false
+  /result/verdict/newRendererHasNoListener: true -> false
+## f4: 11 booleans; 0 differ
+## midcreate: 10 booleans; 4 differ
+  /result/verdict/m1MovedDuringCreateRefused: false -> true
+  /result/verdict/m2aMovedInCallbackRefused: false -> true
+  /result/m1/back: only in the first
+  /result/m2a/back: only in the first
+## nav: 35 booleans; 1 differ
+  /result/pass/newPageCopyGetsItsOwnCanvasAfterTheOldCopyWasCalled: false -> true
+## override: 1 booleans; 0 differ
+## per: 0 booleans; 0 differ
+## transfer: 0 booleans; 0 differ

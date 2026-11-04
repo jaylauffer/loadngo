@@ -4,11 +4,12 @@
 // (programs, buffers, vertex arrays, textures, queries; 0 is "none"). Every function takes and
 // returns numbers.
 //
-// Once the context is lost, this shim is finished for good, even after the browser restores the
-// context: its objects belonged to the lost one. Creating returns 0 (WebGL itself hands out objects
-// while lost), and deleting only forgets the handle, so disposing the old renderer after a restore
-// sends nothing into the restored context, which a new renderer then owns. The shim listens for no
-// events: web3d.js keeps one loss controller a canvas, which says when this shim's context was lost.
+// The shim is made before its context and given it by `bind` (see createGl). Once the context is
+// lost, this shim is finished for good, even after the browser restores the context: its objects
+// belonged to the lost one. Creating returns 0 (WebGL itself hands out objects while lost), and
+// deleting only forgets the handle, so disposing the old renderer after a restore sends nothing
+// into the restored context, which a new renderer then owns. The shim listens for no events:
+// web3d.js's loss controllers count the canvas's losses, which says when its context was lost.
 //
 // Byte data arrives as a pointer and a length into the wasm module's memory and is read in place
 // through one cached Uint8Array view (WebGL2's `bufferSubData(target, offset, view, srcOffset,
@@ -47,15 +48,21 @@ class Table {
 }
 
 /**
- * The import object for the wasm module, over `gl`, a WebGL2 context web3d.js took from a canvas.
- * `lostSince()` says whether the context has been lost since this shim was made (web3d.js's loss
- * controller counts the canvas's losses), so a loss and restore that both fell between two checks
- * still finish the shim.
+ * The import object for the wasm module. It is made before its context, so that web3d.js can
+ * instantiate the module before it touches the canvas (its createRenderer awaits nothing once it
+ * has taken the context), and is then given the WebGL2 context web3d.js took from the canvas by
+ * `bind(gl, lostSince)`. The module calls no import before that: it has no start function, and
+ * web3d.js makes the renderer only after `bind`. `lostSince()` says whether the context has been
+ * lost since the shim was bound (web3d.js's loss controllers count the canvas's losses on its
+ * record, in whichever realm), so a loss and restore that both fell between two checks still finish
+ * the shim.
  */
-export function createGl(gl, lostSince) {
-  const timer = gl.getExtension('EXT_disjoint_timer_query_webgl2');
-  // Lets the driver compile the programs in parallel; the link check then waits for them.
-  gl.getExtension('KHR_parallel_shader_compile');
+export function createGl() {
+  let gl = null;
+  let lostSince = null;
+  let timer = null;
+  let depthOnly = null;
+  let back = null;
 
   const programs = new Table();
   const buffers = new Table();
@@ -63,13 +70,11 @@ export function createGl(gl, lostSince) {
   const textures = new Table();
   const queries = new Table();
   const decoder = new TextDecoder();
-  const depthOnly = [gl.DEPTH];
-  const back = [gl.BACK];
 
   const state = { staged: null, stagedSize: null, lost: false, lastLog: '' };
-  /** True from the moment the context is lost, and for good: the event can lag isContextLost(). */
+  /** True from the moment the context is lost, and for good: the event can lag isContextLost(). False before `bind`. */
   const gone = () => {
-    if (!state.lost && (gl.isContextLost() || lostSince())) state.lost = true;
+    if (!state.lost && gl !== null && (gl.isContextLost() || lostSince())) state.lost = true;
     return state.lost;
   };
   let memory = null;
@@ -430,9 +435,18 @@ export function createGl(gl, lostSince) {
   };
 
   return {
-    gl,
     state,
     imports: { web3d_gl: imports },
+    /** Gives the shim its context, once: before it, the module calls no import (see above). */
+    bind(context, since) {
+      gl = context;
+      lostSince = since;
+      timer = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+      // Lets the driver compile the programs in parallel; the link check then waits for them.
+      gl.getExtension('KHR_parallel_shader_compile');
+      depthOnly = [gl.DEPTH];
+      back = [gl.BACK];
+    },
     /** Gives the shim the instantiated module's memory. */
     attach(wasmMemory) {
       memory = wasmMemory;

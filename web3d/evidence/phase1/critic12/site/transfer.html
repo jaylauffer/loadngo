@@ -1,0 +1,52 @@
+<!doctype html><meta charset="utf-8"><title>critic 12: an OffscreenCanvas transferred from a canvas with the frame's prototype</title>
+<body><script type="module">
+// T1. This document's parser makes a canvas; the frame's MutationObserver touches it first, so it
+// has the frame's prototype. This window's code then calls canvas.transferControlToOffscreen(),
+// which resolves to the frame's method. Which realm's OffscreenCanvas comes back, which copy takes
+// it, and do its loss events still come after the frame is removed (raw WebGL, no web3d)?
+// T2. The same, through this window's own HTMLCanvasElement.prototype.transferControlToOffscreen.
+import { sleep, err, settle, OPTS, until, frameOf, green, page } from './common.js';
+page(async (out) => {
+  const web3d = await import('/pkg/web3d.js');
+  const f = await frameOf('frame.html');
+  const fw = f.contentWindow;
+  fw.eval("window.seen = []; window.obs = new MutationObserver((rs) => { for (const r of rs) for (const n of r.addedNodes) if (n.nodeName === 'CANVAS') window.seen.push(n); }); window.obs.observe(parent.document.body, { childList: true });");
+  document.body.insertAdjacentHTML('beforeend', '<canvas id="a" width="16" height="16"></canvas><canvas id="b" width="16" height="16"></canvas><canvas id="c" width="16" height="16"></canvas><canvas id="d" width="16" height="16"></canvas>');
+  await until(() => fw.seen.length === 4);
+  fw.obs.disconnect();
+  const realmOf = (o) => (Object.getPrototypeOf(o) === fw.OffscreenCanvas.prototype || Object.getPrototypeOf(o) === fw.HTMLCanvasElement.prototype ? 'frame' : 'this window');
+  const ocA = document.getElementById('a').transferControlToOffscreen();
+  const ocB = HTMLCanvasElement.prototype.transferControlToOffscreen.call(document.getElementById('b'));
+  out.elementRealm = realmOf(document.getElementById('a'));
+  out.t1 = { offscreenRealm: realmOf(ocA) };
+  out.t2 = { offscreenRealm: realmOf(ocB) };
+  for (const [k, oc] of [['t1', ocA], ['t2', ocB]]) {
+    const ours = await settle(web3d.createRenderer(oc, OPTS));
+    out[k].ours = ours.ok ? (green(ours.r).isGreen ? 'draws' : 'created') : ours.message;
+    if (ours.ok) ours.r.dispose();
+    const theirs = await settle(fw.web3d.createRenderer(oc, OPTS));
+    out[k].theirs = theirs.ok ? (green(theirs.r).isGreen ? 'draws' : 'created') : theirs.message;
+    if (theirs.ok) theirs.r.dispose();
+  }
+  // Raw WebGL on two more, made the same two ways: do their loss events still come after the
+  // frame is removed, to a listener of this window's?
+  const raw = {};
+  for (const [k, oc] of [['frameMethod', document.getElementById('c').transferControlToOffscreen()], ['ownMethod', HTMLCanvasElement.prototype.transferControlToOffscreen.call(document.getElementById('d'))]]) {
+    const gl = oc.getContext('webgl2');
+    const r = { realm: realmOf(oc), events: [] };
+    oc.addEventListener('webglcontextlost', (e) => { e.preventDefault(); r.events.push('lost'); });
+    oc.addEventListener('webglcontextrestored', () => r.events.push('restored'));
+    raw[k] = { oc, gl, r };
+  }
+  f.remove();
+  await sleep(100);
+  for (const [k, { gl, r }] of Object.entries(raw)) {
+    const lc = gl.getExtension('WEBGL_lose_context');
+    try { lc.loseContext(); } catch (e) { r.loseThrew = err(e); }
+    await sleep(300);
+    try { lc.restoreContext(); } catch (e) { r.restoreThrew = err(e); }
+    await sleep(300);
+    out[`raw_${k}`] = r;
+  }
+});
+</script></body>

@@ -1,0 +1,90 @@
+$ cargo test --locked -p loadngo-web3d
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/loadngo_web3d-b9eafafae96f9adc)
+
+running 75 tests
+test math::tests::frustum_culls_spheres_outside ... ok
+test math::tests::inverse_undoes_a_transform_and_rejects_singular ... ok
+test math::tests::look_at_puts_eye_at_origin_and_target_down_negative_z ... ok
+test math::tests::look_at_survives_up_parallel_to_view ... ok
+test math::tests::mirroring_has_negative_determinant ... ok
+test math::tests::multiply_identity_and_known_product ... ok
+test math::tests::multiply_is_associative_and_not_commutative ... ok
+test math::tests::normal_matrix_keeps_normals_perpendicular_under_non_uniform_scale ... ok
+test math::tests::perspective_maps_near_and_far_planes_and_field_of_view ... ok
+test pack::tests::align_up_rounds_to_multiples ... ok
+test pack::tests::attributes_fall_back_to_float_uv_and_omit_missing_uv ... ok
+test pack::tests::attributes_interleave_normal_then_unorm16_uv ... ok
+test pack::tests::bounding_sphere_contains_every_point ... ok
+test pack::tests::computed_normals_face_out_of_a_quad_and_weigh_by_area ... ok
+test pack::tests::f32_bytes_are_little_endian_floats ... ok
+test pack::tests::indices_narrow_to_u16_when_they_fit ... ok
+test pack::tests::normals_are_renormalised_and_zero_becomes_up ... ok
+test pack::tests::out_of_range_index_is_refused ... ok
+test pack::tests::srgb_encoding_matches_reference_values ... ok
+test pack::tests::std140_blocks_are_legal_and_ordered ... ok
+test pack::tests::uv_format_follows_range ... ok
+test renderer::tests::bad_meshes_are_refused_before_any_gl_call ... ok
+test renderer::tests::clear_colour_is_linear_and_encoded_once ... ok
+test renderer::tests::cpu_timing_is_off_until_asked_for ... ok
+test renderer::tests::draw_keys_order_passes_programs_materials_and_depth ... ok
+test pack::tests::normals_pack_into_10_bit_fields_and_round_trip ... ok
+test renderer::tests::double_sided_turns_culling_off_and_mirroring_flips_the_front_face ... ok
+test renderer::tests::each_material_is_bound_once_a_frame ... ok
+test renderer::tests::depth_writes_come_back_on_before_the_clear ... ok
+test renderer::tests::frame_block_carries_camera_and_normalised_light ... ok
+test renderer::tests::frame_draws_opaque_front_to_back_then_masked_then_blended_back_to_front ... ok
+test renderer::tests::gpu_time_reaches_the_stats ... ok
+test renderer::tests::handles_are_checked_and_resources_in_use_cannot_be_destroyed ... ok
+test renderer::tests::init_compiles_three_programs_and_binds_blocks_and_sampler ... ok
+test renderer::tests::handles_of_another_kind_or_another_renderer_are_refused ... ok
+test renderer::tests::init_refuses_a_driver_layout_that_differs ... ok
+test renderer::tests::init_reports_a_shader_that_fails ... ok
+test renderer::tests::init_puts_back_webgl_default_state_before_anything_else ... ok
+test renderer::tests::mesh_upload_splits_positions_from_packed_attributes_and_narrows_indices ... ok
+test renderer::tests::mesh_without_normals_or_uvs_gets_computed_normals_and_no_uv_attribute ... ok
+test renderer::tests::morph_target_counts_are_capped_and_never_overflow ... ok
+test renderer::tests::non_finite_normals_are_refused ... ok
+test renderer::tests::objects_outside_the_view_hidden_or_fully_masked_are_not_drawn ... ok
+test renderer::tests::release_deletes_everything ... ok
+test renderer::tests::released_renderers_cannot_be_initialised_again ... ok
+test renderer::tests::resize_moves_the_viewport_and_keeps_the_look_at_projection_in_aspect ... ok
+test renderer::tests::skin_and_morph_data_are_accepted_and_recorded_for_later_phases ... ok
+test renderer::tests::texture_flags_refuse_unknown_wrap_modes_and_bits ... ok
+test renderer::tests::skin_weights_must_be_in_range_and_sum_to_one ... ok
+test renderer::tests::textures_respect_the_size_limit_and_get_a_full_mip_chain ... ok
+test renderer::tests::transforms_must_be_finite ... ok
+test shaders::tests::blinn_phong_narrows_with_smoothness ... ok
+test shaders::tests::environment_stand_in_is_specular_colour_times_hemisphere_radiance ... ok
+test renderer::tests::unchanged_state_is_not_sent_again ... ok
+test renderer::tests::uniform_slots_follow_alignment_and_driver_block_size ... ok
+test shaders::tests::every_block_member_is_declared_in_the_source ... ok
+test renderer::tests::a_frame_allocates_nothing ... ok
+test shaders::tests::sources_start_with_version_and_switch_features ... ok
+test slots::tests::a_handle_of_another_kind_or_renderer_is_refused ... ok
+test shaders::tests::the_shader_text_carries_the_same_constants ... ok
+test slots::tests::clearing_keeps_old_handles_refused ... ok
+test slots::tests::forged_handles_fail ... ok
+test shaders::tests::shading_matches_three_js_r180 ... ok
+test slots::tests::handles_are_positive_small_and_never_zero ... ok
+test slots::tests::iter_and_remove_all_visit_live_values ... ok
+test slots::tests::stale_handles_fail_after_their_slot_is_reused ... ok
+test slots::tests::the_largest_handle_is_below_two_to_the_fifty ... ok
+test testing::the_counter_sees_allocations ... ok
+test timer::tests::a_full_ring_skips_frames_instead_of_blocking ... ok
+test timer::tests::disjoint_discards_the_batch ... ok
+test timer::tests::results_arrive_late_and_in_order ... ok
+test timer::tests::the_disjoint_flag_is_read_only_once_a_result_is_in ... ok
+test timer::tests::unsupported_timer_issues_no_queries ... ok
+test slots::tests::no_handle_is_ever_issued_twice_a_slot_retires_instead_of_wrapping ... ok
+test slots::tests::renderers_with_different_serials_never_share_a_handle ... ok
+
+test result: ok. 75 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests loadngo_web3d
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+>>> exit 0

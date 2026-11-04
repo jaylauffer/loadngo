@@ -1,0 +1,30 @@
+{
+  "page": "evidence/phase1/critic12/site/transfer.html",
+  "host": "127.0.0.1",
+  "chrome": "156.0.8078.80",
+  "args": [],
+  "result": {
+    "elementRealm": "frame",
+    "t1": {
+      "offscreenRealm": "frame",
+      "ours": "web3d: this OffscreenCanvas belongs to another realm (it was made in, or transferred to, another window or worker); web3d drives an Offscree",
+      "theirs": "draws"
+    },
+    "t2": {
+      "offscreenRealm": "frame",
+      "ours": "web3d: this OffscreenCanvas belongs to another realm (it was made in, or transferred to, another window or worker); web3d drives an Offscree",
+      "theirs": "draws"
+    },
+    "raw_frameMethod": {
+      "realm": "frame",
+      "events": []
+    },
+    "raw_ownMethod": {
+      "realm": "frame",
+      "events": []
+    }
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

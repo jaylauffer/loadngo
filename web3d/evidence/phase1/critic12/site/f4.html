@@ -1,0 +1,65 @@
+<!doctype html><meta charset="utf-8"><title>critic 12: F4's width set to another value and back</title>
+<body><script type="module">
+// F4: on a context with alpha whose drawing buffer is not the canvas's size, createRenderer sets
+// the canvas's width to another value and back. What can a page see of it? A MutationObserver
+// (attribute records with old values), a customized built-in canvas's attributeChangedCallback,
+// a ResizeObserver, the CSS size. And is the premise true that a context without alpha cannot
+// store another size (drawingBufferStorage refused there)?
+import { sleep, err, settle, attempt, until, page } from './common.js';
+class XCanvas extends HTMLCanvasElement {
+  static observedAttributes = ['width', 'height'];
+  attributeChangedCallback(name, before, after) { (this.log ??= []).push(`${name}:${before}->${after}`); }
+}
+customElements.define('x-canvas', XCanvas, { extends: 'canvas' });
+page(async (out) => {
+  const web3d = await import('/pkg/web3d.js');
+  const ctxOpts = (alpha) => ({ alpha, antialias: false, depth: true });
+  async function watch(name, { alpha, store }) {
+    const c = document.createElement('canvas', { is: 'x-canvas' });
+    c.width = 40;
+    c.height = 30;
+    document.body.append(c);
+    const gl = c.getContext('webgl2', ctxOpts(alpha));
+    let storeError = null;
+    if (store) {
+      while (gl.getError()) {}
+      attempt(() => gl.drawingBufferStorage(gl.RGBA8, 8, 4));
+      storeError = gl.getError();
+    }
+    const stored = [gl.drawingBufferWidth, gl.drawingBufferHeight];
+    c.log = [];
+    const records = [];
+    const mo = new MutationObserver((rs) => { for (const r of rs) records.push(`${r.attributeName}:${r.oldValue}->${c.getAttribute(r.attributeName)}`); });
+    mo.observe(c, { attributes: true, attributeOldValue: true });
+    const sizes = [];
+    const ro = new ResizeObserver((es) => { for (const e of es) sizes.push(`${e.contentRect.width}x${e.contentRect.height}`); });
+    ro.observe(c);
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const roBefore = sizes.length;
+    const m = await settle(web3d.createRenderer(c, { width: 40, height: 30, antialias: false }));
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    mo.disconnect();
+    ro.disconnect();
+    const res = {
+      alpha, store, storeError, stored,
+      created: m.ok ? 'created' : m.message,
+      bufferAfter: m.ok ? [m.r.gl.drawingBufferWidth, m.r.gl.drawingBufferHeight] : null,
+      attributeChangedCallback: c.log,
+      mutationRecords: records,
+      resizeObserverAfterCreate: sizes.slice(roBefore),
+      cssSize: `${c.getBoundingClientRect().width}x${c.getBoundingClientRect().height}`,
+    };
+    if (m.ok) m.r.dispose();
+    out[name] = res;
+  }
+  await watch('alphaStored', { alpha: true, store: true });
+  await watch('alphaNotStored', { alpha: true, store: false });
+  await watch('noAlphaStored', { alpha: false, store: true });
+  await watch('noAlphaNotStored', { alpha: false, store: false });
+  out.premise = {
+    noAlphaStoreRefused: out.noAlphaStored.storeError !== 0 && out.noAlphaStored.stored.join('x') === '40x30',
+    noAlphaBufferIsCanvasAfterCreate: out.noAlphaStored.bufferAfter?.join('x') === '40x30',
+    alphaStoredBufferIsCanvasAfterCreate: out.alphaStored.bufferAfter?.join('x') === '40x30',
+  };
+});
+</script></body>

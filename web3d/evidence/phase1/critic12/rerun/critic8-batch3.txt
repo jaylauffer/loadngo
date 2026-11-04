@@ -1,0 +1,5 @@
+Chrome 156.0.8078.80 (headless, own instance)
+FAIL  E16  threw
+passed undefined of 1; page errors 0
+browser and server stopped
+>>> exit 0

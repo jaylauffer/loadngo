@@ -1,0 +1,22 @@
+<!doctype html><meta charset="utf-8"><title>critic 12: listener counts per context</title>
+<body><script type="module">
+// The premise of the counter's fix: DevTools lists an object's listeners only when the object is
+// resolved in its own frame's context. Here each object's count is read in each frame's context.
+import { frameOf, page } from './common.js';
+page(async (out) => {
+  const f = await frameOf('frame.html');
+  const fw = f.contentWindow;
+  const per = async (o) => { window.__targets ??= {}; window.__targets['k#per'] = o; try { return await window.__listeners('@k#per'); } finally { delete window.__targets['k#per']; } };
+  const tc = document.body.appendChild(document.createElement('canvas'));
+  tc.addEventListener('x', () => {});
+  const fc = fw.document.body.appendChild(fw.document.createElement('canvas'));
+  fc.addEventListener('x', () => {});
+  fw.eval('(c) => c.addEventListener("y", () => {})')(fc);
+  const foc = new fw.OffscreenCanvas(2, 2);
+  foc.addEventListener('x', () => {});
+  out.topCanvasTopListener = await per(tc);
+  out.frameCanvasOneListenerOfEachRealm = await per(fc);
+  out.frameOffscreenTopListener = await per(foc);
+  out.topOrigin = location.origin;
+});
+</script></body>

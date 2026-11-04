@@ -54,9 +54,10 @@ export interface RendererOptions {
    * Called once when the context is restored after a loss of this renderer's: whether it was still
    * live (disposed or not, at any time after the loss, even in a restored listener of the page's
    * that runs before web3d's), disposed while lost, or a create that failed because of the loss.
-   * Create the next renderer then. web3d keeps one loss controller a canvas, which cancels every
-   * lost event so the context can be restored, and runs each hook once in its own try; its
-   * listeners belong to the canvas's own realm, the only one web3d drives it from.
+   * Create the next renderer then. web3d keeps one loss controller a canvas, in the canvas's own
+   * realm, the only one web3d drives it from: it cancels every lost event the browser dispatches,
+   * so the context can be restored, and runs each hook once in its own try. Its two listeners go
+   * on the canvas at every create, and back on after a document.open() takes them off.
    */
   onContextRestored?: () => void;
 }
@@ -125,13 +126,16 @@ export interface MaterialOptions {
 export function compile(source?: RendererOptions['wasm']): Promise<WebAssembly.Module>;
 /**
  * One renderer per canvas while it is live, made by a copy of web3d in the canvas's own realm: a
- * canvas element of another document than this window's, or an OffscreenCanvas of another window
- * or worker, is refused before anything touches it (so a frame cannot drive a canvas of the top
- * document, nor the top a frame's), and a driven element moved to another document is refused by
- * frame(), resize() and the creates. A canvas keeps its first WebGL context and that context's
- * antialias setting; a later renderer on it must ask for the same, and the context needs a depth
- * buffer. The renderer puts the context's state back to its defaults (docs/WEB3D.md lists what is
- * set and what is left alone) and owns that state from then on.
+ * canvas element of another document than this window's, or an OffscreenCanvas whose prototype is
+ * another realm's, is refused before anything touches it (so a frame cannot drive a canvas of the
+ * top document, nor the top a frame's), as is every canvas once the copy's window has navigated
+ * away. The canvas is checked again after the module loads and after each size set, and one moved
+ * meanwhile is refused; a driven element moved to another document is refused by frame(), resize()
+ * and the creates. Every copy reads one record of the canvas, kept on it under
+ * Symbol.for('loadngo-web3d'): leave that property alone. A canvas keeps its first WebGL context and
+ * that context's antialias setting; a later renderer on it must ask for the same, and the context
+ * needs a depth buffer. The renderer puts the context's state back to its defaults (docs/WEB3D.md
+ * lists what is set and what is left alone) and owns that state from then on.
  */
 export function createRenderer(canvas: HTMLCanvasElement | OffscreenCanvas, options?: RendererOptions): Promise<Renderer>;
 
@@ -178,7 +182,8 @@ export class Renderer {
   setCpuTiming(on: boolean): void;
   /**
    * Draws a frame; false from the context's loss on, for good: after a restore, create a new
-   * renderer. Throws if the canvas element has been moved to another document.
+   * renderer. Throws if the canvas element has been moved to another document, or the copy's
+   * window has navigated away.
    */
   frame(): boolean;
   /** [cpuMs, gpuMs or NaN, GPU frame, draws, triangles, culled, program binds, material binds]; `out` holds at least 8. */

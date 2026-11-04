@@ -1,0 +1,460 @@
+{
+  "page": "state",
+  "browser": "Chrome 156.0.8078.80 (headless, own instance)",
+  "console": [
+    "warning: WebGL: this extension has very low support on mobile devices; do not rely on it for rendering effects without implementing a fallback path: WEBGL_polygon_mode"
+  ],
+  "pageErrors": [],
+  "out": {
+    "cases": [
+      {
+        "name": "depth mask false, the depth buffer cleared to 0 by the page",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "viewport 1x1 at the corner",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "front face CW with culling on",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "cull face FRONT_AND_BACK with culling on",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "stencil mask 0 and op ZERO, stencil test off, on a context with stencil",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "dither off",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "OES_draw_buffers_indexed: colorMaskiOES(0, false x4)",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "OES_draw_buffers_indexed: blendEquationiOES(0, FUNC_REVERSE_SUBTRACT), a blended draw",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "OES_draw_buffers_indexed: blendFunciOES(0, ZERO, ZERO), a blended draw",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "OES_draw_buffers_indexed: enableiOES(BLEND, 0) with blendFunciOES(0, ZERO, ZERO), an opaque draw",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "WEBGL_polygon_mode: LINE (excluded by design)",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "after": 6914,
+        "pass": true
+      },
+      {
+        "name": "an integer generic value on the uv attribute (vertexAttribI4ui), a textured mesh without uvs",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "vertexAttribDivisor 1 on attributes 0-2 of the default vertex array",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "uniform-buffer bindings 0-3 taken by page buffers of zeros",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "a red texture bound on every unit, active unit 7, an upload and a textured draw",
+        "pageError": 0,
+        "pixel": {
+          "tl": [
+            255,
+            56,
+            56
+          ],
+          "tr": [
+            56,
+            255,
+            56
+          ],
+          "bl": [
+            56,
+            56,
+            255
+          ]
+        },
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "transform feedback active and paused on a page object, then unbound",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "note": "paused capture left on an unbound object",
+        "pass": true
+      },
+      {
+        "name": "transform feedback active and paused on the bound page object",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "a TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN and an ANY_SAMPLES_PASSED_CONSERVATIVE query left running",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "WEBGL_clip_cull_distance: every CLIP_DISTANCEi on",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "EXT_blend_func_extended: blendFuncSeparate with SRC1 factors, a blended draw",
+        "pageError": 0,
+        "skipped": "no such extension or attribute here"
+      },
+      {
+        "name": "blendColor 0 with blendFunc CONSTANT_COLOR, a blended draw",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "UNPACK_ALIGNMENT 8 and UNPACK_IMAGE_HEIGHT 1, an upload",
+        "pageError": 0,
+        "pixel": {
+          "tl": [
+            255,
+            56,
+            56
+          ],
+          "tr": [
+            56,
+            255,
+            56
+          ],
+          "bl": [
+            56,
+            56,
+            255
+          ]
+        },
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "UNPACK_COLORSPACE_CONVERSION_WEBGL BROWSER_DEFAULT, an upload",
+        "pageError": 0,
+        "pixel": {
+          "tl": [
+            255,
+            56,
+            56
+          ],
+          "tr": [
+            56,
+            255,
+            56
+          ],
+          "bl": [
+            56,
+            56,
+            255
+          ]
+        },
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "unpackColorSpace display-p3, a 2d canvas painted sRGB (200, 100, 50) uploaded",
+        "pageError": 0,
+        "pixel": [
+          206,
+          114,
+          76
+        ],
+        "drawn": false,
+        "glError": 0,
+        "after": "srgb",
+        "pass": false
+      },
+      {
+        "name": "drawingBufferColorSpace display-p3 (pixels read back as written; their meaning is P3)",
+        "pageError": 0,
+        "pixel": [
+          134,
+          134,
+          134
+        ],
+        "drawn": false,
+        "glError": 0,
+        "after": "srgb",
+        "pass": false
+      },
+      {
+        "name": "drawingBufferStorage(SRGB8_ALPHA8): an sRGB drawing buffer, a mid grey",
+        "pageError": 0,
+        "pixel": [
+          134,
+          134,
+          134
+        ],
+        "drawn": false,
+        "glError": 0,
+        "after": 32856,
+        "pass": false
+      },
+      {
+        "name": "drawingBufferStorage(RGBA16F): a float drawing buffer, a mid grey",
+        "pageError": 0,
+        "pixel": [
+          134,
+          134,
+          134
+        ],
+        "drawn": false,
+        "glError": 0,
+        "after": 32856,
+        "pass": false
+      },
+      {
+        "name": "nothing changed (control), a draw",
+        "pageError": 0,
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "drawn": true,
+        "glError": 0,
+        "pass": true
+      },
+      {
+        "name": "nothing changed (control), a mid grey",
+        "pageError": 0,
+        "pixel": [
+          134,
+          134,
+          134
+        ],
+        "drawn": false,
+        "glError": 0,
+        "pass": false
+      },
+      {
+        "name": "nothing changed (control), a 2d canvas uploaded",
+        "pageError": 0,
+        "pixel": [
+          206,
+          114,
+          76
+        ],
+        "drawn": false,
+        "glError": 0,
+        "pass": false
+      }
+    ],
+    "facts": {
+      "extensions": [
+        "EXT_clip_control",
+        "EXT_color_buffer_float",
+        "EXT_color_buffer_half_float",
+        "EXT_conservative_depth",
+        "EXT_depth_clamp",
+        "EXT_disjoint_timer_query_webgl2",
+        "EXT_float_blend",
+        "EXT_polygon_offset_clamp",
+        "EXT_render_snorm",
+        "EXT_texture_compression_bptc",
+        "EXT_texture_compression_rgtc",
+        "EXT_texture_filter_anisotropic",
+        "EXT_texture_mirror_clamp_to_edge",
+        "EXT_texture_norm16",
+        "KHR_parallel_shader_compile",
+        "NV_shader_noperspective_interpolation",
+        "OES_draw_buffers_indexed",
+        "OES_sample_variables",
+        "OES_shader_multisample_interpolation",
+        "OES_texture_float_linear",
+        "WEBGL_blend_func_extended",
+        "WEBGL_clip_cull_distance",
+        "WEBGL_compressed_texture_astc",
+        "WEBGL_compressed_texture_etc",
+        "WEBGL_compressed_texture_etc1",
+        "WEBGL_compressed_texture_pvrtc",
+        "WEBGL_compressed_texture_s3tc",
+        "WEBGL_compressed_texture_s3tc_srgb",
+        "WEBGL_debug_renderer_info",
+        "WEBGL_debug_shaders",
+        "WEBGL_lose_context",
+        "WEBGL_multi_draw",
+        "WEBGL_polygon_mode",
+        "WEBGL_provoking_vertex",
+        "WEBGL_render_shared_exponent",
+        "WEBGL_stencil_texturing"
+      ]
+    },
+    "passed": 23,
+    "failed": [
+      "unpackColorSpace display-p3, a 2d canvas painted sRGB (200, 100, 50) uploaded",
+      "drawingBufferColorSpace display-p3 (pixels read back as written; their meaning is P3)",
+      "drawingBufferStorage(SRGB8_ALPHA8): an sRGB drawing buffer, a mid grey",
+      "drawingBufferStorage(RGBA16F): a float drawing buffer, a mid grey",
+      "nothing changed (control), a mid grey",
+      "nothing changed (control), a 2d canvas uploaded"
+    ],
+    "skipped": [
+      "EXT_blend_func_extended: blendFuncSeparate with SRC1 factors, a blended draw"
+    ]
+  },
+  "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)"
+}

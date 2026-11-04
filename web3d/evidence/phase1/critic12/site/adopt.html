@@ -1,0 +1,66 @@
+<!doctype html><meta charset="utf-8"><title>critic 12: adoptNode, importNode, windowless documents, shadow roots</title>
+<body><div id="host"></div><div id="closedHost"></div><script type="module">
+// Each canvas is judged by its owner document: taken by this window's copy if it is this
+// document's, else refused untouched with no listener; and the frame's copy the other way round.
+import { err, settle, OPTS, frameOf, green, listenersOf, page } from './common.js';
+page(async (out) => {
+  const web3d = await import('/pkg/web3d.js');
+  const f = await frameOf('frame.html');
+  const fw = f.contentWindow;
+  const untouched = (c) => c.getContext('2d') !== null;
+  async function judge(name, c, expectOwner) {
+    const ours = await settle(web3d.createRenderer(c, OPTS));
+    const theirs = ours.ok ? { ok: false, message: 'not tried (ours live)' } : await settle(fw.web3d.createRenderer(c, OPTS));
+    const e = { owner: c.ownerDocument === document ? 'top' : c.ownerDocument === fw.document ? 'frame' : 'windowless' };
+    e.ours = ours.ok ? (green(ours.r).isGreen ? 'draws' : 'created') : ours.message;
+    e.theirs = theirs.ok ? (green(theirs.r).isGreen ? 'draws' : 'created') : theirs.message;
+    if (ours.ok) ours.r.dispose();
+    if (theirs.ok) theirs.r.dispose();
+    if (expectOwner === 'windowless') {
+      e.listeners = await listenersOf(c);
+      e.untouched = untouched(c);
+    }
+    e.ok = expectOwner === 'top' ? e.ours === 'draws' : expectOwner === 'frame' ? /another document/.test(e.ours) && e.theirs === 'draws' : /another document/.test(e.ours) && /another document/.test(e.theirs) && e.untouched && JSON.stringify(e.listeners) === '{}';
+    out[name] = e;
+  }
+  // adoptNode, each way, without inserting.
+  await judge('topAdoptsFrameCanvas', document.adoptNode(fw.document.createElement('canvas')), 'top');
+  await judge('frameAdoptsTopCanvas', fw.document.adoptNode(document.createElement('canvas')), 'frame');
+  // The top calls the frame document's adoptNode on a top canvas, and the other way round.
+  await judge('topCallsFrameAdopt', fw.Document.prototype.adoptNode.call(fw.document, document.createElement('canvas')), 'frame');
+  await judge('frameCallsTopAdopt', fw.eval('(d, c) => d.adoptNode(c)')(document, fw.document.createElement('canvas')), 'top');
+  // importNode, each way (a clone in the importing document).
+  await judge('topImportsFrameCanvas', document.importNode(fw.document.createElement('canvas')), 'top');
+  await judge('frameImportsTopCanvas', fw.document.importNode(document.createElement('canvas')), 'frame');
+  // Windowless documents, and their canvases adopted or imported here.
+  const t = document.createElement('template');
+  t.innerHTML = '<canvas></canvas>';
+  await judge('templateCanvas', t.content.firstChild, 'windowless');
+  await judge('templateImported', document.importNode(t.content, true).firstChild, 'top');
+  const pd = new DOMParser().parseFromString('<canvas></canvas><canvas></canvas>', 'text/html');
+  await judge('domParserCanvas', pd.querySelector('canvas'), 'windowless');
+  await judge('domParserAdopted', document.adoptNode(pd.querySelectorAll('canvas')[1]), 'top');
+  const hd = document.implementation.createHTMLDocument('x');
+  await judge('createHTMLDocumentCanvas', hd.createElement('canvas'), 'windowless');
+  await judge('createHTMLDocumentAdopted', document.adoptNode(hd.createElement('canvas')), 'top');
+  const xd = new Document();
+  await judge('newDocumentCanvas', xd.createElementNS('http://www.w3.org/1999/xhtml', 'canvas'), 'windowless');
+  const ft = fw.document.createElement('template');
+  ft.innerHTML = '<canvas></canvas>';
+  await judge('frameTemplateCanvas', ft.content.firstChild, 'windowless');
+  // Shadow roots, open and closed, here and in the frame.
+  const open = document.getElementById('host').attachShadow({ mode: 'open' });
+  await judge('openShadowHere', open.appendChild(document.createElement('canvas')), 'top');
+  const closed = document.getElementById('closedHost').attachShadow({ mode: 'closed' });
+  await judge('closedShadowHere', closed.appendChild(document.createElement('canvas')), 'top');
+  const fhost = fw.document.body.appendChild(fw.document.createElement('div'));
+  const fshadow = fhost.attachShadow({ mode: 'closed' });
+  await judge('closedShadowInFrame', fshadow.appendChild(fw.document.createElement('canvas')), 'frame');
+  // A declarative shadow root parsed by setHTMLUnsafe here.
+  const dh = document.body.appendChild(document.createElement('div'));
+  dh.setHTMLUnsafe('<div><template shadowrootmode="open"><canvas></canvas></template></div>');
+  await judge('declarativeShadowHere', dh.firstChild.shadowRoot.querySelector('canvas'), 'top');
+  out.allOk = Object.values(out).every((e) => e.ok);
+  out.notOk = Object.entries(out).filter(([, e]) => e && e.ok === false).map(([k]) => k);
+});
+</script></body>

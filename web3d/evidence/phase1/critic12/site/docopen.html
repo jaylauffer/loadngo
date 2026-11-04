@@ -1,0 +1,66 @@
+<!doctype html><meta charset="utf-8"><title>critic 12: document.open() erases web3d's loss listeners</title>
+<body><script type="module">
+// document.open() (and document.write() after the document has loaded, which calls it) erases the
+// event listeners of every node in the document's tree (HTML, "document open steps"). The window,
+// the document and the canvas element stay the same, so web3d keeps accepting and driving the
+// canvas, and its loss controller (one a canvas, kept in a WeakMap, its listeners added once) is
+// never put back. Here, in a same-origin frame's document (and then this one): the frame's own copy
+// drives its own canvas; the document is reopened; the canvas is put back in the new body.
+import { sleep, err, settle, attempt, OPTS, frameOf, green, redraw, cycle, listenersOf, page } from './common.js';
+async function loseAndRestore(r, c, calls) {
+  const lc = r.gl.getExtension('WEBGL_lose_context');
+  let prevented = null;
+  c.addEventListener('webglcontextlost', (e) => (prevented = e.defaultPrevented), { once: true });
+  const lost = new Promise((res) => c.addEventListener('webglcontextlost', () => setTimeout(() => res('lost'), 0), { once: true }));
+  lc.loseContext();
+  const e = { lostEvent: await Promise.race([lost, sleep(3000).then(() => 'timeout')]), prevented };
+  r.dispose();
+  const restored = new Promise((res) => c.addEventListener('webglcontextrestored', () => res('restored'), { once: true }));
+  try { lc.restoreContext(); e.restoreCall = 'ok'; } catch (x) { e.restoreCall = 'threw ' + err(x); }
+  e.restored = await Promise.race([restored, sleep(2000).then(() => 'timeout')]);
+  e.calls = { ...calls };
+  return e;
+}
+page(async (out) => {
+  const f = await frameOf('frame.html');
+  const fw = f.contentWindow;
+  const doc = fw.document;
+  // A canvas the frame's copy drives, in the frame's document; one it drove and disposed; a
+  // detached one it drove (not in the tree when the document is reopened): the control.
+  const driven = doc.getElementById('own');
+  const calls = { lost: 0, restored: 0 };
+  const r = await fw.web3d.createRenderer(driven, { ...OPTS, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++ });
+  out.before = { draws: green(r).isGreen, listeners: await listenersOf(driven) };
+  const usedBefore = doc.body.appendChild(doc.createElement('canvas'));
+  (await fw.web3d.createRenderer(usedBefore, OPTS)).dispose();
+  const detached = doc.createElement('canvas');
+  (await fw.web3d.createRenderer(detached, OPTS)).dispose();
+  // The page reopens its document (or calls document.write after load) and puts the canvas back.
+  fw.eval("document.open(); document.write('<!doctype html><body></body>'); document.close();");
+  out.sameWindowAndDocument = fw.document === doc;
+  fw.document.body.append(driven, usedBefore);
+  out.after = {
+    listenersOnDriven: await listenersOf(driven),
+    rendererStillDraws: attempt(() => redraw(r).isGreen).v ?? 'threw',
+  };
+  // A loss now: nobody cancels it, so the context is lost for good, and web3d does not know.
+  out.lossOnDriven = await loseAndRestore(r, driven, calls);
+  out.lossOnDriven.newCreateAfter = (await settle(fw.web3d.createRenderer(driven, OPTS))).message ?? 'created';
+  // A canvas web3d had used before the reopen: a new renderer is made, with no listener.
+  const m = await settle(fw.web3d.createRenderer(usedBefore, OPTS));
+  out.newRendererOnUsedCanvas = { created: m.ok ? 'created' : m.message, listeners: await listenersOf(usedBefore) };
+  if (m.ok) out.newRendererOnUsedCanvas.loss = await loseAndRestore(m.r, usedBefore, {});
+  // The control: the canvas that was out of the tree keeps its listeners and recovers.
+  fw.document.body.append(detached);
+  out.detachedControl = { listeners: await listenersOf(detached), cycle: await cycle(fw.web3d, detached) };
+  out.verdict = {
+    listenersErased: JSON.stringify(out.after.listenersOnDriven) === '{}',
+    rendererKeptDrawing: out.after.rendererStillDraws === true,
+    lossNotCancelled: out.lossOnDriven.prevented === false,
+    contextLostForGood: /lost/.test(out.lossOnDriven.newCreateAfter),
+    hooksNeverCalled: out.lossOnDriven.calls.lost === 0 && out.lossOnDriven.calls.restored === 0,
+    newRendererHasNoListener: JSON.stringify(out.newRendererOnUsedCanvas.listeners) === '{}',
+    controlRecovers: out.detachedControl.cycle.ok,
+  };
+});
+</script></body>

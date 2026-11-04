@@ -1,0 +1,45 @@
+<!doctype html><meta charset="utf-8"><title>critic 12: the back-forward cache</title>
+<body><script type="module">
+// The page drives a canvas of its own and a top canvas the frame's observer touched first (the
+// frame's prototype), and the frame's copy drives the frame's canvas. The page navigates away and
+// comes back from the back-forward cache (run with --bfcache, which also serves without no-store).
+// After the restore: does each renderer draw, refuse what it should, and recover from a loss?
+import { sleep, err, settle, attempt, OPTS, until, frameOf, green, redraw, cycle, page } from './common.js';
+if (sessionStorage.getItem('c12-bf') === 'away') {
+  // A fresh load after going away: the cache was not used.
+  sessionStorage.removeItem('c12-bf');
+  window.__done = Promise.resolve({ restoredFromCache: false, note: 'loaded fresh: the page was not kept in the back-forward cache' });
+} else {
+  const web3d = await import('/pkg/web3d.js');
+  const f = await frameOf('frame.html');
+  const fw = f.contentWindow;
+  const mine = document.body.appendChild(document.createElement('canvas'));
+  fw.eval("window.seen = null; window.obs = new MutationObserver((rs) => { for (const r of rs) for (const n of r.addedNodes) if (n.nodeName === 'CANVAS') window.seen = n; }); window.obs.observe(parent.document.body, { childList: true });");
+  document.body.insertAdjacentHTML('beforeend', '<canvas id="first" width="16" height="16"></canvas>');
+  await until(() => fw.seen);
+  fw.obs.disconnect();
+  const first = document.getElementById('first');
+  const r1 = await web3d.createRenderer(mine, OPTS);
+  const r2 = await web3d.createRenderer(first, OPTS);
+  const r3 = await fw.web3d.createRenderer(fw.document.getElementById('own'), OPTS);
+  const before = { mine: green(r1).isGreen, first: green(r2).isGreen, frameOwn: green(r3).isGreen };
+  addEventListener('pageshow', (e) => {
+    if (!e.persisted) return;
+    page(async (out) => {
+      out.restoredFromCache = true;
+      out.before = before;
+      out.afterRestore = {
+        mine: attempt(() => redraw(r1)).v ?? 'threw', first: attempt(() => redraw(r2)).v ?? 'threw', frameOwn: attempt(() => redraw(r3)).v ?? 'threw',
+        lost: { mine: r1.lost, first: r2.lost, frameOwn: r3.lost },
+      };
+      r1.dispose(); r2.dispose(); r3.dispose();
+      out.frameCopyOnFirst = (await settle(fw.web3d.createRenderer(first, OPTS))).message ?? 'CREATED';
+      out.cycles = { mine: await cycle(web3d, mine), first: await cycle(web3d, first), frameOwn: await cycle(fw.web3d, fw.document.getElementById('own')) };
+      out.ok = Object.values(out.cycles).every((c) => c.ok) && /another document/.test(out.frameCopyOnFirst);
+    });
+  });
+  sessionStorage.setItem('c12-bf', 'away');
+  await sleep(100);
+  location.href = 'bf-next.html';
+}
+</script></body>

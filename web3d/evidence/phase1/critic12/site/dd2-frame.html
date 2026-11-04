@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>critic 12: a frame that loads web3d before document.domain</title>
+<body><script type="module">
+// Loaded from b.a.localhost under a top at a.localhost: the top is out of reach when this copy
+// loads, so its realm's home is this window. Then document.domain puts the top in reach.
+import * as web3d from '/pkg/web3d.js?dd2';
+window.web3d = web3d;
+window.topReachableAtLoad = (() => { try { void top.document; return true; } catch { return false; } })();
+document.domain = 'a.localhost';
+window.topReachableAfter = (() => { try { void top.document; return true; } catch { return false; } })();
+window.ready = true;
+</script></body>

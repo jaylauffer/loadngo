@@ -1,0 +1,12 @@
+empty dir entries:        0
+== toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
+== cargo rustc (target dir: <tmp>
+   Compiling loadngo-web3d v0.1.0 (<home>/pudding/loadngo/web3d)
+    Finished `release` profile [optimized] target(s) in 0.56s
+== wasm-opt -Os
+== sizes (bytes, and gzip -9)
+release/loadngo_web3d.wasm           108137  gzip   38787
+pkg/loadngo_web3d.wasm                70249  gzip   32174
+pkg/gl.js                             21824  gzip    7391
+pkg/web3d.js                          56597  gzip   17636
+>>> exit 0

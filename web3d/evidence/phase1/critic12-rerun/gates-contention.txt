@@ -1,0 +1,218 @@
+# gates.sh contention log, 2026-11-04 06:54 +0700: every 5 s, each Chrome browser process (headless or not) and whose it is; another session's Chrome is named only by whose it is, since its command line names that session's project
+# 06:54:56 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:29:20 a desktop Chrome window (parent launchd)
+  98976 00:58 another session's headless Chrome (parent: a node script)
+# 06:54:56 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:29:20 a desktop Chrome window (parent launchd)
+  98976 00:58 another session's headless Chrome (parent: a node script)
+# 06:55:01 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:29:25 a desktop Chrome window (parent launchd)
+  98976 01:03 another session's headless Chrome (parent: a node script)
+# 06:55:06 Chrome browser processes (pid, elapsed, whose):
+  369 00:05 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:29:30 a desktop Chrome window (parent launchd)
+  98976 01:08 another session's headless Chrome (parent: a node script)
+# 06:55:11 Chrome browser processes (pid, elapsed, whose):
+  369 00:10 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:29:35 a desktop Chrome window (parent launchd)
+  98976 01:13 another session's headless Chrome (parent: a node script)
+# 06:55:16 Chrome browser processes (pid, elapsed, whose):
+  369 00:15 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:29:40 a desktop Chrome window (parent launchd)
+  98976 01:18 another session's headless Chrome (parent: a node script)
+# 06:55:21 Chrome browser processes (pid, elapsed, whose):
+  369 00:20 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:29:45 a desktop Chrome window (parent launchd)
+  98976 01:23 another session's headless Chrome (parent: a node script)
+# 06:55:26 Chrome browser processes (pid, elapsed, whose):
+  369 00:25 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:29:50 a desktop Chrome window (parent launchd)
+  98976 01:28 another session's headless Chrome (parent: a node script)
+# 06:55:31 Chrome browser processes (pid, elapsed, whose):
+  369 00:30 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  723 00:01 another session's headless Chrome (parent: a node script)
+  1228 02-23:29:55 a desktop Chrome window (parent launchd)
+  98976 01:33 another session's headless Chrome (parent: a node script)
+# 06:55:36 Chrome browser processes (pid, elapsed, whose):
+  369 00:36 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:30:01 a desktop Chrome window (parent launchd)
+  98976 01:39 another session's headless Chrome (parent: a node script)
+# 06:55:42 Chrome browser processes (pid, elapsed, whose):
+  369 00:41 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:30:06 a desktop Chrome window (parent launchd)
+  98976 01:44 another session's headless Chrome (parent: a node script)
+# 06:55:47 Chrome browser processes (pid, elapsed, whose):
+  369 00:46 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:30:11 a desktop Chrome window (parent launchd)
+  98976 01:49 another session's headless Chrome (parent: a node script)
+# 06:55:52 Chrome browser processes (pid, elapsed, whose):
+  369 00:51 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:30:16 a desktop Chrome window (parent launchd)
+# 06:55:57 Chrome browser processes (pid, elapsed, whose):
+  369 00:56 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:30:21 a desktop Chrome window (parent launchd)
+# 06:56:02 Chrome browser processes (pid, elapsed, whose):
+  369 01:01 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:30:26 a desktop Chrome window (parent launchd)
+# 06:56:07 Chrome browser processes (pid, elapsed, whose):
+  369 01:06 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:30:31 a desktop Chrome window (parent launchd)
+# 06:56:12 Chrome browser processes (pid, elapsed, whose):
+  369 01:11 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:30:36 a desktop Chrome window (parent launchd)
+# 06:56:17 Chrome browser processes (pid, elapsed, whose):
+  369 01:16 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:30:41 a desktop Chrome window (parent launchd)
+# 06:56:22 Chrome browser processes (pid, elapsed, whose):
+  369 01:21 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:30:46 a desktop Chrome window (parent launchd)
+# 06:56:27 Chrome browser processes (pid, elapsed, whose):
+  369 01:26 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:30:51 a desktop Chrome window (parent launchd)
+# 06:56:32 Chrome browser processes (pid, elapsed, whose):
+  369 01:31 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:30:56 a desktop Chrome window (parent launchd)
+  1464 00:00 another session's headless Chrome (parent: a node script)
+# 06:56:37 Chrome browser processes (pid, elapsed, whose):
+  369 01:36 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:31:01 a desktop Chrome window (parent launchd)
+  1464 00:05 another session's headless Chrome (parent: a node script)
+# 06:56:42 Chrome browser processes (pid, elapsed, whose):
+  369 01:41 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:31:06 a desktop Chrome window (parent launchd)
+  1464 00:10 another session's headless Chrome (parent: a node script)
+# 06:56:47 Chrome browser processes (pid, elapsed, whose):
+  369 01:46 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:31:11 a desktop Chrome window (parent launchd)
+  1464 00:15 another session's headless Chrome (parent: a node script)
+# 06:56:52 Chrome browser processes (pid, elapsed, whose):
+  369 01:51 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:31:16 a desktop Chrome window (parent launchd)
+  1464 00:20 another session's headless Chrome (parent: a node script)
+# 06:56:57 Chrome browser processes (pid, elapsed, whose):
+  369 01:56 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:31:21 a desktop Chrome window (parent launchd)
+  1735 00:03 another session's headless Chrome (parent: a node script)
+# 06:57:02 Chrome browser processes (pid, elapsed, whose):
+  369 02:01 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:31:26 a desktop Chrome window (parent launchd)
+  1735 00:08 another session's headless Chrome (parent: a node script)
+# 06:57:07 Chrome browser processes (pid, elapsed, whose):
+  369 02:06 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:31:31 a desktop Chrome window (parent launchd)
+  1735 00:13 another session's headless Chrome (parent: a node script)
+# 06:57:13 Chrome browser processes (pid, elapsed, whose):
+  369 02:12 this gate run (node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60)
+  1228 02-23:31:37 a desktop Chrome window (parent launchd)
+  1935 00:01 another session's headless Chrome (parent: a node script)
+# 06:57:18 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:31:42 a desktop Chrome window (parent launchd)
+  1935 00:06 another session's headless Chrome (parent: a node script)
+  1990 00:03 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+# 06:57:23 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:31:47 a desktop Chrome window (parent launchd)
+  1935 00:11 another session's headless Chrome (parent: a node script)
+  1990 00:08 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+# 06:57:28 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:31:52 a desktop Chrome window (parent launchd)
+  1935 00:16 another session's headless Chrome (parent: a node script)
+  1990 00:13 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+# 06:57:33 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:31:57 a desktop Chrome window (parent launchd)
+  1990 00:18 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  2182 00:03 another session's headless Chrome (parent: a node script)
+# 06:57:38 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:32:02 a desktop Chrome window (parent launchd)
+  1990 00:23 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  2182 00:08 another session's headless Chrome (parent: a node script)
+# 06:57:43 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:32:07 a desktop Chrome window (parent launchd)
+  1990 00:28 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  2182 00:13 another session's headless Chrome (parent: a node script)
+# 06:57:48 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:32:12 a desktop Chrome window (parent launchd)
+  1990 00:33 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+# 06:57:53 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:32:17 a desktop Chrome window (parent launchd)
+  1990 00:38 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  3850 00:05 another session's headless Chrome (parent: a node script)
+# 06:57:58 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:32:22 a desktop Chrome window (parent launchd)
+  1990 00:43 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  3850 00:10 another session's headless Chrome (parent: a node script)
+# 06:58:03 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:32:27 a desktop Chrome window (parent launchd)
+  1990 00:48 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  3850 00:15 another session's headless Chrome (parent: a node script)
+# 06:58:08 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:32:32 a desktop Chrome window (parent launchd)
+  1990 00:53 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  3850 00:20 another session's headless Chrome (parent: a node script)
+# 06:58:13 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:32:37 a desktop Chrome window (parent launchd)
+  1990 00:58 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  4084 00:03 another session's headless Chrome (parent: a node script)
+# 06:58:18 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:32:42 a desktop Chrome window (parent launchd)
+  1990 01:03 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  4084 00:08 another session's headless Chrome (parent: a node script)
+# 06:58:23 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:32:47 a desktop Chrome window (parent launchd)
+  1990 01:08 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  4084 00:13 another session's headless Chrome (parent: a node script)
+# 06:58:28 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:32:52 a desktop Chrome window (parent launchd)
+  1990 01:13 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  4283 00:00 another session's headless Chrome (parent: a node script)
+# 06:58:33 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:32:57 a desktop Chrome window (parent launchd)
+  1990 01:18 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  4283 00:05 another session's headless Chrome (parent: a node script)
+# 06:58:39 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:33:03 a desktop Chrome window (parent launchd)
+  1990 01:24 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  4283 00:11 another session's headless Chrome (parent: a node script)
+# 06:58:44 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:33:08 a desktop Chrome window (parent launchd)
+  1990 01:29 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  4283 00:16 another session's headless Chrome (parent: a node script)
+# 06:58:49 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:33:13 a desktop Chrome window (parent launchd)
+  1990 01:34 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  4503 00:03 another session's headless Chrome (parent: a node script)
+# 06:58:54 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:33:18 a desktop Chrome window (parent launchd)
+  1990 01:39 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  4503 00:08 another session's headless Chrome (parent: a node script)
+# 06:58:59 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:33:23 a desktop Chrome window (parent launchd)
+  1990 01:44 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  4503 00:13 another session's headless Chrome (parent: a node script)
+# 06:59:04 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:33:28 a desktop Chrome window (parent launchd)
+  1990 01:49 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  4503 00:18 another session's headless Chrome (parent: a node script)
+# 06:59:09 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:33:33 a desktop Chrome window (parent launchd)
+  1990 01:54 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  4762 00:00 another session's headless Chrome (parent: a node script)
+# 06:59:14 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:33:38 a desktop Chrome window (parent launchd)
+  1990 01:59 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  4762 00:05 another session's headless Chrome (parent: a node script)
+# 06:59:19 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:33:43 a desktop Chrome window (parent launchd)
+  1990 02:04 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  4762 00:10 another session's headless Chrome (parent: a node script)
+# 06:59:24 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:33:48 a desktop Chrome window (parent launchd)
+  1990 02:09 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  4762 00:15 another session's headless Chrome (parent: a node script)
+# 06:59:29 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:33:53 a desktop Chrome window (parent launchd)
+  1990 02:14 this gate run (node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds )
+  4762 00:20 another session's headless Chrome (parent: a node script)
+# 06:59:34 Chrome browser processes (pid, elapsed, whose):
+  1228 02-23:33:58 a desktop Chrome window (parent launchd)
+  5069 00:02 another session's headless Chrome (parent: a node script)
+# gates.sh exit 0

@@ -1,0 +1,73 @@
+{
+ "before": {
+  "draws": true,
+  "listeners": {
+   "webglcontextlost": 1,
+   "webglcontextrestored": 1
+  }
+ },
+ "sameWindowAndDocument": true,
+ "after": {
+  "listenersOnDriven": {
+   "webglcontextlost": 1,
+   "webglcontextrestored": 1
+  },
+  "rendererStillDraws": true
+ },
+ "lossOnDriven": {
+  "lostEvent": "lost",
+  "prevented": true,
+  "restoreCall": "ok",
+  "restored": "restored",
+  "calls": {
+   "lost": 1,
+   "restored": 1
+  },
+  "newCreateAfter": "created"
+ },
+ "newRendererOnUsedCanvas": {
+  "created": "created",
+  "listeners": {
+   "webglcontextlost": 1,
+   "webglcontextrestored": 1
+  },
+  "loss": {
+   "lostEvent": "lost",
+   "prevented": true,
+   "restoreCall": "ok",
+   "restored": "restored",
+   "calls": {}
+  }
+ },
+ "detachedControl": {
+  "listeners": {
+   "webglcontextlost": 1,
+   "webglcontextrestored": 1
+  },
+  "cycle": {
+   "drew": true,
+   "lostEvent": "webglcontextlost",
+   "prevented": true,
+   "restored": "webglcontextrestored",
+   "calls": {
+    "lost": 1,
+    "restored": 1
+   },
+   "after": true,
+   "ok": true
+  }
+ },
+ "verdict": {
+  "listenersErased": false,
+  "rendererKeptDrawing": true,
+  "lossNotCancelled": false,
+  "contextLostForGood": false,
+  "hooksNeverCalled": false,
+  "newRendererHasNoListener": false,
+  "controlRecovers": true
+ }
+}
+messages: 1
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0

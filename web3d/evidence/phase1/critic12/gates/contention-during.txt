@@ -1,0 +1,147 @@
+03:00:16 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:00:16 gpu-processes 3
+03:00:21 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:00:21 gpu-processes 3
+03:00:26 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:00:26 gpu-processes 3
+03:00:31 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:00:31 gpu-processes 3
+03:00:36 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:00:36 gpu-processes 3
+03:00:41 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:00:41 gpu-processes 3
+03:00:47 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:00:47 gpu-processes 3
+03:00:52 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:00:52 gpu-processes 3
+03:00:57 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:00:57 gpu-processes 3
+03:01:02 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:01:02 gpu-processes 3
+03:01:07 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:01:07 gpu-processes 3
+03:01:12 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:01:12 gpu-processes 3
+03:01:17 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:01:17 gpu-processes 3
+03:01:22 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:01:22 gpu-processes 3
+03:01:27 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:01:27 gpu-processes 3
+03:01:32 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:01:32 gpu-processes 3
+03:01:37 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:01:37 gpu-processes 3
+03:01:42 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:01:42 gpu-processes 3
+03:01:47 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:01:47 gpu-processes 3
+03:01:53 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:01:53 gpu-processes 3
+03:01:58 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:01:58 gpu-processes 3
+03:02:03 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:02:03 gpu-processes 3
+03:02:08 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:02:08 gpu-processes 3
+03:02:13 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:02:13 gpu-processes 3
+03:02:18 chrome 52651 parent: node web3d/demo/check.mjs --port 5481 --out web3d/evidence/p
+03:02:18 gpu-processes 3
+03:02:23 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:02:23 gpu-processes 3
+03:02:28 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:02:28 gpu-processes 3
+03:02:33 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:02:33 gpu-processes 3
+03:02:38 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:02:38 gpu-processes 3
+03:02:43 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:02:43 gpu-processes 3
+03:02:48 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:02:48 gpu-processes 3
+03:02:53 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:02:53 gpu-processes 3
+03:02:58 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:02:58 gpu-processes 3
+03:03:03 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:03:03 gpu-processes 3
+03:03:09 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:03:09 gpu-processes 3
+03:03:14 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:03:14 gpu-processes 3
+03:03:19 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:03:19 gpu-processes 3
+03:03:24 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:03:24 gpu-processes 3
+03:03:29 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:03:29 gpu-processes 3
+03:03:34 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:03:34 gpu-processes 3
+03:03:39 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:03:39 gpu-processes 3
+03:03:44 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:03:44 gpu-processes 3
+03:03:49 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:03:49 gpu-processes 3
+03:03:54 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:03:54 gpu-processes 3
+03:03:59 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:03:59 gpu-processes 3
+03:04:04 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:04:04 gpu-processes 3
+03:04:09 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:04:09 gpu-processes 3
+03:04:14 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:04:14 gpu-processes 3
+03:04:20 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:04:20 gpu-processes 3
+03:04:25 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:04:25 gpu-processes 3
+03:04:30 chrome 55029 parent: node web3d/demo/check.mjs --port 5482 --out web3d/evidence/p
+03:04:30 gpu-processes 3
+03:04:35 gpu-processes 2
+03:04:40 gpu-processes 2
+03:04:45 gpu-processes 2
+03:04:50 gpu-processes 2
+03:04:55 gpu-processes 2
+03:05:00 gpu-processes 2
+03:05:05 gpu-processes 2
+03:05:10 gpu-processes 2
+03:05:15 gpu-processes 2
+03:05:20 gpu-processes 2
+03:05:25 gpu-processes 2
+03:05:30 gpu-processes 2
+03:05:35 gpu-processes 2
+03:05:41 gpu-processes 2
+03:05:46 gpu-processes 2
+03:05:51 gpu-processes 2
+03:05:56 gpu-processes 2
+03:06:01 gpu-processes 2
+03:06:06 gpu-processes 2
+03:06:11 chrome 57468 parent: node run.mjs 5483 nav.html
+03:06:11 gpu-processes 3
+03:06:16 chrome 57468 parent: node run.mjs 5483 nav.html
+03:06:16 gpu-processes 3
+03:06:21 chrome 57468 parent: node run.mjs 5483 nav.html
+03:06:21 gpu-processes 3
+03:06:26 chrome 57468 parent: node run.mjs 5483 nav.html
+03:06:26 gpu-processes 3
+03:06:31 chrome 57468 parent: node run.mjs 5483 nav.html
+03:06:31 gpu-processes 3
+03:06:36 chrome 57468 parent: node run.mjs 5483 nav.html
+03:06:36 gpu-processes 3
+03:06:41 chrome 57468 parent: node run.mjs 5483 nav.html
+03:06:41 gpu-processes 3
+03:06:46 chrome 57468 parent: node run.mjs 5483 nav.html
+03:06:46 gpu-processes 3
+03:06:51 chrome 57468 parent: node run.mjs 5483 nav.html
+03:06:51 gpu-processes 3
+03:06:57 chrome 57468 parent: node run.mjs 5483 nav.html
+03:06:57 gpu-processes 3
+03:07:02 chrome 57468 parent: node run.mjs 5483 nav.html
+03:07:02 gpu-processes 3
+03:07:07 chrome 57468 parent: node run.mjs 5483 nav.html
+03:07:07 gpu-processes 3
+03:07:12 chrome 57468 parent: node run.mjs 5483 nav.html
+03:07:12 gpu-processes 3

@@ -1,0 +1,80 @@
+<!doctype html><meta charset="utf-8"><title>critic 12: a canvas moved during a create, and page code inside a call</title>
+<body><script type="module">
+// M1. createRenderer checks the canvas's document before its first await, then awaits the
+// module's compile and instantiation. A canvas moved into a same-origin frame's document in that
+// gap: is the create refused, or does it make a context and listeners on a canvas of another
+// window's document and resolve?
+// M2. Page code that runs inside a renderer call, with no built-in patched: a customized built-in
+// canvas's attributeChangedCallback runs synchronously when web3d sets the canvas's width (in
+// createRenderer and resize). From there the page moves the canvas, calls frame() or dispose().
+import { sleep, err, settle, attempt, OPTS, frameOf, green, redraw, listenersOf, page } from './common.js';
+let hook = null;
+class XCanvas extends HTMLCanvasElement {
+  static observedAttributes = ['width'];
+  attributeChangedCallback(name, before, after) { if (hook) { const h = hook; hook = null; h(this, before, after); } }
+}
+customElements.define('x-canvas', XCanvas, { extends: 'canvas' });
+page(async (out) => {
+  const web3d = await import('/pkg/web3d.js');
+  // Warm the compile cache so only microtasks separate the check from the context.
+  (await web3d.createRenderer(document.body.appendChild(document.createElement('canvas')), OPTS)).dispose();
+  const f = await frameOf('frame.html');
+  const fw = f.contentWindow;
+  // M1: moved right after the call returns its promise.
+  {
+    const c = document.body.appendChild(document.createElement('canvas'));
+    const p = web3d.createRenderer(c, OPTS);
+    fw.document.body.append(c);
+    const m = await settle(p);
+    out.m1 = { created: m.ok ? 'created on a canvas of the frame\'s document' : m.message, ownerIsFrame: c.ownerDocument === fw.document };
+    out.m1.listeners = await listenersOf(c);
+    out.m1.gotContext = !!c.getContext('webgl2', { antialias: false });
+    if (m.ok) {
+      out.m1.frame = attempt(() => m.r.frame()).message ?? 'drew';
+      out.m1.frameCopy = (await settle(fw.web3d.createRenderer(c, OPTS))).message ?? 'created';
+      document.body.append(c);
+      out.m1.back = green(m.r).isGreen;
+      m.r.dispose();
+    }
+  }
+  // M2a: the canvas moved by the page's attributeChangedCallback during createRenderer's width set.
+  {
+    const c = document.body.appendChild(document.createElement('canvas', { is: 'x-canvas' }));
+    hook = (el) => fw.document.body.append(el);
+    const m = await settle(web3d.createRenderer(c, { ...OPTS, width: 17 }));
+    out.m2a = { created: m.ok ? 'created, canvas now in the frame\'s document' : m.message, ownerIsFrame: c.ownerDocument === fw.document, listeners: await listenersOf(c) };
+    if (m.ok) {
+      out.m2a.frame = attempt(() => m.r.frame()).message ?? 'drew';
+      document.body.append(c);
+      out.m2a.back = green(m.r).isGreen;
+      m.r.dispose();
+    } else document.body.append(c);
+  }
+  // M2b: frame() and dispose() called from inside resize(), and a second create inside a create.
+  {
+    const c = document.body.appendChild(document.createElement('canvas', { is: 'x-canvas' }));
+    const r = await web3d.createRenderer(c, OPTS);
+    green(r);
+    const seen = {};
+    hook = () => { seen.frame = attempt(() => r.frame()).message ?? 'drew'; seen.dispose = attempt(() => r.dispose()).message ?? 'disposed'; };
+    seen.resize = attempt(() => r.resize(20, 20)).message ?? 'resized';
+    seen.after = redraw(r).isGreen;
+    out.m2b = seen;
+    const c2 = document.body.appendChild(document.createElement('canvas', { is: 'x-canvas' }));
+    let inner = null;
+    hook = (el) => { inner = web3d.createRenderer(el, OPTS); };
+    const outer = await settle(web3d.createRenderer(c2, { ...OPTS, width: 18 }));
+    const innerResult = inner ? await settle(inner) : { message: 'no inner call' };
+    out.m2c = { outer: outer.ok ? 'created' : outer.message, inner: innerResult.ok ? 'CREATED (two renderers)' : innerResult.message };
+    if (outer.ok) outer.r.dispose();
+    if (innerResult.ok) innerResult.r.dispose();
+    r.dispose();
+  }
+  out.verdict = {
+    m1MovedDuringCreateRefused: !/^created/.test(out.m1.created),
+    m2aMovedInCallbackRefused: !/^created/.test(out.m2a.created),
+    m2bReentrancyRefused: /while the renderer was reading/.test(out.m2b.frame ?? '') && /while the renderer was reading/.test(out.m2b.dispose ?? ''),
+    m2cSecondCreateRefused: !/CREATED/.test(out.m2c.inner),
+  };
+});
+</script></body>

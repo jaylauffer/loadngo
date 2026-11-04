@@ -1,9 +1,9 @@
-serving web3d on http://127.0.0.1:5670/
+serving web3d on http://127.0.0.1:5667/
 Chrome 156.0.8078.80 (headless, launched by this script)
-low-1024x576: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 3.422 p50 3.724 p95 5.591 ms (602 readings), CPU mean 0.051 p95 0.07 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,241,231
-full-1366x768: 1366x768 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.238 p50 0.454 p95 4.842 ms (599 readings), CPU mean 0.054 p95 0.07 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 240,238,228
-low-1024x576-no-msaa: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.184 p50 0.272 p95 5.568 ms (600 readings), CPU mean 0.053 p95 0.07 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,240,230
-probes: 74 passed, 0 failed; INVALID_OPERATION warnings: 0; pending GL errors: 2 (2 raised on purpose); contexts lost to Chrome's limit: 0
+low-1024x576: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.026 p50 0.863 p95 1.843 ms (602 readings), CPU mean 0.054 p95 0.08 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,241,231
+full-1366x768: 1366x768 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.944 p50 1.021 p95 8.566 ms (601 readings), CPU mean 0.055 p95 0.065 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 240,238,228
+low-1024x576-no-msaa: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.13 p50 0.565 p95 4.572 ms (601 readings), CPU mean 0.055 p95 0.075 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,240,230
+probes: 80 passed, 0 failed; INVALID_OPERATION warnings: 0; pending GL errors: 2 (2 raised on purpose); contexts lost to Chrome's limit: 0
   pass  A output is sRGB-encoded (white under a uniform hemisphere)
   pass  A2 the clear colour is linear and encoded
   pass  B1 texture upright: top-left red, top-right green, bottom-left blue
@@ -57,7 +57,7 @@ probes: 74 passed, 0 failed; INVALID_OPERATION warnings: 0; pending GL errors: 2
   pass  Q a Proxy typed array is refused and nothing is written past staging; a lying subclass stages its real length; Rust refuses an array outside staging
   pass  W a handle of another kind, a bare small number, or another renderer's handle is refused; the right object still draws
   pass  L a failed wasm fetch is not cached (fetched again, and the default still loads); a later wasm option is fetched, not ignored
-  pass  Y a failed create (before or after the context exists) leaves no listener or claim behind; a canvas refuses other context settings
+  pass  Y a failed create (for its options, or for a module that is not web3d, both refused before the context is taken) leaves no claim behind, and calls no hook; a canvas refuses other context settings
   pass  U a getter or descriptor that calls the renderer is refused; numbers, in arguments and in Arrays, are never converted, so no valueOf runs; the renderer stays live and drawn
   pass  H6 102 renderers on one canvas issue 406 handles, none twice; the first renderer's handle is refused by the last, whose object stays drawn
   pass  AR Array matrices, vectors and colours must hold numbers (no valueOf runs) and their length is read once; plain number Arrays work
@@ -69,7 +69,7 @@ probes: 74 passed, 0 failed; INVALID_OPERATION warnings: 0; pending GL errors: 2
   pass  RM a same-origin iframe's renderer takes the next serial from the shared counter, and its handle is refused here
   pass  K4 dispose in onContextLost, then onContextRestored still comes and a new renderer draws; frame() is false at once after a loss; a lost renderer cannot resize a canvas a new one owns
   pass  TU pending page errors are reported as pending and do not refuse a good texture; a turned VideoFrame uploads at its turned size; bitmaprenderer canvases are refused, a blank canvas uploads; a DataView of the module compiles, a detached one is refused
-  pass  LE one loss controller a canvas: a throwing hook does not stop the next (E1); one function runs once (E4b); a lost renderer left undisposed hears no later loss (E6); a page-made context lost during a create, and a canvas lost with no renderer, are restored (E11, E12); a loss and restore inside a create call its hook once, after (ET)
+  pass  LE one loss controller a canvas: a throwing hook does not stop the next (E1); one function runs once (E4b); a lost renderer left undisposed hears no later loss (E6); a page-made context lost during a create, and a canvas lost with no renderer, are restored (E11, E12); a loss cancelled and restored while a create loads its module leaves the create the restored context, which it draws on, with no hook called (ET)
   pass  H7 at the largest serial a handle is below 2^50, a handle plus 0.5 or minus 0.25 is refused as a fraction, and the next serial wraps round to 1
   pass  PS a page-made context that suits, left with state of the page's (each of the ninth critic's N8 cases and every other state the renderer resets): web3d draws, uploads and reads back as on a new context, with no WebGL error, and the page's own objects are kept
   pass  LR a page's own restored listener that runs before web3d's disposes the live renderer: onContextRestored comes once (N1); disposed in the page's lost listener instead: once, and no onContextLost; disposed after the restore was handled: no second call
@@ -78,11 +78,17 @@ probes: 74 passed, 0 failed; INVALID_OPERATION warnings: 0; pending GL errors: 2
   pass  DB a drawing buffer a page stored at another size than the canvas's (drawingBufferStorage; the eleventh critic's F4) is made again at the canvas's size, with its samples and in RGBA8, and drawn whole, also after resize; with nothing stored, or on web3d's own context, the canvas's width is set once
   pass  NC as documented: a canvas with no context uploads and then has a '2d' context for good (no webgl2 or bitmaprenderer context, no transfer, later 2d options ignored), an OffscreenCanvas too; a canvas with its own 2d or WebGL context is unchanged and uploads its pixels; a bitmaprenderer canvas is refused and stays one
   pass  MS a detached OffscreenCanvas is refused as detached, a placeholder canvas as transferred (N21); a loss before web3d's first use: the message says web3d cancels a lost event still to come, as it does when the loss is in the create's own task (the hook comes once), and none comes for one already dispatched (N7b')
-allocation, cold (first frames): 601 frames; page scripts 19.45 sampled bytes a frame; by file {"(native or internal)":10.1,"/demo/demo.js":14.6,"/pkg/web3d.js":1.6,"/pkg/loadngo_web3d.wasm":1.1,"/pkg/gl.js":2.1}
-allocation, steady (after 70 s of frames): 601 frames; page scripts 0 sampled bytes a frame; by file {"(native or internal)":9.1}
-allocation, positive control (one short-lived Array of 8 numbers a frame): 601 frames; page scripts 0.59 sampled bytes a frame; by file {"(native or internal)":9.5,"/demo/demo.js":0.6}
-allocation, CPU timing on (reported, not gated): 601 frames; page scripts 1.9 sampled bytes a frame; by file {"(native or internal)":10.2,"/demo/demo.js":1.9}
-  FAILED: the positive control read 0.6 sampled bytes a frame from demo.js (at least 40 expected): the profiler is blind to short-lived objects, so the gate proves nothing
+  pass  DO document.open() and document.write() after load erase every node's listeners, and web3d puts its two back before a lost event can come: a live renderer's canvas lost in the reopening's task is cancelled and restored, each hook once, and a new renderer draws; a canvas with no renderer, after a second reopening by the frame's own write(), likewise; a canvas that was in another document when that one was reopened has its listeners back at its next create
+  pass  NV a frame's copy after its frame navigates: refused the new page's canvas before recording anything, which the new page's copy takes, draws on and recovers; the old copy's renderers no longer draw; a canvas whose create it had begun and one its live renderer drove, moved into this document, are taken here, drawn on and recovered
+  pass  MC a canvas moved during createRenderer is refused: by a getter of its options, before anything is recorded on it; right after the call, before any context, with no claim or listener (and the frame's copy then takes it); moved and back, created; by its own attributeChangedCallback at web3d's width set, with its size put back, no claim, and no listener unless this window had driven it; a module that is not web3d is refused before any context; page code in that callback that calls the renderer or creates again is refused; a MutationObserver's move, after the create, is a driven canvas moved
+  pass  RC one record of a canvas, on the canvas, for every copy: private (non-enumerable, non-writable, non-configurable) and the same object from the frame; a frame whose copy has a home of its own is refused this window's driven canvas moved into its document, and this window's copy the frame's, and moved back each clears to its own colour; a sealed canvas, and one with a property there web3d did not make (writable, or a getter, which never runs), are refused untouched
+  pass  TO an OffscreenCanvas made here by transferControlToOffscreen() from a canvas a frame's observer touched first has the frame's prototype: refused here, with a message naming that case and no listener, and drawn on by the frame's copy
+  pass  SY lost and restored events the page dispatches itself are ignored by web3d's listeners: not cancelled, the renderer not finished and still drawing, no hook called; a real loss after them is cancelled and restored, each hook once
+allocation, cold (first frames): 601 frames; page scripts 20.67 sampled bytes a frame; by file {"(native or internal)":9.8,"/demo/demo.js":14.9,"/pkg/web3d.js":1.7,"/pkg/loadngo_web3d.wasm":1.8,"/pkg/gl.js":2.3}
+allocation, steady (after 70 s of frames): 601 frames; page scripts 0 sampled bytes a frame; by file {"(native or internal)":8.7}
+allocation, positive control (one short-lived Array of 8 numbers a frame): 601 frames; page scripts 0.45 sampled bytes a frame; by file {"(native or internal)":9.1,"/demo/demo.js":0.4}
+allocation, CPU timing on (reported, not gated): 601 frames; page scripts 1.9 sampled bytes a frame; by file {"(native or internal)":10.9,"/demo/demo.js":1.9}
+  FAILED: the positive control read 0.4 sampled bytes a frame from demo.js (at least 40 expected): the profiler is blind to short-lived objects, so the gate proves nothing
 browser and server stopped
 wrote web3d/evidence/phase1/blind-control/rendered-check.json
 FAILED as a blind run must: the positive control was not seen, and everything else held (exit 3)

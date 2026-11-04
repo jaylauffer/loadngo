@@ -1,0 +1,114 @@
+<!doctype html><meta charset="utf-8"><title>critic 12: a frame's initial about:blank replaced, document.open, a removed frame</title>
+<body><script type="module">
+// B1. A copy loaded into a frame's initial about:blank document; the frame then loads a
+// same-origin page, which reuses the window. Does the copy follow its window's new document?
+// B2. document.open() on a frame's document, and then on this one: the window and document stay;
+// the renderer, its canvas (now out of the tree) and its loss controller should carry on.
+// B3. A removed frame's copy: what does its window's document read, and what does it accept?
+import { sleep, err, settle, attempt, OPTS, until, frameOf, green, redraw, cycle, listenersOf, page } from './common.js';
+const bounded = (p) => Promise.race([settle(p), sleep(1500).then(() => ({ ok: false, message: 'NEVER SETTLED' }))]);
+page(async (out) => {
+  const web3d = await import('/pkg/web3d.js');
+  const key = Symbol.for('loadngo-web3d');
+  // B1.
+  {
+    const f = document.createElement('iframe');
+    document.body.append(f);
+    const w = f.contentWindow;
+    const s = w.document.createElement('script');
+    s.type = 'module';
+    s.textContent = `import * as m from '${new URL('/pkg/web3d.js?blank', location.href).href}'; window.blankWeb3d = m; window.marker = 'blank'; window.blankReady = true;`;
+    w.document.body.append(s);
+    await until(() => w.blankReady);
+    const blankDoc = w.document;
+    const bc = blankDoc.body.appendChild(blankDoc.createElement('canvas'));
+    const r = await settle(w.blankWeb3d.createRenderer(bc, OPTS));
+    const b = { before: r.ok ? green(r.r).isGreen : r.message, realmStateBefore: w[key] };
+    f.src = 'frame.html';
+    await new Promise((res) => f.addEventListener('load', res, { once: true }));
+    await until(() => f.contentWindow.ready);
+    const nw = f.contentWindow;
+    b.windowReused = nw.marker === 'blank';
+    b.sameRealmState = nw[key] === b.realmStateBefore;
+    delete b.realmStateBefore;
+    b.oldRendererOnBlankCanvas = r.ok ? (attempt(() => redraw(r.r)).message ?? 'drew') : 'n/a';
+    if (r.ok) attempt(() => r.r.dispose());
+    const nc = nw.document.getElementById('own');
+    // The copy loaded into about:blank, through the reference the top kept (its realm's object).
+    const blankCopy = w.blankWeb3d ?? b.keptBlankCopy;
+    if (b.windowReused) {
+      b.blankCopyOnNewDocCanvas = await cycle(nw.blankWeb3d, nc);
+      const live = await bounded(nw.blankWeb3d.createRenderer(nc, OPTS));
+      b.newDocCopyWhileBlankCopyLive = (await bounded(nw.web3d.createRenderer(nc, OPTS))).message ?? 'CREATED (two renderers)';
+      if (live.ok) live.r.dispose();
+    }
+    b.newDocCopyOnItsCanvas = await cycle(nw.web3d, nc);
+    out.b1 = b;
+    f.remove();
+  }
+  // B2.
+  {
+    const f = await frameOf('frame.html');
+    const fw = f.contentWindow;
+    const fc = fw.document.getElementById('own');
+    const r = await fw.web3d.createRenderer(fc, OPTS);
+    const b = { before: green(r).isGreen };
+    const doc = fw.document;
+    fw.document.open();
+    fw.document.write('<!doctype html><canvas id="c2" width="16" height="16"></canvas>');
+    fw.document.close();
+    b.sameDocument = fw.document === doc;
+    b.web3dStillThere = typeof fw.web3d?.createRenderer === 'function';
+    b.canvasInTree = fc.isConnected;
+    b.rendererAfterOpen = attempt(() => redraw(r).isGreen).v ?? 'threw';
+    // The loss controller on the old canvas after document.open erased the document's listeners.
+    const lc = r.gl.getExtension('WEBGL_lose_context');
+    let prevented = null;
+    fc.addEventListener('webglcontextlost', (e) => (prevented = e.defaultPrevented), { once: true });
+    const lost = new Promise((res) => fc.addEventListener('webglcontextlost', () => setTimeout(() => res('lost'), 0), { once: true }));
+    lc.loseContext();
+    b.lost = await Promise.race([lost, sleep(3000).then(() => 'timeout')]);
+    b.prevented = prevented;
+    r.dispose();
+    try { lc.restoreContext(); } catch (e) { b.restoreThrew = err(e); }
+    await sleep(100);
+    b.newOnOldCanvas = (await settle(fw.web3d.createRenderer(fc, OPTS))).message ?? 'created';
+    const c2 = fw.document.getElementById('c2');
+    b.frameCopyOnWrittenCanvas = await cycle(fw.web3d, c2);
+    b.topCopyOnWrittenCanvas = (await settle(web3d.createRenderer(c2, OPTS))).message ?? 'created';
+    out.b2 = b;
+    // B3: a removed frame's copy.
+    const removed = await frameOf('frame.html');
+    const rw = removed.contentWindow;
+    const rweb3d = rw.web3d;
+    const readDoc = rw.readGlobalDocument;
+    const rdoc = rw.document;
+    const rc = rdoc.getElementById('own');
+    removed.remove();
+    await sleep(50);
+    let g;
+    try { g = readDoc(); out.b3 = { globalDocument: g === rdoc ? 'its own document' : g === document ? 'the top document' : String(g) }; } catch (e) { out.b3 = { globalDocument: 'throws: ' + err(e) }; }
+    let call;
+    try { call = rweb3d.createRenderer(rc, OPTS); } catch (e) { out.b3.call = 'threw ' + err(e); }
+    out.b3.onOwnCanvas = call ? (await bounded(call)).message ?? 'created' : out.b3.call;
+    // Then the top's own copy on that canvas, adopted here.
+    document.body.append(rc);
+    out.b3.topCopyOnAdopted = (await settle(web3d.createRenderer(rc, OPTS))).message ?? 'created';
+    f.remove();
+  }
+  // B2, on this document: document.open() erases the page; the module carries on.
+  {
+    const t1 = document.body.appendChild(document.createElement('canvas'));
+    const r = await web3d.createRenderer(t1, OPTS);
+    const before = green(r).isGreen;
+    const saved = out;
+    document.open();
+    document.write('<!doctype html><title>reopened</title><body></body>');
+    document.close();
+    saved.b2top = { before, rendererAfterOpen: attempt(() => redraw(r).isGreen).v ?? 'threw', canvasInTree: t1.isConnected };
+    r.dispose();
+    saved.b2top.cycleOnOldCanvas = await cycle(web3d, t1);
+    saved.b2top.cycleOnNewCanvas = await cycle(web3d, document.body.appendChild(document.createElement('canvas')));
+  }
+});
+</script></body>

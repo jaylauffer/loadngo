@@ -21,11 +21,13 @@
 // moving objects', it costs nothing (docs/WEB3D.md, "No per-frame allocation").
 //
 // One realm drives a canvas. createRenderer takes only a canvas of its own realm (an element whose
-// document is this window's, or an OffscreenCanvas made in or transferred to this window or worker),
-// and refuses any other before it touches it: a frame cannot drive a canvas of the top document, nor
-// the top a frame's. A driven canvas element moved to another document is refused by frame(),
-// resize() and the creates from then on. Copies of this module loaded twice in one realm share its
-// canvases' state.
+// document is this window's, or an OffscreenCanvas whose prototype is this realm's), from a copy
+// whose window has not navigated away, and refuses any other before it touches it: a frame cannot
+// drive a canvas of the top document, nor the top a frame's. It checks the canvas again after each
+// await and after each size it sets, and refuses one moved meanwhile; it takes the context only
+// after its last await. A driven canvas element moved to another document is refused by frame(),
+// resize() and the creates from then on. Every copy that can touch a canvas reads one record of it,
+// kept on the canvas itself: which renderer owns it, its context's antialias, and its losses.
 //
 // The boundary. Every argument is checked before it reaches wasm:
 // - typed arrays are recognised by their internal slots, never by `instanceof` or their own
@@ -43,7 +45,9 @@
 // `cpuMs`, `gpuMs` and `info` still answer, and `dispose()` again does nothing). When the WebGL context is lost,
 // `frame()` returns false for good, creating anything throws, and the renderer is finished: dispose
 // it, then create a new one when `onContextRestored` is called and upload everything again. One loss
-// controller a canvas (`controllerFor`) cancels every lost event and calls the hooks.
+// controller a canvas in each realm that drove it (`controllerFor`) cancels every lost event and
+// calls the hooks; its two listeners are put back at every create, and after a document.open()
+// erases them.
 //
 // A renderer puts the context's state back to its defaults before it uses it (src/renderer.rs,
 // `reset_context_state`, and gl.js, `reset_webgl_state`): OpenGL ES state, the colour spaces and
@@ -68,15 +72,16 @@ const LOST =
   'web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again';
 const LOST_AT_CREATE =
   "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore";
-// A loss before web3d's listeners were on the canvas: the create cannot tell whether its lost event
-// is still to come (web3d's listener, added now, cancels it) or was dispatched already (only the page
-// could have cancelled it), so the message says both.
+// A context found lost on a canvas this realm had not used, whose lost event web3d's listener (on
+// the canvas since this call began) has not seen: the create cannot tell whether the event is still
+// to come (the listener cancels it) or came before this call (only the page could have cancelled
+// it), so the message says both.
 const LOST_BEFORE_WEB3D =
-  "web3d: the canvas's WebGL context was lost before web3d first used this canvas; it is restored if its lost event is cancelled, which web3d now does if that event is still to come (one already dispatched only the page could have cancelled), and then this call's onContextRestored is called";
+  "web3d: the canvas's WebGL context is lost; it was lost before web3d first used this canvas, and it is restored if its lost event is cancelled, which web3d now does if that event is still to come (one dispatched before this call began only the page could have cancelled), and then this call's onContextRestored is called";
 const SHARED =
   'web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)';
 const REENTRANT =
-  'web3d: a renderer method was called while the renderer was reading another call\'s arguments (from a getter, valueOf or a Proxy); call it afterwards';
+  "web3d: a renderer method was called while the renderer was reading another call's arguments or sizing its canvas, from page code that ran there (a getter, valueOf or a Proxy trap, or a custom element's attributeChangedCallback); call it afterwards";
 
 // Maps, not object literals: a name such as 'toString' must not find Object.prototype.
 const ALPHA_MODES = new Map([
@@ -302,30 +307,53 @@ const CANVAS_KINDS = ['HTMLCanvasElement', 'OffscreenCanvas']
     return { element: name === 'HTMLCanvasElement', proto: p, width: getter(p, 'width'), setWidth: setter(p, 'width'), height: getter(p, 'height'), setHeight: setter(p, 'height'), getContext: p.getContext };
   });
 const IS_PROTOTYPE_OF = Object.prototype.isPrototypeOf;
-// This realm's global, and the built-in getter of a node's document. A window's `document` is
-// unforgeable, so reading it through the global taken here gives the window's own document, the one
-// it has now (a frame's first about:blank document can be replaced by the one it then loads, in the
-// same window).
+// This realm's global, and the built-in getter of a node's document. In a window the global is the
+// WindowProxy, which names whatever window its frame holds now, so after the frame navigates, this
+// realm's code (called through a reference kept from before) reads the new page's document through
+// it. So the document is compared only while `ownRealm()` holds; then `GLOBAL.document`, which is
+// unforgeable, is the window's own document, the one it has now.
 const GLOBAL = globalThis;
 const OWNER_DOCUMENT = globalThis.Node && getter(globalThis.Node.prototype, 'ownerDocument');
 const FOREIGN_ELEMENT =
   "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d drives a canvas element only from a copy of web3d loaded in the window whose document holds it, so load web3d there";
 const FOREIGN_OFFSCREEN =
-  'web3d: this OffscreenCanvas belongs to another realm (it was made in, or transferred to, another window or worker); web3d drives an OffscreenCanvas only from a copy of web3d loaded where it was made or transferred to, so load web3d there';
+  "web3d: this OffscreenCanvas belongs to another realm: its prototype is another window's or worker's (it was made there or transferred there, or made by transferControlToOffscreen() from a canvas element that window's code touched first); web3d drives an OffscreenCanvas only from a copy of web3d loaded in the realm of its prototype";
 const MOVED =
   "web3d: this renderer's canvas has been moved to another document than this window's, which web3d does not support (its context-loss listeners belong to this window, and would stop when that document's window goes); move it back, or dispose this renderer and create one from a copy of web3d in the window whose document holds it";
+const MOVED_AT_CREATE =
+  "web3d: this canvas element was moved to another document than this window's while createRenderer was making its renderer, so the create is refused; web3d drives a canvas element only from the window whose document holds it (move it back and create again, or create from a copy of web3d in the window that holds it now)";
+const NAVIGATED =
+  "web3d: this copy of web3d belongs to a page that its window has navigated away from, so it drives no canvas any more; use a copy of web3d loaded in the window's present page";
 
-/** Whether `canvas`, an element, is in this window's document now. Allocates nothing. */
-const inThisDocument = (canvas) => OWNER_DOCUMENT.call(canvas) === GLOBAL.document;
+/**
+ * Whether this copy's realm is still its window's own (always, in a worker): false once the window
+ * has navigated away, to a page of this origin (whose window holds its own state) or of another
+ * (the read throws). Allocates nothing.
+ */
+function ownRealm() {
+  try {
+    return GLOBAL[SHARED_KEY] === REALM_STATE;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether `canvas`, an element, is in this window's document now, in this realm's own window. Allocates nothing. */
+function inThisDocument(canvas) {
+  try {
+    return GLOBAL[SHARED_KEY] === REALM_STATE && OWNER_DOCUMENT.call(canvas) === GLOBAL.document;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The canvas's kind, recognised by a built-in getter (which also accepts another realm's canvas);
- * then a canvas of another realm is refused. An element's realm is its document's window: its
- * owner document must be this window's. Its prototype does not tell, since Chrome gives a node
- * the prototype of whichever realm touched it first, and keeps it when the node moves to another
- * document. An OffscreenCanvas belongs to the window or worker that made it or received it by
- * transfer, which is the realm of its prototype: it is never wrapped anywhere else, and it moves
- * only by transfer, which detaches it.
+ * then a canvas of another realm is refused, and every canvas once this copy's window has navigated
+ * away. An element's realm is its document's window: its owner document must be this window's (its
+ * prototype is that of whichever realm touched it first). An OffscreenCanvas is taken when its
+ * prototype is this realm's: where it was made or transferred to, or, for one made by an element's
+ * transferControlToOffscreen(), the realm that touched the element first (docs/WEB3D.md).
  */
 function canvasKind(canvas) {
   if (typeof canvas === 'object' && canvas !== null) {
@@ -335,6 +363,7 @@ function canvasKind(canvas) {
       } catch {
         continue; // not this kind
       }
+      if (!ownRealm()) throw new Error(NAVIGATED);
       if (kind.element ? !inThisDocument(canvas) : !IS_PROTOTYPE_OF.call(kind.proto, canvas)) {
         throw new Error(kind.element ? FOREIGN_ELEMENT : FOREIGN_OFFSCREEN);
       }
@@ -359,22 +388,25 @@ function checkSize(width, height) {
 
 /**
  * State shared by copies of this module (a second import under another URL is another copy), kept
- * under one symbol in two places.
+ * under one registered symbol, `Symbol.for('loadngo-web3d')`, in three places.
+ *
+ * On each canvas web3d creates on, its record (`recordOf`). A canvas is one object to every realm
+ * that can touch it, so every copy that could create on it reads one record, whatever its home: a
+ * canvas element moved into another document while a renderer drives it cannot get a second live
+ * renderer from the copy there (the twelfth critic's F3).
  *
  * On this realm's global, shared by every copy loaded in this realm: each canvas's loss controller
- * (its two listeners are this realm's functions, so they run as long as this realm does), and the
- * realm's home, which its first copy chooses and every later one takes.
+ * (its two listeners are this realm's functions, so they run as long as this realm does), the
+ * canvases whose listeners are on and the observer that puts them back after document.open()
+ * (`arm`), and the realm's home, which its first copy chooses and every later one takes.
  *
- * On the home, shared by the copies of every realm with that home: which renderer owns each canvas,
- * the antialias setting each canvas's context has, and the renderer serials. The home is the top
- * window if this realm can reach it (same origin); else the last ancestor it reaches through
+ * On the home, shared by the copies of every realm with that home: the renderer serials. The home is
+ * the top window if this realm can reach it (same origin); else the last ancestor it reaches through
  * parents of its own origin, which is its own window when its parent has another; a worker is its
  * own home. So the copies in a page whose frames are all of one origin share one home, the top
  * window, and so do a frame and its same-origin descendants under a top of another origin. A realm
  * keeps the home its first copy chose: a copy loaded after `document.domain` has made another window
- * reachable still shares the first copy's owners and counter (the eleventh critic's F2). Owners are
- * kept on the home, not in the realm, so a canvas element moved into another same-origin document
- * while a renderer drives it cannot get a second live renderer from the copy there.
+ * reachable still shares the first copy's counter (the eleventh critic's F2).
  */
 const SHARED_KEY = Symbol.for('loadngo-web3d');
 const reachable = (w) => {
@@ -394,17 +426,48 @@ REALM_STATE.home ??= (() => {
   return home;
 })();
 REALM_STATE.controllers ??= new WeakMap();
+// The canvases whose two listeners are on (WeakRefs, so that a canvas the page drops can still be
+// collected), and the documents watched for document.open(): see `arm`.
+REALM_STATE.armed ??= new Set();
+REALM_STATE.watched ??= new WeakSet();
 const HOME = REALM_STATE.home;
 const SHARED_STATE = (HOME[SHARED_KEY] ??= {});
-SHARED_STATE.owners ??= new WeakMap();
-SHARED_STATE.contexts ??= new WeakMap();
 // Each home starts at a random serial, so two homes collide only by chance; within one, serials never
 // repeat.
 SHARED_STATE.serials ??= { next: 1 + (crypto.getRandomValues(new Uint32Array(1))[0] % (SERIALS - 1)), made: 0 };
-const OWNERS = SHARED_STATE.owners;
-const CONTEXTS = SHARED_STATE.contexts;
 const CONTROLLERS = REALM_STATE.controllers;
-const PENDING = { lost: false };
+
+const RECORD_FORGED =
+  "web3d: this canvas has a property under Symbol.for('loadngo-web3d') that web3d did not make; web3d keeps its record of the canvas there (which renderer owns it, its context's antialias, its losses), and the page must leave it alone";
+const NOT_EXTENSIBLE =
+  'web3d: this canvas is not extensible (Object.preventExtensions, seal or freeze), so web3d cannot keep its record of the canvas on it; pass a canvas the page has not sealed';
+
+/**
+ * The canvas's record: `owner`, the renderer (or claim) that holds it; `antialias`, its context's
+ * setting, once seen; `losses`, the losses web3d's listeners have counted, in any realm. Made by the
+ * first create on the canvas and kept for its life, as a non-writable, non-configurable,
+ * non-enumerable property under SHARED_KEY, which the page must leave alone. Runs no page code: the
+ * canvas is a real one, whose own properties are ordinary.
+ */
+function recordOf(canvas) {
+  const d = Reflect.getOwnPropertyDescriptor(canvas, SHARED_KEY);
+  if (d === undefined) {
+    const record = { __proto__: null, owner: null, antialias: null, losses: 0 };
+    if (!Reflect.defineProperty(canvas, SHARED_KEY, { __proto__: null, value: record })) throw new Error(NOT_EXTENSIBLE);
+    return record;
+  }
+  if (d.writable !== false || d.configurable !== false || d.enumerable !== false || typeof d.value !== 'object' || d.value === null) {
+    throw new Error(RECORD_FORGED);
+  }
+  return d.value;
+}
+
+/**
+ * The owner a create records while it runs, so that a second create on the canvas is refused
+ * meanwhile. An owner holds the canvas while its `_holds()` says so; a claim, while this copy's
+ * window has not navigated away (a navigated-away realm's awaits never finish).
+ */
+const CLAIM = Object.freeze({ __proto__: null, _holds: () => ownRealm() });
 
 /**
  * The next renderer serial, from 1 to 2^20 - 1, going round from a random start. Serials are never
@@ -413,12 +476,18 @@ const PENDING = { lost: false };
  * can issue the same handle. A home may make 2^20 - 1 renderers.
  */
 function takeSerial() {
-  const pool = SHARED_STATE.serials;
-  if (pool.made >= SERIALS - 1) throw new Error(`web3d: this page has made ${SERIALS - 1} renderers, the most it may`);
+  const pool = serialsLeft();
   const serial = pool.next;
   pool.next = (serial % (SERIALS - 1)) + 1;
   pool.made++;
   return serial;
+}
+
+/** The serial pool, if it has a serial left: createRenderer asks before it takes the context. */
+function serialsLeft() {
+  const pool = SHARED_STATE.serials;
+  if (pool.made >= SERIALS - 1) throw new Error(`web3d: this page has made ${SERIALS - 1} renderers, the most it may`);
+  return pool;
 }
 
 
@@ -509,18 +578,25 @@ async function compileFrom(source) {
   return WebAssembly.compile(await response.arrayBuffer());
 }
 
-/** Reads every option once, and checks it, before anything is created. */
+/**
+ * Reads every option once, then checks the canvas, then the options, before anything is created.
+ * The options come first: they are the caller's object, and its getters run as they are read. The
+ * canvas is checked after them, through built-ins only, so no page code runs between that check and
+ * the claim createRenderer makes next.
+ */
 function readOptions(canvas, options) {
-  const kind = canvasKind(canvas);
   const o = options ?? {};
   if (typeof o !== 'object') throw new Error(`web3d: options must be an object, not ${describe(o)}`);
-  const width = o.width ?? kind.width.call(canvas);
-  const height = o.height ?? kind.height.call(canvas);
+  const askedWidth = o.width;
+  const askedHeight = o.height;
   const antialias = o.antialias ?? true;
   const cpuTiming = o.cpuTiming ?? false;
   const wasm = o.wasm;
   const onContextLost = o.onContextLost;
   const onContextRestored = o.onContextRestored;
+  const kind = canvasKind(canvas);
+  const width = askedWidth ?? kind.width.call(canvas);
+  const height = askedHeight ?? kind.height.call(canvas);
   checkSize(width, height);
   for (const [name, f] of [
     ['onContextLost', onContextLost],
@@ -541,64 +617,70 @@ function readOptions(canvas, options) {
  * (default false; see setCpuTiming), wasm (see compile), onContextLost and onContextRestored (see
  * controllerFor for when each is called).
  *
- * The canvas must be of this realm (see canvasKind): an element of another document than this
- * window's, or an OffscreenCanvas of another window or worker, is refused before anything touches
+ * The canvas must be of this realm (see canvasKind): any other is refused before anything touches
  * it. A canvas keeps the WebGL context it first had, with that context's settings, whoever made it:
  * a renderer must ask for the antialias the context has, or it is refused, as is a context without
  * a depth buffer. A context that suits is taken with its state put back to the defaults
  * (docs/WEB3D.md lists what is set and what is left alone; the page's objects are kept, not
- * deleted), and from then on the renderer owns that state. Everything is checked before the context
- * is made, and a create that fails afterwards removes what it set up and puts the canvas's size
- * back (not the context's state, which its reset may have changed by then).
+ * deleted), and from then on the renderer owns that state.
+ *
+ * In order: the options and the canvas are checked, the canvas is claimed and web3d's listeners go
+ * on it, and the module is compiled and instantiated (the only awaits); then, in one task, the canvas
+ * is checked again, the context taken and the renderer made. A create that fails leaves no claim, the
+ * canvas's size as it was, and no listener it added (but those of a create that failed because the
+ * context is lost, which bring its onContextRestored); one that fails after taking the context leaves
+ * the context, which no call can remove ("What a failed create leaves" in docs/WEB3D.md).
  */
 export async function createRenderer(canvas, options) {
   const o = readOptions(canvas, options);
-  const owner = OWNERS.get(canvas);
-  if (owner && !owner.lost) throw new Error(SHARED);
-  const first = CONTEXTS.get(canvas);
-  if (first !== undefined && first !== o.antialias) throw new Error(contextMismatch(first));
-  // Claimed before the first await, so two calls in a row cannot both pass the check.
-  OWNERS.set(canvas, PENDING);
+  const record = recordOf(canvas);
+  const prior = record.owner;
+  if (prior !== null && prior._holds()) throw new Error(SHARED);
+  if (record.antialias !== null && record.antialias !== o.antialias) throw new Error(contextMismatch(record.antialias));
+  // Claimed before the first await, so two calls in a row cannot both pass the check. web3d's
+  // listeners go on now (back on, if a document.open() took them off while the canvas was in another
+  // document), so that a loss while the module loads is cancelled.
+  record.owner = CLAIM;
+  const controller = controllerFor(canvas, record);
+  const create = { armedBefore: controller.armed, losses: record.losses, lost: false };
+  arm(controller, canvas, o.kind.element);
   try {
-    const renderer = await build(canvas, o);
-    OWNERS.set(canvas, renderer);
-    return renderer;
+    const shim = createGl();
+    const x = (await WebAssembly.instantiate(await compile(o.wasm), shim.imports)).exports;
+    return take(canvas, o, record, controller, create, shim, x);
   } catch (error) {
-    if (owner) OWNERS.set(canvas, owner);
-    else OWNERS.delete(canvas);
+    if (record.owner === CLAIM) record.owner = prior;
+    if (!create.armedBefore && !create.lost) disarm(controller, canvas);
     throw error;
   }
 }
 
-async function build(canvas, o) {
-  const module = await compile(o.wasm);
-  const attributes = {
-    alpha: false,
-    antialias: o.antialias,
-    depth: true,
-    stencil: false,
-    premultipliedAlpha: true,
-    preserveDrawingBuffer: false,
-    powerPreference: 'high-performance',
-  };
-  const gl = WEBGL2 ? o.kind.getContext.call(canvas, 'webgl2', attributes) : null;
+/**
+ * The rest of createRenderer, after its last await: it takes the context and makes the renderer.
+ * The only page code that can run inside it is a customized built-in canvas's
+ * attributeChangedCallback, when the canvas is sized, so the canvas is checked again after each.
+ */
+function take(canvas, o, record, controller, create, shim, x) {
+  if (!(x.memory instanceof WebAssembly.Memory) || typeof x.web3d_create !== 'function') {
+    throw new Error('web3d: the wasm module is not loadngo-web3d (its exports are missing)');
+  }
+  stillInPlace(canvas, o.kind);
+  serialsLeft();
+  const gl = WEBGL2 ? o.kind.getContext.call(canvas, 'webgl2', contextAttributes(o.antialias)) : null;
   if (!gl) throw new Error('web3d: WebGL2 is not available here, or this canvas already has another kind of context');
-  // From this realm's first use of a canvas on, its loss controller cancels every lost event, so the
-  // context can be restored, and calls the hooks.
-  const known = CONTROLLERS.has(canvas);
-  const controller = controllerFor(canvas);
-  const losses = controller.losses;
   // A lost context (between a loss and its restore, or one the browser dropped) reports no
-  // attributes, so nothing is read or recorded from it.
+  // attributes, so nothing is read or recorded from it. Unless this realm drove the canvas before,
+  // or web3d's listener (on since this call began) has seen the lost event, the create cannot tell
+  // whether the event is still to come or came before this call (LOST_BEFORE_WEB3D).
   const attrs = gl.isContextLost() ? null : gl.getContextAttributes();
   if (!attrs) {
-    waitForRestore(controller, o.onContextRestored);
-    throw new Error(known ? LOST_AT_CREATE : LOST_BEFORE_WEB3D);
+    lostAtCreate(controller, create, o);
+    throw new Error(create.armedBefore || record.losses !== create.losses ? LOST_AT_CREATE : LOST_BEFORE_WEB3D);
   }
   // The context the canvas now has, which the page may have made first with other settings. Every
   // setting that does not suit is named at once.
   const actual = Boolean(attrs.antialias);
-  CONTEXTS.set(canvas, actual);
+  record.antialias = actual;
   const unsuited = [];
   if (actual !== o.antialias) unsuited.push(`antialias ${actual} (ask for antialias: ${actual})`);
   if (!attrs.depth) unsuited.push('no depth buffer (web3d needs one)');
@@ -607,24 +689,21 @@ async function build(canvas, o) {
       `web3d: this canvas's WebGL context has ${unsuited.join(' and ')}; a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit`,
     );
   }
-  // The shim is finished by any loss from now on, even one restored before it next looks.
-  const shim = createGl(gl, () => controller.losses !== losses);
+  // The shim is finished by any loss from now on, even one restored before it next looks, and
+  // whichever realm's listener counted it: the count is on the canvas's record, so a renderer whose
+  // own realm no longer hears the canvas's events (its window navigated away) still learns of it.
+  const losses = record.losses;
+  shim.bind(gl, () => record.losses !== losses);
+  shim.attach(x.memory);
   const size = [o.kind.width.call(canvas), o.kind.height.call(canvas)];
-  let x = null;
   let w = 0;
   try {
-    if (shim.lost()) throw new Error(LOST_AT_CREATE); // between a loss and its restore, programs cannot compile
-    x = (await WebAssembly.instantiate(module, shim.imports)).exports;
-    if (shim.lost()) throw new Error(LOST_AT_CREATE); // lost while the module was instantiated
-    if (!(x.memory instanceof WebAssembly.Memory) || typeof x.web3d_create !== 'function') {
-      throw new Error('web3d: the wasm module is not loadngo-web3d (its exports are missing)');
-    }
-    shim.attach(x.memory);
     const serial = takeSerial();
     w = x.web3d_create(serial) >>> 0;
     if (w === 0) throw new Error('web3d: the module could not create a renderer');
     o.kind.setWidth.call(canvas, o.width);
     o.kind.setHeight.call(canvas, o.height);
+    stillInPlace(canvas, o.kind);
     // A page's drawingBufferStorage (which needs a context with alpha) may have left a drawing
     // buffer of another size than the canvas's, and Chrome keeps it when the canvas is set to the
     // size it already has. Then the canvas is given another width and this one back, so the browser
@@ -633,44 +712,71 @@ async function build(canvas, o) {
     if (attrs.alpha && HAS_BUFFER_STORAGE && (BUFFER_WIDTH.call(gl) !== o.width || BUFFER_HEIGHT.call(gl) !== o.height)) {
       o.kind.setWidth.call(canvas, o.width > 0 ? o.width - 1 : 1);
       o.kind.setWidth.call(canvas, o.width);
+      stillInPlace(canvas, o.kind);
     }
     if (x.web3d_init(w, BUFFER_WIDTH.call(gl), BUFFER_HEIGHT.call(gl)) !== 0) {
       // Programs fail to compile on a context lost meanwhile; say so, not that a shader failed.
       throw new Error(shim.lost() ? LOST_AT_CREATE : `web3d: ${errorText(x, w, shim)}`);
     }
     if (o.cpuTiming) x.web3d_set_cpu_timing(w, 1);
-    const renderer = new Renderer(canvas, o.kind, gl, shim, x, w, serial);
+    const renderer = new Renderer(canvas, o.kind, gl, shim, x, w, serial, record);
     // Only now do the page's hooks belong to the canvas: a loss during the create makes it fail with
     // "lost", and does not call onContextLost.
     controller.current = { renderer, onLost: o.onContextLost, onRestored: o.onContextRestored };
+    record.owner = renderer;
     return renderer;
   } catch (error) {
-    // Leave nothing behind: the renderer's GL objects, the canvas's size. A serial taken is spent,
-    // never reused. A create that failed because the context was lost still hears of the restore,
-    // through this call's onContextRestored; if the restore came while it failed, at once.
+    // Leave nothing behind but the context: the renderer's GL objects, the canvas's size. A serial
+    // taken is spent, never reused. A create that failed because the context was lost (inside this
+    // task, so its lost event is still to come, and web3d's listener cancels it) still hears of the
+    // restore, through this call's onContextRestored.
     if (w !== 0) x.web3d_destroy(w);
-    const lost = shim.lost();
+    if (shim.lost()) lostAtCreate(controller, create, o);
     shim.dispose();
-    if (lost && gl.isContextLost()) waitForRestore(controller, o.onContextRestored);
-    else if (lost && typeof o.onContextRestored === 'function') setTimeout(() => callHook(o.onContextRestored), 0);
     if (o.kind.width.call(canvas) !== size[0]) o.kind.setWidth.call(canvas, size[0]);
     if (o.kind.height.call(canvas) !== size[1]) o.kind.setHeight.call(canvas, size[1]);
     throw error;
   }
 }
 
+/** Refuses a canvas element moved out of this window's document during the create, or a copy whose window navigated away meanwhile. */
+function stillInPlace(canvas, kind) {
+  if (!ownRealm()) throw new Error(NAVIGATED);
+  if (kind.element && !inThisDocument(canvas)) throw new Error(MOVED_AT_CREATE);
+}
+
+/** A create that failed because the context is lost: its onContextRestored comes on the restore, and its listeners stay to bring it. */
+function lostAtCreate(controller, create, o) {
+  create.lost = true;
+  waitForRestore(controller, o.onContextRestored);
+}
+
+/** The context web3d asks for, as a null-prototype object, so that the dictionary's conversion reads only these. */
+const contextAttributes = (antialias) => ({
+  __proto__: null,
+  alpha: false,
+  antialias,
+  depth: true,
+  stencil: false,
+  premultipliedAlpha: true,
+  preserveDrawingBuffer: false,
+  powerPreference: 'high-performance',
+});
+
 function contextMismatch(antialias) {
   return `web3d: this canvas's WebGL context has antialias ${antialias} (ask for antialias: ${antialias}); a canvas keeps its first context and that context's settings, so use a new canvas where the context cannot suit`;
 }
 
 /**
- * The loss controller of a canvas in this realm, made the first time a copy of web3d in this realm
- * takes a context from it, and kept for the canvas's life. Its two listeners are the only ones web3d
- * puts on a canvas, and are this realm's functions. This realm is the only one that drives the
- * canvas (`canvasKind`; a driven element moved to another document is refused by `frame()`,
- * `resize()` and the creates), so they run as long as the canvas's document or worker does. (A
- * canvas element a page moves to another document between renderers gets two more there, from that
- * window's copy, the first time it drives it.)
+ * The loss controller of a canvas in this realm, shared by the copies of web3d in this realm and kept
+ * for the canvas's life, with its two listeners, the only ones web3d puts on a canvas. They are this
+ * realm's functions, kept on the controller, and go on the canvas at every create (`arm`); a create
+ * that fails for another reason than a loss takes off those it put on. This realm is the only one
+ * that drives the canvas (`canvasKind`; a driven element moved to another document is refused by
+ * `frame()`, `resize()` and the creates), so they run as long as the canvas's document or worker does.
+ * document.open() erases them, with every listener in the document's tree (the twelfth critic's F1);
+ * the observer `arm` sets up puts them back before any lost event can be dispatched.
+ *
  * - on `webglcontextlost` it cancels the event, so the context can be restored, counts the loss
  *   (which finishes every renderer made before it), and calls the live renderer's `onContextLost`;
  * - on `webglcontextrestored` it calls, once each (one function once, however often it was given),
@@ -678,31 +784,93 @@ function contextMismatch(antialias) {
  *   it, even in a restored listener of its own that runs first), of every renderer disposed while
  *   lost, and of every create that failed because of the loss. Then no renderer is live until a new
  *   one is created, so a lost renderer left undisposed hears no later loss or restore.
- * Each hook runs in its own `try`; what it throws is reported (`reportError`) and the rest still run.
+ * Both ignore an event the page dispatched itself (one not `isTrusted`): only the browser's say that
+ * the context was lost or restored. Each hook runs in its own `try`; what it throws is reported
+ * (`reportError`) and the rest still run.
  */
-function controllerFor(canvas) {
+function controllerFor(canvas, record) {
   let c = CONTROLLERS.get(canvas);
   if (c) return c;
-  c = { losses: 0, current: null, waiting: new Set() };
-  ADD_LISTENER.call(canvas, 'webglcontextlost', (event) => {
+  c = { current: null, waiting: new Set(), armed: false, ref: null, lostListener: null, restoredListener: null };
+  c.lostListener = (event) => {
+    if (!event.isTrusted) return;
     event.preventDefault();
-    c.losses++;
+    record.losses++;
     const hook = c.current?.onLost;
     if (typeof hook === 'function') callHook(hook);
-  });
-  ADD_LISTENER.call(canvas, 'webglcontextrestored', () => {
+  };
+  c.restoredListener = (event) => {
+    if (!event.isTrusted) return;
     const hooks = new Set(c.waiting);
     c.waiting.clear();
     const hook = c.current?.onRestored;
     if (typeof hook === 'function') hooks.add(hook);
     c.current = null;
     for (const h of hooks) callHook(h);
-  });
+  };
   CONTROLLERS.set(canvas, c);
   return c;
 }
 
 const ADD_LISTENER = EventTarget.prototype.addEventListener;
+const REMOVE_LISTENER = EventTarget.prototype.removeEventListener;
+const MUTATION_OBSERVER = globalThis.MutationObserver;
+const OBSERVE = MUTATION_OBSERVER?.prototype.observe;
+/** The observer watches only the document's own children, which document.open() takes away. */
+const WATCH = Object.freeze({ __proto__: null, childList: true });
+
+/**
+ * Puts the controller's two listeners on the canvas (adding one that is on already does nothing),
+ * records the canvas as armed in this realm, and, for an element, watches its document's own
+ * children: document.open(), which erases every listener in the document's tree, takes them away,
+ * and the observer puts back every armed canvas's listeners at the next microtask checkpoint, before
+ * the next task, so before any lost event can be dispatched.
+ */
+function arm(c, canvas, element) {
+  ADD_LISTENER.call(canvas, 'webglcontextlost', c.lostListener);
+  ADD_LISTENER.call(canvas, 'webglcontextrestored', c.restoredListener);
+  if (!c.armed) {
+    // Refs to canvases since collected go first, so the set holds the realm's armed canvases and
+    // those collected since the last create, however many canvases a page makes over time.
+    for (const ref of REALM_STATE.armed) if (ref.deref() === undefined) REALM_STATE.armed.delete(ref);
+    c.armed = true;
+    c.ref = new WeakRef(canvas);
+    REALM_STATE.armed.add(c.ref);
+  }
+  if (element) watch(OWNER_DOCUMENT.call(canvas));
+}
+
+/** Takes the controller's two listeners off the canvas: those of a failed create that was the first in this realm to arm it. */
+function disarm(c, canvas) {
+  REMOVE_LISTENER.call(canvas, 'webglcontextlost', c.lostListener);
+  REMOVE_LISTENER.call(canvas, 'webglcontextrestored', c.restoredListener);
+  c.armed = false;
+  REALM_STATE.armed.delete(c.ref);
+  c.ref = null;
+}
+
+/** Watches a document's own children with this realm's one observer, once a document. */
+function watch(doc) {
+  const state = REALM_STATE;
+  if (!OBSERVE || state.watched.has(doc)) return;
+  state.observer ??= new MUTATION_OBSERVER(rearm);
+  OBSERVE.call(state.observer, doc, WATCH);
+  state.watched.add(doc);
+}
+
+/** The observer's callback: puts back the two listeners of every canvas armed in this realm. */
+function rearm() {
+  for (const ref of REALM_STATE.armed) {
+    const canvas = ref.deref();
+    const c = canvas === undefined ? undefined : REALM_STATE.controllers.get(canvas);
+    if (c === undefined || !c.armed) {
+      REALM_STATE.armed.delete(ref);
+      continue;
+    }
+    ADD_LISTENER.call(canvas, 'webglcontextlost', c.lostListener);
+    ADD_LISTENER.call(canvas, 'webglcontextrestored', c.restoredListener);
+  }
+}
 
 function waitForRestore(controller, hook) {
   if (typeof hook === 'function') controller.waiting.add(hook);
@@ -732,8 +900,9 @@ function errorText(x, w, shim) {
 
 /** Made only by createRenderer. */
 export class Renderer {
-  constructor(canvas, kind, gl, shim, exports, w, serial) {
+  constructor(canvas, kind, gl, shim, exports, w, serial, record) {
     this.canvas = canvas;
+    this._record = record;
     this._kind = kind;
     this._element = kind.element;
     this._gl = gl;
@@ -764,10 +933,19 @@ export class Renderer {
   }
 
   /**
-   * Every public method starts here: it refuses a disposed renderer, a call made from inside
-   * another call's argument reading, and (for creates) a lost context and a canvas element moved to
-   * another document, then marks the renderer busy until `_leave`. Allocates nothing unless it
-   * throws.
+   * Whether this renderer holds its canvas, so that another create on it is refused: while it is
+   * live (not disposed, its context not lost) and its window has not navigated away. Read by any
+   * copy of web3d through the canvas's record.
+   */
+  _holds() {
+    return this._w !== 0 && !this._shim.lost() && ownRealm();
+  }
+
+  /**
+   * Every public method starts here: it refuses a disposed renderer, a call made from page code
+   * that runs inside another of its calls (reading that call's arguments, or sizing the canvas), and
+   * (for creates) a lost context and a canvas element moved to another document, then marks the
+   * renderer busy until `_leave`. Allocates nothing unless it throws.
    */
   _enter(creates) {
     if (!this._w) throw new Error(DISPOSED);
@@ -778,11 +956,12 @@ export class Renderer {
   }
 
   /**
-   * Refuses a canvas element that is no longer in this window's document: one realm drives a canvas,
-   * and its listeners are this window's. One getter call and one property read; allocates nothing.
+   * Refuses a canvas element that is no longer in this window's document, and any canvas once this
+   * copy's window has navigated away: one realm drives a canvas, and its listeners are this realm's.
+   * Two property reads and one getter call; allocates nothing unless it throws.
    */
   _inPlace() {
-    if (this._element && !inThisDocument(this.canvas)) throw new Error(MOVED);
+    if (this._element ? !inThisDocument(this.canvas) : !ownRealm()) throw new Error(ownRealm() ? MOVED : NAVIGATED);
   }
 
   _leave() {
@@ -862,7 +1041,7 @@ export class Renderer {
       // A lost renderer no longer owns its canvas: a new one may already draw there.
       if (this._shim.lost()) throw new Error(LOST);
       this._inPlace();
-      if (OWNERS.get(this.canvas) !== this) throw new Error('web3d: this renderer no longer owns its canvas');
+      if (this._record.owner !== this) throw new Error('web3d: this renderer no longer owns its canvas');
       const [w, h] = this._size(width, height);
       this._status(this._x.web3d_resize(this._w, w, h));
     } finally {
@@ -1172,12 +1351,12 @@ export class Renderer {
 
   /**
    * Draws a frame; returns false (and draws nothing) once the context is lost: from the moment
-   * `gl.isContextLost()` says so, or the canvas's loss controller has counted a loss since this
-   * renderer was made, whichever comes first (the lost event can come later). Throws if the canvas
-   * element has been moved to another document. With CPU timing on, wasm reads the clock twice
-   * around its work; each reading is a number V8 boxes (22 sampled bytes a frame for the two,
-   * measured in evidence/phase1/critic10-rerun/cpu-timing/), which is why timing is off unless asked
-   * for.
+   * `gl.isContextLost()` says so, or web3d's listeners (of any realm) have counted a loss on the
+   * canvas since this renderer was made, whichever comes first (the lost event can come later).
+   * Throws if the canvas element has been moved to another document, or this copy's window has
+   * navigated away. With CPU timing on, wasm reads the clock twice around its work; each reading is
+   * a number V8 boxes (22 sampled bytes a frame for the two, measured in
+   * evidence/phase1/critic10-rerun/cpu-timing/), which is why timing is off unless asked for.
    */
   frame() {
     this._enter(false);
@@ -1262,7 +1441,7 @@ export class Renderer {
       if (this._shim.lost()) waitForRestore(controller, controller.current.onRestored);
       controller.current = null;
     }
-    if (OWNERS.get(this.canvas) === this) OWNERS.delete(this.canvas);
+    if (this._record.owner === this) this._record.owner = null;
   }
 }
 

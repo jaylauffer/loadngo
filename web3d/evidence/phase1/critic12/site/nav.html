@@ -1,0 +1,137 @@
+<!doctype html><meta charset="utf-8"><title>critic 12: a frame navigates</title>
+<body><script type="module">
+// N1. A frame's copy of web3d after the frame navigates to another same-origin page (a new window
+// and realm in the same browsing context). The top kept a reference to the old copy. Is the old
+// copy's "this window's document" still its own (old) document, or the new page's? Can the old
+// (dead) realm's copy take a canvas of the new page's document, and does its loss controller run?
+// N2. The top's copy drives top-document canvases that have the frame's prototype (adopted from the
+// frame, and touched first by the frame's MutationObserver). The frame then navigates (its realm is
+// discarded, not removed): do the top's renderers still draw and recover, twice, and can new ones
+// be made?
+import { sleep, err, settle, attempt, OPTS, frameOf, green, redraw, cycle, listenersOf, until, page } from './common.js';
+page(async (out) => {
+const web3d = await import('/pkg/web3d.js');
+const f = await frameOf('frame.html');
+out.step = 1;
+const oldWin = f.contentWindow; // a WindowProxy: after navigation it names the new window
+const old = { web3d: oldWin.web3d, doc: oldWin.document, readGlobalDocument: oldWin.readGlobalDocument, HTMLCanvasElement: oldWin.HTMLCanvasElement };
+const oldCanvas = old.doc.getElementById('own');
+// Top-document canvases with the frame's prototype.
+const adopted = old.doc.createElement('canvas');
+document.body.append(adopted);
+oldWin.eval("window.seen = null; window.obs = new MutationObserver((rs) => { for (const r of rs) for (const n of r.addedNodes) if (n.nodeName === 'CANVAS') window.seen = n; }); window.obs.observe(parent.document.body, { childList: true });");
+document.body.insertAdjacentHTML('beforeend', '<canvas id="first" width="16" height="16"></canvas>');
+await until(() => oldWin.seen);
+out.step = 2;
+oldWin.obs.disconnect();
+const first = document.getElementById('first');
+out.prototypes = {
+  adopted: Object.getPrototypeOf(adopted) === old.HTMLCanvasElement.prototype ? 'frame' : 'other',
+  first: Object.getPrototypeOf(first) === old.HTMLCanvasElement.prototype ? 'frame' : 'other',
+};
+// The top's renderers on those two, live across the navigation.
+const live = {};
+for (const [name, c] of [['adopted', adopted], ['first', first]]) {
+  const calls = { lost: 0, restored: 0 };
+  const m = await settle(web3d.createRenderer(c, { ...OPTS, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++ }));
+  live[name] = { c, m, calls, before: m.ok ? green(m.r).isGreen : m.message };
+}
+// The old copy's own renderer on its own canvas, before navigation.
+const oldOwn = await settle(old.web3d.createRenderer(oldCanvas, OPTS));
+out.oldCopyOnOwnCanvasBefore = oldOwn.ok ? green(oldOwn.r).isGreen : oldOwn.message;
+// For the fix: what the old realm reads through its global after the navigation.
+const key = Symbol.for('loadngo-web3d');
+const oldReadState = oldWin.eval('() => globalThis[Symbol.for("loadngo-web3d")]');
+const oldReadNodeSame = oldWin.eval('() => globalThis.Node === Node');
+const oldState = oldReadState();
+// Navigate the frame.
+f.src = 'frame2.html';
+out.step = 3;
+await new Promise((r) => f.addEventListener('load', r, { once: true }));
+out.step = 4;
+await until(() => f.contentWindow.ready && f.contentWindow.page === 'frame2.html');
+out.step = 5;
+const newWin = f.contentWindow;
+const newCanvas = newWin.document.getElementById('own2');
+out.windowProxySame = newWin === oldWin;
+out.newRealm = newWin.web3d !== old.web3d;
+let g;
+try { g = old.readGlobalDocument(); out.oldRealmGlobalDocument = g === newWin.document ? 'the NEW page\'s document' : g === old.doc ? 'its own old document' : String(g); } catch (e) { out.oldRealmGlobalDocument = 'throws: ' + err(e); }
+out.fixSignal = { oldRealmStateThroughGlobalIsItsOwn: oldReadState() === oldState, oldRealmReadsNewWindowsState: oldReadState() === newWin[key], globalNodeIsOwnNode: oldReadNodeSame() };
+// The old copy's renderer on its own canvas after navigation.
+out.oldCopyOwnRendererAfterNav = oldOwn.ok ? attempt(() => redraw(oldOwn.r)) : 'n/a';
+if (out.oldCopyOwnRendererAfterNav.ok) out.oldCopyOwnRendererAfterNav = out.oldCopyOwnRendererAfterNav.v.isGreen ? 'draws' : out.oldCopyOwnRendererAfterNav.v;
+if (oldOwn.ok) attempt(() => oldOwn.r.dispose());
+// The old copy on a canvas of its own old document (now without a window).
+// A dead realm's promises never settle (its microtasks no longer run), so each call is raced.
+const bounded = (p) => Promise.race([settle(p), sleep(1500).then(() => ({ ok: false, message: 'NEVER SETTLED' }))]);
+const c1 = await bounded(old.web3d.createRenderer(old.doc.createElement('canvas'), OPTS));
+out.oldCopyOnOldDocCanvas = c1.ok ? 'created' : c1.message;
+if (c1.ok) c1.r.dispose();
+// The old copy on a canvas of the NEW page's document: the new window's realm owns it.
+// The new page's copy, on its own canvas, first as a control (a fresh canvas), then on newCanvas.
+const ctl = newWin.document.body.appendChild(newWin.document.createElement('canvas'));
+const c0 = await settle(newWin.web3d.createRenderer(ctl, OPTS));
+out.newCopyOnFreshCanvasBefore = c0.ok ? green(c0.r).isGreen : c0.message;
+if (c0.ok) c0.r.dispose();
+// Now the old copy is handed the new page's canvas, and then the new copy asks for it.
+let oldCall;
+try { oldCall = old.web3d.createRenderer(newCanvas, OPTS); out.oldCopyCallOnNewCanvas = 'returned a promise'; } catch (e) { out.oldCopyCallOnNewCanvas = 'threw: ' + err(e); }
+const c2 = oldCall ? await bounded(oldCall) : { ok: false, message: 'threw' };
+out.oldCopyOnNewPageCanvasSettled = c2.ok ? 'created' : c2.message;
+out.newCanvasHasContextAfterOldCall = (() => { const t = newWin.document.createElement('canvas'); return 'n/a'; })();
+const nc = await settle(newWin.web3d.createRenderer(newCanvas, OPTS));
+out.newCopyOnItsOwnCanvasAfterOldCall = nc.ok ? (green(nc.r).isGreen ? 'draws' : 'created, no green') : nc.message;
+if (nc.ok) nc.r.dispose();
+out.newCanvasListeners = await listenersOf(newCanvas);
+out.oldCopyOnNewPageCanvas = c2.ok ? 'created (a dead realm drives the new page\'s canvas)' : c2.message;
+if (c2.ok) {
+  out.oldCopyOnNewPageCanvasDraw = green(c2.r);
+  out.oldCopyListenersOnNewCanvas = await listenersOf(newCanvas);
+  // Does the old realm's loss controller cancel a loss there?
+  const lc = c2.r.gl.getExtension('WEBGL_lose_context');
+  let prevented = null;
+  newCanvas.addEventListener('webglcontextlost', (e) => (prevented = e.defaultPrevented), { once: true });
+  const lost = new Promise((res) => newCanvas.addEventListener('webglcontextlost', () => setTimeout(() => res('lost'), 0), { once: true }));
+  lc.loseContext();
+  out.oldCopyLossEvent = await Promise.race([lost, sleep(3000).then(() => 'timeout')]);
+  out.oldCopyLossPrevented = prevented;
+  c2.r.dispose();
+  const restored = new Promise((res) => newCanvas.addEventListener('webglcontextrestored', () => res('restored'), { once: true }));
+  try { lc.restoreContext(); out.oldCopyRestoreCall = 'ok'; } catch (e) { out.oldCopyRestoreCall = 'throws: ' + err(e); }
+  out.oldCopyRestored = await Promise.race([restored, sleep(3000).then(() => 'timeout')]);
+  out.newCopyAfter = (await settle(newWin.web3d.createRenderer(newCanvas, OPTS))).message ?? 'created';
+}
+// The new page's own copy on its own canvas (control), when the old copy did not take it.
+if (!c2.ok) out.newCopyOnOwnCanvas = await cycle(newWin.web3d, newWin.document.body.appendChild(newWin.document.createElement('canvas')));
+// N2: the top's renderers on frame-prototyped canvases, after the frame navigated.
+out.topRenderers = {};
+for (const [name, k] of Object.entries(live)) {
+out.step = 6;
+  if (!k.m.ok) { out.topRenderers[name] = { create: k.m.message }; continue; }
+  const e = { before: k.before };
+  const d = attempt(() => redraw(k.m.r));
+  e.afterNav = d.ok ? (d.v.isGreen ? 'draws' : d.v) : d.message;
+  // A loss, cancelled by the top's controller?
+  const lc = k.m.r.gl.getExtension('WEBGL_lose_context');
+  let prevented = null;
+  k.c.addEventListener('webglcontextlost', (ev) => (prevented = ev.defaultPrevented), { once: true });
+  const lost = new Promise((res) => k.c.addEventListener('webglcontextlost', () => setTimeout(() => res('lost'), 0), { once: true }));
+  lc.loseContext();
+  e.lostEvent = await Promise.race([lost, sleep(3000).then(() => 'timeout')]);
+  e.prevented = prevented;
+  k.m.r.dispose();
+  const restored = new Promise((res) => k.c.addEventListener('webglcontextrestored', () => res('restored'), { once: true }));
+  try { lc.restoreContext(); } catch (er) { e.restoreThrew = err(er); }
+  e.restored = await Promise.race([restored, sleep(3000).then(() => 'timeout')]);
+  await sleep(20);
+  e.calls = k.calls;
+  e.twoMoreCycles = [await cycle(web3d, k.c), await cycle(web3d, k.c)];
+  out.topRenderers[name] = e;
+}
+out.pass = {
+  newPageCopyGetsItsOwnCanvasAfterTheOldCopyWasCalled: !/already has a live renderer/.test(out.newCopyOnItsOwnCanvasAfterOldCall ?? ''),
+  topRenderersSurviveFrameNavigation: Object.values(out.topRenderers).every((e) => e.afterNav === 'draws' && e.prevented === true && e.restored === 'restored' && e.calls?.lost === 1 && e.calls?.restored === 1 && e.twoMoreCycles?.every((x) => x.ok)),
+};
+});
+</script></body>

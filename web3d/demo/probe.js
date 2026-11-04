@@ -580,7 +580,7 @@ async function failedCreate() {
   const d = {};
   // Refused before any context is made.
   d.early = await settle(createRenderer(c, { width: 1.5, height: 32, onContextLost: () => calls.early++ }));
-  // Fails after the context and the shim exist: a module that is not web3d.
+  // A module that is not web3d: refused once it is instantiated, before the context is taken.
   const empty = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
   d.late = await settle(createRenderer(c, { width: 32, height: 32, antialias: false, wasm: empty, onContextLost: () => calls.late++ }));
   // Forty more failures, then forty creates: no canvas is left held.
@@ -603,7 +603,7 @@ async function failedCreate() {
   d.calls = calls;
   for (const k of ['early', 'late', 'mismatch']) d[k] = d[k].ok ? 'created' : d[k].message;
   log(
-    'Y a failed create (before or after the context exists) leaves no listener or claim behind; a canvas refuses other context settings',
+    'Y a failed create (for its options, or for a module that is not web3d, both refused before the context is taken) leaves no claim behind, and calls no hook; a canvas refuses other context settings',
     /whole number/.test(d.early) && /not loadngo-web3d/.test(d.late) && created === 40 &&
       /keeps its first context/.test(d.mismatch) && d.goodAttributes.antialias === false && d.goodAttributes.samples === 0 &&
       calls.early === 0 && calls.late === 0 && calls.good === 1,
@@ -1226,7 +1226,9 @@ async function lossController() {
       d.e12Again = again.ok ? 'created' : again.message;
       if (again.ok) again.r.dispose();
     }
-    // ET: a loss and its restore both inside the create's instantiation.
+    // ET: a loss and its restore both while a create instantiates the module. The create takes the
+    // context only after its last await, so it takes the restored one: it draws, and neither of its
+    // hooks is called (they are for losses after it is made).
     {
       const c = document.getElementById('let');
       const r0 = await createRenderer(c, opts); // the canvas has a controller and a context
@@ -1234,23 +1236,29 @@ async function lossController() {
       r0.dispose();
       const lc = lose(gl);
       const real = WebAssembly.instantiate;
+      let cancelled = null;
       WebAssembly.instantiate = async (...args) => {
         const result = await real.apply(WebAssembly, args);
+        let ev = null;
+        c.addEventListener('webglcontextlost', (e) => (ev = e), { once: true });
         const lost = event(c, 'webglcontextlost');
         lc.loseContext();
         await lost;
+        cancelled = ev?.defaultPrevented ?? 'no event';
         const restored = event(c, 'webglcontextrestored');
         lc.restoreContext();
         await restored;
         return result;
       };
-      let calls = 0;
+      const calls = { lost: 0, restored: 0 };
       try {
-        d.etCreate = (await settle(createRenderer(c, { ...opts, onContextRestored: () => calls++ }))).message;
+        const made = await settle(createRenderer(c, { ...opts, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++ }));
+        d.etCreate = made.ok ? greenOn(made.r) : made.message;
+        if (made.ok) made.r.dispose();
       } finally {
         WebAssembly.instantiate = real;
       }
-      d.etCallsAtOnce = calls;
+      d.etCancelled = cancelled;
       await timeout(20);
       d.etCalls = calls;
       const again = await settle(createRenderer(c, opts));
@@ -1262,13 +1270,13 @@ async function lossController() {
   }
   const lostMessage = (m) => /context is lost/.test(m ?? '');
   log(
-    'LE one loss controller a canvas: a throwing hook does not stop the next (E1); one function runs once (E4b); a lost renderer left undisposed hears no later loss (E6); a page-made context lost during a create, and a canvas lost with no renderer, are restored (E11, E12); a loss and restore inside a create call its hook once, after (ET)',
+    'LE one loss controller a canvas: a throwing hook does not stop the next (E1); one function runs once (E4b); a lost renderer left undisposed hears no later loss (E6); a page-made context lost during a create, and a canvas lost with no renderer, are restored (E11, E12); a loss cancelled and restored while a create loads its module leaves the create the restored context, which it draws on, with no hook called (ET)',
     lostMessage(d.e1Create) && d.e1.a === 1 && d.e1.b === 1 &&
       lostMessage(d.e4bCreate) && d.e4b === 1 &&
       d.e6Second === 'created' && d.e6.old.lost === 1 && d.e6.old.restored === 1 && d.e6.now.lost === 1 && d.e6.now.restored === 1 &&
       lostMessage(d.e11Create) && !d.e11RestoreThrew && d.e11Restored === 'webglcontextrestored' && d.e11Calls === 1 && d.e11Again === 'created' &&
       !d.e12RestoreThrew && d.e12Restored === 'webglcontextrestored' && d.e12Again === 'created' &&
-      lostMessage(d.etCreate) && d.etCallsAtOnce === 0 && d.etCalls === 1 && d.etAgain === 'created',
+      isGreen(d.etCreate) && d.etCancelled === true && d.etCalls.lost === 0 && d.etCalls.restored === 0 && d.etAgain === 'created',
     d,
   );
 }
@@ -2210,6 +2218,531 @@ async function refusalMessages() {
   );
 }
 
+// The thirteenth round's probes, for the twelfth critic's findings: F1 (DO), F2 (NV), F3 (RC; the
+// document.domain arrangement itself needs Origin-Agent-Cluster ?0, which this cross-origin
+// isolated page cannot have, so it runs in evidence/phase1/critic12-rerun/), F4 (MC), the
+// OffscreenCanvas of F5 (TO), and web3d's listeners ignoring events the page dispatches (SY).
+
+const KEY = Symbol.for('loadngo-web3d');
+/** A same-origin frame with its own copy of web3d (probe-frame.html unless `src` says), once it is ready. */
+async function frameWithCopy(src = './probe-frame.html') {
+  const iframe = document.createElement('iframe');
+  iframe.src = src;
+  document.body.append(iframe);
+  await new Promise((res) => iframe.addEventListener('load', res, { once: true }));
+  for (let i = 0; i < 100 && !iframe.contentWindow.__frame; i++) await timeout(20);
+  return iframe;
+}
+/** A renderer from a frame's copy, with its context tracked so that releaseAll releases it. */
+const tracked = (r) => (track(r.gl), r);
+/** The owner in a canvas's record, or null: what web3d left claimed on it. */
+const ownerOf = (c) => Object.getOwnPropertyDescriptor(c, KEY)?.value?.owner ?? null;
+/** True if the canvas has no context: it takes a '2d' one (so use it last on a canvas). */
+const contextless = (c) => c.getContext('2d') !== null;
+/** One loss and restore while `r` drives `c`: whether the lost event was cancelled (by anyone) and the restore came. */
+async function lossOf(r, c) {
+  const lc = r.gl.getExtension('WEBGL_lose_context');
+  let event = null;
+  c.addEventListener('webglcontextlost', (e) => (event = e), { once: true });
+  const lost = eventOf(c, 'webglcontextlost');
+  lc.loseContext();
+  await Promise.race([lost, timeout(3000)]);
+  const e = { prevented: event?.defaultPrevented ?? 'no event' };
+  r.dispose();
+  const restored = eventOf(c, 'webglcontextrestored');
+  e.restoreThrew = attempt(() => lc.restoreContext()).threw;
+  e.restored = await Promise.race([restored, timeout(3000)]);
+  await timeout(20);
+  return e;
+}
+const recovered = (e) => e && e.prevented === true && !e.restoreThrew && e.restored === 'webglcontextrestored';
+
+/**
+ * DO: document.open() erases the listeners of every node in the document's tree, keeping the
+ * window, the document and the nodes (the twelfth critic's F1). web3d's observer puts its listeners
+ * back before any lost event can come: on a canvas a live renderer drives, with a loss in the
+ * reopening's own task, and on one web3d used and left with no renderer; reopened from this window
+ * and from the frame's own code, by document.open() and by document.write() after load. A canvas
+ * that was in another document when that one was reopened has its listeners back at its next create.
+ */
+async function documentReopened() {
+  const opts = { width: 16, height: 16, antialias: false };
+  const d = {};
+  const iframe = await frameWithCopy();
+  const fw = iframe.contentWindow;
+  const f = fw.__frame;
+  const doc = fw.document;
+  // A: driven by a live renderer. B: driven once and left with no renderer.
+  const A = f.canvas;
+  const calls = { lost: 0, restored: 0 };
+  const rA = tracked(await f.createRenderer(A, { ...opts, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++ }));
+  d.drawsBefore = greenOn(rA);
+  const B = doc.body.appendChild(doc.createElement('canvas'));
+  const rB = tracked(await f.createRenderer(B, opts));
+  const glB = rB.gl;
+  rB.dispose();
+  d.before = { A: await listenersOf(A), B: await listenersOf(B) };
+  // 1. Reopened from this window, the canvases put back, and A lost in the same task: its lost event
+  // comes in a later task, after the observer has run.
+  doc.open();
+  doc.write('<!doctype html><body></body>');
+  doc.close();
+  d.sameWindowAndDocument = fw.document === doc && fw.__frame === f;
+  d.canvasesWereTakenOut = !A.isConnected && !B.isConnected;
+  doc.body.append(A, B);
+  d.drawsAfterReopen = greenOn(rA);
+  const lcA = rA.gl.getExtension('WEBGL_lose_context');
+  let lostA = null;
+  A.addEventListener('webglcontextlost', (e) => (lostA = e), { once: true });
+  const lostEventA = eventOf(A, 'webglcontextlost');
+  lcA.loseContext();
+  await Promise.race([lostEventA, timeout(3000)]);
+  d.A = { prevented: lostA?.defaultPrevented ?? 'no event', listeners: await listenersOf(A) };
+  rA.dispose();
+  const restoredA = eventOf(A, 'webglcontextrestored');
+  d.A.restoreThrew = attempt(() => lcA.restoreContext()).threw;
+  d.A.restored = await Promise.race([restoredA, timeout(3000)]);
+  await timeout(20);
+  d.A.calls = { ...calls };
+  const nA = await settle(f.createRenderer(A, opts));
+  d.A.next = nA.ok ? greenOn(tracked(nA.r)) : nA.message;
+  if (nA.ok) nA.r.dispose();
+  // 2. Reopened again by the frame's own code, with document.write() after load, which calls
+  // document.open(); then B, with no renderer, is lost and restored, and drawn on after.
+  fw.eval("document.write('<!doctype html><body></body>'); document.close();");
+  d.reopenedByWrite = !B.isConnected;
+  doc.body.append(B);
+  await timeout(0);
+  d.B = { listeners: await listenersOf(B) };
+  const lcB = glB.getExtension('WEBGL_lose_context');
+  let lostB = null;
+  B.addEventListener('webglcontextlost', (e) => (lostB = e), { once: true });
+  const lostEventB = eventOf(B, 'webglcontextlost');
+  lcB.loseContext();
+  await Promise.race([lostEventB, timeout(3000)]);
+  d.B.prevented = lostB?.defaultPrevented ?? 'no event';
+  const restoredB = eventOf(B, 'webglcontextrestored');
+  d.B.restoreThrew = attempt(() => lcB.restoreContext()).threw;
+  d.B.restored = await Promise.race([restoredB, timeout(3000)]);
+  await timeout(20);
+  const nB = await settle(f.createRenderer(B, opts));
+  d.B.next = nB.ok ? greenOn(tracked(nB.r)) : nB.message;
+  if (nB.ok) nB.r.dispose();
+  // 3. C, driven once and left, moved into another frame's document, which is reopened (the frame's
+  // observer does not watch that one), and moved back: no listener, until the next create.
+  const C = doc.body.appendChild(doc.createElement('canvas'));
+  tracked(await f.createRenderer(C, opts)).dispose();
+  const other = document.createElement('iframe');
+  document.body.append(other);
+  const odoc = other.contentDocument;
+  odoc.body.append(C);
+  odoc.open();
+  odoc.write('<!doctype html><body></body>');
+  odoc.close();
+  doc.body.append(C);
+  await timeout(0);
+  d.C = { afterOtherReopened: await listenersOf(C) };
+  const cCalls = { lost: 0, restored: 0 };
+  const rC = await settle(f.createRenderer(C, { ...opts, onContextLost: () => cCalls.lost++, onContextRestored: () => cCalls.restored++ }));
+  d.C.created = rC.ok ? greenOn(tracked(rC.r)) : rC.message;
+  d.C.afterCreate = await listenersOf(C);
+  if (rC.ok) d.C.loss = await lossOf(rC.r, C);
+  d.C.calls = cCalls;
+  other.remove();
+  iframe.remove();
+  log(
+    "DO document.open() and document.write() after load erase every node's listeners, and web3d puts its two back before a lost event can come: a live renderer's canvas lost in the reopening's task is cancelled and restored, each hook once, and a new renderer draws; a canvas with no renderer, after a second reopening by the frame's own write(), likewise; a canvas that was in another document when that one was reopened has its listeners back at its next create",
+    isGreen(d.drawsBefore) && controllers(d.before.A, 1) && controllers(d.before.B, 1) && d.sameWindowAndDocument && d.canvasesWereTakenOut && isGreen(d.drawsAfterReopen) &&
+      d.A.prevented === true && controllers(d.A.listeners, 1) && !d.A.restoreThrew && d.A.restored === 'webglcontextrestored' &&
+      d.A.calls.lost === 1 && d.A.calls.restored === 1 && isGreen(d.A.next) &&
+      d.reopenedByWrite && controllers(d.B.listeners, 1) && d.B.prevented === true && !d.B.restoreThrew && d.B.restored === 'webglcontextrestored' && isGreen(d.B.next) &&
+      none(d.C.afterOtherReopened) && isGreen(d.C.created) && controllers(d.C.afterCreate, 1) && recovered(d.C.loss) && d.C.calls.lost === 1 && d.C.calls.restored === 1,
+    d,
+  );
+}
+
+/**
+ * NV: a frame's copy after its frame has navigated to another page (the twelfth critic's F2): its
+ * global then names the new page's window. Called through references kept from before, the old
+ * copy is refused the new page's canvas before it records anything, and the new page's copy takes
+ * it; the old copy's renderer no longer draws; a canvas whose create the old copy had begun (its
+ * module never arriving) and one its live renderer drove, both moved into this document, are taken
+ * by this window's copy.
+ */
+async function navigatedAway() {
+  const opts = { width: 16, height: 16, antialias: false };
+  const d = {};
+  const iframe = await frameWithCopy();
+  const fw = iframe.contentWindow;
+  const old = fw.__frame;
+  const oldDoc = fw.document;
+  // The old copy's renderer on its own canvas, one on a canvas it then moves into this document
+  // (driven, so frame() throws "moved"), and a create it begins whose module never arrives.
+  const rOwn = tracked(await old.createRenderer(old.canvas, opts));
+  d.ownBefore = greenOn(rOwn);
+  const away = oldDoc.body.appendChild(oldDoc.createElement('canvas'));
+  const rAway = tracked(await old.createRenderer(away, opts));
+  d.awayBefore = greenOn(rAway);
+  document.body.append(away);
+  d.awayMoved = attempt(() => rAway.frame()).message;
+  const pending = oldDoc.body.appendChild(oldDoc.createElement('canvas'));
+  const never = new Response(new ReadableStream({ start() {} }), { headers: { 'Content-Type': 'application/wasm' } });
+  old.createRenderer(pending, { ...opts, wasm: never });
+  d.pendingClaimed = (await settle(old.createRenderer(pending, opts))).message;
+  // The frame navigates: a new page, a new realm, its own copy.
+  const loaded = new Promise((res) => iframe.addEventListener('load', res, { once: true }));
+  iframe.src = './probe-frame.html?navigated';
+  await loaded;
+  for (let i = 0; i < 100 && (!iframe.contentWindow.__frame || iframe.contentWindow.__frame === old); i++) await timeout(20);
+  const fresh = iframe.contentWindow.__frame;
+  d.newRealm = fresh !== undefined && fresh !== old && iframe.contentWindow.document !== oldDoc;
+  // The old copy on the new page's canvas: refused at once (a navigated-away realm's promises do
+  // not settle, so the refusal shows as no record made on the canvas), and the new copy takes it.
+  const tried = old.createRenderer(fresh.canvas, opts);
+  d.oldCopyRecordOnNewCanvas = Object.getOwnPropertyDescriptor(fresh.canvas, KEY) === undefined ? 'none' : 'made';
+  d.oldCopySettled = await Promise.race([settle(tried).then((s) => s.message ?? 'created'), timeout(300).then(() => 'never settled')]);
+  const rNew = await settle(fresh.createRenderer(fresh.canvas, opts));
+  d.newCopy = rNew.ok ? greenOn(tracked(rNew.r)) : rNew.message;
+  d.newListeners = await listenersOf(fresh.canvas);
+  if (rNew.ok) d.newLoss = await lossOf(rNew.r, fresh.canvas);
+  // The old copy's renderers: no longer draw.
+  d.ownAfter = attempt(() => rOwn.frame());
+  d.awayAfter = attempt(() => rAway.frame());
+  // Their canvases, in this document: taken by this window's copy, which recovers them.
+  document.body.append(pending);
+  for (const [name, c] of [['pending', pending], ['away', away]]) {
+    const calls = { lost: 0, restored: 0 };
+    const r = await settle(createRenderer(c, { ...opts, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++ }));
+    const e = { created: r.ok ? greenOn(r.r) : r.message };
+    if (r.ok) e.loss = await lossOf(r.r, c);
+    e.calls = calls;
+    d[name] = e;
+  }
+  attempt(() => rOwn.dispose());
+  attempt(() => rAway.dispose());
+  iframe.remove();
+  const takenHere = (e) => isGreen(e.created) && recovered(e.loss) && e.calls.lost === 1 && e.calls.restored === 1;
+  const noDraw = (t) => (t.threw && /navigated away/.test(t.message)) || (!t.threw && t.value === false);
+  log(
+    "NV a frame's copy after its frame navigates: refused the new page's canvas before recording anything, which the new page's copy takes, draws on and recovers; the old copy's renderers no longer draw; a canvas whose create it had begun and one its live renderer drove, moved into this document, are taken here, drawn on and recovered",
+    isGreen(d.ownBefore) && isGreen(d.awayBefore) && MOVED.test(d.awayMoved ?? '') && /already has a live renderer/.test(d.pendingClaimed ?? '') && d.newRealm &&
+      d.oldCopyRecordOnNewCanvas === 'none' && isGreen(d.newCopy) && controllers(d.newListeners, 1) && recovered(d.newLoss) &&
+      noDraw(d.ownAfter) && noDraw(d.awayAfter) && takenHere(d.pending) && takenHere(d.away),
+    d,
+  );
+}
+
+/** A canvas whose attributeChangedCallback runs a probe's hook once, the next time its width is set. */
+const widthHooks = new WeakMap();
+function probeCanvas(w = 16, h = 16, parent = document.body) {
+  if (!customElements.get('web3d-probe-canvas')) {
+    customElements.define(
+      'web3d-probe-canvas',
+      class extends HTMLCanvasElement {
+        static observedAttributes = ['width'];
+        attributeChangedCallback() {
+          const hook = widthHooks.get(this);
+          if (hook) {
+            widthHooks.delete(this);
+            hook(this);
+          }
+        }
+      },
+      { extends: 'canvas' },
+    );
+  }
+  const c = document.createElement('canvas', { is: 'web3d-probe-canvas' });
+  c.width = w;
+  c.height = h;
+  parent.append(c);
+  return c;
+}
+
+/**
+ * MC: a canvas moved during createRenderer (the twelfth critic's F4), checked again after the
+ * awaits and after each size set. Moved by a getter of the options, which are read before the canvas
+ * is checked, it is refused with nothing recorded on it. Moved right after the call, it is refused
+ * before any context, with no claim and no listener; moved and back, it is created. Moved by a
+ * customized built-in canvas's attributeChangedCallback when web3d sets its width, it is refused with
+ * its size put back and no claim; with no listener if this window had not driven it, and its
+ * listeners kept if it had. A
+ * module that is not web3d is refused before any context. Page code in that callback that calls the
+ * renderer, or creates again on the canvas, is refused. A move by a MutationObserver, after the
+ * create's last check, is a driven canvas moved: frame() throws until it is back.
+ */
+async function movedDuringCreate() {
+  const opts = { width: 16, height: 16, antialias: false };
+  const d = {};
+  const iframe = await frameWithCopy();
+  const fw = iframe.contentWindow;
+  const f = fw.__frame;
+  const there = (c) => fw.document.body.append(c);
+  // m0: moved by a getter of the options, which are read before the canvas is checked.
+  {
+    const c = canvasFor('mc-m0');
+    const r = await settle(createRenderer(c, { ...opts, get width() { there(c); return 16; } }));
+    d.m0 = { create: r.ok ? 'created' : r.message, record: Object.getOwnPropertyDescriptor(c, KEY) === undefined ? 'none' : 'made', listeners: await listenersOf(c) };
+    if (r.ok) r.r.dispose();
+    d.m0.contextless = contextless(c);
+  }
+  // m1: moved into the frame's document right after the call.
+  {
+    const c = canvasFor('mc-m1');
+    const p = createRenderer(c, opts);
+    there(c);
+    d.m1 = { create: (await settle(p)).message ?? 'created', listeners: await listenersOf(c), owner: ownerOf(c) };
+    d.m1.contextless = contextless(c);
+  }
+  // m1b: the same, and the frame's copy then takes it (no claim was left).
+  {
+    const c = canvasFor('mc-m1b');
+    const p = createRenderer(c, opts);
+    there(c);
+    d.m1b = { create: (await settle(p)).message ?? 'created' };
+    const theirs = await settle(f.createRenderer(c, opts));
+    d.m1b.frameCopy = theirs.ok ? greenOn(tracked(theirs.r)) : theirs.message;
+    if (theirs.ok) theirs.r.dispose();
+  }
+  // m1c: moved away and back before the awaits are done: it is in place when checked.
+  {
+    const c = canvasFor('mc-m1c');
+    const p = createRenderer(c, opts);
+    there(c);
+    document.body.append(c);
+    const r = await settle(p);
+    d.m1c = r.ok ? greenOn(r.r) : r.message;
+    if (r.ok) r.r.dispose();
+  }
+  // m2a: moved by its own attributeChangedCallback at web3d's first width set.
+  {
+    const c = probeCanvas(20, 10);
+    widthHooks.set(c, there);
+    d.m2a = { create: (await settle(createRenderer(c, opts))).message ?? 'created' };
+    d.m2a.size = [c.width, c.height];
+    d.m2a.listeners = await listenersOf(c);
+    d.m2a.owner = ownerOf(c);
+    d.m2a.contextKept = !contextless(c);
+  }
+  // m2b: the same on a canvas this window drove before; moved back, it is created and drawn.
+  {
+    const c = probeCanvas();
+    (await createRenderer(c, opts)).dispose();
+    widthHooks.set(c, there);
+    d.m2b = { create: (await settle(createRenderer(c, opts))).message ?? 'created', listeners: await listenersOf(c), owner: ownerOf(c) };
+    document.body.append(c);
+    const r = await settle(createRenderer(c, opts));
+    d.m2b.back = r.ok ? greenOn(r.r) : r.message;
+    if (r.ok) r.r.dispose();
+  }
+  // m2c: page code in the callback calls the renderer inside resize(), and creates inside a create.
+  {
+    const c = probeCanvas();
+    const r = await createRenderer(c, opts);
+    greenOn(r);
+    const seen = {};
+    widthHooks.set(c, () => {
+      seen.frame = attempt(() => r.frame()).message ?? 'drew';
+      seen.dispose = attempt(() => r.dispose()).message ?? 'disposed';
+    });
+    seen.resize = attempt(() => r.resize(20, 20)).message ?? 'resized';
+    seen.after = greenOn(r);
+    r.dispose();
+    const c2 = probeCanvas();
+    let inner = null;
+    widthHooks.set(c2, (el) => (inner = createRenderer(el, opts)));
+    const outer = await settle(createRenderer(c2, opts));
+    seen.outer = outer.ok ? 'created' : outer.message;
+    seen.inner = inner ? ((await settle(inner)).message ?? 'created') : 'no inner call';
+    if (outer.ok) outer.r.dispose();
+    d.m2c = seen;
+  }
+  // m3: a module that is not web3d: refused before any context, with no listener.
+  {
+    const c = canvasFor('mc-m3');
+    const empty = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+    d.m3 = { create: (await settle(createRenderer(c, { ...opts, wasm: empty }))).message ?? 'created', listeners: await listenersOf(c), owner: ownerOf(c) };
+    d.m3.contextless = contextless(c);
+  }
+  // m4: a MutationObserver moves the canvas when web3d sets its width; it runs after the create's
+  // last check, so the create resolves with a driven canvas that has been moved.
+  {
+    const c = canvasFor('mc-m4');
+    const mo = new MutationObserver(() => {
+      mo.disconnect();
+      there(c);
+    });
+    mo.observe(c, { attributes: true });
+    const r = await settle(createRenderer(c, opts));
+    d.m4 = { create: r.ok ? 'created' : r.message };
+    if (r.ok) {
+      d.m4.frame = attempt(() => r.r.frame()).message ?? 'drew';
+      document.body.append(c);
+      d.m4.back = greenOn(r.r);
+      r.r.dispose();
+    }
+  }
+  iframe.remove();
+  const MOVED_AT_CREATE = /was moved to another document than this window's while createRenderer was making its renderer/;
+  const reentrant = (m) => /while the renderer was reading another call's arguments or sizing its canvas/.test(m ?? '');
+  log(
+    "MC a canvas moved during createRenderer is refused: by a getter of its options, before anything is recorded on it; right after the call, before any context, with no claim or listener (and the frame's copy then takes it); moved and back, created; by its own attributeChangedCallback at web3d's width set, with its size put back, no claim, and no listener unless this window had driven it; a module that is not web3d is refused before any context; page code in that callback that calls the renderer or creates again is refused; a MutationObserver's move, after the create, is a driven canvas moved",
+    FOREIGN_ELEMENT.test(d.m0.create) && d.m0.record === 'none' && none(d.m0.listeners) && d.m0.contextless &&
+      MOVED_AT_CREATE.test(d.m1.create) && none(d.m1.listeners) && d.m1.owner === null && d.m1.contextless &&
+      MOVED_AT_CREATE.test(d.m1b.create) && isGreen(d.m1b.frameCopy) && isGreen(d.m1c) &&
+      MOVED_AT_CREATE.test(d.m2a.create) && d.m2a.size[0] === 20 && d.m2a.size[1] === 10 && none(d.m2a.listeners) && d.m2a.owner === null && d.m2a.contextKept &&
+      MOVED_AT_CREATE.test(d.m2b.create) && controllers(d.m2b.listeners, 1) && d.m2b.owner === null && isGreen(d.m2b.back) &&
+      reentrant(d.m2c.frame) && reentrant(d.m2c.dispose) && d.m2c.resize === 'resized' && isGreen(d.m2c.after) &&
+      d.m2c.outer === 'created' && /already has a live renderer/.test(d.m2c.inner) &&
+      /not loadngo-web3d/.test(d.m3.create) && none(d.m3.listeners) && d.m3.owner === null && d.m3.contextless &&
+      d.m4.create === 'created' && MOVED.test(d.m4.frame) && isGreen(d.m4.back),
+    d,
+  );
+}
+
+/**
+ * RC: every copy reads one record of a canvas, kept on the canvas (the twelfth critic's F3): the
+ * same object from either realm, non-enumerable, non-writable and non-configurable. A frame whose
+ * copy has a home of its own (probe-home.html; two realms joined by document.domain have different
+ * homes) is refused a canvas this window's renderer drives, moved into its document, and this
+ * window's copy one the frame's drives; moved back, each still clears to its own colour. A canvas
+ * that cannot take the record, or has a property there web3d did not make, is refused untouched,
+ * with no page code run.
+ */
+async function canvasRecord() {
+  const opts = { width: 16, height: 16, antialias: false };
+  const d = {};
+  const iframe = await frameWithCopy('./probe-home.html');
+  const fw = iframe.contentWindow;
+  const f = fw.__frame;
+  d.homes = { frameHomeIsItself: fw[KEY]?.home === fw, ownSerials: fw[KEY]?.serials !== undefined && fw[KEY]?.serials !== window[KEY]?.serials };
+  const corner = (r) => {
+    r.frame();
+    return canvasPixel(r.gl, -0.99, -0.99);
+  };
+  const red = (p) => p[0] > 200 && p[1] < 50 && p[2] < 50;
+  // A green quad in the middle over a red clear: a second renderer on the context would leave its
+  // own clear colour in this one's state cache (the critic's dd2.json read the other's colour).
+  const drive = (r) => {
+    flat(r);
+    r.createObject(r.createMesh(quad(-0.5, -0.5, 0.5, 0.5, -5)), r.createMaterial({ baseColor: [0, 1, 0, 1] }));
+    r.setClearColor(1, 0, 0);
+    return red(corner(r)) && isGreen(canvasPixel(r.gl, 0, 0));
+  };
+  // This window's renderer, its canvas moved into the frame's document and back.
+  {
+    const c = canvasFor('rc-ours');
+    const r = await createRenderer(c, opts);
+    d.ours = { red: drive(r) };
+    const desc = Object.getOwnPropertyDescriptor(c, KEY);
+    d.record = {
+      privateProperty: desc !== undefined && !desc.enumerable && !desc.writable && !desc.configurable && !Object.keys(c).includes(String(KEY)),
+      ownerIsTheRenderer: desc?.value?.owner === r,
+      oneObjectFromTheFrame: fw.Object.getOwnPropertyDescriptor(c, fw.Symbol.for('loadngo-web3d'))?.value === desc?.value,
+    };
+    fw.document.body.append(c);
+    d.ours.frameCopy = (await settle(f.createRenderer(c, opts))).message ?? 'created';
+    document.body.append(c);
+    d.ours.back = red(corner(r));
+    r.dispose();
+  }
+  // The frame's renderer, its canvas moved into this document and back.
+  {
+    const c = fw.document.body.appendChild(fw.document.createElement('canvas'));
+    const r = tracked(await f.createRenderer(c, opts));
+    d.theirs = { red: drive(r) };
+    document.body.append(c);
+    d.theirs.ourCopy = (await settle(createRenderer(c, opts))).message ?? 'created';
+    fw.document.body.append(c);
+    d.theirs.back = red(corner(r));
+    r.dispose();
+  }
+  iframe.remove();
+  // A canvas that cannot take the record, and two with a property there that web3d did not make.
+  {
+    const sealed = canvasFor('rc-sealed');
+    Object.preventExtensions(sealed);
+    d.sealed = { create: (await settle(createRenderer(sealed, opts))).message ?? 'created', listeners: await listenersOf(sealed) };
+    d.sealed.contextless = contextless(sealed);
+    const writable = canvasFor('rc-writable');
+    Object.defineProperty(writable, KEY, { value: { owner: null, antialias: null }, writable: true });
+    d.writable = { create: (await settle(createRenderer(writable, opts))).message ?? 'created', listeners: await listenersOf(writable) };
+    d.writable.contextless = contextless(writable);
+    const accessor = canvasFor('rc-accessor');
+    let ran = false;
+    Object.defineProperty(accessor, KEY, { get: () => ((ran = true), { owner: null, antialias: null }) });
+    d.accessor = { create: (await settle(createRenderer(accessor, opts))).message ?? 'created', listeners: await listenersOf(accessor), ran };
+    d.accessor.contextless = contextless(accessor);
+  }
+  const refusedUntouched = (e, re) => re.test(e.create) && none(e.listeners) && e.contextless;
+  log(
+    "RC one record of a canvas, on the canvas, for every copy: private (non-enumerable, non-writable, non-configurable) and the same object from the frame; a frame whose copy has a home of its own is refused this window's driven canvas moved into its document, and this window's copy the frame's, and moved back each clears to its own colour; a sealed canvas, and one with a property there web3d did not make (writable, or a getter, which never runs), are refused untouched",
+    d.homes.frameHomeIsItself && d.homes.ownSerials &&
+      d.record.privateProperty && d.record.ownerIsTheRenderer && d.record.oneObjectFromTheFrame &&
+      d.ours.red && /already has a live renderer/.test(d.ours.frameCopy) && d.ours.back &&
+      d.theirs.red && /already has a live renderer/.test(d.theirs.ourCopy) && d.theirs.back &&
+      refusedUntouched(d.sealed, /not extensible/) && refusedUntouched(d.writable, /web3d did not make/) &&
+      refusedUntouched(d.accessor, /web3d did not make/) && d.accessor.ran === false,
+    d,
+  );
+}
+
+/**
+ * TO: an OffscreenCanvas this window makes with transferControlToOffscreen() from a canvas of its
+ * own document that a frame's observer touched first has the frame's prototype (the twelfth
+ * critic's transfer.json): refused here, with a message that says so, and drawn on by the frame's
+ * copy.
+ */
+async function transferredOffscreen() {
+  const opts = { width: 16, height: 16, antialias: false };
+  const d = {};
+  const iframe = await frameWithCopy();
+  const fw = iframe.contentWindow;
+  fw.eval("window.__seen = null; window.__observer = new MutationObserver((records) => { for (const r of records) for (const n of r.addedNodes) if (n.nodeName === 'CANVAS') window.__seen = n; }); window.__observer.observe(parent.document.body, { childList: true });");
+  document.body.insertAdjacentHTML('beforeend', '<canvas id="to-first" width="16" height="16"></canvas>');
+  for (let i = 0; i < 100 && !fw.__seen; i++) await timeout(5);
+  fw.__observer.disconnect();
+  const c = document.getElementById('to-first');
+  const oc = HTMLCanvasElement.prototype.transferControlToOffscreen.call(c);
+  d.prototype = Object.getPrototypeOf(oc) === fw.OffscreenCanvas.prototype ? 'frame' : Object.getPrototypeOf(oc) === OffscreenCanvas.prototype ? 'this window' : 'other';
+  d.ours = (await settle(createRenderer(oc, opts))).message ?? 'created';
+  d.oursListeners = await listenersOf(oc);
+  const theirs = await settle(fw.__frame.createRenderer(oc, opts));
+  d.theirs = theirs.ok ? greenOn(tracked(theirs.r)) : theirs.message;
+  if (theirs.ok) theirs.r.dispose();
+  iframe.remove();
+  log(
+    "TO an OffscreenCanvas made here by transferControlToOffscreen() from a canvas a frame's observer touched first has the frame's prototype: refused here, with a message naming that case and no listener, and drawn on by the frame's copy",
+    d.prototype === 'frame' && FOREIGN_OFFSCREEN.test(d.ours) && /transferControlToOffscreen\(\) from a canvas element that window's code touched first/.test(d.ours) && none(d.oursListeners) && isGreen(d.theirs),
+    d,
+  );
+}
+
+/**
+ * SY: web3d's listeners ignore lost and restored events the page dispatches itself (not
+ * isTrusted): the renderer is not finished, no hook is called, and nothing is cancelled. A real
+ * loss after them is still cancelled and restored, with each hook once.
+ */
+async function syntheticEvents() {
+  const opts = { width: 16, height: 16, antialias: false };
+  const d = {};
+  const c = canvasFor('sy');
+  const calls = { lost: 0, restored: 0 };
+  const r = await createRenderer(c, { ...opts, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++ });
+  const fakeLost = new Event('webglcontextlost', { cancelable: true });
+  c.dispatchEvent(fakeLost);
+  c.dispatchEvent(new Event('webglcontextrestored'));
+  d.fake = { prevented: fakeLost.defaultPrevented, lost: r.lost, frame: r.frame(), calls: { ...calls } };
+  d.draws = greenOn(r);
+  d.real = await lossOf(r, c);
+  d.calls = calls;
+  log(
+    "SY lost and restored events the page dispatches itself are ignored by web3d's listeners: not cancelled, the renderer not finished and still drawing, no hook called; a real loss after them is cancelled and restored, each hook once",
+    d.fake.prevented === false && d.fake.lost === false && d.fake.frame === true && d.fake.calls.lost === 0 && d.fake.calls.restored === 0 && isGreen(d.draws) &&
+      recovered(d.real) && d.calls.lost === 1 && d.calls.restored === 1,
+    d,
+  );
+}
+
 /** Releases every context the probes have made so far, once a probe is done with them. */
 const releaseAll = () => {
   for (const gl of contexts) release(gl);
@@ -2256,6 +2789,12 @@ async function main() {
     ['DB', drawingBufferSize],
     ['NC', contextlessCanvases],
     ['MS', refusalMessages],
+    ['DO', documentReopened],
+    ['NV', navigatedAway],
+    ['MC', movedDuringCreate],
+    ['RC', canvasRecord],
+    ['TO', transferredOffscreen],
+    ['SY', syntheticEvents],
   ]) {
     try {
       await probe();

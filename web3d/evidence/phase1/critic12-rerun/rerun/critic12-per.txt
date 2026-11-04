@@ -1,0 +1,49 @@
+{
+ "topCanvasTopListener": [
+  {
+   "origin": "http://127.0.0.1:5664",
+   "name": "",
+   "frameId": "CA1BFB",
+   "n": 1
+  },
+  {
+   "origin": "http://127.0.0.1:5664",
+   "name": "",
+   "frameId": "4F64DE",
+   "n": 0
+  }
+ ],
+ "frameCanvasOneListenerOfEachRealm": [
+  {
+   "origin": "http://127.0.0.1:5664",
+   "name": "",
+   "frameId": "CA1BFB",
+   "n": 0
+  },
+  {
+   "origin": "http://127.0.0.1:5664",
+   "name": "",
+   "frameId": "4F64DE",
+   "n": 2
+  }
+ ],
+ "frameOffscreenTopListener": [
+  {
+   "origin": "http://127.0.0.1:5664",
+   "name": "",
+   "frameId": "CA1BFB",
+   "n": 0
+  },
+  {
+   "origin": "http://127.0.0.1:5664",
+   "name": "",
+   "frameId": "4F64DE",
+   "n": 1
+  }
+ ],
+ "topOrigin": "http://127.0.0.1:5664"
+}
+messages: 1
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0

@@ -1,0 +1,13 @@
+{
+  "page": "notop",
+  "browser": "Chrome 156.0.8078.80 (headless, own instance)",
+  "console": [],
+  "pageErrors": [],
+  "out": {
+    "error": "Error: web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d drives a canvas element only from a copy of web3d loaded in the window whose document holds it, so load web3d there\n    at canvasKind (http://127.0.0.1:5484/web3d/pkg/web3d.js:339:15)\n    at readOptions (http://127.0.0.1:5484/web3d/pkg/web3d.js:514:16)\n    at Object.createRenderer (http://127.0.0.1:5484/web3d/pkg/web3d.js:555:13)\n    at run (http://127.0.0.1:5484/c/frames.js:83:29)",
+    "partial": {
+      "sharedStateBefore": false
+    }
+  },
+  "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)"
+}

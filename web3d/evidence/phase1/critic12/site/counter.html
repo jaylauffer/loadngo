@@ -1,0 +1,86 @@
+<!doctype html><meta charset="utf-8"><title>critic 12: the listener counter</title>
+<body><canvas id="tc" width="16" height="16"></canvas><script type="module">
+// Audits the drivers' window.__listeners (check.mjs and the critics' run.mjs): an object is
+// resolved in every frame's main context and the longest list is taken. Can it over-count (the
+// same listener seen from two contexts, added up) or under-count (listeners of another realm's
+// functions; a node of a template's, a DOMParser's or a removed frame's document; an
+// OffscreenCanvas a frame made)? Known listeners are added, of either realm's functions, and
+// counted.
+import { sleep, settle, OPTS, frameOf, listenersOf, page } from './common.js';
+page(async (out) => {
+  const f = await frameOf('frame.html');
+  const fw = f.contentWindow;
+  const add = (target, type, realm) => {
+    if (realm === 'top') target.addEventListener(type, () => {});
+    else fw.eval('(t, type) => t.addEventListener(type, () => {})')(target, type);
+  };
+  const cases = {};
+  const count = async (name, target, expect) => {
+    const got = await listenersOf(target);
+    cases[name] = { got, expect, ok: JSON.stringify(got) === JSON.stringify(expect) };
+  };
+  // A top canvas with one listener of each realm's functions.
+  const tc = document.getElementById('tc');
+  add(tc, 'a', 'top');
+  add(tc, 'b', 'frame');
+  await count('topCanvasBothRealms', tc, { a: 1, b: 1 });
+  // A frame canvas with one listener of each realm's functions.
+  const fc = fw.document.getElementById('own');
+  add(fc, 'a', 'top');
+  add(fc, 'b', 'frame');
+  await count('frameCanvasBothRealms', fc, { a: 1, b: 1 });
+  // The same listener type twice from one realm: 2, not more.
+  const two = document.createElement('canvas');
+  add(two, 'a', 'top');
+  add(two, 'a', 'frame');
+  await count('twoOfOneType', two, { a: 2 });
+  // Documents with no window.
+  const t = document.createElement('template');
+  t.innerHTML = '<canvas></canvas>';
+  const tcan = t.content.firstChild;
+  add(tcan, 'a', 'top');
+  await count('templateCanvas', tcan, { a: 1 });
+  const pcan = new DOMParser().parseFromString('<canvas></canvas>', 'text/html').querySelector('canvas');
+  add(pcan, 'a', 'top');
+  await count('domParserCanvas', pcan, { a: 1 });
+  const hcan = document.implementation.createHTMLDocument('x').createElement('canvas');
+  add(hcan, 'a', 'top');
+  await count('createHTMLDocumentCanvas', hcan, { a: 1 });
+  // OffscreenCanvases, made here and made by the frame.
+  const oc = new OffscreenCanvas(4, 4);
+  add(oc, 'a', 'top');
+  await count('offscreenHere', oc, { a: 1 });
+  const foc = new fw.OffscreenCanvas(4, 4);
+  add(foc, 'a', 'top');
+  add(foc, 'b', 'frame');
+  await count('offscreenOfFrame', foc, { a: 1, b: 1 });
+  // A canvas of a nested frame (depth 2).
+  const inner = fw.document.createElement('iframe');
+  inner.src = 'frame2.html';
+  fw.document.body.append(inner);
+  await new Promise((r) => inner.addEventListener('load', r, { once: true }));
+  for (let i = 0; i < 200 && !inner.contentWindow.ready; i++) await sleep(10);
+  const ic = inner.contentWindow.document.getElementById('own2');
+  add(ic, 'a', 'top');
+  await count('nestedFrameCanvas', ic, { a: 1 });
+  // A frame's canvas after the frame is removed: its listeners are still on it.
+  const keep = fw.document.createElement('canvas');
+  fw.document.body.append(keep);
+  add(keep, 'a', 'top');
+  await count('frameCanvasBeforeRemoval', keep, { a: 1 });
+  f.remove();
+  await sleep(100);
+  await count('frameCanvasAfterRemoval', keep, { a: 1 });
+  // A canvas web3d drove, of this window: its two listeners, and one of the page's.
+  const web3d = await import('/pkg/web3d.js');
+  const w = document.createElement('canvas');
+  document.body.append(w);
+  const r = await settle(web3d.createRenderer(w, OPTS));
+  add(w, 'webglcontextlost', 'top');
+  await count('web3dCanvas', w, { webglcontextlost: 2, webglcontextrestored: 1 });
+  if (r.ok) r.r.dispose();
+  out.cases = cases;
+  out.allExact = Object.values(cases).every((c) => c.ok);
+  out.blindSpots = Object.entries(cases).filter(([, c]) => !c.ok).map(([k]) => k);
+});
+</script></body>

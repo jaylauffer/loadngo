@@ -1,0 +1,48 @@
+<!doctype html><meta charset="utf-8"><title>critic 12: ownerDocument overridden before and after web3d loads</title>
+<body><script type="module">
+// A page that defines its own ownerDocument on the element or on a prototype between the canvas
+// and Node.prototype, before a copy loads and after: the copy reads the built-in getter it took
+// from Node.prototype, so none of these should change what it accepts. Node.prototype itself
+// patched before load is patching a built-in (out of scope); recorded for completeness.
+import { settle, OPTS, frameOf, green, page } from './common.js';
+page(async (out) => {
+  const f = await frameOf('frame.html');
+  const fw = f.contentWindow;
+  const lie = (target, doc) => Object.defineProperty(target, 'ownerDocument', { configurable: true, get: () => doc });
+  const verdict = async (web3d, c) => { const m = await settle(web3d.createRenderer(c, OPTS)); const v = m.ok ? (green(m.r).isGreen ? 'draws' : 'created') : m.message; if (m.ok) m.r.dispose(); return v; };
+  // Before load: own property, HTMLCanvasElement.prototype, Element.prototype.
+  const own = fw.document.createElement('canvas'); // the frame's canvas, claiming the top's document
+  fw.document.body.append(own);
+  lie(own, document);
+  const mine = document.body.appendChild(document.createElement('canvas')); // ours, claiming the frame's
+  lie(mine, fw.document);
+  lie(HTMLCanvasElement.prototype, fw.document);
+  lie(Element.prototype, fw.document);
+  const early = await import('/pkg/web3d.js?override-early');
+  out.beforeLoad = {
+    frameCanvasClaimingTop: await verdict(early, own),
+    topCanvasClaimingFrame: await verdict(early, mine),
+    freshTopCanvas: await verdict(early, document.body.appendChild(document.createElement('canvas'))),
+  };
+  delete HTMLCanvasElement.prototype.ownerDocument;
+  delete Element.prototype.ownerDocument;
+  // After load: the same, and Node.prototype's getter replaced.
+  const late = await import('/pkg/web3d.js?override-late');
+  lie(HTMLCanvasElement.prototype, fw.document);
+  const nodeDesc = Object.getOwnPropertyDescriptor(Node.prototype, 'ownerDocument');
+  Object.defineProperty(Node.prototype, 'ownerDocument', { configurable: true, get() { return fw.document; } });
+  out.afterLoad = {
+    frameCanvasClaimingTop: await verdict(late, own),
+    topCanvasClaimingFrame: await verdict(late, mine),
+    freshTopCanvas: await verdict(late, document.body.appendChild(document.createElement('canvas'))),
+    freshFrameCanvas: await verdict(late, fw.document.body.appendChild(fw.document.createElement('canvas'))),
+  };
+  // Node.prototype patched before a copy loads (patching a built-in: out of scope).
+  Object.defineProperty(Node.prototype, 'ownerDocument', { configurable: true, get() { return document; } });
+  delete HTMLCanvasElement.prototype.ownerDocument;
+  const patched = await import('/pkg/web3d.js?override-node-patched');
+  out.nodePatchedBeforeLoad_outOfScope = { freshFrameCanvas: await verdict(patched, fw.document.body.appendChild(fw.document.createElement('canvas'))) };
+  Object.defineProperty(Node.prototype, 'ownerDocument', nodeDesc);
+  out.ok = Object.values(out.beforeLoad).concat(Object.values(out.afterLoad)).every((v, i) => [false, true, true, false, true, true, false][i] ? v === 'draws' : /another document/.test(v));
+});
+</script></body>

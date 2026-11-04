@@ -11,7 +11,10 @@
        dispose, context loss, and the boundary: lying typed arrays, handle kinds, the compile cache,
        failed creates and re-entrancy; page-made contexts left with the page's state, listener
        order, canvases of another realm (with probe-frame.html and, from a second origin,
-       probe-xorigin.html), and canvases without a context (these make canvases of their own). Driven by check.mjs; results in window.__probe.done. -->
+       probe-xorigin.html), canvases without a context, and the twelfth critic's findings: a
+       reopened document, a navigated frame, canvases moved during a create, the canvas's record
+       (with probe-home.html), a transferred OffscreenCanvas and the page's own loss events (these
+       make canvases of their own). Driven by check.mjs; results in window.__probe.done. -->
   <canvas id="main"></canvas><canvas id="disposed"></canvas><canvas id="loss"></canvas><canvas id="shared"></canvas>
   <canvas id="typed"></canvas><canvas id="kinds"></canvas><canvas id="kinds2"></canvas><canvas id="cache1"></canvas>
   <canvas id="cache2"></canvas><canvas id="failed"></canvas><canvas id="reenter"></canvas><canvas id="serials"></canvas>

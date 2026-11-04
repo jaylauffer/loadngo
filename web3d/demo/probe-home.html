@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>web3d probe frame with a home of its own</title>
+  <link rel="icon" href="data:,">
+</head>
+<body>
+  <!-- A same-origin frame for probe RC whose copy of web3d has a home of its own, as two realms
+       joined only by document.domain would: a test hook sets this realm's state before the copy
+       loads, so the copy keeps this window as its home (and its own serial counter). check.mjs's
+       page is cross-origin isolated, where document.domain does nothing; the arrangement itself
+       runs in evidence/phase1/critic12-rerun/. -->
+  <canvas id="c" width="16" height="16"></canvas>
+  <script>window[Symbol.for('loadngo-web3d')] = { home: window };</script>
+  <script type="module">
+    import { createRenderer } from '../pkg/web3d.js';
+    window.__frame = { createRenderer, canvas: document.getElementById('c') };
+  </script>
+</body>
+</html>
