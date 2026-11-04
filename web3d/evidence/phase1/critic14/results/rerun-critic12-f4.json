@@ -1,0 +1,117 @@
+{
+  "page": "evidence/phase1/critic12/site/f4.html",
+  "host": "127.0.0.1",
+  "chrome": "157.0.8103.38",
+  "args": [],
+  "result": {
+    "alphaStored": {
+      "alpha": true,
+      "store": true,
+      "storeError": 0,
+      "stored": [
+        8,
+        4
+      ],
+      "created": "created",
+      "bufferAfter": [
+        40,
+        30
+      ],
+      "attributeChangedCallback": [
+        "width:40->40",
+        "height:30->30",
+        "width:40->39",
+        "width:39->40"
+      ],
+      "mutationRecords": [
+        "width:40->40",
+        "height:30->30",
+        "width:40->40",
+        "width:39->40"
+      ],
+      "resizeObserverAfterCreate": [],
+      "cssSize": "40x30"
+    },
+    "alphaNotStored": {
+      "alpha": true,
+      "store": false,
+      "storeError": null,
+      "stored": [
+        40,
+        30
+      ],
+      "created": "created",
+      "bufferAfter": [
+        40,
+        30
+      ],
+      "attributeChangedCallback": [
+        "width:40->40",
+        "height:30->30"
+      ],
+      "mutationRecords": [
+        "width:40->40",
+        "height:30->30"
+      ],
+      "resizeObserverAfterCreate": [],
+      "cssSize": "40x30"
+    },
+    "noAlphaStored": {
+      "alpha": false,
+      "store": true,
+      "storeError": 1282,
+      "stored": [
+        40,
+        30
+      ],
+      "created": "created",
+      "bufferAfter": [
+        40,
+        30
+      ],
+      "attributeChangedCallback": [
+        "width:40->40",
+        "height:30->30"
+      ],
+      "mutationRecords": [
+        "width:40->40",
+        "height:30->30"
+      ],
+      "resizeObserverAfterCreate": [],
+      "cssSize": "40x30"
+    },
+    "noAlphaNotStored": {
+      "alpha": false,
+      "store": false,
+      "storeError": null,
+      "stored": [
+        40,
+        30
+      ],
+      "created": "created",
+      "bufferAfter": [
+        40,
+        30
+      ],
+      "attributeChangedCallback": [
+        "width:40->40",
+        "height:30->30"
+      ],
+      "mutationRecords": [
+        "width:40->40",
+        "height:30->30"
+      ],
+      "resizeObserverAfterCreate": [],
+      "cssSize": "40x30"
+    },
+    "premise": {
+      "noAlphaStoreRefused": true,
+      "noAlphaBufferIsCanvasAfterCreate": true,
+      "alphaStoredBufferIsCanvasAfterCreate": true
+    }
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "warning: WebGL: INVALID_OPERATION: drawingBufferStorage: alpha is required for drawingBufferStorage"
+  ]
+}

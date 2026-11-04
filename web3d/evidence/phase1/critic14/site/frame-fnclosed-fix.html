@@ -1,0 +1,13 @@
+<!doctype html><meta charset="utf-8"><title>critic 14: a frame whose page declares a global function named closed before the trial-fix web3d loads</title>
+<body><canvas id="own" width="16" height="16"></canvas>
+<script>
+// An ordinary classic-script function declaration. It replaces the window's own `closed` accessor
+// (configurable) with a data property, before the module below is evaluated.
+function closed() { return 'a page function'; }
+</script>
+<script type="module">
+import * as web3d from '/evidence/phase1/critic14/fix-pkg/web3d.js';
+window.web3d = web3d;
+window.page = 'frame-fnclosed.html';
+window.ready = true;
+</script></body>

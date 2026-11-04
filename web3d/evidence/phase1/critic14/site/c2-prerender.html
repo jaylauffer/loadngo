@@ -1,0 +1,12 @@
+<!doctype html><meta charset="utf-8"><title>critic 14: a page prerendered by speculation rules, then activated</title>
+<body>
+<script type="speculationrules">{ "prerender": [{ "source": "list", "urls": ["c2-prerendered.html"], "eagerness": "immediate" }] }</script>
+<script>
+// Waits for the prerendered page to report it ran, then navigates to it, which activates it.
+sessionStorage.removeItem('c14-prerender');
+const t0 = performance.now();
+const go = () => { location.href = 'c2-prerendered.html'; };
+const poll = setInterval(() => {
+  if (sessionStorage.getItem('c14-prerender') || performance.now() - t0 > 6000) { clearInterval(poll); setTimeout(go, 300); }
+}, 50);
+</script></body>

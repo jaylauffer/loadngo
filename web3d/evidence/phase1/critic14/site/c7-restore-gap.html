@@ -1,0 +1,34 @@
+<!doctype html><meta charset="utf-8"><title>critic 14: is there a task between the context coming back and its restored event?</title>
+<body><script type="module">
+// A raw WebGL2 context (no web3d): its loss is cancelled by a listener of the page's, then it is
+// restored. A MessageChannel loop polls isContextLost() in tasks of its own, and records whether it
+// ever reads false before the webglcontextrestored listener has run. If it does, a create could take
+// the restored context before that event, and its hooks would be called for a loss it never had.
+import { page, sleep } from '../../critic13/site/common.js';
+page(async (out) => {
+  for (let trial = 0; trial < 20; trial++) {
+    const c = document.body.appendChild(document.createElement('canvas'));
+    const gl = c.getContext('webgl2');
+    c.addEventListener('webglcontextlost', (e) => e.preventDefault());
+    let restoredEventRan = false;
+    c.addEventListener('webglcontextrestored', () => { restoredEventRan = true; });
+    const lc = gl.getExtension('WEBGL_lose_context');
+    lc.loseContext();
+    await sleep(30);
+    const mc = new MessageChannel();
+    let sawLiveBeforeEvent = 0, polls = 0, done = false;
+    mc.port1.onmessage = () => {
+      polls++;
+      if (!gl.isContextLost() && !restoredEventRan) sawLiveBeforeEvent++;
+      if (!done) mc.port2.postMessage(0);
+    };
+    lc.restoreContext();
+    mc.port2.postMessage(0);
+    await sleep(300);
+    done = true;
+    (out.trials ??= []).push({ polls, sawLiveBeforeEvent, restoredEventRan, liveAtEnd: !gl.isContextLost() });
+    c.remove();
+  }
+  out.anyGap = out.trials.some((t) => t.sawLiveBeforeEvent > 0);
+});
+</script></body>

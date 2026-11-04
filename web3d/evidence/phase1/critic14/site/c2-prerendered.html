@@ -1,0 +1,34 @@
+<!doctype html><meta charset="utf-8"><title>critic 14: the prerendered page</title>
+<body><canvas id="own" width="16" height="16"></canvas><script type="module">
+// While prerendered: does closed read false, and does a renderer create and draw? After activation:
+// does it still draw, and recover from a loss?
+import * as web3d from '/pkg/web3d.js';
+import { sleep, err, settle, attempt, OPTS, green, redraw, until } from '../../critic13/site/common.js';
+const CLOSED = Object.getOwnPropertyDescriptor(window, 'closed').get;
+const out = { duringPrerender: { prerendering: document.prerendering === true, closed: CLOSED.call(window) } };
+sessionStorage.setItem('c14-prerender', String(document.prerendering === true));
+const made = await settle(web3d.createRenderer(document.getElementById('own'), OPTS));
+out.duringPrerender.create = made.ok ? 'created' : made.message;
+if (made.ok) out.duringPrerender.draws = attempt(() => green(made.r).isGreen).v ?? 'threw';
+out.duringPrerender.stillPrerendering = document.prerendering === true;
+const activated = () => new Promise((res) => (document.prerendering ? document.addEventListener('prerenderingchange', res, { once: true }) : res()));
+await activated();
+const nav = performance.getEntriesByType('navigation')[0];
+out.afterActivation = { activationStart: nav?.activationStart ?? null, closed: CLOSED.call(window) };
+if (made.ok) {
+  const r = made.r;
+  out.afterActivation.draws = attempt(() => redraw(r).isGreen).v ?? 'threw';
+  const calls = { lost: 0, restored: 0 };
+  r.dispose();
+  const r2 = await settle(web3d.createRenderer(document.getElementById('own'), { ...OPTS, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++ }));
+  if (r2.ok) {
+    const gl = r2.r.gl; const lc = gl.getExtension('WEBGL_lose_context');
+    lc.loseContext(); await until(() => gl.isContextLost(), 2000); await sleep(50); r2.r.dispose();
+    lc.restoreContext(); out.afterActivation.recovered = !!(await until(() => !gl.isContextLost(), 2000)); await sleep(100);
+    out.afterActivation.calls = calls;
+  } else out.afterActivation.secondCreate = r2.message;
+}
+out.userAgent = navigator.userAgent.replace(/^.*(Chrome\/[0-9.]+).*$/, '$1');
+window.__done = Promise.resolve(out);
+fetch('/report', { method: 'POST', body: JSON.stringify(out) }).catch(() => {});
+</script></body>

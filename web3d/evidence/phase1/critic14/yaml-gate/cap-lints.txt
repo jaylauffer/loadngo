@@ -1,0 +1,12 @@
+# Critic 14: does an environment variable let `cargo clippy ... -- -D warnings` exit 0 on code that
+# has a lint? A throwaway crate (outside the repository) with one unused variable, checked on
+# wasm32-unknown-unknown with rustc 1.99.0's clippy, offline:
+#   src/lib.rs: pub fn f() -> i32 { let unused = 5; let x = 1; x + 0 }
+#   cargo clippy --offline --quiet --target wasm32-unknown-unknown --all-targets -- -D warnings
+plain:                                     exit 101 (error: unused variable: `unused`)
+RUSTFLAGS='--cap-lints warn':              exit 0 (the lint printed as a warning)
+CARGO_ENCODED_RUSTFLAGS='--cap-lints\x1fwarn': exit 0
+RUSTFLAGS='--cap-lints allow':             exit 101 (cargo's target-info query fails with that flag; not a bypass)
+# So an `env: { RUSTFLAGS: --cap-lints warn }` on the step, its job or the workflow, or an earlier
+# step that writes it to $GITHUB_ENV, lets the wasm32 step pass when its lints fail. ci-step.rb
+# passes all four (results.txt).

@@ -1,0 +1,477 @@
+// WebGL2 for loadngo-web3d. The wasm module imports these functions as module `web3d_gl`.
+//
+// This file owns the WebGL2 context and the tables that turn small integers into WebGL objects
+// (programs, buffers, vertex arrays, textures, queries; 0 is "none"). Every function takes and
+// returns numbers.
+//
+// The shim is made before its context and given it by `bind` (see createGl). Once the context is
+// lost, this shim is finished for good, even after the browser restores the context: its objects
+// belonged to the lost one. Creating returns 0 (WebGL itself hands out objects while lost), and
+// deleting only forgets the handle, so disposing the old renderer after a restore sends nothing
+// into the restored context, which a new renderer then owns. The shim listens for no events:
+// web3d.js's loss controllers count the canvas's losses, which says when its context was lost.
+//
+// Byte data arrives as a pointer and a length into the wasm module's memory and is read in place
+// through one cached Uint8Array view (WebGL2's `bufferSubData(target, offset, view, srcOffset,
+// length)`), so drawing a frame allocates nothing here. Strings (shader sources, block names, and
+// the messages of errors and logs) are decoded only while the programs are built or when a message
+// is reported.
+//
+// BSD-3-Clause; see the repository's LICENSE.
+
+const INVALID_INDEX = 0xffffffff;
+
+/** Small integers for WebGL objects; slot 0 is always null. */
+class Table {
+  constructor() {
+    this.items = [null];
+    this.free = [];
+  }
+  put(object) {
+    if (!object) return 0;
+    if (this.free.length > 0) {
+      const i = this.free.pop();
+      this.items[i] = object;
+      return i;
+    }
+    this.items.push(object);
+    return this.items.length - 1;
+  }
+  take(i) {
+    const object = this.items[i] ?? null;
+    if (i > 0 && object) {
+      this.items[i] = null;
+      this.free.push(i);
+    }
+    return object;
+  }
+}
+
+/**
+ * The import object for the wasm module. It is made before its context, so that web3d.js can
+ * instantiate the module before it touches the canvas (its createRenderer awaits nothing once it
+ * has taken the context), and is then given the WebGL2 context web3d.js took from the canvas by
+ * `bind(gl, lostSince)`. The module calls no import before that: it has no start function, and
+ * web3d.js makes the renderer only after `bind`. `lostSince()` says whether the context has been
+ * lost since the shim was bound (web3d.js's loss controllers count the canvas's losses on its
+ * record, in whichever realm), so a loss and restore that both fell between two checks still finish
+ * the shim.
+ */
+export function createGl() {
+  let gl = null;
+  let lostSince = null;
+  let timer = null;
+  let depthOnly = null;
+  let back = null;
+
+  const programs = new Table();
+  const buffers = new Table();
+  const arrays = new Table();
+  const textures = new Table();
+  const queries = new Table();
+  const decoder = new TextDecoder();
+
+  const state = { staged: null, stagedSize: null, lost: false, lastLog: '' };
+  /** True from the moment the context is lost, and for good: the event can lag isContextLost(). False before `bind`. */
+  const gone = () => {
+    if (!state.lost && gl !== null && (gl.isContextLost() || lostSince())) state.lost = true;
+    return state.lost;
+  };
+  let memory = null;
+  let heap = new Uint8Array(0);
+
+  /** The module's memory as bytes; the view is remade only after the memory grows. */
+  const bytes = () => {
+    if (heap.buffer !== memory.buffer) heap = new Uint8Array(memory.buffer);
+    return heap;
+  };
+  // Pointers and lengths arrive as wasm i32s; `>>> 0` reads them unsigned, as Rust meant them.
+  const text = (ptr, len) => decoder.decode(bytes().subarray(ptr >>> 0, (ptr >>> 0) + (len >>> 0)));
+  const note = (level, message) => {
+    state.lastLog = message;
+    if (level >= 2) console.error(message);
+    else if (level === 1) console.warn(message);
+    else console.info(message);
+  };
+
+  const compile = (type, source) => {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    return shader;
+  };
+
+  /**
+   * Whether polygons are drawn as lines: one triangle far larger than a 1x1 framebuffer covers its
+   * one pixel when filled, and leaves it empty as lines: its edges all pass at least 1.4 pixels from
+   * that pixel's centre (2 pixels along x or y), which a line 1 pixel wide cannot reach (the reset
+   * sets the width first; a page's wide lines could). Runs once a renderer, after the rest of the
+   * reset (so nothing else the page left can hide the triangle), with objects of its own that it
+   * deletes, and raises no WebGL error. It leaves the viewport at 1x1, the clear colour at 0, blending,
+   * culling and the depth test off, the program, vertex array, framebuffer and TEXTURE0's 2D texture
+   * unbound, and TEXTURE0 active; the renderer sets each of those itself before it draws. Skipped
+   * where the browser has no WEBGL_polygon_mode, since then no page can have changed the mode.
+   */
+  const drawsLines = () => {
+    if (!gl.getSupportedExtensions()?.includes('WEBGL_polygon_mode')) return false;
+    const program = gl.createProgram();
+    const vs = compile(gl.VERTEX_SHADER, '#version 300 es\nvoid main() {\n  vec2 p[3] = vec2[3](vec2(-4.0, -4.0), vec2(8.0, -4.0), vec2(-4.0, 8.0));\n  gl_Position = vec4(p[gl_VertexID], 0.0, 1.0);\n}\n');
+    const fs = compile(gl.FRAGMENT_SHADER, '#version 300 es\nprecision mediump float;\nout vec4 o;\nvoid main() { o = vec4(1.0); }\n');
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+    const vao = gl.createVertexArray();
+    const texture = gl.createTexture();
+    const framebuffer = gl.createFramebuffer();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, 1, 1);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+    let lines = false;
+    if (gl.getProgramParameter(program, gl.LINK_STATUS) && gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+      gl.viewport(0, 0, 1, 1);
+      for (const cap of [gl.BLEND, gl.CULL_FACE, gl.DEPTH_TEST]) gl.disable(cap);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.useProgram(program);
+      gl.bindVertexArray(vao);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      const px = new Uint8Array(4);
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      lines = px[0] === 0;
+    }
+    gl.bindVertexArray(null);
+    gl.useProgram(null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.deleteFramebuffer(framebuffer);
+    gl.deleteTexture(texture);
+    gl.deleteVertexArray(vao);
+    gl.deleteProgram(program);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+    return lines;
+  };
+
+  const imports = {
+    get_integer: (pname) => gl.getParameter(pname) | 0,
+    timer_query_supported: () => (timer ? 1 : 0),
+
+    program_create(vsPtr, vsLen, fsPtr, fsLen) {
+      if (gone()) return 0;
+      const program = gl.createProgram();
+      if (!program) return 0;
+      const vs = compile(gl.VERTEX_SHADER, text(vsPtr, vsLen));
+      const fs = compile(gl.FRAGMENT_SHADER, text(fsPtr, fsLen));
+      gl.attachShader(program, vs);
+      gl.attachShader(program, fs);
+      gl.linkProgram(program);
+      // The shaders are kept attached until the check, for their logs.
+      program.web3dShaders = [vs, fs];
+      return programs.put(program);
+    },
+    program_check(p) {
+      const program = programs.items[p];
+      if (!program) return 0;
+      const ok = gl.getProgramParameter(program, gl.LINK_STATUS);
+      if (!ok && gone()) {
+        note(1, 'web3d: the WebGL context was lost while the shader programs were compiled');
+      } else if (!ok) {
+        const logs = program.web3dShaders.map((s) => gl.getShaderInfoLog(s)).filter(Boolean);
+        logs.push(gl.getProgramInfoLog(program));
+        note(2, `web3d: shader program ${p} failed:\n${logs.join('\n')}`);
+      }
+      for (const s of program.web3dShaders) {
+        gl.detachShader(program, s);
+        gl.deleteShader(s);
+      }
+      program.web3dShaders = [];
+      return ok ? 1 : 0;
+    },
+    program_bind_block(p, namePtr, nameLen, binding) {
+      const program = programs.items[p];
+      const index = gl.getUniformBlockIndex(program, text(namePtr, nameLen));
+      if (index === INVALID_INDEX) return 0;
+      gl.uniformBlockBinding(program, index, binding);
+      return 1;
+    },
+    program_bind_sampler(p, namePtr, nameLen, unit) {
+      const program = programs.items[p];
+      const location = gl.getUniformLocation(program, text(namePtr, nameLen));
+      if (!location) return 0;
+      gl.useProgram(program);
+      gl.uniform1i(location, unit);
+      return 1;
+    },
+    program_block_size(p, namePtr, nameLen) {
+      const program = programs.items[p];
+      const index = gl.getUniformBlockIndex(program, text(namePtr, nameLen));
+      if (index === INVALID_INDEX) return -1;
+      return gl.getActiveUniformBlockParameter(program, index, gl.UNIFORM_BLOCK_DATA_SIZE) | 0;
+    },
+    program_uniform_offset(p, namePtr, nameLen) {
+      const program = programs.items[p];
+      const indices = gl.getUniformIndices(program, [text(namePtr, nameLen)]);
+      if (!indices || indices[0] === INVALID_INDEX) return -1;
+      return gl.getActiveUniforms(program, indices, gl.UNIFORM_OFFSET)[0] | 0;
+    },
+    program_delete: (p) => {
+      const program = programs.take(p);
+      if (!gone()) gl.deleteProgram(program);
+    },
+    use_program: (p) => gl.useProgram(programs.items[p]),
+
+    buffer_create(target, ptr, len, usage) {
+      if (gone()) return 0;
+      const buffer = gl.createBuffer();
+      if (!buffer) return 0;
+      gl.bindBuffer(target, buffer);
+      // A length of 0 would mean "to the end of the view", the whole heap.
+      if (len !== 0) gl.bufferData(target, bytes(), usage, ptr >>> 0, len >>> 0);
+      return buffers.put(buffer);
+    },
+    buffer_alloc(target, size, usage) {
+      if (gone()) return 0;
+      const buffer = gl.createBuffer();
+      if (!buffer) return 0;
+      gl.bindBuffer(target, buffer);
+      gl.bufferData(target, size, usage);
+      return buffers.put(buffer);
+    },
+    buffer_update(b, target, offset, ptr, len) {
+      if (len === 0) return;
+      gl.bindBuffer(target, buffers.items[b]);
+      gl.bufferSubData(target, offset >>> 0, bytes(), ptr >>> 0, len >>> 0);
+    },
+    buffer_delete: (b) => {
+      const buffer = buffers.take(b);
+      if (!gone()) gl.deleteBuffer(buffer);
+    },
+    bind_buffer_range: (target, index, b, offset, size) =>
+      gl.bindBufferRange(target, index, buffers.items[b], offset, size),
+
+    vertex_array_create: () => (gone() ? 0 : arrays.put(gl.createVertexArray())),
+    vertex_array_bind: (a) => gl.bindVertexArray(arrays.items[a]),
+    vertex_array_delete: (a) => {
+      const array = arrays.take(a);
+      if (!gone()) gl.deleteVertexArray(array);
+    },
+    vertex_attrib(location, b, size, type, normalized, stride, offset) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffers.items[b]);
+      gl.enableVertexAttribArray(location);
+      gl.vertexAttribPointer(location, size, type, normalized !== 0, stride, offset);
+    },
+    index_buffer_bind: (b) => gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers.items[b]),
+
+    texture_create_staged(internalFormat, width, height, levels, wrapS, wrapT, minFilter, magFilter) {
+      const source = state.staged;
+      if (!source) {
+        note(2, 'web3d: no image source was staged for the texture');
+        return 0;
+      }
+      if (gone()) return 0;
+      // The size the texture is made for must still be the source's, or the upload would fail
+      // (larger) or fill only a corner (smaller).
+      let w = width;
+      let h = height;
+      try {
+        if (state.stagedSize) [w, h] = state.stagedSize();
+      } catch {
+        w = -1; // no longer an image source; never throw through the wasm module
+      }
+      if (w !== width || h !== height) {
+        note(2, `web3d: the image source is ${w}x${h} now, not the ${width}x${height} it was when the texture was asked for`);
+        return 0;
+      }
+      // Errors left pending by earlier calls (the page's, on a context it made, or a draw's) are not
+      // this upload's: report each as pending and clear it, so the check after the upload is exact.
+      for (let i = 0; i < 16; i++) {
+        const pending = gl.getError();
+        if (pending === gl.NO_ERROR) break;
+        note(1, `web3d: WebGL error 0x${pending.toString(16)} was pending before a texture upload; an earlier call raised it, not the upload`);
+      }
+      const texture = gl.createTexture();
+      if (!texture) return 0;
+      try {
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texStorage2D(gl.TEXTURE_2D, levels, internalFormat, width, height);
+        // glTF's convention: the image's first row is v = 0. No premultiplying, and no colour
+        // conversion: the source's bytes as they are (unpackColorSpace is 'srgb', set when the
+        // renderer was initialised; ImageBitmaps take the rest from createImageBitmap's options).
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+        gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, source);
+        // Once a texture, not per frame: an upload WebGL refused leaves an error, not an exception.
+        // Pending errors were cleared above, so this one is the upload's.
+        const error = gl.getError();
+        if (error !== gl.NO_ERROR) {
+          note(2, `web3d: the texture upload raised WebGL error 0x${error.toString(16)}: WebGL refused to put the source's pixels into the ${width}x${height} texture made for it`);
+          gl.deleteTexture(texture);
+          return 0;
+        }
+        if (levels > 1) gl.generateMipmap(gl.TEXTURE_2D);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrapS);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrapT);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, minFilter);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, magFilter);
+      } catch (error) {
+        // A tainted canvas (one drawn with a cross-origin image) or a closed ImageBitmap throws;
+        // report it rather than unwind through the wasm module.
+        note(2, `web3d: texture upload failed: ${error}`);
+        gl.deleteTexture(texture);
+        return 0;
+      }
+      return textures.put(texture);
+    },
+    texture_bind(unit, t) {
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, textures.items[t]);
+    },
+    texture_delete: (t) => {
+      const texture = textures.take(t);
+      if (!gone()) gl.deleteTexture(texture);
+    },
+
+    enable: (cap) => gl.enable(cap),
+    disable: (cap) => gl.disable(cap),
+    front_face: (mode) => gl.frontFace(mode),
+    depth_mask: (write) => gl.depthMask(write !== 0),
+    blend_func_separate: (a, b, c, d) => gl.blendFuncSeparate(a, b, c, d),
+    // WebGL 2's default state, put back when a renderer is initialised (Renderer::init in
+    // src/renderer.rs says which, and why; docs/WEB3D.md what is left alone).
+    color_mask: (r, g, b, a) => gl.colorMask(r !== 0, g !== 0, b !== 0, a !== 0),
+    depth_func: (func) => gl.depthFunc(func),
+    depth_range: (near, far) => gl.depthRange(near, far),
+    clear_depth: (depth) => gl.clearDepth(depth),
+    cull_face: (mode) => gl.cullFace(mode),
+    blend_equation: (mode) => gl.blendEquation(mode),
+    hint: (target, mode) => gl.hint(target, mode),
+    pixel_store: (pname, value) => gl.pixelStorei(pname, value),
+    use_default_framebuffer() {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.drawBuffers(back);
+      gl.readBuffer(gl.BACK);
+    },
+    unbind_buffer: (target) => gl.bindBuffer(target, null),
+    unbind_sampler: (unit) => gl.bindSampler(unit, null),
+    vertex_attrib_default: (location, x, y, z, w) => gl.vertexAttrib4f(location, x, y, z, w),
+    end_transform_feedback() {
+      // Ending it when none is active would be an error; binding while one is active, too.
+      if (gl.getParameter(gl.TRANSFORM_FEEDBACK_ACTIVE)) gl.endTransformFeedback();
+      gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
+    },
+    end_query_on(target) {
+      if (gl.getQuery(target, gl.CURRENT_QUERY)) gl.endQuery(target);
+    },
+    // What WebGL and its extensions add to OpenGL ES's state, put back last (Renderer::init in
+    // src/renderer.rs calls this at the end of its reset). First the colour spaces of uploads and of
+    // the drawing buffer, and the drawing buffer's format: three.js r180's WebGLRenderer sets the
+    // two colour spaces whenever the application assigns its outputColorSpace (its setter, not its
+    // constructor, sets them), and a page may have stored an sRGB or float buffer, into which web3d's
+    // own sRGB encoding would be encoded again. drawingBufferStorage needs a context with alpha (on
+    // one without, the format is the one it was made with), and a canvas resize keeps the format, so
+    // setting it once holds. Its size is the buffer's present one, which web3d.js has made the
+    // canvas's before init (a page's stored size is not kept). Then the line width at 1, its
+    // default, for the polygon-mode test draw below, which may draw lines. Then, for each extension
+    // the browser has (getExtension returns the page's object where it enabled one, and enabling one
+    // here changes no state): EXT_clip_control's origin and depth mode, EXT_depth_clamp, and the
+    // clip distances.
+    reset_webgl_state() {
+      if ('unpackColorSpace' in gl) gl.unpackColorSpace = 'srgb';
+      if ('drawingBufferColorSpace' in gl) gl.drawingBufferColorSpace = 'srgb';
+      if (typeof gl.drawingBufferStorage === 'function' && gl.getContextAttributes()?.alpha && gl.drawingBufferFormat !== gl.RGBA8) {
+        gl.drawingBufferStorage(gl.RGBA8, gl.drawingBufferWidth, gl.drawingBufferHeight);
+      }
+      gl.lineWidth(1);
+      const clip = gl.getExtension('EXT_clip_control');
+      if (clip) clip.clipControlEXT(clip.LOWER_LEFT_EXT, clip.NEGATIVE_ONE_TO_ONE_EXT);
+      const clamp = gl.getExtension('EXT_depth_clamp');
+      if (clamp) gl.disable(clamp.DEPTH_CLAMP_EXT);
+      const distances = gl.getExtension('WEBGL_clip_cull_distance');
+      if (distances) {
+        const n = Math.min(gl.getParameter(distances.MAX_CLIP_DISTANCES_WEBGL) | 0, 32);
+        for (let i = 0; i < n; i++) gl.disable(distances.CLIP_DISTANCE0_WEBGL + i);
+      }
+      // WEBGL_polygon_mode: a page that enabled it may have left polygons drawn as lines. Its mode
+      // cannot be read where the page did not enable it (getParameter raises INVALID_ENUM there),
+      // and enabling it to ask would print Chrome's warning about the extension on a page that never
+      // used it. So a test draw asks: only if it finds lines is the extension taken (the page's,
+      // already enabled) and polygons filled again.
+      if (drawsLines()) {
+        const mode = gl.getExtension('WEBGL_polygon_mode');
+        if (mode) {
+          mode.polygonModeWEBGL(gl.FRONT_AND_BACK, mode.FILL_WEBGL);
+          gl.disable(mode.POLYGON_OFFSET_LINE_WEBGL);
+        }
+      }
+    },
+    viewport: (x, y, width, height) => gl.viewport(x, y, width, height),
+    clear_color: (r, g, b, a) => gl.clearColor(r, g, b, a),
+    clear: (mask) => gl.clear(mask),
+    draw_elements: (mode, count, type, offset) => gl.drawElements(mode, count, type, offset),
+    invalidate_depth: () => gl.invalidateFramebuffer(gl.FRAMEBUFFER, depthOnly),
+    flush: () => gl.flush(),
+
+    query_create: () => (timer && !gone() ? queries.put(gl.createQuery()) : 0),
+    query_delete: (q) => {
+      const query = queries.take(q);
+      if (!gone()) gl.deleteQuery(query);
+    },
+    query_begin: (q) => gl.beginQuery(timer.TIME_ELAPSED_EXT, queries.items[q]),
+    query_end: () => gl.endQuery(timer.TIME_ELAPSED_EXT),
+    query_available: (q) => (gl.getQueryParameter(queries.items[q], gl.QUERY_RESULT_AVAILABLE) ? 1 : 0),
+    // Nanoseconds, an integer: no boxed fraction on the way to wasm.
+    query_result_ns: (q) => gl.getQueryParameter(queries.items[q], gl.QUERY_RESULT),
+    gpu_disjoint: () => (gl.getParameter(timer.GPU_DISJOINT_EXT) ? 1 : 0),
+
+    log: (level, ptr, len) => note(level, `web3d: ${text(ptr, len)}`),
+    // performance.now, bound to performance. Each reading still comes back as a number V8 boxes
+    // (22 sampled bytes a frame for the two, evidence/phase1/critic10-rerun/cpu-timing/): that
+    // is why CPU timing is off unless asked for.
+    now: performance.now.bind(performance),
+  };
+
+  return {
+    state,
+    imports: { web3d_gl: imports },
+    /** Gives the shim its context, once: before it, the module calls no import (see above). */
+    bind(context, since) {
+      gl = context;
+      lostSince = since;
+      timer = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+      // Lets the driver compile the programs in parallel; the link check then waits for them.
+      gl.getExtension('KHR_parallel_shader_compile');
+      depthOnly = [gl.DEPTH];
+      back = [gl.BACK];
+    },
+    /** Gives the shim the instantiated module's memory. */
+    attach(wasmMemory) {
+      memory = wasmMemory;
+      heap = new Uint8Array(memory.buffer);
+    },
+    /** Whether the context has been lost (for good, for this shim). */
+    lost: gone,
+    /** Holds an image source, and a way to read its size again, for the next texture_create_staged call. */
+    stage(source, sizeOf = null) {
+      state.staged = source;
+      state.stagedSize = sizeOf;
+    },
+    info() {
+      const debug = gl.getExtension('WEBGL_debug_renderer_info');
+      return {
+        renderer: gl.getParameter(debug ? debug.UNMASKED_RENDERER_WEBGL : gl.RENDERER),
+        vendor: gl.getParameter(debug ? debug.UNMASKED_VENDOR_WEBGL : gl.VENDOR),
+        version: gl.getParameter(gl.VERSION),
+        maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
+        timerQuery: Boolean(timer),
+        antialias: Boolean(gl.getContextAttributes()?.antialias),
+        samples: gl.getParameter(gl.SAMPLES),
+      };
+    },
+    /** Nothing to release: the shim holds no listeners, and its GL objects go with the renderer. */
+    dispose() {},
+  };
+}

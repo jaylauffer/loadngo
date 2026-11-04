@@ -1,0 +1,182 @@
+{
+  "page": "evidence/phase1/critic13-rerun/site/reopen-paths.html",
+  "host": "127.0.0.1",
+  "chrome": "157.0.8103.38",
+  "args": [],
+  "result": {
+    "lost: none": {
+      "drew": true,
+      "reopened": 0,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "covered": true
+    },
+    "lost: window": {
+      "drew": true,
+      "reopened": 1,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "covered": true
+    },
+    "lost: document": {
+      "drew": true,
+      "reopened": 1,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "covered": true
+    },
+    "lost: div": {
+      "drew": true,
+      "reopened": 1,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "covered": true
+    },
+    "lost: shadow root": {
+      "drew": true,
+      "reopened": 1,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "covered": true
+    },
+    "lost: canvas, after web3d": {
+      "drew": true,
+      "reopened": 1,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "covered": true
+    },
+    "lost: canvas, before web3d": {
+      "drew": true,
+      "reopened": 1,
+      "restoreCall": "ok",
+      "restored": false,
+      "calls": {
+        "lost": 0,
+        "restored": 0
+      },
+      "covered": false
+    },
+    "restored: none": {
+      "drew": true,
+      "reopened": 0,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "covered": true
+    },
+    "restored: window": {
+      "drew": true,
+      "reopened": 1,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "covered": true
+    },
+    "restored: document": {
+      "drew": true,
+      "reopened": 1,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "covered": true
+    },
+    "restored: div": {
+      "drew": true,
+      "reopened": 1,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "covered": true
+    },
+    "restored: shadow root": {
+      "drew": true,
+      "reopened": 1,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "covered": true
+    },
+    "restored: canvas, after web3d": {
+      "drew": true,
+      "reopened": 1,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "covered": true
+    },
+    "restored: canvas, before web3d": {
+      "drew": true,
+      "reopened": 1,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 0
+      },
+      "covered": false
+    },
+    "verdict": {
+      "lost: none": true,
+      "lost: window": true,
+      "lost: document": true,
+      "lost: div": true,
+      "lost: shadow root": true,
+      "lost: canvas, after web3d": true,
+      "lost: canvas, before web3d": false,
+      "restored: none": true,
+      "restored: window": true,
+      "restored: document": true,
+      "restored: div": true,
+      "restored: shadow root": true,
+      "restored: canvas, after web3d": true,
+      "restored: canvas, before web3d": false
+    }
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed"
+  ]
+}

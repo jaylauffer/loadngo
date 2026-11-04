@@ -22,8 +22,9 @@
 //
 // One realm drives a canvas. createRenderer takes only a canvas of its own realm (an element whose
 // document is this window's, or an OffscreenCanvas whose prototype is this realm's), from a copy
-// whose window has not navigated away and whose frame has not been removed, and refuses any other
-// before it touches it: a frame cannot drive a canvas of the top document, nor the top a frame's.
+// whose window has not navigated away, been closed or had its frame removed, and refuses any
+// other before it touches it: a frame cannot drive a canvas of the top document, nor the top a
+// frame's.
 // It checks the canvas again after its last await, which is before it takes the context, and after
 // it sets the canvas's width and height (one check for the pair), and refuses one moved meanwhile.
 // A driven canvas element moved to another document is refused by frame(), resize() and the creates
@@ -46,9 +47,12 @@
 // `cpuMs`, `gpuMs` and `info` still answer, and `dispose()` again does nothing). When the WebGL context is lost,
 // `frame()` returns false for good, creating anything throws, and the renderer is finished: dispose
 // it, then create a new one when `onContextRestored` is called and upload everything again. One loss
-// controller a canvas in each realm that drove it (`controllerFor`) cancels every lost event and
-// calls the hooks; its two listeners are put back at every create, and after a document.open()
-// erases them.
+// controller a canvas in each realm that drove it (`controllerFor`) cancels every lost event that
+// reaches its listener and calls the hooks; its two listeners are put back at every create, and
+// after a document.open() erases them. That holds on a cooperative page (docs/WEB3D.md, "The page
+// contract"): one that does not stop the context events before web3d's listeners run or reopen the
+// document from inside them, does not shadow or patch the built-ins web3d reads, and does not move
+// a driven canvas to another document.
 //
 // A renderer puts the context's state back to its defaults before it uses it (src/renderer.rs,
 // `reset_context_state`, and gl.js, `reset_webgl_state`): OpenGL ES state, the colour spaces and
@@ -313,10 +317,13 @@ const IS_PROTOTYPE_OF = Object.prototype.isPrototypeOf;
 // realm's code (called through a reference kept from before) reads the new page's document through
 // it. So the document is compared only while `ownRealm()` holds; then `GLOBAL.document`, which is
 // unforgeable, is the window's own document, the one it has now. A removed frame's global still
-// reads its own state, but its window reads `closed` (taken here, so the page's own property is
-// never read); a worker has no `closed`.
+// reads its own state, but its window's `top` reads null, as does a closed window's once the
+// browser has discarded it. `top`'s getter is an own, non-configurable property of every window
+// from its start, so no page code can replace it (a page's `function top() {}` throws, and a
+// `var top` changes nothing), unlike `closed`'s, which a page's `function closed() {}` replaces
+// (the fourteenth critic's F1). A worker has no `top` getter (TOP is undefined there).
 const GLOBAL = globalThis;
-const CLOSED = getter(globalThis, 'closed');
+const TOP = getter(globalThis, 'top');
 const OWNER_DOCUMENT = globalThis.Node && getter(globalThis.Node.prototype, 'ownerDocument');
 const FOREIGN_ELEMENT =
   "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d drives a canvas element only from a copy of web3d loaded in the window whose document holds it, so load web3d there";
@@ -327,17 +334,18 @@ const MOVED =
 const MOVED_AT_CREATE =
   "web3d: this canvas element was moved to another document than this window's while createRenderer was making its renderer, so the create is refused; web3d drives a canvas element only from the window whose document holds it (move it back and create again, or create from a copy of web3d in the window that holds it now)";
 const NAVIGATED =
-  "web3d: this copy of web3d belongs to a page that its window has navigated away from, or to a frame that has been removed (its window is closed), so it drives no canvas any more; use a copy of web3d loaded in the present page of an open window";
+  "web3d: this copy of web3d belongs to a page that its window has navigated away from, or to a frame that has been removed or a window that has been closed, so it drives no canvas any more; use a copy of web3d loaded in the present page of an open window";
 
 /**
- * Whether this copy's realm is still its window's own and its window is open (always, in a worker):
- * false once the window has navigated away, to a page of this origin (whose window holds its own
- * state) or of another (the read throws), and once its frame has been removed (the window reads
- * `closed`; its global still reads this realm's state). Allocates nothing.
+ * Whether this copy's realm is still its window's own and its window still in a page (always, in a
+ * worker): false once the window has navigated away, to a page of this origin (whose window holds
+ * its own state) or of another (the read throws), and once its frame has been removed or the
+ * browser has discarded the closed window (its `top` reads null; its global still reads this
+ * realm's state). Allocates nothing.
  */
 function ownRealm() {
   try {
-    return GLOBAL[SHARED_KEY] === REALM_STATE && !(CLOSED !== undefined && CLOSED.call(GLOBAL));
+    return GLOBAL[SHARED_KEY] === REALM_STATE && (TOP === undefined || TOP.call(GLOBAL) !== null);
   } catch {
     return false;
   }
@@ -355,7 +363,7 @@ function inThisDocument(canvas) {
 /**
  * The canvas's kind, recognised by a built-in getter (which also accepts another realm's canvas);
  * then a canvas of another realm is refused, and every canvas once this copy's window has navigated
- * away or its frame has been removed. An element's realm is its document's window: its owner
+ * away, been closed or had its frame removed. An element's realm is its document's window: its owner
  * document must be this window's (its prototype is that of whichever realm touched it first). An
  * OffscreenCanvas is taken when its prototype is this realm's: where it was made or transferred to,
  * or, for one made by an element's transferControlToOffscreen(), the realm that touched the element
@@ -732,7 +740,11 @@ function take(canvas, o, record, controller, create, shim, x) {
     if (o.cpuTiming) x.web3d_set_cpu_timing(w, 1);
     const renderer = new Renderer(canvas, o.kind, gl, shim, x, w, serial, record);
     // Only now do the page's hooks belong to the canvas: a loss during the create makes it fail with
-    // "lost", and does not call onContextLost.
+    // "lost", and does not call onContextLost. A renderer still current here was finished by a loss
+    // whose restore web3d's listener never heard (outside the page contract: docs/WEB3D.md), since
+    // the context reads restored only once its restored event has run; its hook waits for the next
+    // restore instead of being dropped (the fourteenth critic's F2).
+    if (controller.current) waitForRestore(controller, controller.current.onRestored);
     controller.current = { renderer, onLost: o.onContextLost, onRestored: o.onContextRestored };
     record.owner = renderer;
     return renderer;
@@ -750,7 +762,10 @@ function take(canvas, o, record, controller, create, shim, x) {
   }
 }
 
-/** Refuses a canvas element moved out of this window's document during the create, or a copy whose window navigated away or whose frame was removed meanwhile. */
+/**
+ * Refuses a canvas element moved out of this window's document during the create, or a copy whose
+ * window navigated away, was closed or had its frame removed meanwhile.
+ */
 function stillInPlace(canvas, kind) {
   if (!ownRealm()) throw new Error(NAVIGATED);
   if (kind.element && !inThisDocument(canvas)) throw new Error(MOVED_AT_CREATE);
@@ -787,9 +802,10 @@ function contextMismatch(antialias) {
  * `frame()`, `resize()` and the creates), so they run as long as the canvas's document or worker does.
  * document.open() erases them, with every listener in the document's tree (the twelfth critic's F1);
  * the observer `arm` sets up puts them back at the next microtask checkpoint, before any later
- * event. An event already at the canvas when a listener of the page's ahead of web3d's reopens
- * the document does not reach them (docs/WEB3D.md, "When the listeners are on", says what that
- * costs).
+ * event. They see every context event on a cooperative page (docs/WEB3D.md, "The page contract"). A
+ * page listener that runs before them and stops the event, or that reopens the document while it
+ * is at the canvas, keeps it from them: a lost event is then not cancelled, and a restored event's
+ * hooks wait for the next restore (the contract says what each case costs).
  *
  * - on `webglcontextlost` it cancels the event, so the context can be restored, counts the loss
  *   (which finishes every renderer made before it), and calls the live renderer's `onContextLost`;
@@ -810,7 +826,11 @@ function controllerFor(canvas, record) {
     if (!event.isTrusted) return;
     event.preventDefault();
     record.losses++;
-    const hook = c.current?.onLost;
+    // A renderer hears one loss. One still current at a later loss missed the restore between
+    // (outside the page contract); it keeps its onContextRestored for the next restore.
+    const current = c.current;
+    const hook = current?.onLost;
+    if (current) current.onLost = null;
     if (typeof hook === 'function') callHook(hook);
   };
   c.restoredListener = (event) => {
@@ -950,7 +970,8 @@ export class Renderer {
   /**
    * Whether this renderer holds its canvas, so that another create on it is refused: while it is
    * live (not disposed, its context not lost) and `ownRealm()` holds (its window has not navigated
-   * away, nor its frame been removed). Read by any copy of web3d through the canvas's record.
+   * away, been closed or had its frame removed). Read by any copy of web3d through the canvas's
+   * record.
    */
   _holds() {
     return this._w !== 0 && !this._shim.lost() && ownRealm();
@@ -972,9 +993,9 @@ export class Renderer {
 
   /**
    * Refuses a canvas element that is no longer in this window's document, and any canvas once this
-   * copy's window has navigated away or its frame has been removed: one realm drives a canvas, and
-   * its listeners are this realm's. Two property reads and two getter calls; allocates nothing
-   * unless it throws.
+   * copy's window has navigated away, been closed or had its frame removed: one realm drives a
+   * canvas, and its listeners are this realm's. Two property reads and two getter calls (`top` and
+   * the canvas's `ownerDocument`); allocates nothing unless it throws.
    */
   _inPlace() {
     if (this._element ? !inThisDocument(this.canvas) : !ownRealm()) throw new Error(ownRealm() ? MOVED : NAVIGATED);
@@ -1370,10 +1391,10 @@ export class Renderer {
    * `gl.isContextLost()` says so, or web3d's listeners (of any realm) have counted a loss on the
    * canvas since this renderer was made, whichever comes first (the lost event can come later).
    * Throws if the canvas element has been moved to another document, or this copy's window has
-   * navigated away or its frame has been removed. With CPU timing on, wasm reads the clock twice
-   * around its work; each reading is a number V8 boxes (22 sampled bytes a frame for the two,
-   * measured in evidence/phase1/critic10-rerun/cpu-timing/), which is why timing is off unless asked
-   * for.
+   * navigated away, been closed or had its frame removed. With CPU timing on, wasm reads the clock
+   * twice around its work; each reading is a number V8 boxes (22 sampled bytes a frame for the two,
+   * measured in evidence/phase1/critic10-rerun/cpu-timing/), which is why timing is off unless
+   * asked for.
    */
   frame() {
     this._enter(false);

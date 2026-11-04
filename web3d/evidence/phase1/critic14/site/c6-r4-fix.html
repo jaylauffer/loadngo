@@ -1,0 +1,80 @@
+<!doctype html><meta charset="utf-8"><title>critic 14: the missed restore's hooks against a trial fix (a finished current renderer's hook kept)</title>
+<body><script type="module">
+// The fourteenth round documents, as a limit, a listener of the page's on the canvas ahead of
+// web3d's that reopens the document during a lost or restored event. Each trial is a fresh
+// same-origin frame whose own copy of web3d drives the frame's canvas, held in a <div> (or shadow
+// roots) in the frame's body. Reopening listeners are functions of the frame's own realm (page code
+// in the canvas's realm), made with the frame's eval. Each records whether the context came back
+// after restoreContext() (the loss was cancelled) and the hooks called.
+import { sleep, err, settle, attempt, OPTS, frameOf, green, redraw, page, until } from '../../critic13/site/common.js';
+const FRAME = 'frame-fix-r4.html';
+const REOPEN = "document.open(); document.write('<!doctype html><body></body>'); document.close();";
+const CLOSED = Object.getOwnPropertyDescriptor(window, 'closed').get;
+
+async function setup(shadow = 0) {
+  const f = await frameOf(FRAME);
+  const fw = f.contentWindow;
+  const c = fw.document.getElementById('own');
+  const holder = fw.document.createElement('div');
+  let parent = holder;
+  const roots = [];
+  // `shadow` shadow roots nested: each holds a div that hosts the next, and the last holds the canvas.
+  for (let i = 0; i < shadow; i++) {
+    const root = parent.attachShadow({ mode: 'open' });
+    roots.push(root);
+    if (i < shadow - 1) { const inner = fw.document.createElement('div'); root.append(inner); parent = inner; } else parent = root;
+  }
+  parent.append(c);
+  fw.document.body.append(holder);
+  fw.__holder = holder;
+  fw.__fired = 0;
+  // A listener of the frame's realm that reopens the frame's document once and puts the holder back.
+  const reopener = fw.eval(`(function reopen(e) { window.__fired++; ${REOPEN} document.body.append(window.__holder); })`);
+  return { f, fw, c, holder, roots, reopener };
+}
+
+/** Loses and restores the canvas's context through `gl`; disposes `r` once lost unless told not to. */
+async function lossAndRestore(gl, { dispose, wait = 300 } = {}) {
+  const lc = gl.getExtension('WEBGL_lose_context');
+  lc.loseContext();
+  await until(() => gl.isContextLost(), 3000);
+  await sleep(50);
+  if (dispose) attempt(() => dispose.dispose());
+  const call = attempt(() => lc.restoreContext());
+  const restored = !!(await until(() => !gl.isContextLost(), 2000));
+  await sleep(wait);
+  return { restoreCall: call.ok ? 'ok' : call.message, restored };
+}
+
+page(async (out) => {
+  // R4: the restored-event limit, then what the page does in between. WEB3D.md: "the controller
+  // stays as it was before the restore, so the hooks it held come with the canvas's next restore, if
+  // one comes, after that loss's onContextLost".
+  for (const variant of ['dispose in onContextLost, then create', 'no dispose, then create', 'no dispose, no create', 'dispose after the missed restore, then create']) {
+    const s = await setup(0);
+    s.c.addEventListener('webglcontextrestored', s.reopener, { once: true });
+    const log = [];
+    let r1;
+    const disposeInLost = variant.startsWith('dispose in onContextLost');
+    r1 = await s.fw.web3d.createRenderer(s.c, { ...OPTS, onContextLost: () => { log.push('first lost'); if (disposeInLost) r1.dispose(); }, onContextRestored: () => log.push('first restored') });
+    const drew1 = green(r1).isGreen;
+    const gl = r1.gl;
+    const first = await lossAndRestore(gl, {});
+    log.push(`(restore 1 done: restored ${first.restored}, page reopened ${s.fw.__fired})`);
+    let r2 = null;
+    if (variant === 'dispose after the missed restore, then create') r1.dispose();
+    if (variant.endsWith('then create')) {
+      const m = await settle(s.fw.web3d.createRenderer(s.c, { ...OPTS, onContextLost: () => log.push('second lost'), onContextRestored: () => log.push('second restored') }));
+      r2 = m.ok ? m.r : null;
+      log.push(m.ok ? `(second renderer created, draws ${green(m.r).isGreen})` : `(second create: ${m.message})`);
+    }
+    const second = await lossAndRestore(gl, {});
+    log.push(`(restore 2 done: restored ${second.restored})`);
+    await sleep(200);
+    out[`R4 missed restore, ${variant}`] = { drew1, log };
+    attempt(() => r1.dispose()); if (r2) attempt(() => r2.dispose());
+    s.f.remove();
+  }
+
+});
+</script></body>

@@ -1,0 +1,274 @@
+{
+  "page": "evidence/phase1/critic14/site/c3-reopen.html",
+  "host": "127.0.0.1",
+  "chrome": "157.0.8103.38",
+  "args": [],
+  "result": {
+    "R1 lost: inner shadow root": {
+      "drew": true,
+      "reopened": 1,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "covered": true
+    },
+    "R1 lost: outer shadow root": {
+      "drew": true,
+      "reopened": 0,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "covered": true
+    },
+    "R1 lost: canvas, before web3d": {
+      "drew": true,
+      "reopened": 1,
+      "restoreCall": "ok",
+      "restored": false,
+      "calls": {
+        "lost": 0,
+        "restored": 0
+      },
+      "covered": false
+    },
+    "R1 restored: inner shadow root": {
+      "drew": true,
+      "reopened": 1,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "covered": true
+    },
+    "R1 restored: outer shadow root": {
+      "drew": true,
+      "reopened": 0,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "covered": true
+    },
+    "R1 restored: canvas, before web3d": {
+      "drew": true,
+      "reopened": 1,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 0
+      },
+      "covered": false
+    },
+    "R2 added in the reopening's task, does not reopen": {
+      "drew": true,
+      "preventedWhenPageRan": false,
+      "reopened": 0,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      }
+    },
+    "R2 added in the reopening's task, reopens": {
+      "drew": true,
+      "preventedWhenPageRan": false,
+      "reopened": 1,
+      "restoreCall": "ok",
+      "restored": false,
+      "calls": {
+        "lost": 0,
+        "restored": 0
+      }
+    },
+    "R3a reopens the parent document (the frame goes)": {
+      "drew": true,
+      "nestedClosed": true,
+      "frameAfter": "drew",
+      "calls": {
+        "lost": 0,
+        "restored": 0
+      },
+      "contextLost": true
+    },
+    "R3b reopens a sibling document": {
+      "drew": true,
+      "reopened": 1,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "covered": true
+    },
+    "R4 missed restore, dispose in onContextLost, then create": {
+      "drew1": true,
+      "log": [
+        "first lost",
+        "(restore 1 done: restored true, page reopened 1)",
+        "(second renderer created, draws true)",
+        "second lost",
+        "first restored",
+        "second restored",
+        "(restore 2 done: restored true)"
+      ]
+    },
+    "R4 missed restore, no dispose, then create": {
+      "drew1": true,
+      "log": [
+        "first lost",
+        "(restore 1 done: restored true, page reopened 1)",
+        "(second renderer created, draws true)",
+        "second lost",
+        "second restored",
+        "(restore 2 done: restored true)"
+      ]
+    },
+    "R4 missed restore, no dispose, no create": {
+      "drew1": true,
+      "log": [
+        "first lost",
+        "(restore 1 done: restored true, page reopened 1)",
+        "first lost",
+        "first restored",
+        "(restore 2 done: restored true)"
+      ]
+    },
+    "R4 missed restore, dispose after the missed restore, then create": {
+      "drew1": true,
+      "log": [
+        "first lost",
+        "(restore 1 done: restored true, page reopened 1)",
+        "(second renderer created, draws true)",
+        "second lost",
+        "first restored",
+        "second restored",
+        "(restore 2 done: restored true)"
+      ]
+    },
+    "R5 window, capturing, stopPropagation, lost": {
+      "drew": true,
+      "restoreCall": "ok",
+      "restored": false,
+      "calls": {
+        "lost": 0,
+        "restored": 0
+      },
+      "covered": false
+    },
+    "R5 canvas, before web3d, stopImmediatePropagation, lost": {
+      "drew": true,
+      "restoreCall": "ok",
+      "restored": false,
+      "calls": {
+        "lost": 0,
+        "restored": 0
+      },
+      "covered": false
+    },
+    "R5 canvas, before web3d, preventDefault only (control), lost": {
+      "drew": true,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "covered": true
+    },
+    "R5 window, capturing, stopPropagation, restored": {
+      "drew": true,
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 0
+      },
+      "covered": false
+    },
+    "R6 lost, canvas in a div": {
+      "drew": true,
+      "reopened": 1,
+      "observerSaw": [
+        {
+          "type": "webglcontextlost",
+          "trusted": true,
+          "atCanvas": true,
+          "phase": 2,
+          "preventedBefore": false
+        }
+      ],
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 0,
+        "restored": 1
+      }
+    },
+    "R6 lost, canvas in a shadow root": {
+      "drew": true,
+      "reopened": 1,
+      "observerSaw": [
+        "undefined"
+      ],
+      "restoreCall": "ok",
+      "restored": false,
+      "calls": {
+        "lost": 0,
+        "restored": 0
+      }
+    },
+    "R6 restored, canvas in a div": {
+      "drew": true,
+      "reopened": 1,
+      "observerSaw": [
+        {
+          "type": "webglcontextrestored",
+          "trusted": true,
+          "atCanvas": true,
+          "phase": 2,
+          "preventedBefore": false
+        }
+      ],
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 0
+      }
+    },
+    "R6 restored, canvas in a shadow root": {
+      "drew": true,
+      "reopened": 1,
+      "observerSaw": [
+        "undefined"
+      ],
+      "restoreCall": "ok",
+      "restored": true,
+      "calls": {
+        "lost": 1,
+        "restored": 0
+      }
+    }
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed",
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed",
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed",
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed",
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed"
+  ]
+}

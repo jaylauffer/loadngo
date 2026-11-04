@@ -1,0 +1,164 @@
+<!doctype html><meta charset="utf-8"><title>critic 14: attacks on the closed check (removals, shadowed closed, moves)</title>
+<body><script type="module">
+// The fourteenth round's fix for the thirteenth critic's F1: ownRealm() also requires !closed, read
+// through the getter taken when web3d loads. Each trial: a same-origin frame's copy of web3d compiles
+// the module (one renderer made and disposed), begins a create on the frame's own canvas, the frame
+// goes (in that task) by one of several removals, the canvas is adopted into this document, and this
+// window's copy creates on it. "created, draws" is F1 fixed; "already has a live renderer" is F1.
+// `closed` is read through this window's own built-in getter, which works on any window.
+import * as web3d from '/pkg/web3d.js';
+import { sleep, err, settle, attempt, OPTS, frameOf, green, redraw, page, until } from '../../critic13/site/common.js';
+const FRAME = '../../critic13/site/frame.html';
+const CLOSED = Object.getOwnPropertyDescriptor(window, 'closed').get;
+const describeClosed = (w) => w.eval("(() => { const d = Object.getOwnPropertyDescriptor(globalThis, 'closed'); return d === undefined ? 'none' : ('get' in d ? 'accessor' : 'data: ' + typeof d.value) + (d.configurable ? ', configurable' : ', not configurable'); })()");
+
+async function trial(fw, remove, { compileFirst = true, delay = 100, canvas } = {}) {
+  const res = {};
+  if (compileFirst) (await fw.web3d.createRenderer(fw.document.body.appendChild(fw.document.createElement('canvas')), OPTS)).dispose();
+  const c = canvas ?? fw.document.getElementById('own');
+  const begun = fw.web3d.createRenderer(c, OPTS);
+  begun.then(() => (res.frameCreate = 'resolved'), (e) => (res.frameCreate = err(e)));
+  remove();
+  res.closedAfterRemoval = CLOSED.call(fw);
+  // The removed copy, called after the removal, on a canvas of its own document.
+  // Raced with a timer: a removed realm whose check passes never finishes the create's awaits.
+  const called = await Promise.race([settle(fw.web3d.createRenderer(fw.document.createElement('canvas'), OPTS)), sleep(500).then(() => ({ message: 'still pending after 500 ms (got past the check; a removed frame never finishes its awaits)' }))]);
+  res.removedCopyCalled = called.message ?? 'CREATED';
+  document.body.append(c);
+  await sleep(delay);
+  const m = await settle(web3d.createRenderer(c, OPTS));
+  res.topCreate = m.ok ? (green(m.r).isGreen ? 'created, draws' : 'created, no draw') : m.message;
+  if (m.ok) m.r.dispose();
+  c.remove();
+  return res;
+}
+
+page(async (out) => {
+  // A0: control, the plain frame removed.
+  { const f = await frameOf(FRAME); out.A0_control = await trial(f.contentWindow, () => f.remove()); }
+  // A1: the frame's page declared `function closed() {}` in a classic script before web3d loaded.
+  {
+    const f = await frameOf('frame-fnclosed.html');
+    const fw = f.contentWindow;
+    out.A1_fnDeclaredBeforeLoad = { descriptor: describeClosed(fw), builtinClosedWhileAttached: CLOSED.call(fw) };
+    Object.assign(out.A1_fnDeclaredBeforeLoad, await trial(fw, () => f.remove()));
+  }
+  // A1b: the same declaration, in a classic script run after web3d loaded.
+  {
+    const f = await frameOf(FRAME);
+    const fw = f.contentWindow;
+    const s = fw.document.createElement('script');
+    s.textContent = "function closed() { return 'a page function'; }";
+    fw.document.body.append(s);
+    out.A1b_fnDeclaredAfterLoad = { descriptor: describeClosed(fw) };
+    Object.assign(out.A1b_fnDeclaredAfterLoad, await trial(fw, () => f.remove()));
+  }
+  // A1c: `var closed = ...` before load (no effect expected: the accessor stays, the set is ignored).
+  { const f = await frameOf('frame-varclosed.html'); const fw = f.contentWindow; out.A1c_varBeforeLoad = { descriptor: describeClosed(fw) }; Object.assign(out.A1c_varBeforeLoad, await trial(fw, () => f.remove())); }
+  // A1d: Object.defineProperty before load (patching a built-in: out of scope, recorded only).
+  { const f = await frameOf('frame-defclosed.html'); const fw = f.contentWindow; out.A1d_definePropertyBeforeLoad_outOfScope = { descriptor: describeClosed(fw) }; Object.assign(out.A1d_definePropertyBeforeLoad_outOfScope, await trial(fw, () => f.remove())); }
+  // B: a frame removed in the same task as its first create (its module not compiled yet).
+  for (const delay of [0, 300]) {
+    const f = await frameOf(FRAME);
+    out[`B_sameTaskFirstCreate_${delay}ms`] = await trial(f.contentWindow, () => f.remove(), { compileFirst: false, delay });
+  }
+  // C: a nested frame whose parent frame is removed.
+  {
+    const p = await frameOf('frame-parent.html');
+    const pw = p.contentWindow;
+    const nw = pw.nested;
+    out.C_nestedParentRemoved = await trial(nw, () => p.remove());
+    out.C_nestedParentRemoved.parentClosed = CLOSED.call(pw);
+  }
+  // C2: nested, the inner iframe element removed from its parent's document.
+  {
+    const p = await frameOf('frame-parent.html');
+    const nw = p.contentWindow.nested;
+    out.C2_nestedOwnElementRemoved = await trial(nw, () => p.contentWindow.document.getElementById('nested').remove());
+    p.remove();
+  }
+  // D: a frame moved with appendChild (removed and inserted again: a new browsing context).
+  {
+    const f = await frameOf(FRAME);
+    const fw = f.contentWindow;
+    const holder = document.body.appendChild(document.createElement('div'));
+    out.D_reinsertedByAppend = await trial(fw, () => holder.append(f));
+    out.D_reinsertedByAppend.newWindowIsOld = f.contentWindow === fw;
+    f.remove(); holder.remove();
+  }
+  // E: a frame moved with moveBefore(), which keeps it attached: its copy must still draw.
+  if (typeof Element.prototype.moveBefore === 'function') {
+    const f = await frameOf(FRAME);
+    const fw = f.contentWindow;
+    const r = await fw.web3d.createRenderer(fw.document.getElementById('own'), OPTS);
+    const before = green(r).isGreen;
+    const holder = document.body.appendChild(document.createElement('div'));
+    const moved = attempt(() => holder.moveBefore(f, null));
+    await sleep(50);
+    const sameWindow = f.contentWindow === fw;
+    const closedAfter = CLOSED.call(fw);
+    const after = attempt(() => redraw(r));
+    const calls = { lost: 0, restored: 0 };
+    r.dispose();
+    const r2 = await settle(fw.web3d.createRenderer(fw.document.getElementById('own'), { ...OPTS, onContextLost: () => calls.lost++, onContextRestored: () => calls.restored++ }));
+    let recovered = null;
+    if (r2.ok) {
+      const gl = r2.r.gl; const lc = gl.getExtension('WEBGL_lose_context');
+      lc.loseContext(); await until(() => gl.isContextLost(), 2000); await sleep(50); r2.r.dispose();
+      lc.restoreContext(); recovered = !!(await until(() => !gl.isContextLost(), 2000)); await sleep(100);
+    }
+    out.E_moveBefore = { moved: moved.ok ? 'ok' : moved.message, before, sameWindow, closedAfter, afterDraws: after.ok ? after.v.isGreen : after.message, secondCreate: r2.ok ? 'created' : r2.message, recovered, calls };
+    f.remove(); holder.remove();
+  } else out.E_moveBefore = 'no moveBefore here';
+  // F: an iframe's own window.close() (a frame is never script-closable): its copy must still draw.
+  {
+    const f = await frameOf(FRAME);
+    const fw = f.contentWindow;
+    const r = await fw.web3d.createRenderer(fw.document.getElementById('own'), OPTS);
+    const before = green(r).isGreen;
+    fw.eval('window.close()');
+    await sleep(100);
+    out.F_frameCallsWindowClose = { before, closedAfter: CLOSED.call(fw), stillAttached: f.isConnected && f.contentWindow === fw, afterDraws: attempt(() => redraw(r).isGreen).v ?? 'threw', create: (await settle(fw.web3d.createRenderer(fw.document.body.appendChild(fw.document.createElement('canvas')), OPTS))).message ?? 'created' };
+    r.dispose(); f.remove();
+  }
+  // G: a popup's copy draws while open; its closed reads true only once it is closed.
+  {
+    const w = window.open('popup.html', 'c14popup', 'popup,width=200,height=200');
+    out.G_popup = { opened: !!w };
+    if (w) {
+      await until(() => w.ready, 5000);
+      const r = await settle(w.web3d.createRenderer(w.document.getElementById('own'), OPTS));
+      out.G_popup.create = r.ok ? 'created' : r.message;
+      if (r.ok) {
+        out.G_popup.draws = green(r.r).isGreen;
+        out.G_popup.closedWhileOpen = CLOSED.call(w);
+        w.close();
+        out.G_popup.closedRightAfterClose = CLOSED.call(w);
+        out.G_popup.frameRightAfterClose = attempt(() => r.r.frame()).message ?? 'drew';
+        await sleep(300);
+        out.G_popup.closedLater = CLOSED.call(w);
+      }
+    }
+  }
+  // H: this top window calls window.close() when it may not close (more than one history entry):
+  // Chrome refuses, and closed must stay false so this window's renderer keeps drawing.
+  {
+    history.pushState({}, '', location.href + '#one');
+    history.pushState({}, '', location.href.replace(/#.*$/, '') + '#two');
+    const c = document.body.appendChild(document.createElement('canvas'));
+    const r = await web3d.createRenderer(c, OPTS);
+    const before = green(r).isGreen;
+    if (history.length > 1) {
+      window.close();
+      await sleep(200);
+      out.H_topRefusedClose = { historyLength: history.length, before, closedAfter: CLOSED.call(window), afterDraws: attempt(() => redraw(r).isGreen).v ?? 'threw' };
+    } else out.H_topRefusedClose = 'history too short; skipped';
+    r.dispose(); c.remove();
+  }
+  // I: document.body.innerHTML = '' removes a frame mid-create (last: it clears this page's body).
+  {
+    const f = await frameOf(FRAME);
+    out.I_bodyInnerHTMLCleared = await trial(f.contentWindow, () => { document.body.innerHTML = ''; });
+  }
+});
+</script></body>

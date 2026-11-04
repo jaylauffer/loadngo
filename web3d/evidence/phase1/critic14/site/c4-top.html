@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8"><title>critic 14: is top, unlike closed, safe from a page's own declarations?</title>
+<body><script type="module">
+// A fix candidate for the closed check: `top` is [LegacyUnforgeable], an own non-configurable
+// property of the window, and reads null once the frame is removed. A page's classic-script
+// `function top() {}` cannot replace it (the declaration throws), unlike `function closed() {}`.
+import { page, frameOf } from '../../critic13/site/common.js';
+page(async (out) => {
+  const f = await frameOf('frame-fnclosed.html');
+  const fw = f.contentWindow;
+  const readTop = fw.eval("() => { try { return globalThis.top === null ? 'null' : 'a window'; } catch (e) { return 'threw'; } }");
+  const desc = fw.eval("JSON.stringify(Object.getOwnPropertyDescriptor(globalThis, 'top'), (k, v) => typeof v === 'function' ? 'fn' : v)");
+  out.inFrameWithFunctionClosed = { topDescriptor: desc, topAttached: readTop() };
+  f.remove();
+  out.inFrameWithFunctionClosed.topRemoved = readTop();
+  const errors = [];
+  const g = document.createElement('iframe');
+  g.src = 'frame-fntop.html';
+  document.body.append(g);
+  await new Promise((r) => g.addEventListener('load', r, { once: true }));
+  g.contentWindow.addEventListener('error', (e) => errors.push(e.message));
+  out.functionTopDeclaration = { scriptRan: g.contentWindow.__topScriptRan, topIsStillAWindow: g.contentWindow.top === window };
+  g.remove();
+});
+</script></body>

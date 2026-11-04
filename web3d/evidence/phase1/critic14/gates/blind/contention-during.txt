@@ -1,0 +1,30 @@
+# every 5 s during: bash -c set -o pipefail; node web3d/demo/check.mjs --port 5486 --out web3d/evidence/phase1/critic14/gates/blind --seconds 10 --steady 60 --blind 2>&1 | sed -e 's|<home>|<home>|g' > web3d/evidence/phase1/critic14/gates/blind/check-blind.log
+2026-11-04T02:02:52.784Z browsers: other desktop pid 1228; other headless pid 7687; gpu processes: 3
+2026-11-04T02:02:57.813Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 7766; gpu processes: 4
+2026-11-04T02:03:02.824Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 7766; gpu processes: 4
+2026-11-04T02:03:07.821Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 7893; gpu processes: 4
+2026-11-04T02:03:12.822Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 7893; gpu processes: 4
+2026-11-04T02:03:17.819Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 7971; gpu processes: 4
+2026-11-04T02:03:22.819Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8028; gpu processes: 4
+2026-11-04T02:03:27.819Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8068; gpu processes: 4
+2026-11-04T02:03:32.821Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8116; gpu processes: 4
+2026-11-04T02:03:37.820Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8116; gpu processes: 4
+2026-11-04T02:03:42.823Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8116; gpu processes: 4
+2026-11-04T02:03:47.824Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8116; gpu processes: 4
+2026-11-04T02:03:52.822Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8238; gpu processes: 4
+2026-11-04T02:03:57.824Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8238; gpu processes: 4
+2026-11-04T02:04:02.826Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8238; gpu processes: 4
+2026-11-04T02:04:07.826Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8238; gpu processes: 4
+2026-11-04T02:04:12.830Z browsers: other desktop pid 1228; this run headless pid 7741; gpu processes: 3
+2026-11-04T02:04:17.828Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8398; gpu processes: 4
+2026-11-04T02:04:22.828Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8469; gpu processes: 4
+2026-11-04T02:04:27.828Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8469; gpu processes: 4
+2026-11-04T02:04:32.829Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8469; gpu processes: 4
+2026-11-04T02:04:37.832Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8469; gpu processes: 4
+2026-11-04T02:04:42.831Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8469; gpu processes: 4
+2026-11-04T02:04:47.833Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8469; gpu processes: 4
+2026-11-04T02:04:52.832Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8469; gpu processes: 4
+2026-11-04T02:04:57.834Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8718; gpu processes: 4
+2026-11-04T02:05:02.834Z browsers: other desktop pid 1228; this run headless pid 7741; other headless pid 8718; gpu processes: 4
+2026-11-04T02:05:07.837Z browsers: other desktop pid 1228; other headless pid 8718; gpu processes: 3
+2026-11-04T02:05:07.994Z browsers: other desktop pid 1228; other headless pid 8718; gpu processes: 3

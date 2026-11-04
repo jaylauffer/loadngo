@@ -1,0 +1,138 @@
+{
+  "page": "evidence/phase1/critic14/site/c7-restore-gap.html",
+  "host": "127.0.0.1",
+  "chrome": "157.0.8103.38",
+  "args": [],
+  "result": {
+    "trials": [
+      {
+        "polls": 185123,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      },
+      {
+        "polls": 182766,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      },
+      {
+        "polls": 187665,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      },
+      {
+        "polls": 184773,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      },
+      {
+        "polls": 185929,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      },
+      {
+        "polls": 182086,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      },
+      {
+        "polls": 182447,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      },
+      {
+        "polls": 185977,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      },
+      {
+        "polls": 184567,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      },
+      {
+        "polls": 185298,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      },
+      {
+        "polls": 184720,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      },
+      {
+        "polls": 181058,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      },
+      {
+        "polls": 184903,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      },
+      {
+        "polls": 182363,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      },
+      {
+        "polls": 184983,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      },
+      {
+        "polls": 182543,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      },
+      {
+        "polls": 181744,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      },
+      {
+        "polls": 183465,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      },
+      {
+        "polls": 185019,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      },
+      {
+        "polls": 183507,
+        "sawLiveBeforeEvent": 0,
+        "restoredEventRan": true,
+        "liveAtEnd": true
+      }
+    ],
+    "anyGap": false
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+    "warning: WARNING: Too many active WebGL contexts. Oldest context will be lost."
+  ]
+}

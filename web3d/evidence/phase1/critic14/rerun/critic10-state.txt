@@ -1,0 +1,3 @@
+== state: Chrome 157.0.8103.38 (headless, own instance); gpu ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version); page errors 0
+browsers and servers stopped
+>>> exit 0

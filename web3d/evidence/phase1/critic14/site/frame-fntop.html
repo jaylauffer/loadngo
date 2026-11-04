@@ -1,0 +1,4 @@
+<!doctype html><meta charset="utf-8"><title>critic 14: a frame whose page tries to declare a global function named top</title>
+<body><script>window.__topScriptRan = false;</script>
+<script>function top() { return 'a page function'; } window.__topScriptRan = true;</script>
+<script>window.ready = true;</script></body>

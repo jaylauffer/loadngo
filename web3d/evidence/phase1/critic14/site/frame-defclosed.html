@@ -1,0 +1,8 @@
+<!doctype html><meta charset="utf-8"><title>critic 14: a frame that redefines closed before web3d loads (patching a built-in: out of scope)</title>
+<body><canvas id="own" width="16" height="16"></canvas>
+<script>Object.defineProperty(window, 'closed', { get() { return false; }, configurable: true });</script>
+<script type="module">
+import * as web3d from '/pkg/web3d.js';
+window.web3d = web3d;
+window.ready = true;
+</script></body>

@@ -1,0 +1,6 @@
+<!doctype html><meta charset="utf-8"><title>critic 14: a frame that holds a nested frame with its own copy of web3d</title>
+<body><iframe id="nested" src="../../critic13/site/frame.html"></iframe>
+<script>
+const n = document.getElementById('nested');
+n.addEventListener('load', () => { const t = setInterval(() => { if (n.contentWindow.ready) { clearInterval(t); window.nested = n.contentWindow; window.ready = true; } }, 10); });
+</script></body>

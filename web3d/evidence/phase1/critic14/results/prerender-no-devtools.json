@@ -1,0 +1,24 @@
+{
+  "page": "c2-prerender.html",
+  "devtools": "none attached",
+  "result": {
+    "duringPrerender": {
+      "prerendering": true,
+      "closed": false,
+      "create": "created",
+      "draws": true,
+      "stillPrerendering": true
+    },
+    "afterActivation": {
+      "activationStart": 6299.699999988079,
+      "closed": false,
+      "draws": true,
+      "recovered": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      }
+    },
+    "userAgent": "Chrome/157.0.0.0"
+  }
+}
