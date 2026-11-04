@@ -1,0 +1,10 @@
+<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><title>round 15: a frame whose page declares function closed() before web3d loads</title>
+<body><script>
+// A classic script's top-level function declaration: it replaces the window's own configurable
+// `closed` accessor with a non-configurable data property (the fourteenth critic's F1).
+function closed() {}
+</script><canvas id="own" width="16" height="16"></canvas><script type="module">
+import * as web3d from '/pkg/web3d.js';
+window.web3d = web3d;
+window.ready = true;
+</script></body>

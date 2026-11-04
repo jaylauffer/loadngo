@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>web3d probe frame (closed declared)</title>
+  <link rel="icon" href="data:,">
+</head>
+<body>
+  <!-- probe-frame.html, but its page first declares a global function named `closed`, which
+       replaces the window's own configurable `closed` accessor with a non-configurable data
+       property before web3d loads (the fourteenth critic's F1). Probe NV removes this frame during
+       a create and checks that web3d still sees the removal, through `top`. -->
+  <script>
+    function closed() {}
+  </script>
+  <canvas id="c" width="16" height="16"></canvas>
+  <script type="module">
+    import { createRenderer } from '../pkg/web3d.js';
+    window.__frame = { createRenderer, canvas: document.getElementById('c') };
+  </script>
+</body>
+</html>

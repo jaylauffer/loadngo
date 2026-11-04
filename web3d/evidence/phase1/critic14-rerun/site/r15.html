@@ -1,0 +1,206 @@
+<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><title>round 15: top, stopped events, and the missed restore's hooks</title>
+<body><script type="module">
+// The fifteenth round's own page, against the current web3d/pkg/ (BSD-3-Clause; see the
+// repository's LICENSE). Each section is named in docs/WEB3D.md or ../README.md:
+// - T1: `top` and `closed` in a removed frame, a plain one and one whose page declared
+//   `function closed() {}`; the copy's renderer and creates after the removal; this window's copy
+//   taking a canvas the copy drove (moved out first) and one whose create it had begun.
+// - T2: `top` and `closed` in a popup after close(), in the same task and until `top` reads null,
+//   and what its copy does in between; a plain popup, and one whose page declared `function closed() {}`.
+// - T3: a module worker that gives its global a `top` before it imports web3d.
+// - T4: a listener of the page's that stops a lost or restored event, at each place on its path.
+// - T5: the fourteenth critic's four R4 variants (a missed restore, then what the page does).
+import { sleep, err, settle, attempt, OPTS, frameOf, green, page, until } from '../../critic13/site/common.js';
+import * as web3d from '/pkg/web3d.js';
+const KEY = Symbol.for('loadngo-web3d');
+const recordOf = (c) => (Object.getOwnPropertyDescriptor(c, KEY) ? 'made' : 'none');
+const describe = (d) => (d ? (d.get ? `accessor, configurable ${d.configurable}` : `data ${typeof d.value}, configurable ${d.configurable}`) : 'none');
+const topOf = (w) => { try { const t = w.top; return t === null ? 'null' : t === window ? 'this window' : t === w ? 'itself' : 'another window'; } catch (e) { return `threw: ${err(e)}`; } };
+const frameCall = (r) => { const a = attempt(() => r.frame()); return a.ok ? `returned ${a.v}` : `threw: ${a.message.slice(0, 60)}`; };
+const REOPEN = "document.open(); document.write('<!doctype html><body></body>'); document.close();";
+
+/** Loses and restores the context through `gl`; `between` runs once it is lost. */
+async function lossAndRestore(gl, between) {
+  const lc = gl.getExtension('WEBGL_lose_context');
+  lc.loseContext();
+  await until(() => gl.isContextLost(), 3000);
+  await sleep(50);
+  if (between) between();
+  const call = attempt(() => lc.restoreContext());
+  const restored = !!(await until(() => !gl.isContextLost(), 1500));
+  await sleep(150);
+  return { restoreCall: call.ok ? 'ok' : call.message, restored };
+}
+
+page(async (out) => {
+  // T1. Removed frames.
+  for (const src of ['frame.html', 'frame-fnclosed.html']) {
+    const f = await frameOf(src);
+    const fw = f.contentWindow;
+    const doc = fw.document;
+    const t = { closed: describe(Object.getOwnPropertyDescriptor(fw, 'closed')), top: describe(Object.getOwnPropertyDescriptor(fw, 'top')), topBefore: topOf(fw) };
+    t.functionTopThrows = attempt(() => fw.eval('function top() {}')).ok ? 'no' : 'yes';
+    // A canvas the frame's copy drives, moved into this document (driven, so unsupported: frame() throws "moved").
+    const away = doc.body.appendChild(doc.createElement('canvas'));
+    const r = await fw.web3d.createRenderer(away, OPTS);
+    t.drewBefore = green(r).isGreen;
+    document.body.append(away);
+    // A create the frame's copy begins (the module is compiled), and the frame removed in that task.
+    const begun = doc.getElementById('own');
+    fw.web3d.createRenderer(begun, OPTS).then(undefined, () => {});
+    t.claimedAtRemoval = recordOf(begun);
+    f.remove();
+    t.topSameTask = topOf(fw);
+    t.closedSameTask = typeof fw.closed === 'function' ? "the page's function" : fw.closed;
+    t.frameAfter = frameCall(r);
+    const after = doc.body.appendChild(doc.createElement('canvas'));
+    fw.web3d.createRenderer(after, OPTS).then(undefined, () => {});
+    t.recordAfterRemoval = recordOf(after);
+    document.body.append(begun, after);
+    for (const [name, c] of [['away', away], ['begun', begun], ['after', after]]) {
+      const m = await settle(web3d.createRenderer(c, OPTS));
+      t[`${name} taken here`] = m.ok ? green(m.r).isGreen : m.message;
+      if (m.ok) m.r.dispose();
+      c.remove();
+    }
+    attempt(() => r.dispose());
+    out[`T1 removed, ${src}`] = t;
+  }
+
+  // T2. A popup after close(): a plain one, and one whose page declared `function closed() {}`.
+  for (const src of ['popup.html', 'popup-fnclosed.html']) {
+    const t = {};
+    const w = window.open(src, `round15-${src}`, 'popup,width=240,height=200');
+    if (!w) out[`T2 ${src}`] = 'blocked';
+    else {
+      await until(() => w.ready, 5000);
+      const pd = w.document;
+      const r = await w.web3d.createRenderer(pd.getElementById('own'), OPTS);
+      t.drewOpen = green(r).isGreen;
+      const c2 = pd.body.appendChild(pd.createElement('canvas'));
+      const c3 = pd.body.appendChild(pd.createElement('canvas'));
+      w.close();
+      w.web3d.createRenderer(c2, OPTS).then(undefined, () => {});
+      t.sameTask = { closed: w.closed, top: topOf(w), frame: frameCall(r), recordOnNewCanvas: recordOf(c2) };
+      await sleep(0);
+      t.nextTask = { closed: w.closed, top: topOf(w), frame: frameCall(r) };
+      const t0 = performance.now();
+      let at = null;
+      while (performance.now() - t0 < 5000) {
+        if (topOf(w) === 'null') { at = Math.round(performance.now() - t0); break; }
+        await sleep(1);
+      }
+      t.topNullAfterMs = at;
+      w.web3d.createRenderer(c3, OPTS).then(undefined, () => {});
+      t.afterTopNull = { closed: w.closed, top: topOf(w), frame: frameCall(r), recordOnNewCanvas: recordOf(c3) };
+      out[`T2 closed, ${src}`] = t;
+    }
+  }
+
+  // T3. A module worker whose global is given a `top` before it imports web3d.
+  for (const mode of ['none', 'data', 'accessor']) {
+    const wk = new Worker(`worker-top.js?mode=${mode}`, { type: 'module' });
+    const next = () => new Promise((res) => { wk.onmessage = (e) => res(e.data); wk.onerror = (e) => res({ error: e.message }); setTimeout(() => res({ error: 'timeout' }), 8000); });
+    const ready = await next();
+    const oc = new OffscreenCanvas(16, 16);
+    const result = next();
+    wk.postMessage({ canvas: oc }, [oc]);
+    out[`T3 worker, top ${mode}`] = { ready, result: await result };
+    wk.terminate();
+  }
+
+  // T4. A listener of the page's (a function of the canvas's realm) that stops the event, once.
+  const places = [
+    ['none (control)', null],
+    ['window, capturing: stopPropagation()', 'window'],
+    ['window, capturing: cancelBubble = true', 'window', 'cancel'],
+    ['document, capturing: stopPropagation()', 'document'],
+    ['ancestor element, capturing: stopPropagation()', 'holder'],
+    ['shadow root, capturing: stopPropagation()', 'root'],
+    ['window, bubbling: stopPropagation() (the event does not bubble)', 'window', 'stop', false],
+    ['canvas, capturing: stopPropagation()', 'canvas', 'stop', true],
+    ['canvas, capturing: stopImmediatePropagation()', 'canvas', 'immediate', true],
+    ['canvas, ahead of web3d: stopPropagation()', 'canvas', 'stop', false],
+    ['canvas, ahead of web3d: cancelBubble = true', 'canvas', 'cancel', false],
+    ['canvas, ahead of web3d: stopImmediatePropagation()', 'canvas', 'immediate', false],
+    ['canvas, after web3d: stopImmediatePropagation()', 'canvas-after', 'immediate', false],
+  ];
+  for (const type of ['webglcontextlost', 'webglcontextrestored']) {
+    for (const [label, where, how = 'stop', capture = true] of places) {
+      const f = await frameOf('frame.html');
+      const fw = f.contentWindow;
+      const doc = fw.document;
+      const c = doc.getElementById('own');
+      const holder = doc.createElement('div');
+      doc.body.append(holder);
+      let root = null;
+      if (where === 'root') { root = holder.attachShadow({ mode: 'open' }); root.append(c); } else holder.append(c);
+      fw.__stopped = 0;
+      const stopper = fw.eval(`(function stopper(e) { window.__stopped++; ${how === 'immediate' ? 'e.stopImmediatePropagation();' : how === 'cancel' ? 'e.cancelBubble = true;' : 'e.stopPropagation();'} })`);
+      const target = { window: fw, document: doc, holder, root, canvas: c }[where];
+      const add = (t) => t.addEventListener(type, stopper, { capture, once: true });
+      if (target) add(target);
+      const log = [];
+      let r1;
+      r1 = await fw.web3d.createRenderer(c, { ...OPTS, onContextLost: () => { log.push('lost'); r1.dispose(); }, onContextRestored: () => log.push('restored') });
+      if (where === 'canvas-after') add(c);
+      const drew = green(r1).isGreen;
+      const gl = r1.gl;
+      let prevented = null;
+      // The page's own measuring listener, on the canvas after web3d's: reads whether the event was cancelled.
+      c.addEventListener('webglcontextlost', (e) => (prevented = e.defaultPrevented), { once: true });
+      const first = await lossAndRestore(gl);
+      const t = { drew, stopperRan: fw.__stopped, lostPrevented: prevented ?? 'not seen', ...first, hooksAtFirst: [...log] };
+      if (log.includes('restored')) {
+        const m = await settle(fw.web3d.createRenderer(c, OPTS));
+        t.next = m.ok ? green(m.r).isGreen : m.message;
+        if (m.ok) m.r.dispose();
+      } else if (first.restored) {
+        // The restore's hooks never came: lose and restore once more, with no renderer made between.
+        const second = await lossAndRestore(gl);
+        t.second = { ...second, hooks: [...log] };
+      }
+      out[`T4 ${type}, ${label}`] = t;
+      attempt(() => r1.dispose());
+      f.remove();
+    }
+  }
+
+  // T5. The fourteenth critic's R4 (its c6-r4-fix.html), against this round's code: a listener of
+  // the page's on the canvas ahead of web3d's reopens the document during the restored event.
+  for (const variant of ['dispose in onContextLost, then create', 'no dispose, then create', 'no dispose, no create', 'dispose after the missed restore, then create']) {
+    const f = await frameOf('frame.html');
+    const fw = f.contentWindow;
+    const c = fw.document.getElementById('own');
+    const holder = fw.document.createElement('div');
+    holder.append(c);
+    fw.document.body.append(holder);
+    fw.__holder = holder;
+    fw.__fired = 0;
+    const reopener = fw.eval(`(function reopen(e) { window.__fired++; ${REOPEN} document.body.append(window.__holder); })`);
+    c.addEventListener('webglcontextrestored', reopener, { once: true });
+    const log = [];
+    let r1;
+    const disposeInLost = variant.startsWith('dispose in onContextLost');
+    r1 = await fw.web3d.createRenderer(c, { ...OPTS, onContextLost: () => { log.push('first lost'); if (disposeInLost) r1.dispose(); }, onContextRestored: () => log.push('first restored') });
+    const drew1 = green(r1).isGreen;
+    const gl = r1.gl;
+    const first = await lossAndRestore(gl);
+    log.push(`(restore 1 done: restored ${first.restored}, page reopened ${fw.__fired})`);
+    let r2 = null;
+    if (variant === 'dispose after the missed restore, then create') r1.dispose();
+    if (variant.endsWith('then create')) {
+      const m = await settle(fw.web3d.createRenderer(c, { ...OPTS, onContextLost: () => log.push('second lost'), onContextRestored: () => log.push('second restored') }));
+      r2 = m.ok ? m.r : null;
+      log.push(m.ok ? `(second renderer created, draws ${green(m.r).isGreen})` : `(second create: ${m.message})`);
+    }
+    const second = await lossAndRestore(gl);
+    log.push(`(restore 2 done: restored ${second.restored})`);
+    await sleep(200);
+    out[`T5 R4 missed restore, ${variant}`] = { drew1, log };
+    attempt(() => r1.dispose());
+    if (r2) attempt(() => r2.dispose());
+    f.remove();
+  }
+});
+</script></body>

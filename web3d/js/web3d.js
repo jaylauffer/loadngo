@@ -317,13 +317,16 @@ const IS_PROTOTYPE_OF = Object.prototype.isPrototypeOf;
 // realm's code (called through a reference kept from before) reads the new page's document through
 // it. So the document is compared only while `ownRealm()` holds; then `GLOBAL.document`, which is
 // unforgeable, is the window's own document, the one it has now. A removed frame's global still
-// reads its own state, but its window's `top` reads null, as does a closed window's once the
-// browser has discarded it. `top`'s getter is an own, non-configurable property of every window
-// from its start, so no page code can replace it (a page's `function top() {}` throws, and a
-// `var top` changes nothing), unlike `closed`'s, which a page's `function closed() {}` replaces
-// (the fourteenth critic's F1). A worker has no `top` getter (TOP is undefined there).
+// reads its own state, but its window's `top` reads null (in the removal's own task), as does a
+// closed window's once the browser has discarded it (a few milliseconds after `close()`). `top`'s
+// getter is an own, non-configurable property of every window from its start, so no page code can
+// replace it (a page's `function top() {}` throws, and a `var top` changes nothing). `closed`'s
+// reads true from `close()` on, but it is configurable, and a page's `function closed() {}`
+// declared before this module loads replaces it (the fourteenth critic's F1): CLOSED is then
+// undefined, and `top` alone still sees a removal. A worker has neither getter (both undefined).
 const GLOBAL = globalThis;
 const TOP = getter(globalThis, 'top');
+const CLOSED = getter(globalThis, 'closed');
 const OWNER_DOCUMENT = globalThis.Node && getter(globalThis.Node.prototype, 'ownerDocument');
 const FOREIGN_ELEMENT =
   "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d drives a canvas element only from a copy of web3d loaded in the window whose document holds it, so load web3d there";
@@ -337,15 +340,19 @@ const NAVIGATED =
   "web3d: this copy of web3d belongs to a page that its window has navigated away from, or to a frame that has been removed or a window that has been closed, so it drives no canvas any more; use a copy of web3d loaded in the present page of an open window";
 
 /**
- * Whether this copy's realm is still its window's own and its window still in a page (always, in a
- * worker): false once the window has navigated away, to a page of this origin (whose window holds
- * its own state) or of another (the read throws), and once its frame has been removed or the
- * browser has discarded the closed window (its `top` reads null; its global still reads this
- * realm's state). Allocates nothing.
+ * Whether this copy's realm is still its window's own and its window open (always, in a worker):
+ * false once the window has navigated away, to a page of this origin (whose window holds its own
+ * state) or of another (the read throws), once its frame has been removed (its `top` reads null and
+ * its `closed` true; its global still reads this realm's state), and once it has been closed (its
+ * `closed` reads true, then its `top` null). Allocates nothing.
  */
 function ownRealm() {
   try {
-    return GLOBAL[SHARED_KEY] === REALM_STATE && (TOP === undefined || TOP.call(GLOBAL) !== null);
+    return (
+      GLOBAL[SHARED_KEY] === REALM_STATE &&
+      (TOP === undefined || TOP.call(GLOBAL) !== null) &&
+      (CLOSED === undefined || !CLOSED.call(GLOBAL))
+    );
   } catch {
     return false;
   }
@@ -994,8 +1001,8 @@ export class Renderer {
   /**
    * Refuses a canvas element that is no longer in this window's document, and any canvas once this
    * copy's window has navigated away, been closed or had its frame removed: one realm drives a
-   * canvas, and its listeners are this realm's. Two property reads and two getter calls (`top` and
-   * the canvas's `ownerDocument`); allocates nothing unless it throws.
+   * canvas, and its listeners are this realm's. Two property reads and three getter calls (`top`,
+   * `closed` and the canvas's `ownerDocument`); allocates nothing unless it throws.
    */
   _inPlace() {
     if (this._element ? !inThisDocument(this.canvas) : !ownRealm()) throw new Error(ownRealm() ? MOVED : NAVIGATED);
