@@ -33,7 +33,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use loadngo_pq_crypto::{default_registry, PqSchemeRegistry, PrivateKey, PublicKey, Signature};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -1335,7 +1335,7 @@ fn unique_suffix() -> u128 {
 
 #[cfg(unix)]
 fn sync_dir(dir: &Path) -> Result<()> {
-    File::open(dir)
+    fs::File::open(dir)
         .and_then(|dir| dir.sync_all())
         .with_context(|| format!("failed to synchronize {}", dir.display()))
 }
