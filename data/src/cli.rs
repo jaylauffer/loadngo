@@ -108,15 +108,18 @@ pub struct Usage {
 }
 
 impl Usage {
-    /// Prints the full help text to stdout.
-    pub fn print(&self) {
-        println!("{} -- {}", self.bin, self.about);
-        println!();
-        println!("Usage:");
-        println!("  {} [OPTIONS]", self.invocation);
+    /// The full help text: what `--help` prints.
+    #[must_use]
+    pub fn text(&self) -> String {
+        use std::fmt::Write as _;
+        let mut text = String::new();
+        let _ = writeln!(text, "{} -- {}", self.bin, self.about);
+        let _ = writeln!(text);
+        let _ = writeln!(text, "Usage:");
+        let _ = writeln!(text, "  {} [OPTIONS]", self.invocation);
         if !self.args.is_empty() {
-            println!();
-            println!("Options:");
+            let _ = writeln!(text);
+            let _ = writeln!(text, "Options:");
             let width = self
                 .args
                 .iter()
@@ -125,7 +128,8 @@ impl Usage {
                 .unwrap_or(0);
             for arg in self.args {
                 let tag = if arg.required { "required" } else { "optional" };
-                println!(
+                let _ = writeln!(
+                    text,
                     "  {:width$}  ({tag:8})  {}",
                     arg.signature(),
                     arg.help,
@@ -134,19 +138,27 @@ impl Usage {
             }
         }
         if !self.notes.is_empty() {
-            println!();
-            println!("Notes:");
+            let _ = writeln!(text);
+            let _ = writeln!(text, "Notes:");
             for note in self.notes {
-                println!("  - {note}");
+                let _ = writeln!(text, "  - {note}");
             }
         }
         if !self.examples.is_empty() {
-            println!();
-            println!("Examples:");
+            let _ = writeln!(text);
+            let _ = writeln!(text, "Examples:");
             for example in self.examples {
-                println!("  {example}");
+                let _ = writeln!(text, "  {example}");
             }
         }
+        text
+    }
+
+    /// Prints the full help text to stdout. A reader that stops early (`--help | head`)
+    /// is not an error, so a closed pipe is ignored rather than a panic.
+    pub fn print(&self) {
+        use std::io::Write as _;
+        let _ = std::io::stdout().lock().write_all(self.text().as_bytes());
     }
 
     /// A one-line reminder to append to a parse error, e.g.
