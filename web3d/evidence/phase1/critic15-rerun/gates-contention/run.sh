@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# The sixteenth round (a copy of ../../critic14-rerun/gates-contention/run.sh): runs gates.sh with the given ports from the workspace root, and every 5 s while
-# it runs records the Chrome browsers running (desktop or headless; "before" if it was running when
-# the gates began, so another session's or the desktop's) and the count of GPU processes, into
-# contention-during.txt beside this script. Exits with gates.sh's status.
+# The sixteenth round (a copy of ../../critic14-rerun/gates-contention/run.sh): runs gates.sh with
+# the given ports from the workspace root, and every 5 s while it runs records the Chrome browsers
+# running (desktop or headless; "before" if it was running when the gates began, so another
+# session's or the desktop's) and the count of GPU processes, into contention-during.txt beside
+# this script. Exits with gates.sh's status.
 #   PLAYWRIGHT_CORE=... THREE_DIR=... bash run.sh <port> <port for --blind>
 # BSD-3-Clause; see the repository's LICENSE.
 set -u

@@ -1,0 +1,274 @@
+{
+  "page": "evidence/phase1/critic11/site/reset.html",
+  "host": "127.0.0.1",
+  "chrome": "157.0.8103.38",
+  "args": [],
+  "result": {
+    "S1 platform": {
+      "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+      "lineWidthRange": [
+        1,
+        1
+      ],
+      "polygonMode": true,
+      "drawingBufferStorage": true,
+      "drawingBufferToneMapping": false,
+      "drawBuffersIndexed": true
+    },
+    "S2 page left LINE mode with lineWidth 1": {
+      "lineWidthSet": 1,
+      "lineWidthNow": 1,
+      "modeAfter": "FILL",
+      "centre": [
+        32,
+        255,
+        33,
+        255
+      ],
+      "offDiagonal": [
+        30,
+        255,
+        30,
+        255
+      ],
+      "error": 0,
+      "filled": true
+    },
+    "S2 page left LINE mode with lineWidth 3": {
+      "lineWidthSet": 3,
+      "lineWidthNow": 1,
+      "modeAfter": "FILL",
+      "centre": [
+        32,
+        255,
+        33,
+        255
+      ],
+      "offDiagonal": [
+        30,
+        255,
+        30,
+        255
+      ],
+      "error": 0,
+      "filled": true
+    },
+    "S2 page left LINE mode with lineWidth 5": {
+      "lineWidthSet": 5,
+      "lineWidthNow": 1,
+      "modeAfter": "FILL",
+      "centre": [
+        32,
+        255,
+        33,
+        255
+      ],
+      "offDiagonal": [
+        30,
+        255,
+        30,
+        255
+      ],
+      "error": 0,
+      "filled": true
+    },
+    "S2 page left LINE mode with lineWidth 8": {
+      "lineWidthSet": 8,
+      "lineWidthNow": 1,
+      "modeAfter": "FILL",
+      "centre": [
+        32,
+        255,
+        33,
+        255
+      ],
+      "offDiagonal": [
+        30,
+        255,
+        30,
+        255
+      ],
+      "error": 0,
+      "filled": true
+    },
+    "S2 page left LINE mode with lineWidth max": {
+      "lineWidthSet": 1,
+      "lineWidthNow": 1,
+      "modeAfter": "FILL",
+      "centre": [
+        32,
+        255,
+        33,
+        255
+      ],
+      "offDiagonal": [
+        30,
+        255,
+        30,
+        255
+      ],
+      "error": 0,
+      "filled": true
+    },
+    "S3 drawingBufferStorage on alpha:false": {
+      "SRGB8_ALPHA8": {
+        "error": 1282,
+        "before": 32849,
+        "after": 32849,
+        "RGBA8": 32856
+      },
+      "RGBA16F": {
+        "error": 1282,
+        "before": 32849,
+        "after": 32849,
+        "RGBA8": 32856
+      },
+      "RGBA8": {
+        "error": 1282,
+        "before": 32849,
+        "after": 32849,
+        "RGBA8": 32856
+      }
+    },
+    "S4 antialias + alpha + SRGB8_ALPHA8 storage, then web3d": {
+      "samplesBefore": 4,
+      "formatBefore": "SRGB8_ALPHA8",
+      "samplesAfter": 4,
+      "formatAfter": "RGBA8",
+      "infoSamples": 4,
+      "centre": [
+        32,
+        255,
+        33,
+        255
+      ],
+      "error": 0
+    },
+    "S5 page storage 40x30 on a 300x150 canvas, web3d asked {\"width\":300,\"height\":150}": {
+      "afterPageStorage": [
+        40,
+        30
+      ],
+      "afterCreate": [
+        300,
+        150
+      ],
+      "canvas": [
+        300,
+        150
+      ],
+      "format": "RGBA8",
+      "size": [
+        300,
+        150
+      ],
+      "cornerPixel": [
+        32,
+        255,
+        33,
+        255
+      ],
+      "afterResize": [
+        300,
+        150,
+        "RGBA8"
+      ]
+    },
+    "S5 page storage 40x30 on a 300x150 canvas, web3d asked {}": {
+      "afterPageStorage": [
+        40,
+        30
+      ],
+      "afterCreate": [
+        300,
+        150
+      ],
+      "canvas": [
+        300,
+        150
+      ],
+      "format": "RGBA8",
+      "size": [
+        300,
+        150
+      ],
+      "cornerPixel": [
+        32,
+        255,
+        33,
+        255
+      ],
+      "afterResize": [
+        300,
+        150,
+        "RGBA8"
+      ]
+    },
+    "S6 preserveDrawingBuffer page context": {
+      "centre": [
+        32,
+        255,
+        33,
+        255
+      ],
+      "error": 0
+    },
+    "S7 state after create, before the first frame": {
+      "viewport": [
+        0,
+        0,
+        1,
+        1
+      ],
+      "framebuffer": null,
+      "texture2D": null,
+      "activeTexture": 0,
+      "error": 0,
+      "firstFrame": {
+        "centre": [
+          32,
+          255,
+          33,
+          255
+        ],
+        "viewportNow": [
+          0,
+          0,
+          64,
+          64
+        ]
+      }
+    },
+    "S8 OES_draw_buffers_indexed: colour mask, blend equation and blend on buffer 0": {
+      "centre": [
+        255,
+        192,
+        33,
+        255
+      ],
+      "error": 0,
+      "expect": "red > green > 0, as a new context draws it"
+    },
+    "S8c control: the same quad on a new context": {
+      "centre": [
+        255,
+        192,
+        33,
+        255
+      ],
+      "error": 0
+    }
+  },
+  "messages": [
+    "warning: WebGL: this extension has very low support on mobile devices; do not rely on it for rendering effects without implementing a fallback path: WEBGL_polygon_mode",
+    "warning: WebGL: this extension has very low support on mobile devices; do not rely on it for rendering effects without implementing a fallback path: WEBGL_polygon_mode",
+    "warning: WebGL: this extension has very low support on mobile devices; do not rely on it for rendering effects without implementing a fallback path: WEBGL_polygon_mode",
+    "warning: WebGL: this extension has very low support on mobile devices; do not rely on it for rendering effects without implementing a fallback path: WEBGL_polygon_mode",
+    "warning: WebGL: this extension has very low support on mobile devices; do not rely on it for rendering effects without implementing a fallback path: WEBGL_polygon_mode",
+    "warning: WebGL: INVALID_OPERATION: drawingBufferStorage: alpha is required for drawingBufferStorage",
+    "warning: WebGL: INVALID_OPERATION: drawingBufferStorage: alpha is required for drawingBufferStorage",
+    "warning: WebGL: INVALID_OPERATION: drawingBufferStorage: alpha is required for drawingBufferStorage",
+    "warning: WebGL: this extension has very low support on mobile devices; do not rely on it for rendering effects without implementing a fallback path: WEBGL_polygon_mode",
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

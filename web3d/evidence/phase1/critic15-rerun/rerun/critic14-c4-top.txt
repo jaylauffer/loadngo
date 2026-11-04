@@ -1,0 +1,16 @@
+{
+ "inFrameWithFunctionClosed": {
+  "topDescriptor": "{\"get\":\"fn\",\"enumerable\":true,\"configurable\":false}",
+  "topAttached": "a window",
+  "topRemoved": "null"
+ },
+ "functionTopDeclaration": {
+  "scriptRan": false,
+  "topIsStillAWindow": true
+ }
+}
+messages: 2
+  pageerror: Identifier 'top' has already been declared
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0

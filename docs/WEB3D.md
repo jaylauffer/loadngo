@@ -676,24 +676,24 @@ if they differ from its std140 packing.
 
 - **Rust.** The unit test `a_frame_allocates_nothing` counts allocations with a counting global
   allocator across 30 frames of moving camera, objects and light: zero (`src/renderer.rs`).
-- **JS.** With CPU timing and the readout off, the demo's scripts allocated **0.09 sampled bytes a
-  frame** at steady state, over 601 frames, while the camera and three objects moved, their matrices
-  and vectors plain Arrays as three.js holds them (this round's run,
-  `web3d/evidence/phase1/rendered-check.json`, `allocation`). Its 56 sampled bytes are all the
-  check's own measuring call (`window.__web3d.frames`); `pkg/` allocated none, `frame()`'s realm and
-  document check included. The demo holds the three objects' handles in constants (see the next
+- **JS.** With CPU timing and the readout off, the demo's scripts allocated **no sampled bytes** at
+  steady state, over 601 frames, while the camera and three objects moved, their matrices and vectors
+  plain Arrays as three.js holds them (this round's run, `web3d/evidence/phase1/rendered-check.json`,
+  `allocation`); `pkg/` allocated none, `frame()`'s realm and document check included. The fifteenth
+  round's run read 0.09 sampled bytes a frame, 56 bytes in all, all of them the check's own
+  measuring call (`window.__web3d.frames`). The demo holds the three objects' handles in constants (see the next
   point). The check fails:
   - above 1;
   - if a sampling window holds fewer than 90% of the frames 60 Hz would give;
   - **if the profiler is blind.** Chrome accepts an unknown sampling parameter silently, so the
     "objects already collected" flags cannot be trusted by the call succeeding. A positive-control
     window has the demo make one short-lived Array of 8 numbers a frame, and the check fails unless
-    the profiler reports at least 40 sampled bytes a frame from it. It read 88.9. With the flags
+    the profiler reports at least 40 sampled bytes a frame from it. It read 89.0. With the flags
     left out (`--blind`) it read 0.5, and the check exited 3, its code for "only the control
     failed" (`evidence/phase1/blind-control/`).
-- **Cold frames differ.** In the first 10 s the module's call wrappers showed 262.6 sampled bytes a
+- **Cold frames differ.** In the first 10 s the module's call wrappers showed 257.6 sampled bytes a
   frame, `web3d.js` 29.9 (copying Array elements one by one boxes them until V8 optimises the loop)
-  and `gl.js` 1.8 (same file).
+  and `gl.js` 2.9 (same file).
 - **A handle costs its caller about 12 bytes a call, unless the caller holds it boxed.** A handle is
   at least 2³⁰ (its serial starts at bit 30; the layout is under "The boundary rules"), past the
   small integers V8 stores as they are, so V8 holds it as a double. Where V8 keeps doubles unboxed,
@@ -875,8 +875,9 @@ work has not: the wasm is byte for byte the one that run measured (`sha256 4d659
 and the JavaScript has since gained, in `frame()`, one property read (the thirteenth round) and two
 getter calls (`closed` in the fourteenth round, `top` in the fifteenth). The near-quiet runs on 157
 agree with the table: the fourteenth critic's (a desktop Chrome window beside it) read GPU medians
-within 0.03 ms of it and p95s within 0.04 ms (`critic14/README.md`, `critic14/gates/rendered/`), and
-this round's (below) medians within 0.02 ms and p95s within 0.05 ms:
+within 0.03 ms of it and p95s within 0.04 ms (`critic14/README.md`, `critic14/gates/rendered/`), the
+fifteenth round's medians within 0.02 ms and p95s within 0.05 ms (`critic14-rerun/README.md`), and
+this round's (below) medians within 0.005 ms, with more spread at the tail:
 
 | Canvas | GPU ms mean | p50 | p95 | CPU ms p50 (p95) | Draws | Triangles |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -887,14 +888,17 @@ this round's (below) medians within 0.02 ms and p95s within 0.05 ms:
 - In that run each GPU p95 is at most 4.3% above its median (3.1% at 1024x576 with MSAA, 2.0% at
   1366x768, 4.3% without MSAA). Its GPU medians are within 0.02 ms of the eleventh round's quiet
   run, and its p95s within 0.04 ms (`33df5d4a`'s committed `rendered-check.json`).
-- **This round's run** (`rendered-check.json` now, Chrome 157): only a desktop Chrome window shared
-  the GPU with it (`critic14-rerun/gates-contention/contention-during.txt`, sampled every 5 s, with
-  a note on reading it). GPU mean, p50 and p95: 0.855, 0.847 and 0.884 ms at 1024x576 with MSAA;
-  1.056, 1.048 and 1.116 at 1366x768; 0.566, 0.565 and 0.579 without MSAA. CPU p50 0.05, 0.175 and
-  0.045 ms, p95 0.245, 0.255 and 0.055.
+- **This round's run** (the sixteenth; `rendered-check.json` now, Chrome 157): only a desktop
+  Chrome window shared the GPU with it (`critic15-rerun/gates-contention/contention-during.txt`,
+  sampled every 5 s). GPU mean, p50 and p95: 0.88, 0.868 and 0.96 ms at 1024x576 with MSAA; 1.087,
+  1.053 and 1.219 at 1366x768; 0.653, 0.589 and 0.917 without MSAA. The medians match the table, but
+  the means and p95s sit above it and above the fifteenth round's run (0.884, 1.116 and 0.579 ms at
+  p95), with the same wasm; that the desktop window's own work made the spread is an inference. CPU
+  p50 0.21, 0.2 and 0.185 ms, p95 0.285, 0.265 and 0.345.
 - CPU time is the module's frame work and its WebGL calls on the main thread. It differs between
-  runs of the same code and between rows of one run: 0.105 to 0.175 ms p50 in the table's run, 0.045
-  to 0.175 in this round's, 0.045 in each row of the fourteenth critic's (`critic14/README.md`); the
+  runs of the same code and between rows of one run: 0.105 to 0.175 ms p50 in the table's run, 0.185
+  to 0.21 in this round's, 0.045 to 0.175 in the fifteenth round's, 0.045 in each row of the
+  fourteenth critic's (`critic14/README.md`); the
   eleventh round's quiet run read 0.02 to 0.16 (`33df5d4a`'s `rendered-check.json`), the tenth
   critic's 0.05 to 0.055 (`critic10/README.md`). That the machine's other load makes the difference
   is an inference; since the table's run the per-frame path has gained one property read (the
@@ -905,12 +909,14 @@ this round's (below) medians within 0.02 ms and p95s within 0.05 ms:
 - All **80** probes passed this round, with `getError` 0, no `INVALID_OPERATION` and no context lost
   to Chrome's limit (same file, `probes`). Probe NV now also covers a removed frame whose page
   declared `function closed() {}`.
-- The critics' scripts and pages, all rerun this round (`critic14-rerun/`, its README): 64 runs,
+- The critics' scripts and pages, all rerun this round (`critic15-rerun/`, its README): 67 runs,
   each exiting 0, and each probe passes, or fails only by the premise the table gives. Against the
-  fourteenth critic's own rerun and pages, no boolean differs in any of the 60 result files
-  (`critic14-rerun/booleans.txt`); among the outcomes its pages record as strings, `c1-closed`'s A1
-  now creates and draws where it was refused (F1's fix), and `c3-reopen`'s R4 calls the first
-  renderer's `onContextRestored` once at the next restore (F2(a)'s).
+  fifteenth critic's own rerun and pages, none of 1,396 booleans differs, in 64 result files
+  (`critic15-rerun/booleans.txt`); among the outcomes its pages record as strings,
+  `s1-restored-create`'s three failing rows now give the renderer made in the page's restored
+  listener its own `onContextLost` and `onContextRestored`, and no hook for the restore before it
+  (F1's fix). The fifteenth round's rerun against the fourteenth critic: no boolean differed in 60
+  files (`critic14-rerun/booleans.txt`).
 
   | Critic | Result | Evidence |
   | --- | --- | --- |
@@ -928,6 +934,7 @@ this round's (below) medians within 0.02 ms and p95s within 0.05 ms:
   | Twelfth | Its pages now read fixed: `docopen` (the listeners back after `document.open()`, the loss cancelled, each hook once), `nav` (the new page's copy takes its own canvas), `dd2` (no second renderer across `document.domain`, either way), `midcreate` (canvases moved during a create refused, no listener), `transfer` (the message), `blank` (`b2top` recovers; `b2`'s create on the reopened canvas succeeds, and its `prevented` reads false only because its own listener, added in the reopening's task, runs before web3d's); `adopt`, `override`, `bf`, `f4`, `per` and `counter` hold | `critic12-rerun/` (its README, `results/rerun-critic12-*.json`) |
   | Thirteenth | `f2c`'s 36 trials all create (18 were refused), `f2`'s R1 and R1b create and recover, `f2b`'s claimed canvas creates (F1); `f1b`'s E and `f1`'s D and E (a listener on the canvas ahead of web3d's that reopens, for either event) and `f1b`'s I (a driven canvas moved and its other document reopened) are now stated limits; `f1`'s P2, G, D2 and E3 read `recovered` false only because each page's reopening erases its own measuring listener (web3d's hooks ran, the context came back); `f3`'s out-of-scope cases and `f4`'s H2 and X as WEB3D.md now states; `f2`'s R2 is the browser losing a removed frame's context | `critic13-rerun/` (its README, `results/rerun-critic13-*.json`) |
   | Fourteenth | `c1-closed`'s A1 and A1d create and draw (F1); `c3-reopen`'s R4 reads "first restored" once at the next restore in each variant, and its R5 (a listener that stops the event) and R1 are stated in the page contract; `c2-prerender` (with and without DevTools), `c4-top` and `c7-restore-gap` hold; `c5-top-fix` and `c6-r4-fix` run its own trial packages and reproduce them | `critic14-rerun/` (its README, `results/rerun-critic14-*.json`) |
+  | Fifteenth | `s1-restored-create`'s three rows (a renderer made in the page's restored listener, ahead of web3d's) keep the new renderer's hooks for its own loss, with probe LR's new case (F1); `s2-worker-closed` and `s3-builtins-per-call` read as before, and the contract now states what they show (F2) | `critic15-rerun/` (its README, `results/rerun-critic15-*.json`) |
 
 **dolores.** A Raspberry Pi 5 with Chromium 156 on V3D 7.1, with **the demo's earlier load**, before
 it was given its present one (`web3d/evidence/phase1-dolores/README.md`):
@@ -1099,9 +1106,10 @@ repository's settings, such as required checks.
     `critic14/tools/no-devtools.mjs` for `c2-prerender.html` (a DevTools client turns
     prerendering off). `critic14-rerun/tools/` holds copies of both that keep their results beside
     them, and runs this round's own page, `critic14-rerun/site/r15.html`;
+  - the fifteenth's: its pages in `critic15/site/`, run with `critic15-rerun/tools/run.mjs`;
   - all of them in one go, with the twelfth, fourteenth and fifteenth rounds' own pages:
-    `critic14-rerun/rerun-critics.sh`, and `critic14-rerun/booleans.sh` to compare its booleans
-    with the fourteenth critic's.
+    `critic15-rerun/rerun-critics.sh`, and `critic15-rerun/booleans.sh` to compare its booleans
+    with the fifteenth critic's.
 - `evidence/phase1/gates.sh`, which runs the gates above (not the critics' scripts), writes
   `gates.txt`, and exits 1 unless every gate held. The blind run must exit 3, `check.mjs`'s code for
   "only the positive control failed": a blind run that fails for any other reason (a port taken,
@@ -1113,7 +1121,7 @@ repository's settings, such as required checks.
 | --- | --- | --- |
 | `pkg/loadngo_web3d.wasm` | 70,249 | 32,174 |
 | `pkg/gl.js` | 22,570 | 7,617 |
-| `pkg/web3d.js` | 69,944 | 21,667 |
+| `pkg/web3d.js` | 70,925 | 21,965 |
 
 ## Limits of phase 1
 

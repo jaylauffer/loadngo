@@ -1,0 +1,133 @@
+{
+ "trials": [
+  {
+   "polls": 182210,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  },
+  {
+   "polls": 173666,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  },
+  {
+   "polls": 179977,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  },
+  {
+   "polls": 182306,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  },
+  {
+   "polls": 177503,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  },
+  {
+   "polls": 177600,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  },
+  {
+   "polls": 177178,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  },
+  {
+   "polls": 182505,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  },
+  {
+   "polls": 181305,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  },
+  {
+   "polls": 180475,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  },
+  {
+   "polls": 178446,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  },
+  {
+   "polls": 181146,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  },
+  {
+   "polls": 177975,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  },
+  {
+   "polls": 176938,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  },
+  {
+   "polls": 178473,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  },
+  {
+   "polls": 180693,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  },
+  {
+   "polls": 178642,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  },
+  {
+   "polls": 181835,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  },
+  {
+   "polls": 183801,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  },
+  {
+   "polls": 181346,
+   "sawLiveBeforeEvent": 0,
+   "restoredEventRan": true,
+   "liveAtEnd": true
+  }
+ ],
+ "anyGap": false
+}
+messages: 5
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+  warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.
+  warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.
+  warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.
+  warning: WARNING: Too many active WebGL contexts. Oldest context will be lost.
+browser and server stopped
+>>> exit 0

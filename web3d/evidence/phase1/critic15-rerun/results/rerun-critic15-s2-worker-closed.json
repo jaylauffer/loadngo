@@ -1,0 +1,49 @@
+{
+  "page": "evidence/phase1/critic15/site/s2-worker-closed.html",
+  "host": "127.0.0.1",
+  "chrome": "157.0.8103.38",
+  "args": [],
+  "result": {
+    "S2 worker, closed none": {
+      "ready": {
+        "ready": true,
+        "closed": "none"
+      },
+      "result": {
+        "created": true,
+        "isGreen": true
+      }
+    },
+    "S2 worker, closed data": {
+      "ready": {
+        "ready": true,
+        "closed": "data true"
+      },
+      "result": {
+        "created": true,
+        "isGreen": true
+      }
+    },
+    "S2 worker, closed accessor": {
+      "ready": {
+        "ready": true,
+        "closed": "accessor, configurable true"
+      },
+      "result": {
+        "created": false,
+        "message": "web3d: this copy of web3d belongs to a page that its window has navigated away from, or to a frame that has been removed or a window that ha"
+      }
+    },
+    "S2 worker, closed accessor-false": {
+      "ready": {
+        "ready": true,
+        "closed": "accessor, configurable true"
+      },
+      "result": {
+        "created": true,
+        "isGreen": true
+      }
+    }
+  },
+  "messages": []
+}

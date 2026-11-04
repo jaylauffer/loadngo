@@ -1,0 +1,52 @@
+{
+ "R4 missed restore, dispose in onContextLost, then create": {
+  "drew1": true,
+  "log": [
+   "first lost",
+   "(restore 1 done: restored true, page reopened 1)",
+   "(second renderer created, draws true)",
+   "second lost",
+   "first restored",
+   "second restored",
+   "(restore 2 done: restored true)"
+  ]
+ },
+ "R4 missed restore, no dispose, then create": {
+  "drew1": true,
+  "log": [
+   "first lost",
+   "(restore 1 done: restored true, page reopened 1)",
+   "(second renderer created, draws true)",
+   "second lost",
+   "first restored",
+   "second restored",
+   "(restore 2 done: restored true)"
+  ]
+ },
+ "R4 missed restore, no dispose, no create": {
+  "drew1": true,
+  "log": [
+   "first lost",
+   "(restore 1 done: restored true, page reopened 1)",
+   "first lost",
+   "first restored",
+   "(restore 2 done: restored true)"
+  ]
+ },
+ "R4 missed restore, dispose after the missed restore, then create": {
+  "drew1": true,
+  "log": [
+   "first lost",
+   "(restore 1 done: restored true, page reopened 1)",
+   "(second renderer created, draws true)",
+   "second lost",
+   "first restored",
+   "second restored",
+   "(restore 2 done: restored true)"
+  ]
+ }
+}
+messages: 1
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0

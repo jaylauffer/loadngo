@@ -1,4 +1,4 @@
-# loadngo-web3d phase 1 gates, 2026-11-04 10:15 +0700; run on the working tree of loadngo 38ad5a13 (web3d-phase1); changed from that commit: docs/WEB3D.md web3d/evidence 
+# loadngo-web3d phase 1 gates, 2026-11-04 11:11 +0700; run on the working tree of loadngo 7e2a25d4 (web3d-phase1); changed from that commit: web3d/evidence 
 # rustc 1.99.0 (b940084d7 2026-09-28); cargo 1.99.0 (5f94df478 2026-08-27); wasm-opt version 133; node v24.22.0; macOS 26.6.2
 # CARGO_TARGET_DIR is the workspace's own target/ except where a step says otherwise. PLAYWRIGHT_CORE and THREE_DIR (a three.js r180 package) are set in the environment.
 
@@ -8,12 +8,12 @@ $ cargo fmt --check
 
 ==================================================================
 $ cargo clippy --locked --workspace --all-targets --all-features --exclude loadngo-gfx-dx12 --exclude gui-win32 --exclude proactor-harness -- -D warnings
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.40s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s
 >>> exit 0 (must be 0: held)
 
 ==================================================================
 $ cargo clippy --locked -p loadngo-web3d --target wasm32-unknown-unknown --all-targets -- -D warnings
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s
 >>> exit 0 (must be 0: held)
 
 ==================================================================
@@ -23,12 +23,12 @@ $ cargo clippy --locked --offline -p loadngo-web3d --target wasm32-unknown-unkno
 
 ==================================================================
 $ cargo clippy --locked --offline -p loadngo-web3d --target aarch64-unknown-linux-gnu --all-targets --all-features -- -D warnings
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s
 >>> exit 0 (must be 0: held)
 
 ==================================================================
 $ cargo clippy --locked --offline -p loadngo-web3d --target x86_64-pc-windows-msvc --all-targets --all-features -- -D warnings
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s
 >>> exit 0 (must be 0: held)
 
 ==================================================================
@@ -42,77 +42,77 @@ $ cargo test --locked -p loadngo-web3d
      Running unittests src/lib.rs (target/debug/deps/loadngo_web3d-b9eafafae96f9adc)
 
 running 75 tests
-test math::tests::mirroring_has_negative_determinant ... ok
-test math::tests::perspective_maps_near_and_far_planes_and_field_of_view ... ok
-test math::tests::multiply_identity_and_known_product ... ok
-test pack::tests::align_up_rounds_to_multiples ... ok
-test pack::tests::f32_bytes_are_little_endian_floats ... ok
-test pack::tests::computed_normals_face_out_of_a_quad_and_weigh_by_area ... ok
-test math::tests::look_at_puts_eye_at_origin_and_target_down_negative_z ... ok
-test math::tests::multiply_is_associative_and_not_commutative ... ok
 test math::tests::frustum_culls_spheres_outside ... ok
-test math::tests::look_at_survives_up_parallel_to_view ... ok
 test math::tests::inverse_undoes_a_transform_and_rejects_singular ... ok
-test pack::tests::attributes_fall_back_to_float_uv_and_omit_missing_uv ... ok
-test pack::tests::bounding_sphere_contains_every_point ... ok
+test math::tests::look_at_puts_eye_at_origin_and_target_down_negative_z ... ok
+test math::tests::mirroring_has_negative_determinant ... ok
+test math::tests::multiply_identity_and_known_product ... ok
+test math::tests::multiply_is_associative_and_not_commutative ... ok
 test math::tests::normal_matrix_keeps_normals_perpendicular_under_non_uniform_scale ... ok
+test math::tests::look_at_survives_up_parallel_to_view ... ok
+test pack::tests::align_up_rounds_to_multiples ... ok
+test math::tests::perspective_maps_near_and_far_planes_and_field_of_view ... ok
+test pack::tests::attributes_fall_back_to_float_uv_and_omit_missing_uv ... ok
 test pack::tests::attributes_interleave_normal_then_unorm16_uv ... ok
+test pack::tests::bounding_sphere_contains_every_point ... ok
+test pack::tests::computed_normals_face_out_of_a_quad_and_weigh_by_area ... ok
+test pack::tests::f32_bytes_are_little_endian_floats ... ok
 test pack::tests::indices_narrow_to_u16_when_they_fit ... ok
 test pack::tests::normals_are_renormalised_and_zero_becomes_up ... ok
 test pack::tests::out_of_range_index_is_refused ... ok
 test pack::tests::srgb_encoding_matches_reference_values ... ok
 test pack::tests::std140_blocks_are_legal_and_ordered ... ok
 test pack::tests::uv_format_follows_range ... ok
-test renderer::tests::clear_colour_is_linear_and_encoded_once ... ok
 test renderer::tests::bad_meshes_are_refused_before_any_gl_call ... ok
-test renderer::tests::cpu_timing_is_off_until_asked_for ... ok
-test renderer::tests::depth_writes_come_back_on_before_the_clear ... ok
 test renderer::tests::draw_keys_order_passes_programs_materials_and_depth ... ok
-test pack::tests::normals_pack_into_10_bit_fields_and_round_trip ... ok
 test renderer::tests::double_sided_turns_culling_off_and_mirroring_flips_the_front_face ... ok
+test pack::tests::normals_pack_into_10_bit_fields_and_round_trip ... ok
+test renderer::tests::cpu_timing_is_off_until_asked_for ... ok
+test renderer::tests::clear_colour_is_linear_and_encoded_once ... ok
+test renderer::tests::depth_writes_come_back_on_before_the_clear ... ok
 test renderer::tests::frame_block_carries_camera_and_normalised_light ... ok
 test renderer::tests::each_material_is_bound_once_a_frame ... ok
-test renderer::tests::frame_draws_opaque_front_to_back_then_masked_then_blended_back_to_front ... ok
-test renderer::tests::gpu_time_reaches_the_stats ... ok
 test renderer::tests::handles_are_checked_and_resources_in_use_cannot_be_destroyed ... ok
+test renderer::tests::gpu_time_reaches_the_stats ... ok
 test renderer::tests::init_refuses_a_driver_layout_that_differs ... ok
-test renderer::tests::init_compiles_three_programs_and_binds_blocks_and_sampler ... ok
 test renderer::tests::init_reports_a_shader_that_fails ... ok
-test renderer::tests::handles_of_another_kind_or_another_renderer_are_refused ... ok
-test renderer::tests::mesh_upload_splits_positions_from_packed_attributes_and_narrows_indices ... ok
+test renderer::tests::init_compiles_three_programs_and_binds_blocks_and_sampler ... ok
 test renderer::tests::init_puts_back_webgl_default_state_before_anything_else ... ok
-test renderer::tests::mesh_without_normals_or_uvs_gets_computed_normals_and_no_uv_attribute ... ok
+test renderer::tests::frame_draws_opaque_front_to_back_then_masked_then_blended_back_to_front ... ok
+test renderer::tests::mesh_upload_splits_positions_from_packed_attributes_and_narrows_indices ... ok
 test renderer::tests::morph_target_counts_are_capped_and_never_overflow ... ok
-test renderer::tests::non_finite_normals_are_refused ... ok
+test renderer::tests::handles_of_another_kind_or_another_renderer_are_refused ... ok
+test renderer::tests::mesh_without_normals_or_uvs_gets_computed_normals_and_no_uv_attribute ... ok
 test renderer::tests::objects_outside_the_view_hidden_or_fully_masked_are_not_drawn ... ok
-test renderer::tests::release_deletes_everything ... ok
 test renderer::tests::released_renderers_cannot_be_initialised_again ... ok
+test renderer::tests::skin_and_morph_data_are_accepted_and_recorded_for_later_phases ... ok
+test renderer::tests::non_finite_normals_are_refused ... ok
 test renderer::tests::texture_flags_refuse_unknown_wrap_modes_and_bits ... ok
 test renderer::tests::resize_moves_the_viewport_and_keeps_the_look_at_projection_in_aspect ... ok
-test renderer::tests::skin_and_morph_data_are_accepted_and_recorded_for_later_phases ... ok
 test renderer::tests::skin_weights_must_be_in_range_and_sum_to_one ... ok
+test renderer::tests::release_deletes_everything ... ok
 test renderer::tests::textures_respect_the_size_limit_and_get_a_full_mip_chain ... ok
 test renderer::tests::transforms_must_be_finite ... ok
 test shaders::tests::blinn_phong_narrows_with_smoothness ... ok
 test shaders::tests::environment_stand_in_is_specular_colour_times_hemisphere_radiance ... ok
+test renderer::tests::a_frame_allocates_nothing ... ok
 test renderer::tests::unchanged_state_is_not_sent_again ... ok
 test shaders::tests::every_block_member_is_declared_in_the_source ... ok
-test renderer::tests::uniform_slots_follow_alignment_and_driver_block_size ... ok
 test shaders::tests::sources_start_with_version_and_switch_features ... ok
-test shaders::tests::the_shader_text_carries_the_same_constants ... ok
 test slots::tests::a_handle_of_another_kind_or_renderer_is_refused ... ok
 test slots::tests::clearing_keeps_old_handles_refused ... ok
-test slots::tests::forged_handles_fail ... ok
-test renderer::tests::a_frame_allocates_nothing ... ok
+test renderer::tests::uniform_slots_follow_alignment_and_driver_block_size ... ok
 test slots::tests::handles_are_positive_small_and_never_zero ... ok
 test slots::tests::iter_and_remove_all_visit_live_values ... ok
 test shaders::tests::shading_matches_three_js_r180 ... ok
-test slots::tests::stale_handles_fail_after_their_slot_is_reused ... ok
+test slots::tests::forged_handles_fail ... ok
+test shaders::tests::the_shader_text_carries_the_same_constants ... ok
 test slots::tests::the_largest_handle_is_below_two_to_the_fifty ... ok
+test slots::tests::stale_handles_fail_after_their_slot_is_reused ... ok
 test testing::the_counter_sees_allocations ... ok
+test timer::tests::results_arrive_late_and_in_order ... ok
 test timer::tests::a_full_ring_skips_frames_instead_of_blocking ... ok
 test timer::tests::disjoint_discards_the_batch ... ok
-test timer::tests::results_arrive_late_and_in_order ... ok
 test timer::tests::the_disjoint_flag_is_read_only_once_a_result_is_in ... ok
 test timer::tests::unsupported_timer_issues_no_queries ... ok
 test slots::tests::no_handle_is_ever_issued_twice_a_slot_retires_instead_of_wrapping ... ok
@@ -136,16 +136,16 @@ $ cargo test --locked -p loadngo-web3d --release
 running 75 tests
 test math::tests::frustum_culls_spheres_outside ... ok
 test math::tests::inverse_undoes_a_transform_and_rejects_singular ... ok
+test math::tests::look_at_survives_up_parallel_to_view ... ok
+test math::tests::mirroring_has_negative_determinant ... ok
+test math::tests::normal_matrix_keeps_normals_perpendicular_under_non_uniform_scale ... ok
+test math::tests::multiply_identity_and_known_product ... ok
 test math::tests::multiply_is_associative_and_not_commutative ... ok
 test math::tests::look_at_puts_eye_at_origin_and_target_down_negative_z ... ok
-test math::tests::mirroring_has_negative_determinant ... ok
-test math::tests::perspective_maps_near_and_far_planes_and_field_of_view ... ok
-test math::tests::multiply_identity_and_known_product ... ok
-test math::tests::look_at_survives_up_parallel_to_view ... ok
-test math::tests::normal_matrix_keeps_normals_perpendicular_under_non_uniform_scale ... ok
-test pack::tests::align_up_rounds_to_multiples ... ok
 test pack::tests::attributes_fall_back_to_float_uv_and_omit_missing_uv ... ok
+test math::tests::perspective_maps_near_and_far_planes_and_field_of_view ... ok
 test pack::tests::attributes_interleave_normal_then_unorm16_uv ... ok
+test pack::tests::align_up_rounds_to_multiples ... ok
 test pack::tests::bounding_sphere_contains_every_point ... ok
 test pack::tests::computed_normals_face_out_of_a_quad_and_weigh_by_area ... ok
 test pack::tests::f32_bytes_are_little_endian_floats ... ok
@@ -156,23 +156,23 @@ test pack::tests::srgb_encoding_matches_reference_values ... ok
 test pack::tests::normals_pack_into_10_bit_fields_and_round_trip ... ok
 test pack::tests::std140_blocks_are_legal_and_ordered ... ok
 test pack::tests::uv_format_follows_range ... ok
-test renderer::tests::draw_keys_order_passes_programs_materials_and_depth ... ok
+test renderer::tests::bad_meshes_are_refused_before_any_gl_call ... ok
 test renderer::tests::clear_colour_is_linear_and_encoded_once ... ok
+test renderer::tests::a_frame_allocates_nothing ... ok
+test renderer::tests::depth_writes_come_back_on_before_the_clear ... ok
+test renderer::tests::draw_keys_order_passes_programs_materials_and_depth ... ok
+test renderer::tests::cpu_timing_is_off_until_asked_for ... ok
+test renderer::tests::double_sided_turns_culling_off_and_mirroring_flips_the_front_face ... ok
+test renderer::tests::each_material_is_bound_once_a_frame ... ok
 test renderer::tests::frame_block_carries_camera_and_normalised_light ... ok
 test renderer::tests::gpu_time_reaches_the_stats ... ok
-test renderer::tests::handles_are_checked_and_resources_in_use_cannot_be_destroyed ... ok
-test renderer::tests::depth_writes_come_back_on_before_the_clear ... ok
-test renderer::tests::each_material_is_bound_once_a_frame ... ok
-test renderer::tests::bad_meshes_are_refused_before_any_gl_call ... ok
-test renderer::tests::cpu_timing_is_off_until_asked_for ... ok
-test renderer::tests::handles_of_another_kind_or_another_renderer_are_refused ... ok
 test renderer::tests::frame_draws_opaque_front_to_back_then_masked_then_blended_back_to_front ... ok
-test renderer::tests::double_sided_turns_culling_off_and_mirroring_flips_the_front_face ... ok
+test renderer::tests::handles_are_checked_and_resources_in_use_cannot_be_destroyed ... ok
+test renderer::tests::handles_of_another_kind_or_another_renderer_are_refused ... ok
 test renderer::tests::init_compiles_three_programs_and_binds_blocks_and_sampler ... ok
-test renderer::tests::a_frame_allocates_nothing ... ok
+test renderer::tests::init_puts_back_webgl_default_state_before_anything_else ... ok
 test renderer::tests::init_refuses_a_driver_layout_that_differs ... ok
 test renderer::tests::init_reports_a_shader_that_fails ... ok
-test renderer::tests::init_puts_back_webgl_default_state_before_anything_else ... ok
 test renderer::tests::mesh_upload_splits_positions_from_packed_attributes_and_narrows_indices ... ok
 test renderer::tests::mesh_without_normals_or_uvs_gets_computed_normals_and_no_uv_attribute ... ok
 test renderer::tests::morph_target_counts_are_capped_and_never_overflow ... ok
@@ -199,15 +199,15 @@ test slots::tests::clearing_keeps_old_handles_refused ... ok
 test slots::tests::forged_handles_fail ... ok
 test slots::tests::handles_are_positive_small_and_never_zero ... ok
 test slots::tests::iter_and_remove_all_visit_live_values ... ok
-test slots::tests::stale_handles_fail_after_their_slot_is_reused ... ok
 test slots::tests::the_largest_handle_is_below_two_to_the_fifty ... ok
 test testing::the_counter_sees_allocations ... ok
 test timer::tests::a_full_ring_skips_frames_instead_of_blocking ... ok
+test slots::tests::stale_handles_fail_after_their_slot_is_reused ... ok
 test timer::tests::disjoint_discards_the_batch ... ok
 test timer::tests::results_arrive_late_and_in_order ... ok
 test timer::tests::the_disjoint_flag_is_read_only_once_a_result_is_in ... ok
-test timer::tests::unsupported_timer_issues_no_queries ... ok
 test slots::tests::no_handle_is_ever_issued_twice_a_slot_retires_instead_of_wrapping ... ok
+test timer::tests::unsupported_timer_issues_no_queries ... ok
 test slots::tests::renderers_with_different_serials_never_share_a_handle ... ok
 
 test result: ok. 75 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
@@ -226,21 +226,21 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 $ web3d/build.sh
 == toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
 == cargo rustc (target dir: <home>/pudding/loadngo/target)
-    Finished `release` profile [optimized] target(s) in 0.05s
+    Finished `release` profile [optimized] target(s) in 0.04s
 == wasm-opt -Os
 == sizes (bytes, and gzip -9)
 release/loadngo_web3d.wasm           108137  gzip   38787
 pkg/loadngo_web3d.wasm                70249  gzip   32174
 pkg/gl.js                             22570  gzip    7617
-pkg/web3d.js                          69944  gzip   21667
+pkg/web3d.js                          70925  gzip   21965
 >>> exit 0 (must be 0: held)
 
 ==================================================================
 $ shasum -a 256 web3d/pkg/loadngo_web3d.wasm web3d/pkg/gl.js web3d/pkg/web3d.js web3d/pkg/web3d.d.ts
 4d6594b5a0d5841f5f94c02fa91b0ede0ee75460b32927bebfc0bc7f230c95bc  web3d/pkg/loadngo_web3d.wasm
 6542cb394eccf017f3756fc59b03c5dd2b0c1d04e71d4b89781fba21466eb902  web3d/pkg/gl.js
-bdbf9ec663d4d96aab2732e53049f7934e59d3d1638f76cbf72d23c7dd8c803d  web3d/pkg/web3d.js
-2f7be9a7746810178184b50421207ff5a66b3975dd6182a435debb8aee28c674  web3d/pkg/web3d.d.ts
+cced8579559675a629ebdb50e3b3f03bd49c1b5b70aa50521e6afeafd9ab7ace  web3d/pkg/web3d.js
+e1b9e4f3e0ad2b2e53ba9a1783d70bc51290488750524c4211cc9e8cc7ebf4f2  web3d/pkg/web3d.d.ts
 >>> exit 0 (must be 0: held)
 
 == build 2: the workspace's target/
@@ -255,15 +255,15 @@ $ web3d/build.sh
 release/loadngo_web3d.wasm           108137  gzip   38787
 pkg/loadngo_web3d.wasm                70249  gzip   32174
 pkg/gl.js                             22570  gzip    7617
-pkg/web3d.js                          69944  gzip   21667
+pkg/web3d.js                          70925  gzip   21965
 >>> exit 0 (must be 0: held)
 
 ==================================================================
 $ shasum -a 256 web3d/pkg/loadngo_web3d.wasm web3d/pkg/gl.js web3d/pkg/web3d.js web3d/pkg/web3d.d.ts
 4d6594b5a0d5841f5f94c02fa91b0ede0ee75460b32927bebfc0bc7f230c95bc  web3d/pkg/loadngo_web3d.wasm
 6542cb394eccf017f3756fc59b03c5dd2b0c1d04e71d4b89781fba21466eb902  web3d/pkg/gl.js
-bdbf9ec663d4d96aab2732e53049f7934e59d3d1638f76cbf72d23c7dd8c803d  web3d/pkg/web3d.js
-2f7be9a7746810178184b50421207ff5a66b3975dd6182a435debb8aee28c674  web3d/pkg/web3d.d.ts
+cced8579559675a629ebdb50e3b3f03bd49c1b5b70aa50521e6afeafd9ab7ace  web3d/pkg/web3d.js
+e1b9e4f3e0ad2b2e53ba9a1783d70bc51290488750524c4211cc9e8cc7ebf4f2  web3d/pkg/web3d.d.ts
 >>> exit 0 (must be 0: held)
 
 == build 3: CARGO_TARGET_DIR is a new empty directory (0 entries)
@@ -273,21 +273,21 @@ $ web3d/build.sh
 == toolchain: rustc 1.99.0 (b940084d7 2026-09-28); wasm-opt version 133
 == cargo rustc (target dir: <empty>)
    Compiling loadngo-web3d v0.1.0 (<home>/pudding/loadngo/web3d)
-    Finished `release` profile [optimized] target(s) in 0.79s
+    Finished `release` profile [optimized] target(s) in 0.50s
 == wasm-opt -Os
 == sizes (bytes, and gzip -9)
 release/loadngo_web3d.wasm           108137  gzip   38787
 pkg/loadngo_web3d.wasm                70249  gzip   32174
 pkg/gl.js                             22570  gzip    7617
-pkg/web3d.js                          69944  gzip   21667
+pkg/web3d.js                          70925  gzip   21965
 >>> exit 0 (must be 0: held)
 
 ==================================================================
 $ shasum -a 256 web3d/pkg/loadngo_web3d.wasm web3d/pkg/gl.js web3d/pkg/web3d.js web3d/pkg/web3d.d.ts
 4d6594b5a0d5841f5f94c02fa91b0ede0ee75460b32927bebfc0bc7f230c95bc  web3d/pkg/loadngo_web3d.wasm
 6542cb394eccf017f3756fc59b03c5dd2b0c1d04e71d4b89781fba21466eb902  web3d/pkg/gl.js
-bdbf9ec663d4d96aab2732e53049f7934e59d3d1638f76cbf72d23c7dd8c803d  web3d/pkg/web3d.js
-2f7be9a7746810178184b50421207ff5a66b3975dd6182a435debb8aee28c674  web3d/pkg/web3d.d.ts
+cced8579559675a629ebdb50e3b3f03bd49c1b5b70aa50521e6afeafd9ab7ace  web3d/pkg/web3d.js
+e1b9e4f3e0ad2b2e53ba9a1783d70bc51290488750524c4211cc9e8cc7ebf4f2  web3d/pkg/web3d.d.ts
 >>> exit 0 (must be 0: held)
 
 ==================================================================
@@ -307,12 +307,12 @@ step: cargo clippy (web3d, wasm32); if: matrix.os == 'ubuntu-latest'; rows: ubun
 >>> exit 0 (must be 0: held)
 
 ==================================================================
-$ bash -c set -o pipefail; node web3d/demo/check.mjs --port 5662 --out web3d/evidence/phase1 --seconds 10 --steady 60 2>&1 | tee web3d/evidence/phase1/rendered-check.log
-serving web3d on http://127.0.0.1:5662/
+$ bash -c set -o pipefail; node web3d/demo/check.mjs --port 5666 --out web3d/evidence/phase1 --seconds 10 --steady 60 2>&1 | tee web3d/evidence/phase1/rendered-check.log
+serving web3d on http://127.0.0.1:5666/
 Chrome 157.0.8103.38 (headless, launched by this script)
-low-1024x576: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.855 p50 0.847 p95 0.884 ms (602 readings), CPU mean 0.09 p95 0.245 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,241,231
-full-1366x768: 1366x768 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.056 p50 1.048 p95 1.116 ms (602 readings), CPU mean 0.169 p95 0.255 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 240,238,228
-low-1024x576-no-msaa: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.566 p50 0.565 p95 0.579 ms (602 readings), CPU mean 0.044 p95 0.055 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,240,230
+low-1024x576: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.88 p50 0.868 p95 0.96 ms (602 readings), CPU mean 0.196 p95 0.285 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,241,231
+full-1366x768: 1366x768 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.087 p50 1.053 p95 1.219 ms (602 readings), CPU mean 0.194 p95 0.265 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 240,238,228
+low-1024x576-no-msaa: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.653 p50 0.589 p95 0.917 ms (602 readings), CPU mean 0.194 p95 0.345 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,240,230
 probes: 80 passed, 0 failed; INVALID_OPERATION warnings: 0; pending GL errors: 2 (2 raised on purpose); contexts lost to Chrome's limit: 0
   pass  A output is sRGB-encoded (white under a uniform hemisphere)
   pass  A2 the clear colour is linear and encoded
@@ -382,7 +382,7 @@ probes: 80 passed, 0 failed; INVALID_OPERATION warnings: 0; pending GL errors: 2
   pass  LE one loss controller a canvas: a throwing hook does not stop the next (E1); one function runs once (E4b); a lost renderer left undisposed hears no later loss (E6); a page-made context lost during a create, and a canvas lost with no renderer, are restored (E11, E12); a loss cancelled and restored while a create loads its module leaves the create the restored context, which it draws on, with no hook called (ET)
   pass  H7 at the largest serial a handle is below 2^50, a handle plus 0.5 or minus 0.25 is refused as a fraction, and the next serial wraps round to 1
   pass  PS a page-made context that suits, left with state of the page's (each of the ninth critic's N8 cases and every other state the renderer resets): web3d draws, uploads and reads back as on a new context, with no WebGL error, and the page's own objects are kept
-  pass  LR a page's own restored listener that runs before web3d's disposes the live renderer: onContextRestored comes once (N1); disposed in the page's lost listener instead: once, and no onContextLost; disposed after the restore was handled: no second call
+  pass  LR a page's own restored listener that runs before web3d's disposes the live renderer: onContextRestored comes once (N1); disposed in the page's lost listener instead: once, and no onContextLost; disposed after the restore was handled: no second call; a renderer the page's restored listener makes there, the first disposed or not, keeps its hooks for its own loss (F1 of the fifteenth critic)
   pass  XR one realm drives a canvas: a frame's copy is refused a canvas of this document and an OffscreenCanvas made here, this window's copy the frame's canvas and the frame's OffscreenCanvas, each leaving it untouched, while each copy draws on its own; under a top of another origin a same-origin child's copy, loaded first, is refused its parent's canvas before and after the parent draws there, the two share one home (serials in sequence), the parent is refused the child's canvas, and the parent recovers from a loss once the child has gone
   pass  XD a canvas element belongs to its document's window, whatever its prototype: adopted from the frame's document into this one (prototype the frame's), touched first by the frame's observer (the frame's), or adopted the other way, each is refused by the copy of the other window with no listener left and drawn on by its own; once the frame is gone, this window's renderers on the two canvases with the frame's prototype draw, lose and restore with each hook once, and a new renderer draws; a driven canvas moved to the frame's document is refused by frame(), resize() and the creates, and by the frame's copy, and draws again moved back; handed over between renderers it gets a controller from each window; canvases of documents with no window are refused, untouched
   pass  DB a drawing buffer a page stored at another size than the canvas's (drawingBufferStorage; the eleventh critic's F4) is made again at the canvas's size, with its samples and in RGBA8, and drawn whole, also after resize; with nothing stored, or on web3d's own context, the canvas's width is set once
@@ -394,21 +394,21 @@ probes: 80 passed, 0 failed; INVALID_OPERATION warnings: 0; pending GL errors: 2
   pass  RC one record of a canvas, on the canvas, for every copy: private (non-enumerable, non-writable, non-configurable) and the same object from the frame; a frame whose copy has a home of its own is refused this window's driven canvas moved into its document, and this window's copy the frame's, and moved back each clears to its own colour; a sealed canvas, and one with a property there web3d did not make (writable, or a getter, which never runs), are refused untouched
   pass  TO an OffscreenCanvas made here by transferControlToOffscreen() from a canvas a frame's observer touched first has the frame's prototype: refused here, with a message naming that case and no listener, and drawn on by the frame's copy
   pass  SY lost and restored events the page dispatches itself are ignored by web3d's listeners: not cancelled, the renderer not finished and still drawing, no hook called; a real loss after them is cancelled and restored, each hook once
-allocation, cold (first frames): 601 frames; page scripts 627.69 sampled bytes a frame; by file {"(native or internal)":78.5,"/demo/demo.js":333.4,"/pkg/web3d.js":29.9,"/pkg/loadngo_web3d.wasm":262.6,"/pkg/gl.js":1.8}
-allocation, steady (after 70 s of frames): 601 frames; page scripts 0.09 sampled bytes a frame; by file {"(native or internal)":30.5,"/demo/demo.js":0.1}
-allocation, positive control (one short-lived Array of 8 numbers a frame): 601 frames; page scripts 88.89 sampled bytes a frame; by file {"(native or internal)":31.1,"/demo/demo.js":88.9}
-allocation, CPU timing on (reported, not gated): 601 frames; page scripts 193.87 sampled bytes a frame; by file {"(native or internal)":32.1,"/demo/demo.js":168.7,"/pkg/web3d.js":25.2}
+allocation, cold (first frames): 601 frames; page scripts 619.51 sampled bytes a frame; by file {"(native or internal)":77.7,"/demo/demo.js":329.1,"/pkg/web3d.js":29.9,"/pkg/loadngo_web3d.wasm":257.6,"/pkg/gl.js":2.9}
+allocation, steady (after 70 s of frames): 601 frames; page scripts 0 sampled bytes a frame; by file {"(native or internal)":30.6}
+allocation, positive control (one short-lived Array of 8 numbers a frame): 601 frames; page scripts 89.04 sampled bytes a frame; by file {"(native or internal)":30.5,"/demo/demo.js":89}
+allocation, CPU timing on (reported, not gated): 601 frames; page scripts 186.62 sampled bytes a frame; by file {"(native or internal)":31.5,"/demo/demo.js":162.8,"/pkg/web3d.js":23.8}
 browser and server stopped
 wrote web3d/evidence/phase1/rendered-check.json
 >>> exit 0 (must be 0: held)
 
 ==================================================================
-$ bash -c set -o pipefail; node web3d/demo/check.mjs --port 5663 --out web3d/evidence/phase1/blind-control --seconds 10 --steady 60 --blind 2>&1 | tee web3d/evidence/phase1/blind-control/check-blind.log
-serving web3d on http://127.0.0.1:5663/
+$ bash -c set -o pipefail; node web3d/demo/check.mjs --port 5667 --out web3d/evidence/phase1/blind-control --seconds 10 --steady 60 --blind 2>&1 | tee web3d/evidence/phase1/blind-control/check-blind.log
+serving web3d on http://127.0.0.1:5667/
 Chrome 157.0.8103.38 (headless, launched by this script)
-low-1024x576: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.843 p50 0.841 p95 0.858 ms (602 readings), CPU mean 0.017 p95 0.03 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,241,231
-full-1366x768: 1366x768 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.022 p50 1.022 p95 1.026 ms (602 readings), CPU mean 0.018 p95 0.03 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 240,238,228
-low-1024x576-no-msaa: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.569 p50 0.565 p95 0.593 ms (602 readings), CPU mean 0.036 p95 0.135 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,240,230
+low-1024x576: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.889 p50 0.87 p95 0.992 ms (602 readings), CPU mean 0.2 p95 0.29 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,241,231
+full-1366x768: 1366x768 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 1.053 p50 1.048 p95 1.092 ms (602 readings), CPU mean 0.192 p95 0.3 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 240,238,228
+low-1024x576-no-msaa: 1024x576 60 fps, frame p50 16.665 p95 16.67 ms, GPU mean 0.616 p50 0.587 p95 0.783 ms (602 readings), CPU mean 0.201 p95 0.34 ms, 64 draws 320000 tris, glError 0, messages 0, pixels top 33,36,43 (clear 33,36,43) centre 243,240,230
 probes: 80 passed, 0 failed; INVALID_OPERATION warnings: 0; pending GL errors: 2 (2 raised on purpose); contexts lost to Chrome's limit: 0
   pass  A output is sRGB-encoded (white under a uniform hemisphere)
   pass  A2 the clear colour is linear and encoded
@@ -478,7 +478,7 @@ probes: 80 passed, 0 failed; INVALID_OPERATION warnings: 0; pending GL errors: 2
   pass  LE one loss controller a canvas: a throwing hook does not stop the next (E1); one function runs once (E4b); a lost renderer left undisposed hears no later loss (E6); a page-made context lost during a create, and a canvas lost with no renderer, are restored (E11, E12); a loss cancelled and restored while a create loads its module leaves the create the restored context, which it draws on, with no hook called (ET)
   pass  H7 at the largest serial a handle is below 2^50, a handle plus 0.5 or minus 0.25 is refused as a fraction, and the next serial wraps round to 1
   pass  PS a page-made context that suits, left with state of the page's (each of the ninth critic's N8 cases and every other state the renderer resets): web3d draws, uploads and reads back as on a new context, with no WebGL error, and the page's own objects are kept
-  pass  LR a page's own restored listener that runs before web3d's disposes the live renderer: onContextRestored comes once (N1); disposed in the page's lost listener instead: once, and no onContextLost; disposed after the restore was handled: no second call
+  pass  LR a page's own restored listener that runs before web3d's disposes the live renderer: onContextRestored comes once (N1); disposed in the page's lost listener instead: once, and no onContextLost; disposed after the restore was handled: no second call; a renderer the page's restored listener makes there, the first disposed or not, keeps its hooks for its own loss (F1 of the fifteenth critic)
   pass  XR one realm drives a canvas: a frame's copy is refused a canvas of this document and an OffscreenCanvas made here, this window's copy the frame's canvas and the frame's OffscreenCanvas, each leaving it untouched, while each copy draws on its own; under a top of another origin a same-origin child's copy, loaded first, is refused its parent's canvas before and after the parent draws there, the two share one home (serials in sequence), the parent is refused the child's canvas, and the parent recovers from a loss once the child has gone
   pass  XD a canvas element belongs to its document's window, whatever its prototype: adopted from the frame's document into this one (prototype the frame's), touched first by the frame's observer (the frame's), or adopted the other way, each is refused by the copy of the other window with no listener left and drawn on by its own; once the frame is gone, this window's renderers on the two canvases with the frame's prototype draw, lose and restore with each hook once, and a new renderer draws; a driven canvas moved to the frame's document is refused by frame(), resize() and the creates, and by the frame's copy, and draws again moved back; handed over between renderers it gets a controller from each window; canvases of documents with no window are refused, untouched
   pass  DB a drawing buffer a page stored at another size than the canvas's (drawingBufferStorage; the eleventh critic's F4) is made again at the canvas's size, with its samples and in RGBA8, and drawn whole, also after resize; with nothing stored, or on web3d's own context, the canvas's width is set once
@@ -490,10 +490,10 @@ probes: 80 passed, 0 failed; INVALID_OPERATION warnings: 0; pending GL errors: 2
   pass  RC one record of a canvas, on the canvas, for every copy: private (non-enumerable, non-writable, non-configurable) and the same object from the frame; a frame whose copy has a home of its own is refused this window's driven canvas moved into its document, and this window's copy the frame's, and moved back each clears to its own colour; a sealed canvas, and one with a property there web3d did not make (writable, or a getter, which never runs), are refused untouched
   pass  TO an OffscreenCanvas made here by transferControlToOffscreen() from a canvas a frame's observer touched first has the frame's prototype: refused here, with a message naming that case and no listener, and drawn on by the frame's copy
   pass  SY lost and restored events the page dispatches itself are ignored by web3d's listeners: not cancelled, the renderer not finished and still drawing, no hook called; a real loss after them is cancelled and restored, each hook once
-allocation, cold (first frames): 601 frames; page scripts 15.49 sampled bytes a frame; by file {"(native or internal)":10.1,"/demo/demo.js":10.8,"/pkg/web3d.js":1.7,"/pkg/loadngo_web3d.wasm":1.2,"/pkg/gl.js":1.8}
-allocation, steady (after 70 s of frames): 601 frames; page scripts 0 sampled bytes a frame; by file {"(native or internal)":9.7}
-allocation, positive control (one short-lived Array of 8 numbers a frame): 601 frames; page scripts 0.54 sampled bytes a frame; by file {"(native or internal)":9.6,"/demo/demo.js":0.5}
-allocation, CPU timing on (reported, not gated): 601 frames; page scripts 1.47 sampled bytes a frame; by file {"(native or internal)":10.9,"/demo/demo.js":1.5}
+allocation, cold (first frames): 601 frames; page scripts 15.97 sampled bytes a frame; by file {"(native or internal)":10.7,"/demo/demo.js":11,"/pkg/web3d.js":1.7,"/pkg/loadngo_web3d.wasm":1.6,"/pkg/gl.js":1.7}
+allocation, steady (after 70 s of frames): 601 frames; page scripts 0 sampled bytes a frame; by file {"(native or internal)":9.1}
+allocation, positive control (one short-lived Array of 8 numbers a frame): 601 frames; page scripts 0.54 sampled bytes a frame; by file {"(native or internal)":9,"/demo/demo.js":0.5}
+allocation, CPU timing on (reported, not gated): 601 frames; page scripts 1.76 sampled bytes a frame; by file {"(native or internal)":11,"/demo/demo.js":1.8}
   FAILED: the positive control read 0.5 sampled bytes a frame from demo.js (at least 40 expected): the profiler is blind to short-lived objects, so the gate proves nothing
 browser and server stopped
 wrote web3d/evidence/phase1/blind-control/rendered-check.json

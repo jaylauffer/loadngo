@@ -1,0 +1,148 @@
+{
+  "page": "evidence/phase1/critic11-rerun/site/facts.html",
+  "host": "127.0.0.1",
+  "chrome": "157.0.8103.38",
+  "args": [],
+  "result": {
+    "ownerDocument across realms": {
+      "adoptedHere": {
+        "ownerByOurGetter": true,
+        "ownerByFramesGetter": true,
+        "wrapper": "frame"
+      },
+      "adoptedThere": {
+        "ownerByOurGetter": true,
+        "wrapper": "top"
+      },
+      "template": {
+        "ownerIsOurs": false,
+        "wrapper": "top",
+        "webgl2": true
+      },
+      "parsed": {
+        "ownerIsOurs": false,
+        "webgl2": true
+      }
+    },
+    "first touch by a frame, context made here, frame removed": {
+      "canvasWrapper": "frame",
+      "owner": "this document",
+      "contextWrapper": "frame",
+      "extensionWrapper": "frame",
+      "before": [
+        0,
+        255,
+        0,
+        255
+      ],
+      "frameGone": true,
+      "afterRemovalOwnMethods": [
+        0,
+        128,
+        0,
+        255
+      ],
+      "afterRemovalError": 0,
+      "events": {
+        "lost": 1,
+        "prevented": true,
+        "restored": 1
+      },
+      "lostAfter": false,
+      "afterRestore": [
+        0,
+        255,
+        0,
+        255
+      ]
+    },
+    "drawingBufferStorage and canvas sizes": {
+      "maxRenderbuffer": 16384,
+      "maxTexture": 16384,
+      "maxViewport": [
+        16384,
+        16384
+      ],
+      "pageStorage": [
+        40,
+        30,
+        "SRGB8_ALPHA8"
+      ],
+      "sameSizeSet": [
+        40,
+        30,
+        "SRGB8_ALPHA8"
+      ],
+      "storageAtCanvasSize": [
+        300,
+        150,
+        "RGBA8",
+        0
+      ],
+      "toggled": [
+        300,
+        150,
+        "SRGB8_ALPHA8"
+      ],
+      "storageOverMaxRenderbuffer": {
+        "asked": [
+          16385,
+          64
+        ],
+        "got": [
+          300,
+          150,
+          "RGBA8"
+        ],
+        "error": 1281
+      },
+      "canvasOverMax": {
+        "asked": [
+          16385,
+          64
+        ],
+        "got": [
+          16384,
+          64
+        ],
+        "error": 0
+      },
+      "canvas20000": {
+        "got": [
+          5760,
+          5760
+        ],
+        "error": 0
+      },
+      "canvas0": {
+        "got": [
+          1,
+          1
+        ],
+        "error": 0
+      },
+      "msaaSamples": 4,
+      "msaaToggled": {
+        "got": [
+          64,
+          64,
+          "SRGB8_ALPHA8"
+        ],
+        "samples": 4
+      },
+      "noAlpha": {
+        "got": [
+          64,
+          64,
+          32849
+        ],
+        "error": 1282
+      }
+    }
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "warning: WebGL: INVALID_VALUE: drawingBufferStorage: width > MAX_RENDERBUFFER_SIZE",
+    "warning: WebGL: INVALID_OPERATION: drawingBufferStorage: alpha is required for drawingBufferStorage"
+  ]
+}
