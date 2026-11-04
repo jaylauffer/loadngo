@@ -3,9 +3,9 @@
 # written as <home>: fmt; clippy as CI runs it (the macOS row's workspace command and the wasm32
 # step) and for the crate on wasm32, aarch64 Linux, Windows MSVC and the host; the tests, debug and
 # release; build.sh twice in place and once from an empty target directory, compared byte for byte,
-# with no local path in pkg/; the three.js reference check; the CI step's YAML (found by its name,
-# then checked by its commands, exactly the wasm32 clippy command run here, and by what could let
-# it pass when that fails: ci-step.rb); the rendered check,
+# with no local path in pkg/; the three.js reference check; the CI step's YAML (ci-step.rb, whose
+# header lists what it refuses: a step that does not run exactly the wasm32 clippy command run
+# here, or that could pass when that fails, or be skipped); the rendered check,
 # which must pass; and the rendered check with --blind, which must fail on its positive control
 # alone, which check.mjs reports as exit 3 (any other failure, such as a port taken or Chrome
 # missing, exits 1, and is not counted as the blind run holding). Each gate is judged by its exit
@@ -95,8 +95,7 @@ fi
 step node web3d/tools/three-reference.mjs --check
 # The CI step: found by its name, then checked by what it runs (exactly the wasm32 target added and
 # the same clippy command as the local gate above) and by what could let it pass when that command
-# fails (continue-on-error, a shell of its own), on a matrix row that exists, in a workflow that runs
-# on pushes and pull requests (ci-step.rb beside this script).
+# fails, or skip it (ci-step.rb beside this script lists each check; a refusal exits 2).
 step env WASM_CLIPPY="$wasm_clippy" ruby web3d/evidence/phase1/ci-step.rb .github/workflows/ci.yml
 # The rendered check, which must pass, and its blind run, which must fail on the control alone (exit
 # 3); their logs are also kept beside their JSON.

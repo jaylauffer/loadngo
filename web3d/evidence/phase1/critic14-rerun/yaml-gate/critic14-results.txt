@@ -1,0 +1,8 @@
+real: PASSES the gate
+step-env-cap-lints: fails the gate: ci-step: refused: the step sets env RUSTFLAGS, outside the allow-list (CARGO_TERM_COLOR, LOADNGO_CAS_MIN_FREE_GIB)
+job-env-cap-lints: fails the gate: ci-step: refused: the job sets env RUSTFLAGS, outside the allow-list (CARGO_TERM_COLOR, LOADNGO_CAS_MIN_FREE_GIB)
+workflow-env-cap-lints: fails the gate: ci-step: refused: the workflow sets env RUSTFLAGS, outside the allow-list (CARGO_TERM_COLOR, LOADNGO_CAS_MIN_FREE_GIB)
+earlier-step-sets-github-env: fails the gate: ci-step: refused: a run in job check (step "x") mentions GITHUB_ENV
+job-if-false: fails the gate: ci-step: refused: the job sets if: false
+push-and-pr-on-no-branch: fails the gate: ci-step: refused: push has the filter branches; only paths-ignore is allowed
+paths-ignore-everything: fails the gate: ci-step: refused: push paths-ignore "**" matches .github/workflows/ci.yml, Cargo.lock, Cargo.toml, web3d/Cargo.toml, web3d/src/gl.rs, web3d/
