@@ -220,13 +220,18 @@ pub fn is_windows_unsafe(name: &str) -> bool {
         .unwrap_or("")
         .trim_end_matches(' ')
         .to_ascii_uppercase();
-    matches!(
+    if matches!(
         base.as_str(),
         "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
-    ) || ((base.starts_with("COM") || base.starts_with("LPT"))
-        && base.len() == 4
-        && base.as_bytes()[3].is_ascii_digit()
-        && base.as_bytes()[3] != b'0')
+    ) {
+        return true;
+    }
+    // COM0-COM9 and LPT0-LPT9, also with a superscript 1, 2 or 3, as Microsoft lists them.
+    let mut chars = base.chars();
+    let prefix: String = chars.by_ref().take(3).collect();
+    let rest: Vec<char> = chars.collect();
+    (prefix == "COM" || prefix == "LPT")
+        && matches!(rest.as_slice(), [digit] if digit.is_ascii_digit() || matches!(digit, '\u{b9}' | '\u{b2}' | '\u{b3}'))
 }
 
 /// Code points HFS+ ignores when comparing names (as git's `is_hfs_dotgit` does).

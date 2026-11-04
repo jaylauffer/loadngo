@@ -373,10 +373,11 @@ pub fn receive(root: &Path, input: &mut impl Read, trust: &Trust) -> Result<Rece
     if magic != STREAM_MAGIC {
         bail!("not a repository stream");
     }
-    let store = crate::archive_cas::ArchiveCasStorage::new(root)
+    let store = crate::archive_cas::ArchiveCasStorage::with_buffer_size(root, 1 << 20)
         .with_context(|| format!("failed to open the store at {}", root.display()))?;
     let mut objects = 0;
     let mut head = None;
+    let mut buffer = vec![0_u8; 1 << 20];
     loop {
         let mut tag = [0_u8; 1];
         input
@@ -389,7 +390,7 @@ pub fn receive(root: &Path, input: &mut impl Read, trust: &Trust) -> Result<Rece
                 let hash = CasHash::from_bytes(hash);
                 let length = read_length(&mut input)?;
                 crate::disk::ensure_room(root, length, crate::disk::floor_from_env())?;
-                receive_object(&store, hash, length, &mut input)?;
+                receive_object(&store, hash, length, &mut input, &mut buffer)?;
                 objects += 1;
             }
             b'H' => {
@@ -456,13 +457,15 @@ pub fn receive(root: &Path, input: &mut impl Read, trust: &Trust) -> Result<Rece
 
 /// Stores one object frame. The bytes go to a partial file first and must hash to
 /// `hash`; only then is the store touched. A copy already stored is kept when it reads
-/// back intact and replaced by the proven bytes when it does not, so a stream can only
-/// ever put back the one correct content, never remove it.
+/// back intact; otherwise it is moved aside, the proven bytes stored, and the old copy
+/// put back if storing fails. So a stream can only ever put back the one correct
+/// content, never remove it. `buffer` is reused across frames.
 fn receive_object(
     store: &crate::archive_cas::ArchiveCasStorage,
     hash: CasHash,
     length: u64,
     input: &mut impl Read,
+    buffer: &mut [u8],
 ) -> Result<()> {
     let partial = store.scratch_path("receive");
     let result = (|| -> Result<()> {
@@ -472,11 +475,10 @@ fn receive_object(
             .open(&partial)
             .with_context(|| format!("failed to create {}", partial.display()))?;
         let mut hasher = blake3::Hasher::new();
-        let mut buffer = vec![0_u8; 1 << 20];
         let mut body = input.take(length);
         let mut copied = 0_u64;
         loop {
-            let read = body.read(&mut buffer)?;
+            let read = body.read(buffer)?;
             if read == 0 {
                 break;
             }
@@ -493,35 +495,54 @@ fn receive_object(
         }
         file.sync_all()?;
         drop(file);
-        if store.has_object(hash) {
-            if stored_copy_is_intact(store, hash) {
-                return Ok(());
+        if store.has_object(hash) && stored_copy_is_intact(store, hash, buffer) {
+            return Ok(());
+        }
+        // Move whatever copy is stored aside (both forms, raw and compressed), so that
+        // if storing the proven bytes fails it can be put back as it was.
+        let mut aside = Vec::new();
+        for path in [store.object_path(hash), store.compressed_object_path(hash)] {
+            if path.exists() {
+                let moved = store.scratch_path("damaged");
+                fs::rename(&path, &moved)
+                    .with_context(|| format!("failed to move {} aside", path.display()))?;
+                aside.push((path, moved));
             }
-            store
-                .remove_object(hash)
-                .with_context(|| format!("failed to replace the damaged copy of {hash}"))?;
         }
         let stored = store
             .add_stream(&mut File::open(&partial)?)
-            .with_context(|| format!("failed to store {hash}"))?;
-        if stored.object.hash != hash {
-            bail!("object {hash} changed while it was stored");
+            .with_context(|| format!("failed to store {hash}"));
+        match stored {
+            Ok(stored) if stored.object.hash == hash => {
+                for (_, moved) in aside {
+                    let _ = fs::remove_file(moved);
+                }
+                Ok(())
+            }
+            other => {
+                for (path, moved) in aside {
+                    let _ = fs::rename(moved, path);
+                }
+                other.and_then(|_| bail!("object {hash} changed while it was stored"))
+            }
         }
-        Ok(())
     })();
     let _ = fs::remove_file(&partial);
     result
 }
 
 /// Whether the stored copy of `hash` reads back hashing to it.
-fn stored_copy_is_intact(store: &crate::archive_cas::ArchiveCasStorage, hash: CasHash) -> bool {
+fn stored_copy_is_intact(
+    store: &crate::archive_cas::ArchiveCasStorage,
+    hash: CasHash,
+    buffer: &mut [u8],
+) -> bool {
     let Ok(mut reader) = store.open_object(hash) else {
         return false;
     };
     let mut hasher = blake3::Hasher::new();
-    let mut buffer = vec![0_u8; 1 << 20];
     loop {
-        match reader.read(&mut buffer) {
+        match reader.read(buffer) {
             Ok(0) => break,
             Ok(read) => {
                 hasher.update(&buffer[..read]);

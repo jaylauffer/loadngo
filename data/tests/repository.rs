@@ -848,13 +848,16 @@ fn windows_device_names_and_forbidden_characters_are_known() {
     ] {
         assert!(is_windows_unsafe(bad), "{bad:?}");
     }
+    for bad in ["com0", "LPT0.txt", "COM\u{b9}", "lpt\u{b3}.log"] {
+        assert!(is_windows_unsafe(bad), "{bad:?}");
+    }
     for good in [
         "console",
-        "com0",
         "COM10",
         "auxiliary.c",
         "README.md",
         "lpt",
+        "com\u{b4}",
     ] {
         assert!(!is_windows_unsafe(good), "{good:?}");
     }
