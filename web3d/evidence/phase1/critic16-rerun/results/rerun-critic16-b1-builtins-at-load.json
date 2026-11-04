@@ -1,0 +1,86 @@
+{
+  "page": "evidence/phase1/critic16/site/b1-builtins-at-load.html",
+  "host": "127.0.0.1",
+  "chrome": "157.0.8103.38",
+  "args": [],
+  "result": {
+    "B1 steps, with the counts after each": {
+      "create": {
+        "Set (control)": 1,
+        "Map": 0,
+        "WeakMap": 0,
+        "WeakSet": 0,
+        "Symbol.for": 0,
+        "Object.freeze": 0,
+        "Object.getPrototypeOf": 0,
+        "Object.getOwnPropertyDescriptor": 0,
+        "crypto.getRandomValues": 0
+      },
+      "draws": true,
+      "refusedCall": "web3d: positions must be a Float32Array, not \"x\"; dequantise integer data first",
+      "rustRefusal": "web3d: 603880052228099 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)",
+      "afterCalls": {
+        "Set (control)": 1,
+        "Map": 0,
+        "WeakMap": 0,
+        "WeakSet": 0,
+        "Symbol.for": 0,
+        "Object.freeze": 0,
+        "Object.getPrototypeOf": 0,
+        "Object.getOwnPropertyDescriptor": 0,
+        "crypto.getRandomValues": 0
+      },
+      "hooks": [
+        "lost",
+        "restored"
+      ],
+      "nextDraws": true,
+      "compileBytes": true,
+      "afterCompileBytes": {
+        "Set (control)": 2,
+        "Map": 0,
+        "WeakMap": 0,
+        "WeakSet": 0,
+        "Symbol.for": 0,
+        "Object.freeze": 0,
+        "Object.getPrototypeOf": 0,
+        "Object.getOwnPropertyDescriptor": 0,
+        "crypto.getRandomValues": 0
+      },
+      "compileOtherUrl": true,
+      "afterAll": {
+        "Set (control)": 2,
+        "Map": 0,
+        "WeakMap": 0,
+        "WeakSet": 0,
+        "Symbol.for": 0,
+        "Object.freeze": 0,
+        "Object.getPrototypeOf": 0,
+        "Object.getOwnPropertyDescriptor": 0,
+        "crypto.getRandomValues": 0
+      }
+    },
+    "B1 built-ins js/web3d.js uses that no call of web3d reached": [
+      "Map",
+      "WeakMap",
+      "WeakSet",
+      "Symbol.for",
+      "Object.freeze",
+      "Object.getPrototypeOf",
+      "Object.getOwnPropertyDescriptor",
+      "crypto.getRandomValues"
+    ],
+    "B1 calls from neither file (not counted), with where they came from": {
+      "Map": [
+        "    at new Map (http://127.0.0.1:5672/evidence/phase1/critic16/site/b1-builtins-at-load.html:25:56) |     at parseEvaluationResultValue (<anonymous>:120:81)",
+        "    at new Map (http://127.0.0.1:5672/evidence/phase1/critic16/site/b1-builtins-at-load.html:25:56) |     at parseEvaluationResultValue (<anonymous>:120:81)",
+        "    at new Map (http://127.0.0.1:5672/evidence/phase1/critic16/site/b1-builtins-at-load.html:25:56) |     at parseEvaluationResultValue (<anonymous>:120:81)",
+        "    at new Map (http://127.0.0.1:5672/evidence/phase1/critic16/site/b1-builtins-at-load.html:25:56) |     at parseEvaluationResultValue (<anonymous>:120:81)"
+      ]
+    },
+    "B1 built-ins a call of web3d reached": [
+      "Set (control) (2)"
+    ]
+  },
+  "messages": []
+}

@@ -1,0 +1,63 @@
+{
+ "S3 steps, with the counts after each": {
+  "create": {
+   "Set": 1,
+   "URL": 1,
+   "Error": 0,
+   "TextDecoder": 1,
+   "ArrayBuffer.isView": 0,
+   "WeakRef": 1
+  },
+  "draws": true,
+  "refusedCall": "web3d: positions must be a Float32Array, not \"x\"; dequantise integer data first",
+  "afterRefusal": {
+   "Set": 1,
+   "URL": 1,
+   "Error": 1,
+   "TextDecoder": 1,
+   "ArrayBuffer.isView": 0,
+   "WeakRef": 1
+  },
+  "rustRefusal": "web3d: 655893179924483 is not a valid mesh handle: not live in this renderer (destroyed, never created, or another renderer's)",
+  "afterRustRefusal": {
+   "Set": 1,
+   "URL": 1,
+   "Error": 2,
+   "TextDecoder": 2,
+   "ArrayBuffer.isView": 0,
+   "WeakRef": 1
+  },
+  "hooks": [
+   "lost",
+   "restored"
+  ],
+  "afterRestore": {
+   "Set": 2,
+   "URL": 1,
+   "Error": 2,
+   "TextDecoder": 2,
+   "ArrayBuffer.isView": 0,
+   "WeakRef": 1
+  },
+  "compileBytes": true,
+  "afterCompileBytes": {
+   "Set": 2,
+   "URL": 1,
+   "Error": 2,
+   "TextDecoder": 2,
+   "ArrayBuffer.isView": 3,
+   "WeakRef": 1
+  }
+ },
+ "S3 globals web3d read at a call, outside WEB3D.md's list": [
+  "Set (2)",
+  "URL (1)",
+  "Error (2)",
+  "TextDecoder (2)",
+  "ArrayBuffer.isView (3)",
+  "WeakRef (1)"
+ ]
+}
+messages: 0
+browser and server stopped
+>>> exit 0

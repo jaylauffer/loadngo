@@ -1,0 +1,490 @@
+{
+  "page": "evidence/phase1/critic14-rerun/site/r15.html",
+  "host": "127.0.0.1",
+  "chrome": "157.0.8103.38",
+  "args": [],
+  "result": {
+    "T1 removed, frame.html": {
+      "closed": "accessor, configurable true",
+      "top": "accessor, configurable false",
+      "topBefore": "this window",
+      "functionTopThrows": "yes",
+      "drewBefore": true,
+      "claimedAtRemoval": "made",
+      "topSameTask": "null",
+      "closedSameTask": true,
+      "frameAfter": "threw: web3d: this copy of web3d belongs to a page that its window ",
+      "recordAfterRemoval": "none",
+      "away taken here": true,
+      "begun taken here": true,
+      "after taken here": true
+    },
+    "T1 removed, frame-fnclosed.html": {
+      "closed": "data function, configurable false",
+      "top": "accessor, configurable false",
+      "topBefore": "this window",
+      "functionTopThrows": "yes",
+      "drewBefore": true,
+      "claimedAtRemoval": "made",
+      "topSameTask": "null",
+      "closedSameTask": "the page's function",
+      "frameAfter": "threw: web3d: this copy of web3d belongs to a page that its window ",
+      "recordAfterRemoval": "none",
+      "away taken here": true,
+      "begun taken here": true,
+      "after taken here": true
+    },
+    "T2 closed, popup.html": {
+      "drewOpen": true,
+      "sameTask": {
+        "closed": true,
+        "top": "itself",
+        "frame": "threw: web3d: this copy of web3d belongs to a page that its window ",
+        "recordOnNewCanvas": "none"
+      },
+      "nextTask": {
+        "closed": true,
+        "top": "itself",
+        "frame": "threw: web3d: this copy of web3d belongs to a page that its window "
+      },
+      "topNullAfterMs": 3,
+      "afterTopNull": {
+        "closed": true,
+        "top": "null",
+        "frame": "returned false",
+        "recordOnNewCanvas": "none"
+      }
+    },
+    "T2 closed, popup-fnclosed.html": {
+      "drewOpen": true,
+      "sameTask": {
+        "top": "itself",
+        "frame": "returned true",
+        "recordOnNewCanvas": "made"
+      },
+      "nextTask": {
+        "top": "itself",
+        "frame": "returned true"
+      },
+      "topNullAfterMs": 3,
+      "afterTopNull": {
+        "top": "null",
+        "frame": "returned false",
+        "recordOnNewCanvas": "none"
+      }
+    },
+    "T3 worker, top none": {
+      "ready": {
+        "ready": true,
+        "top": "none"
+      },
+      "result": {
+        "created": true,
+        "isGreen": true
+      }
+    },
+    "T3 worker, top data": {
+      "ready": {
+        "ready": true,
+        "top": "data null"
+      },
+      "result": {
+        "created": true,
+        "isGreen": true
+      }
+    },
+    "T3 worker, top accessor": {
+      "ready": {
+        "ready": true,
+        "top": "accessor, configurable false"
+      },
+      "result": {
+        "created": false,
+        "message": "web3d: this copy of web3d belongs to a page that its window has navigated away from, or to a frame that has been removed or a window that ha"
+      }
+    },
+    "T4 webglcontextlost, none (control)": {
+      "drew": true,
+      "stopperRan": 0,
+      "lostPrevented": true,
+      "restoreCall": "ok",
+      "restored": true,
+      "hooksAtFirst": [
+        "lost",
+        "restored"
+      ],
+      "next": true
+    },
+    "T4 webglcontextlost, window, capturing: stopPropagation()": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": "not seen",
+      "restoreCall": "ok",
+      "restored": false,
+      "hooksAtFirst": []
+    },
+    "T4 webglcontextlost, window, capturing: cancelBubble = true": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": "not seen",
+      "restoreCall": "ok",
+      "restored": false,
+      "hooksAtFirst": []
+    },
+    "T4 webglcontextlost, document, capturing: stopPropagation()": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": "not seen",
+      "restoreCall": "ok",
+      "restored": false,
+      "hooksAtFirst": []
+    },
+    "T4 webglcontextlost, ancestor element, capturing: stopPropagation()": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": "not seen",
+      "restoreCall": "ok",
+      "restored": false,
+      "hooksAtFirst": []
+    },
+    "T4 webglcontextlost, shadow root, capturing: stopPropagation()": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": "not seen",
+      "restoreCall": "ok",
+      "restored": false,
+      "hooksAtFirst": []
+    },
+    "T4 webglcontextlost, window, bubbling: stopPropagation() (the event does not bubble)": {
+      "drew": true,
+      "stopperRan": 0,
+      "lostPrevented": true,
+      "restoreCall": "ok",
+      "restored": true,
+      "hooksAtFirst": [
+        "lost",
+        "restored"
+      ],
+      "next": true
+    },
+    "T4 webglcontextlost, canvas, capturing: stopPropagation()": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": "not seen",
+      "restoreCall": "ok",
+      "restored": false,
+      "hooksAtFirst": []
+    },
+    "T4 webglcontextlost, canvas, capturing: stopImmediatePropagation()": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": "not seen",
+      "restoreCall": "ok",
+      "restored": false,
+      "hooksAtFirst": []
+    },
+    "T4 webglcontextlost, canvas, ahead of web3d: stopPropagation()": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": true,
+      "restoreCall": "ok",
+      "restored": true,
+      "hooksAtFirst": [
+        "lost",
+        "restored"
+      ],
+      "next": true
+    },
+    "T4 webglcontextlost, canvas, ahead of web3d: cancelBubble = true": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": true,
+      "restoreCall": "ok",
+      "restored": true,
+      "hooksAtFirst": [
+        "lost",
+        "restored"
+      ],
+      "next": true
+    },
+    "T4 webglcontextlost, canvas, ahead of web3d: stopImmediatePropagation()": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": "not seen",
+      "restoreCall": "ok",
+      "restored": false,
+      "hooksAtFirst": []
+    },
+    "T4 webglcontextlost, canvas, after web3d: stopImmediatePropagation()": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": "not seen",
+      "restoreCall": "ok",
+      "restored": true,
+      "hooksAtFirst": [
+        "lost",
+        "restored"
+      ],
+      "next": true
+    },
+    "T4 webglcontextrestored, none (control)": {
+      "drew": true,
+      "stopperRan": 0,
+      "lostPrevented": true,
+      "restoreCall": "ok",
+      "restored": true,
+      "hooksAtFirst": [
+        "lost",
+        "restored"
+      ],
+      "next": true
+    },
+    "T4 webglcontextrestored, window, capturing: stopPropagation()": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": true,
+      "restoreCall": "ok",
+      "restored": true,
+      "hooksAtFirst": [
+        "lost"
+      ],
+      "second": {
+        "restoreCall": "ok",
+        "restored": true,
+        "hooks": [
+          "lost",
+          "restored"
+        ]
+      }
+    },
+    "T4 webglcontextrestored, window, capturing: cancelBubble = true": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": true,
+      "restoreCall": "ok",
+      "restored": true,
+      "hooksAtFirst": [
+        "lost"
+      ],
+      "second": {
+        "restoreCall": "ok",
+        "restored": true,
+        "hooks": [
+          "lost",
+          "restored"
+        ]
+      }
+    },
+    "T4 webglcontextrestored, document, capturing: stopPropagation()": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": true,
+      "restoreCall": "ok",
+      "restored": true,
+      "hooksAtFirst": [
+        "lost"
+      ],
+      "second": {
+        "restoreCall": "ok",
+        "restored": true,
+        "hooks": [
+          "lost",
+          "restored"
+        ]
+      }
+    },
+    "T4 webglcontextrestored, ancestor element, capturing: stopPropagation()": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": true,
+      "restoreCall": "ok",
+      "restored": true,
+      "hooksAtFirst": [
+        "lost"
+      ],
+      "second": {
+        "restoreCall": "ok",
+        "restored": true,
+        "hooks": [
+          "lost",
+          "restored"
+        ]
+      }
+    },
+    "T4 webglcontextrestored, shadow root, capturing: stopPropagation()": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": true,
+      "restoreCall": "ok",
+      "restored": true,
+      "hooksAtFirst": [
+        "lost"
+      ],
+      "second": {
+        "restoreCall": "ok",
+        "restored": true,
+        "hooks": [
+          "lost",
+          "restored"
+        ]
+      }
+    },
+    "T4 webglcontextrestored, window, bubbling: stopPropagation() (the event does not bubble)": {
+      "drew": true,
+      "stopperRan": 0,
+      "lostPrevented": true,
+      "restoreCall": "ok",
+      "restored": true,
+      "hooksAtFirst": [
+        "lost",
+        "restored"
+      ],
+      "next": true
+    },
+    "T4 webglcontextrestored, canvas, capturing: stopPropagation()": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": true,
+      "restoreCall": "ok",
+      "restored": true,
+      "hooksAtFirst": [
+        "lost"
+      ],
+      "second": {
+        "restoreCall": "ok",
+        "restored": true,
+        "hooks": [
+          "lost",
+          "restored"
+        ]
+      }
+    },
+    "T4 webglcontextrestored, canvas, capturing: stopImmediatePropagation()": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": true,
+      "restoreCall": "ok",
+      "restored": true,
+      "hooksAtFirst": [
+        "lost"
+      ],
+      "second": {
+        "restoreCall": "ok",
+        "restored": true,
+        "hooks": [
+          "lost",
+          "restored"
+        ]
+      }
+    },
+    "T4 webglcontextrestored, canvas, ahead of web3d: stopPropagation()": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": true,
+      "restoreCall": "ok",
+      "restored": true,
+      "hooksAtFirst": [
+        "lost",
+        "restored"
+      ],
+      "next": true
+    },
+    "T4 webglcontextrestored, canvas, ahead of web3d: cancelBubble = true": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": true,
+      "restoreCall": "ok",
+      "restored": true,
+      "hooksAtFirst": [
+        "lost",
+        "restored"
+      ],
+      "next": true
+    },
+    "T4 webglcontextrestored, canvas, ahead of web3d: stopImmediatePropagation()": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": true,
+      "restoreCall": "ok",
+      "restored": true,
+      "hooksAtFirst": [
+        "lost"
+      ],
+      "second": {
+        "restoreCall": "ok",
+        "restored": true,
+        "hooks": [
+          "lost",
+          "restored"
+        ]
+      }
+    },
+    "T4 webglcontextrestored, canvas, after web3d: stopImmediatePropagation()": {
+      "drew": true,
+      "stopperRan": 1,
+      "lostPrevented": true,
+      "restoreCall": "ok",
+      "restored": true,
+      "hooksAtFirst": [
+        "lost",
+        "restored"
+      ],
+      "next": true
+    },
+    "T5 R4 missed restore, dispose in onContextLost, then create": {
+      "drew1": true,
+      "log": [
+        "first lost",
+        "(restore 1 done: restored true, page reopened 1)",
+        "(second renderer created, draws true)",
+        "second lost",
+        "first restored",
+        "second restored",
+        "(restore 2 done: restored true)"
+      ]
+    },
+    "T5 R4 missed restore, no dispose, then create": {
+      "drew1": true,
+      "log": [
+        "first lost",
+        "(restore 1 done: restored true, page reopened 1)",
+        "(second renderer created, draws true)",
+        "second lost",
+        "first restored",
+        "second restored",
+        "(restore 2 done: restored true)"
+      ]
+    },
+    "T5 R4 missed restore, no dispose, no create": {
+      "drew1": true,
+      "log": [
+        "first lost",
+        "(restore 1 done: restored true, page reopened 1)",
+        "first restored",
+        "(restore 2 done: restored true)"
+      ]
+    },
+    "T5 R4 missed restore, dispose after the missed restore, then create": {
+      "drew1": true,
+      "log": [
+        "first lost",
+        "(restore 1 done: restored true, page reopened 1)",
+        "(second renderer created, draws true)",
+        "second lost",
+        "first restored",
+        "second restored",
+        "(restore 2 done: restored true)"
+      ]
+    }
+  },
+  "messages": [
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed",
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed",
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed",
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed",
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed",
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed",
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed",
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed"
+  ]
+}

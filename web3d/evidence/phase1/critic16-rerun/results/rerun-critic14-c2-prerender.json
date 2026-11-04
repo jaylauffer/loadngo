@@ -1,0 +1,30 @@
+{
+  "page": "evidence/phase1/critic14/site/c2-prerender.html",
+  "host": "127.0.0.1",
+  "chrome": "157.0.8103.38",
+  "args": [],
+  "result": {
+    "duringPrerender": {
+      "prerendering": false,
+      "closed": false,
+      "create": "created",
+      "draws": true,
+      "stillPrerendering": false
+    },
+    "afterActivation": {
+      "activationStart": 0,
+      "closed": false,
+      "draws": true,
+      "recovered": true,
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      }
+    },
+    "userAgent": "Chrome/157.0.0.0"
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

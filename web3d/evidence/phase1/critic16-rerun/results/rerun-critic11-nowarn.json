@@ -1,0 +1,13 @@
+{
+  "page": "evidence/phase1/critic11/site/nowarn.html",
+  "host": "127.0.0.1",
+  "chrome": "157.0.8103.38",
+  "args": [],
+  "result": {
+    "ok": true,
+    "note": "any console message here is web3d's own, on a page that never enabled WEBGL_polygon_mode"
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

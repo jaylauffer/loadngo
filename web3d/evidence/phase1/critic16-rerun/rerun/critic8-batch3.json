@@ -1,0 +1,14 @@
+{
+  "started": "2026-11-04T05:26:21.416Z",
+  "console": [],
+  "pageErrors": [],
+  "browser": "Chrome 157.0.8103.38 (headless, own instance)",
+  "probes": [
+    {
+      "id": "E16",
+      "claim": "threw",
+      "pass": false,
+      "detail": "TypeError: Cannot read properties of undefined (reading '0')\n    at whole (http://127.0.0.1:5672/c/batch3.js:62:39)\n    at main (http://127.0.0.1:5672/c/batch3.js:63:137)"
+    }
+  ]
+}

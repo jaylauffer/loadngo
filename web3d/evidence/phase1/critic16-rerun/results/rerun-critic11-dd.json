@@ -1,0 +1,17 @@
+{
+  "page": "evidence/phase1/critic11/site/dd.html",
+  "host": "a.localhost",
+  "chrome": "157.0.8103.38",
+  "args": [],
+  "result": {
+    "top": "http://a.localhost:5672",
+    "frameOrigin": "http://b.a.localhost:5672",
+    "firstHomeIsFrameWindow": true,
+    "topHasState": true,
+    "copy1Create": "accepted",
+    "copy2CreateWhileCopy1Live": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)"
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

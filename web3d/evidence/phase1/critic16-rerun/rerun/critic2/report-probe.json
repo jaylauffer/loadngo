@@ -1,0 +1,690 @@
+{
+  "browser": "157.0.8103.38",
+  "probe": {
+    "tests": [
+      {
+        "name": "P1 a 65,535-vertex mesh (u16, max index 65534) draws its triangle",
+        "pass": true,
+        "detail": {
+          "n": 65535,
+          "special": 65534,
+          "pixel": [
+            255,
+            255,
+            255
+          ],
+          "drawn": true,
+          "statsTriangles": 1
+        }
+      },
+      {
+        "name": "P1 a 65,536-vertex mesh (u16, index 65535) draws its triangle",
+        "pass": true,
+        "detail": {
+          "n": 65536,
+          "special": 65535,
+          "pixel": [
+            255,
+            255,
+            255
+          ],
+          "drawn": true,
+          "statsTriangles": 1
+        }
+      },
+      {
+        "name": "P1 a 65,537-vertex mesh (u32) draws its triangle",
+        "pass": true,
+        "detail": {
+          "n": 65537,
+          "special": 65536,
+          "pixel": [
+            255,
+            255,
+            255
+          ],
+          "drawn": true,
+          "statsTriangles": 1
+        }
+      },
+      {
+        "name": "L key only, grey dielectric, 45 deg: web3d within 2/255 of three.js r180 (plus the stand-in)",
+        "pass": true,
+        "detail": {
+          "web3d": [
+            144,
+            144,
+            144
+          ],
+          "three": [
+            144,
+            144,
+            144
+          ],
+          "expected": [
+            144,
+            144,
+            144
+          ],
+          "envStandIn": [
+            0,
+            0,
+            0
+          ]
+        }
+      },
+      {
+        "name": "L oblique normal, glossy, hemisphere: web3d within 2/255 of three.js r180 (plus the stand-in)",
+        "pass": true,
+        "detail": {
+          "web3d": [
+            146,
+            108,
+            73
+          ],
+          "three": [
+            144,
+            106,
+            69
+          ],
+          "expected": [
+            145,
+            108,
+            73
+          ],
+          "envStandIn": [
+            0.00591423028002266,
+            0.0064675928917172915,
+            0.007020955503411923
+          ]
+        }
+      },
+      {
+        "name": "L half metal, downward normal, hemisphere: web3d within 2/255 of three.js r180 (plus the stand-in)",
+        "pass": true,
+        "detail": {
+          "web3d": [
+            72,
+            107,
+            83
+          ],
+          "three": [
+            64,
+            99,
+            77
+          ],
+          "expected": [
+            71,
+            107,
+            83
+          ],
+          "envStandIn": [
+            0.012121807262010054,
+            0.023125979431905003,
+            0.012136794659712836
+          ]
+        }
+      },
+      {
+        "name": "L full metal, on-peak highlight: web3d within 2/255 of three.js r180 (plus the stand-in)",
+        "pass": true,
+        "detail": {
+          "web3d": [
+            122,
+            101,
+            72
+          ],
+          "three": [
+            116,
+            95,
+            68
+          ],
+          "expected": [
+            123,
+            101,
+            72
+          ],
+          "envStandIn": [
+            0.022500993818227108,
+            0.015000662545484737,
+            0.0075003312727423685
+          ]
+        }
+      },
+      {
+        "name": "L dielectric, on-peak highlight, roughness 0.2: web3d within 2/255 of three.js r180 (plus the stand-in)",
+        "pass": true,
+        "detail": {
+          "web3d": [
+            110,
+            110,
+            110
+          ],
+          "three": [
+            110,
+            110,
+            110
+          ],
+          "expected": [
+            110,
+            110,
+            110
+          ],
+          "envStandIn": [
+            0,
+            0,
+            0
+          ]
+        }
+      },
+      {
+        "name": "L skin-like rough red, side key: web3d within 2/255 of three.js r180 (plus the stand-in)",
+        "pass": true,
+        "detail": {
+          "web3d": [
+            142,
+            114,
+            104
+          ],
+          "three": [
+            142,
+            113,
+            103
+          ],
+          "expected": [
+            143,
+            114,
+            104
+          ],
+          "envStandIn": [
+            0.0023924828300080597,
+            0.0024890075325891227,
+            0.002660148454188379
+          ]
+        }
+      },
+      {
+        "name": "L grazing view (65 deg), fresnel: web3d within 2/255 of three.js r180 (plus the stand-in)",
+        "pass": true,
+        "detail": {
+          "web3d": [
+            58,
+            58,
+            62
+          ],
+          "three": [
+            56,
+            56,
+            59
+          ],
+          "expected": [
+            59,
+            59,
+            62
+          ],
+          "envStandIn": [
+            0.0035456215665006863,
+            0.0035456215665006863,
+            0.004113717071942067
+          ]
+        }
+      },
+      {
+        "name": "S blended draws composite back to front whatever the creation order",
+        "pass": true,
+        "detail": {
+          "got": [
+            141,
+            42,
+            91
+          ],
+          "backToFront": [
+            141,
+            41,
+            91
+          ],
+          "frontToBack": [
+            91,
+            41,
+            141
+          ]
+        }
+      },
+      {
+        "name": "D every method throws \"renderer disposed\" after dispose(); getters are null",
+        "pass": true,
+        "detail": {
+          "notThrowing": [],
+          "getters": {
+            "cpuMs": null,
+            "gpuMs": null,
+            "lost": {
+              "threw": false,
+              "value": false
+            }
+          },
+          "disposeAgain": {
+            "threw": false
+          }
+        }
+      },
+      {
+        "name": "K1 first loss: old renderer finished (frame false, creates throw), destroys after restore harmless, getError 0, new renderer draws",
+        "pass": true,
+        "detail": {
+          "framesBefore": 14,
+          "getErrorBefore": 0,
+          "lostEvent": "lost",
+          "whileLost": {
+            "createMesh": true,
+            "destroyObject": {
+              "threw": false
+            },
+            "destroyMaterial": {
+              "threw": false
+            }
+          },
+          "restoredEvent": "restored",
+          "falseFrames": 17,
+          "firstGetErrorAfterRestore": 0,
+          "afterRestore": {
+            "destroyTexture": {
+              "threw": false
+            },
+            "destroyObject": {
+              "threw": false
+            },
+            "destroyMaterial2": {
+              "threw": false
+            },
+            "destroyMesh": {
+              "threw": false
+            },
+            "destroyTexture2": {
+              "threw": false
+            },
+            "setVisible": {
+              "threw": true,
+              "message": "web3d: 741978685833218 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            },
+            "createTexture": true
+          },
+          "getErrorAfterOldCalls": 0,
+          "getErrorAfterDispose": 0,
+          "freshPixel": [
+            56,
+            255,
+            56
+          ],
+          "freshGetError": 0,
+          "freshGpuMs": 0.077041
+        }
+      },
+      {
+        "name": "K2 second loss on the same canvas: old renderer finished (frame false, creates throw), destroys after restore harmless, getError 0, new renderer draws",
+        "pass": true,
+        "detail": {
+          "framesBefore": 12,
+          "getErrorBefore": 0,
+          "lostEvent": "lost",
+          "whileLost": {
+            "createMesh": true,
+            "destroyObject": {
+              "threw": false
+            },
+            "destroyMaterial": {
+              "threw": false
+            }
+          },
+          "restoredEvent": "restored",
+          "falseFrames": 16,
+          "firstGetErrorAfterRestore": 0,
+          "afterRestore": {
+            "destroyTexture": {
+              "threw": false
+            },
+            "destroyObject": {
+              "threw": false
+            },
+            "destroyMaterial2": {
+              "threw": false
+            },
+            "destroyMesh": {
+              "threw": false
+            },
+            "destroyTexture2": {
+              "threw": false
+            },
+            "setVisible": {
+              "threw": true,
+              "message": "web3d: 741980833316866 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+            },
+            "createTexture": true
+          },
+          "getErrorAfterOldCalls": 0,
+          "getErrorAfterDispose": 0,
+          "freshPixel": [
+            56,
+            255,
+            56
+          ],
+          "freshGetError": 0,
+          "freshGpuMs": 0.076124
+        }
+      }
+    ],
+    "notes": {
+      "restart": [
+        {
+          "n": 65535,
+          "special": 65534,
+          "pixel": [
+            255,
+            255,
+            255
+          ],
+          "drawn": true,
+          "statsTriangles": 1
+        },
+        {
+          "n": 65536,
+          "special": 65535,
+          "pixel": [
+            255,
+            255,
+            255
+          ],
+          "drawn": true,
+          "statsTriangles": 1
+        },
+        {
+          "n": 65537,
+          "special": 65536,
+          "pixel": [
+            255,
+            255,
+            255
+          ],
+          "drawn": true,
+          "statsTriangles": 1
+        }
+      ],
+      "restartGetError": 0,
+      "threeRevision": "180",
+      "threeToneMapping": 0,
+      "threeOutput": "srgb",
+      "lighting": [
+        {
+          "name": "key only, grey dielectric, 45 deg",
+          "web3d": [
+            144,
+            144,
+            144
+          ],
+          "three": [
+            144,
+            144,
+            144
+          ],
+          "envStandIn": [
+            0,
+            0,
+            0
+          ],
+          "expected": [
+            144,
+            144,
+            144
+          ],
+          "maxDiff": 0
+        },
+        {
+          "name": "oblique normal, glossy, hemisphere",
+          "web3d": [
+            146,
+            108,
+            73
+          ],
+          "three": [
+            144,
+            106,
+            69
+          ],
+          "envStandIn": [
+            0.0059,
+            0.0065,
+            0.007
+          ],
+          "expected": [
+            145,
+            108,
+            73
+          ],
+          "maxDiff": 1
+        },
+        {
+          "name": "half metal, downward normal, hemisphere",
+          "web3d": [
+            72,
+            107,
+            83
+          ],
+          "three": [
+            64,
+            99,
+            77
+          ],
+          "envStandIn": [
+            0.0121,
+            0.0231,
+            0.0121
+          ],
+          "expected": [
+            71,
+            107,
+            83
+          ],
+          "maxDiff": 1
+        },
+        {
+          "name": "full metal, on-peak highlight",
+          "web3d": [
+            122,
+            101,
+            72
+          ],
+          "three": [
+            116,
+            95,
+            68
+          ],
+          "envStandIn": [
+            0.0225,
+            0.015,
+            0.0075
+          ],
+          "expected": [
+            123,
+            101,
+            72
+          ],
+          "maxDiff": 1
+        },
+        {
+          "name": "dielectric, on-peak highlight, roughness 0.2",
+          "web3d": [
+            110,
+            110,
+            110
+          ],
+          "three": [
+            110,
+            110,
+            110
+          ],
+          "envStandIn": [
+            0,
+            0,
+            0
+          ],
+          "expected": [
+            110,
+            110,
+            110
+          ],
+          "maxDiff": 0
+        },
+        {
+          "name": "skin-like rough red, side key",
+          "web3d": [
+            142,
+            114,
+            104
+          ],
+          "three": [
+            142,
+            113,
+            103
+          ],
+          "envStandIn": [
+            0.0024,
+            0.0025,
+            0.0027
+          ],
+          "expected": [
+            143,
+            114,
+            104
+          ],
+          "maxDiff": 1
+        },
+        {
+          "name": "grazing view (65 deg), fresnel",
+          "web3d": [
+            58,
+            58,
+            62
+          ],
+          "three": [
+            56,
+            56,
+            59
+          ],
+          "envStandIn": [
+            0.0035,
+            0.0035,
+            0.0041
+          ],
+          "expected": [
+            59,
+            59,
+            62
+          ],
+          "maxDiff": 1
+        }
+      ],
+      "lightingGetError": 0,
+      "K1 first loss": {
+        "framesBefore": 14,
+        "getErrorBefore": 0,
+        "lostEvent": "lost",
+        "whileLost": {
+          "createMesh": true,
+          "destroyObject": {
+            "threw": false
+          },
+          "destroyMaterial": {
+            "threw": false
+          }
+        },
+        "restoredEvent": "restored",
+        "falseFrames": 17,
+        "firstGetErrorAfterRestore": 0,
+        "afterRestore": {
+          "destroyTexture": {
+            "threw": false
+          },
+          "destroyObject": {
+            "threw": false
+          },
+          "destroyMaterial2": {
+            "threw": false
+          },
+          "destroyMesh": {
+            "threw": false
+          },
+          "destroyTexture2": {
+            "threw": false
+          },
+          "setVisible": {
+            "threw": true,
+            "message": "web3d: 741978685833218 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+          },
+          "createTexture": true
+        },
+        "getErrorAfterOldCalls": 0,
+        "getErrorAfterDispose": 0,
+        "freshPixel": [
+          56,
+          255,
+          56
+        ],
+        "freshGetError": 0,
+        "freshGpuMs": 0.077041
+      },
+      "K2 second loss on the same canvas": {
+        "framesBefore": 12,
+        "getErrorBefore": 0,
+        "lostEvent": "lost",
+        "whileLost": {
+          "createMesh": true,
+          "destroyObject": {
+            "threw": false
+          },
+          "destroyMaterial": {
+            "threw": false
+          }
+        },
+        "restoredEvent": "restored",
+        "falseFrames": 16,
+        "firstGetErrorAfterRestore": 0,
+        "afterRestore": {
+          "destroyTexture": {
+            "threw": false
+          },
+          "destroyObject": {
+            "threw": false
+          },
+          "destroyMaterial2": {
+            "threw": false
+          },
+          "destroyMesh": {
+            "threw": false
+          },
+          "destroyTexture2": {
+            "threw": false
+          },
+          "setVisible": {
+            "threw": true,
+            "message": "web3d: 741980833316866 is not a valid object handle: not live in this renderer (destroyed, never created, or another renderer's)"
+          },
+          "createTexture": true
+        },
+        "getErrorAfterOldCalls": 0,
+        "getErrorAfterDispose": 0,
+        "freshPixel": [
+          56,
+          255,
+          56
+        ],
+        "freshGetError": 0,
+        "freshGpuMs": 0.076124
+      }
+    },
+    "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)",
+    "passed": 14,
+    "failed": []
+  },
+  "messages": [],
+  "invalidOperation": []
+}

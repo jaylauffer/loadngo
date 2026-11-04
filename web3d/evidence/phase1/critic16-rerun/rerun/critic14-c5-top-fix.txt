@@ -1,0 +1,74 @@
+{
+ "A0_control": {
+  "closedAfterRemoval": true,
+  "removedCopyCalled": "web3d: this copy of web3d belongs to a page that its window has navigated away from, or to a frame that has been removed (its window is clos",
+  "topCreate": "created, draws"
+ },
+ "A1_fnDeclaredBeforeLoad": {
+  "descriptor": "data: function, not configurable",
+  "builtinClosedWhileAttached": false,
+  "closedAfterRemoval": true,
+  "removedCopyCalled": "web3d: this copy of web3d belongs to a page that its window has navigated away from, or to a frame that has been removed (its window is clos",
+  "topCreate": "created, draws"
+ },
+ "A1b_fnDeclaredAfterLoad": {
+  "descriptor": "data: function, not configurable",
+  "closedAfterRemoval": true,
+  "removedCopyCalled": "web3d: this copy of web3d belongs to a page that its window has navigated away from, or to a frame that has been removed (its window is clos",
+  "topCreate": "created, draws"
+ },
+ "B_sameTaskFirstCreate_0ms": {
+  "closedAfterRemoval": true,
+  "frameCreate": "Failed to fetch",
+  "removedCopyCalled": "web3d: this copy of web3d belongs to a page that its window has navigated away from, or to a frame that has been removed (its window is clos",
+  "topCreate": "created, draws"
+ },
+ "B_sameTaskFirstCreate_300ms": {
+  "closedAfterRemoval": true,
+  "frameCreate": "Failed to fetch",
+  "removedCopyCalled": "web3d: this copy of web3d belongs to a page that its window has navigated away from, or to a frame that has been removed (its window is clos",
+  "topCreate": "created, draws"
+ },
+ "D_reinsertedByAppend": {
+  "closedAfterRemoval": true,
+  "removedCopyCalled": "web3d: this copy of web3d belongs to a page that its window has navigated away from, or to a frame that has been removed (its window is clos",
+  "topCreate": "created, draws",
+  "newWindowIsOld": false
+ },
+ "E_moveBefore": {
+  "moved": "ok",
+  "before": true,
+  "sameWindow": true,
+  "closedAfter": false,
+  "afterDraws": true,
+  "secondCreate": "created",
+  "recovered": true,
+  "calls": {
+   "lost": 1,
+   "restored": 1
+  }
+ },
+ "F_frameCallsWindowClose": {
+  "before": true,
+  "closedAfter": false,
+  "stillAttached": true,
+  "afterDraws": true,
+  "create": "created"
+ },
+ "H_topRefusedClose": {
+  "historyLength": 4,
+  "before": true,
+  "closedAfter": false,
+  "afterDraws": true
+ },
+ "I_bodyInnerHTMLCleared": {
+  "closedAfterRemoval": true,
+  "removedCopyCalled": "web3d: this copy of web3d belongs to a page that its window has navigated away from, or to a frame that has been removed (its window is clos",
+  "topCreate": "created, draws"
+ }
+}
+messages: 2
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+  warning: Scripts may close only the windows that were opened by them.
+browser and server stopped
+>>> exit 0

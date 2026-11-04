@@ -1,0 +1,65 @@
+{
+ "pkg": "/pkg/web3d.js",
+ "N1 no frame() while lost": {
+  "drew": true,
+  "restoreCall": true,
+  "restored": true,
+  "hooks": [
+   "page stopped and cancelled the lost event"
+  ],
+  "lostGetter": false,
+  "frameAfter": {
+   "drew": true,
+   "isGreen": false
+  },
+  "glErrorAfterFrame": 1282,
+  "nextCreate": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)"
+ },
+ "N1 frame() called while lost": {
+  "drew": true,
+  "frameWhileLost": {
+   "ok": true,
+   "v": false
+  },
+  "restoreCall": true,
+  "restored": true,
+  "hooks": [
+   "page stopped and cancelled the lost event"
+  ],
+  "lostGetter": true,
+  "frameAfter": {
+   "drew": false,
+   "isGreen": false
+  },
+  "glErrorAfterFrame": 0,
+  "nextCreate": "created, draws"
+ }
+}
+messages: 25
+  warning: WebGL: INVALID_OPERATION: getQueryParameter: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: beginQuery: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: bindBuffer: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: bufferSubData: no buffer
+  warning: WebGL: INVALID_OPERATION: bindBufferRange: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: drawElements: no valid shader program in use
+  warning: WebGL: INVALID_ENUM: endQuery: invalid target
+  warning: WebGL: INVALID_OPERATION: deleteVertexArray: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: delete: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: delete: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: delete: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: delete: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: delete: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: delete: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: delete: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: delete: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: delete: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: delete: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: delete: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: delete: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: delete: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: delete: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: delete: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: delete: object does not belong to this context
+  warning: WebGL: INVALID_OPERATION: delete: object does not belong to this context
+browser and server stopped
+>>> exit 0

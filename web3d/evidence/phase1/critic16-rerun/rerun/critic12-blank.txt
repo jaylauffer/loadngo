@@ -1,0 +1,81 @@
+{
+ "b1": {
+  "before": true,
+  "windowReused": false,
+  "sameRealmState": false,
+  "oldRendererOnBlankCanvas": "drew",
+  "newDocCopyOnItsCanvas": {
+   "drew": true,
+   "lostEvent": "webglcontextlost",
+   "prevented": true,
+   "restored": "webglcontextrestored",
+   "calls": {
+    "lost": 1,
+    "restored": 1
+   },
+   "after": true,
+   "ok": true
+  }
+ },
+ "b2": {
+  "before": true,
+  "sameDocument": true,
+  "web3dStillThere": true,
+  "canvasInTree": false,
+  "rendererAfterOpen": true,
+  "lost": "lost",
+  "prevented": false,
+  "newOnOldCanvas": "created",
+  "frameCopyOnWrittenCanvas": {
+   "drew": true,
+   "lostEvent": "webglcontextlost",
+   "prevented": true,
+   "restored": "webglcontextrestored",
+   "calls": {
+    "lost": 1,
+    "restored": 1
+   },
+   "after": true,
+   "ok": true
+  },
+  "topCopyOnWrittenCanvas": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOM"
+ },
+ "b3": {
+  "globalDocument": "its own document",
+  "onOwnCanvas": "web3d: this copy of web3d belongs to a page that its window has navigated away from, or to a frame that has been removed or a window that ha",
+  "topCopyOnAdopted": "created"
+ },
+ "b2top": {
+  "before": true,
+  "rendererAfterOpen": true,
+  "canvasInTree": false,
+  "cycleOnOldCanvas": {
+   "drew": true,
+   "lostEvent": "webglcontextlost",
+   "prevented": true,
+   "restored": "webglcontextrestored",
+   "calls": {
+    "lost": 1,
+    "restored": 1
+   },
+   "after": true,
+   "ok": true
+  },
+  "cycleOnNewCanvas": {
+   "drew": true,
+   "lostEvent": "webglcontextlost",
+   "prevented": true,
+   "restored": "webglcontextrestored",
+   "calls": {
+    "lost": 1,
+    "restored": 1
+   },
+   "after": true,
+   "ok": true
+  }
+ }
+}
+messages: 1
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0

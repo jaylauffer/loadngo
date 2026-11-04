@@ -1,0 +1,38 @@
+{
+  "page": "evidence/phase1/critic12/site/midcreate.html",
+  "host": "127.0.0.1",
+  "chrome": "157.0.8103.38",
+  "args": [],
+  "result": {
+    "m1": {
+      "created": "web3d: this canvas element was moved to another document than this window's while createRenderer was making its renderer, so the create is r",
+      "ownerIsFrame": true,
+      "listeners": {},
+      "gotContext": true
+    },
+    "m2a": {
+      "created": "web3d: this canvas element was moved to another document than this window's while createRenderer was making its renderer, so the create is r",
+      "ownerIsFrame": true,
+      "listeners": {}
+    },
+    "m2b": {
+      "frame": "web3d: a renderer method was called while the renderer was reading another call's arguments or sizing its canvas, from page code that ran th",
+      "dispose": "web3d: a renderer method was called while the renderer was reading another call's arguments or sizing its canvas, from page code that ran th",
+      "resize": "resized",
+      "after": true
+    },
+    "m2c": {
+      "outer": "created",
+      "inner": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)"
+    },
+    "verdict": {
+      "m1MovedDuringCreateRefused": true,
+      "m2aMovedInCallbackRefused": true,
+      "m2bReentrancyRefused": true,
+      "m2cSecondCreateRefused": true
+    }
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

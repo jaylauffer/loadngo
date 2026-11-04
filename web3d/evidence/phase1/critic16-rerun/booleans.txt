@@ -1,0 +1,81 @@
+# the seventeenth round's rerun against the sixteenth critic's (node ../critic11/tools/bool-diff.mjs <critic's file> <this round's file>)
+## rerun/critic3.json: 22 booleans; 0 differ
+## rerun/critic4.json: 41 booleans; 0 differ
+## rerun/critic5-exhaust.json: 8 booleans; 0 differ
+## rerun/critic5-main.json: 51 booleans; 0 differ
+## rerun/critic6-extra.json: 5 booleans; 0 differ
+## rerun/critic6.json: 110 booleans; 0 differ
+## rerun/critic7.json: 102 booleans; 0 differ
+## rerun/critic8-batch2.json: 3 booleans; 0 differ
+## rerun/critic8-batch3.json: 1 booleans; 0 differ
+## rerun/critic8.json: 24 booleans; 0 differ
+## rerun/run9.json: 44 booleans; 0 differ
+## rerun/run9-batch2.json: 7 booleans; 0 differ
+## rerun/run9-frame-first.json: 2 booleans; 0 differ
+## rerun/run10-bf.json: 6 booleans; 0 differ
+## rerun/run10-notop.json: 1 booleans; 0 differ
+## rerun/run10-pm.json: 4 booleans; 0 differ
+## rerun/run10-state.json: 58 booleans; 0 differ
+## rerun/run10-state2.json: 0 booleans; 0 differ
+## rerun/run10-xtop.json: 3 booleans; 0 differ
+## rerun/critic1/probe-report.json: 87 booleans; 0 differ
+## rerun/critic2/report-probe.json: 63 booleans; 0 differ
+## results/rerun-critic11-dd.json: 2 booleans; 0 differ
+## results/rerun-critic11-intent.json: 4 booleans; 0 differ
+## results/rerun-critic11-nowarn.json: 1 booleans; 0 differ
+## results/rerun-critic11-observe.json: 4 booleans; 0 differ
+## results/rerun-critic11-realm.json: 12 booleans; 0 differ
+## results/rerun-critic11-reset.json: 9 booleans; 0 differ
+## results/rerun-critic12-adopt.json: 24 booleans; 0 differ
+## results/rerun-critic12-bf.json: 26 booleans; 0 differ
+## results/rerun-critic12-blank.json: 28 booleans; 0 differ
+## results/rerun-critic12-counter.json: 13 booleans; 0 differ
+## results/rerun-critic12-dd2.json: 12 booleans; 0 differ
+## results/rerun-critic12-docopen.json: 16 booleans; 0 differ
+## results/rerun-critic12-f4.json: 11 booleans; 0 differ
+## results/rerun-critic12-midcreate.json: 8 booleans; 0 differ
+## results/rerun-critic12-nav.json: 35 booleans; 0 differ
+## results/rerun-critic12-override.json: 1 booleans; 0 differ
+## results/rerun-critic12-per.json: 0 booleans; 0 differ
+## results/rerun-critic12-transfer.json: 0 booleans; 0 differ
+## results/rerun-critic13-f1.json: 68 booleans; 0 differ
+## results/rerun-critic13-f1b.json: 29 booleans; 0 differ
+## results/rerun-critic13-f2-fix.json: 0 booleans; 0 differ
+## results/rerun-critic13-f2.json: 18 booleans; 0 differ
+## results/rerun-critic13-f2b.json: 6 booleans; 0 differ
+## results/rerun-critic13-f2c.json: 0 booleans; 0 differ
+## results/rerun-critic13-f3.json: 3 booleans; 0 differ
+## results/rerun-critic13-f4.json: 5 booleans; 0 differ
+## results/rerun-critic14-c1-closed.json: 31 booleans; 0 differ
+## results/rerun-critic14-c2-prerender.json: 7 booleans; 0 differ
+## results/rerun-critic14-c3-reopen.json: 60 booleans; 0 differ
+## results/rerun-critic14-c4-top.json: 2 booleans; 0 differ
+## results/rerun-critic14-c5-top-fix.json: 21 booleans; 0 differ
+## results/rerun-critic14-c6-r4-fix.json: 4 booleans; 0 differ
+## results/rerun-critic14-c7-restore-gap.json: 41 booleans; 0 differ
+## results/rerun-critic14-prerender-no-devtools.json: 7 booleans; 0 differ
+## results/rerun-critic15-s1-restored-create.json: 30 booleans; 0 differ
+## results/rerun-critic15-s2-worker-closed.json: 11 booleans; 0 differ
+## results/rerun-critic15-s3-builtins-per-call.json: 2 booleans; 0 differ
+## results/rerun-round12-dd.json: 5 booleans; 0 differ
+## results/rerun-round12-facts.json: 10 booleans; 0 differ
+## results/rerun-round12-intent.json: 19 booleans; 0 differ
+## results/rerun-round12-listeners.json: 0 booleans; 0 differ
+## results/rerun-round14-reopen-paths.json: 56 booleans; 0 differ
+## results/rerun-round15-r15.json: 113 booleans; 0 differ
+## critic16/results/g1-loss-in-dispatch.json vs results/rerun-critic16-g1-loss-in-dispatch.json: 63 booleans; 13 differ
+  /result/G1 lost in the create's then, r1 disposed first/r2RestoredOnlyAtItsOwnRestore: false -> true
+  /result/G1 lost in the create's then, r1 disposed first/r2LostOnce: false -> true
+  /result/G1 lost in the create's then, r1 disposed first/asDocumented: false -> true
+  /result/G1 lost in the create's then, r1 not disposed/r2RestoredOnlyAtItsOwnRestore: false -> true
+  /result/G1 lost in the create's then, r1 not disposed/r2LostOnce: false -> true
+  /result/G1 lost in the create's then, r1 not disposed/asDocumented: false -> true
+  /result/G1 lost in a second page listener ahead of web3d's, r1 disposed first/r2RestoredOnlyAtItsOwnRestore: false -> true
+  /result/G1 lost in a second page listener ahead of web3d's, r1 disposed first/r2LostOnce: false -> true
+  /result/G1 lost in a second page listener ahead of web3d's, r1 disposed first/asDocumented: false -> true
+  /result/G1 lost in the create's then, and r2 disposed there (disposed while lost)/r2RestoredOnlyAtItsOwnRestore: false -> true
+  /result/G1 lost in the create's then, and r2 disposed there (disposed while lost)/asDocumented: false -> true
+  /result/G1 lost in listener 1 before the create, which fails because of the loss/r2RestoredOnlyAtItsOwnRestore: false -> true
+## critic16/results/b1-builtins-at-load.json vs results/rerun-critic16-b1-builtins-at-load.json: 4 booleans; 0 differ
+## critic16/results/o1-frame-order.json vs results/rerun-critic16-o1-frame-order.json: 6 booleans; 0 differ
+## critic16/results/n1-stopped-and-cancelled.json vs results/rerun-critic16-n1-stopped-and-cancelled.json: 14 booleans; 0 differ

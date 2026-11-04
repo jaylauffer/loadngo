@@ -1,0 +1,18 @@
+{
+  "page": "xtop",
+  "browser": "Chrome 157.0.8103.38 (headless, own instance)",
+  "console": [],
+  "pageErrors": [],
+  "out": {
+    "topCrossOrigin": true,
+    "sharedStateSame": false,
+    "aFirst": [
+      56,
+      255,
+      56
+    ],
+    "secondCreate": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d drives a canvas element only from a copy of web3d loaded in the window whose document holds it, so load web3d there",
+    "sharedStateAfter": false
+  },
+  "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)"
+}
