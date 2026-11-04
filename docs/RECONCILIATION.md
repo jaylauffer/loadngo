@@ -216,7 +216,11 @@ Jay, 2026-10-01:
    `loadngo-cpp` and `loadngo-cpp.pre-mailmap-backup-20260820` in
    `pudding-20260917` are a first case.
 3. **Directory nodes** (lesson 3), so subtree records and every
-   consolidation stay small.
+   consolidation stay small. Done 2026-11-04 for repositories, not archives:
+   a repository version's tree is one content-addressed object per folder
+   with its file and byte totals, and its changes name a folder created or
+   deleted whole as one path ([REPOSITORY.md](REPOSITORY.md)). Archive
+   manifests are still one flat list.
 4. **Task**: canonical BLAKE3 hashing in `data::entity` and `data::sync`;
    sync emits records and consolidations; skeletal keys fold case and
    Unicode.

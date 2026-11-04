@@ -31,6 +31,7 @@ pub mod machine_identity;
 pub mod model_store;
 pub mod p2pmsg;
 pub mod pudding;
+pub mod repository;
 pub mod service;
 
 pub mod zip;

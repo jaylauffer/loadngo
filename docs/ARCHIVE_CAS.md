@@ -338,6 +338,13 @@ gone. Only `archive_cas_purge --delete-archive` deletes manifests, every
 version of that one archive. `archive_cas_gc` counts every manifest on disk,
 retired ones included, so it frees only strays an interrupted run left.
 
+A root can also hold repositories ([REPOSITORY.md](REPOSITORY.md),
+`repositories/<id>/`). Since 2026-11-04 `archive_cas_gc` and `archive_cas_purge`
+keep every object a repository needs (each version reachable from a head or a
+kept head claim, and every tree and file below them), and refuse to run when a
+repository cannot be read. Before that change, `archive_cas_gc --execute` would
+have deleted every repository object as unreferenced.
+
 ## Scope and future promotion
 
 This is an integrity and recoverability layer, not an authenticity claim.

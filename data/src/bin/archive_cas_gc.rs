@@ -56,6 +56,12 @@ fn run() -> Result<()> {
     // manifest's own bytes plus every blob it points at), and it came from
     // manifests already in memory -- no extra disk work to know it, so
     // there's no excuse for the walk below to be silent.
+    // Objects the repositories in this root need (docs/REPOSITORY.md) are live too.
+    let repository_objects = data::repository::live_objects(&store)
+        .context("cannot work out what this root's repositories need; nothing removed")?;
+    let repository_count = repository_objects.len();
+    referenced.extend(repository_objects);
+
     let expected_total = referenced.len();
     let scan_started = Instant::now();
     let mut last_reported_at = Instant::now();
@@ -88,9 +94,10 @@ fn run() -> Result<()> {
 
     let total_bytes: u64 = orphaned.iter().map(|(_, size)| size).sum();
     println!(
-        "{} manifest(s) scanned, {} referenced object(s) (blobs + manifest bytes).",
+        "{} manifest(s) scanned, {} referenced object(s) (blobs + manifest bytes, and {} objects repositories need).",
         manifest_count,
-        referenced.len()
+        referenced.len(),
+        repository_count
     );
     println!(
         "{} orphaned blob(s), {} reclaimable.",

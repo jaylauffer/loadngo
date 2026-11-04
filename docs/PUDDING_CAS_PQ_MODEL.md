@@ -40,6 +40,14 @@ CAS layer is not yet a complete post-quantum repository model.
 
 ### What exists now
 
+Since 2026-11-04, a repository layer on the Archive CAS ([REPOSITORY.md](REPOSITORY.md),
+`loadngo-repo`): versions with explicit parents and directory-node trees, branch
+heads signed with Dilithium2, checkout, status, commit, import from git and send
+between machines. loadngo's whole `dev` history is held that way. The list below
+is the earlier slice it builds on; the "does not exist yet" list still holds
+for the `pudding` root manifests, and REPOSITORY.md says what the repository
+layer does not do yet (merges, fetching, trust policy, rollback protection).
+
 - blob storage in [cas.rs](../data/src/cas.rs)
 - fixed 32-byte `CasHash`
 - current blob addressing by `blake3`

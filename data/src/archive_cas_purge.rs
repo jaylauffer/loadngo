@@ -317,6 +317,9 @@ fn plan(
         }
     }
 
+    // Objects the repositories in this root need (docs/REPOSITORY.md) are never purged.
+    referenced.extend(crate::repository::live_objects(store)?);
+
     let candidates: Vec<CasHash> = match sweep {
         Sweep::Full => store.object_hashes_with_progress(|found| {
             progress(PurgeProgress::ListingObjects { found });
@@ -393,6 +396,19 @@ pub fn execute_purge(
         .collect();
     if now != plan.live {
         bail!("the archive's manifests changed since this plan was made; plan the purge again");
+    }
+    // A repository may have come to need a planned object since (a commit that restored
+    // a file, say).
+    let needed = crate::repository::live_objects(store)?;
+    if let Some(object) = plan
+        .objects
+        .iter()
+        .find(|object| needed.contains(&object.hash))
+    {
+        bail!(
+            "object {} is needed by a repository since this plan was made; plan the purge again",
+            object.hash
+        );
     }
     let total = plan.file_count();
     let mut outcome = PurgeOutcome::default();
