@@ -1,0 +1,20 @@
+cargo fmt --check: exit 0, held
+cargo clippy --locked --workspace --all-targets --all-features --exclude loadngo-gfx-dx12 --exclude gui-win32 --exclude proactor-harness -- -D warnings: exit 0, held
+cargo clippy --locked -p loadngo-web3d --target wasm32-unknown-unknown --all-targets -- -D warnings: exit 0, held
+cargo clippy --locked --offline -p loadngo-web3d --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings: exit 0, held
+cargo clippy --locked --offline -p loadngo-web3d --target aarch64-unknown-linux-gnu --all-targets --all-features -- -D warnings: exit 0, held
+cargo clippy --locked --offline -p loadngo-web3d --target x86_64-pc-windows-msvc --all-targets --all-features -- -D warnings: exit 0, held
+cargo clippy --locked --offline -p loadngo-web3d --all-targets --all-features -- -D warnings: exit 0, held
+cargo test --locked -p loadngo-web3d: exit 0, held
+cargo test --locked -p loadngo-web3d --release: exit 0, held
+web3d/build.sh: exit 0, held
+shasum -a 256 web3d/pkg/loadngo_web3d.wasm web3d/pkg/gl.js web3d/pkg/web3d.js web3d/pkg/web3d.d.ts: exit 0, held
+web3d/build.sh: exit 0, held
+shasum -a 256 web3d/pkg/loadngo_web3d.wasm web3d/pkg/gl.js web3d/pkg/web3d.js web3d/pkg/web3d.d.ts: exit 0, held
+web3d/build.sh: exit 0, held
+shasum -a 256 web3d/pkg/loadngo_web3d.wasm web3d/pkg/gl.js web3d/pkg/web3d.js web3d/pkg/web3d.d.ts: exit 0, held
+node web3d/tools/three-reference.mjs --check: exit 0, held
+env WASM_CLIPPY=cargo clippy --locked -p loadngo-web3d --target wasm32-unknown-unknown --all-targets -- -D warnings ruby web3d/evidence/phase1/ci-step.rb .github/workflows/ci.yml: exit 0, held
+bash -c set -o pipefail; node web3d/demo/check.mjs --port 5662 --out web3d/evidence/phase1 --seconds 10 --steady 60 2>&1 | tee web3d/evidence/phase1/rendered-check.log: exit 0, held
+bash -c set -o pipefail; node web3d/demo/check.mjs --port 5663 --out web3d/evidence/phase1/blind-control --seconds 10 --steady 60 --blind 2>&1 | tee web3d/evidence/phase1/blind-control/check-blind.log: exit 3, held
+wrote <home>/pudding/loadngo/web3d/evidence/phase1/gates.txt; every gate held
