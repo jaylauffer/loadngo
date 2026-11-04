@@ -1,0 +1,22 @@
+{
+ "top": "http://a.localhost:5664",
+ "frameOrigin": "http://b.a.localhost:5664",
+ "topReachableAfter": true,
+ "realmHomeIsTheFrame": true,
+ "topStateMadeByTheFrame": false,
+ "copy1": "created",
+ "copy2WhileCopy1Live": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)",
+ "serial1": 161319,
+ "copy2AfterCopy1Disposed": "created",
+ "serial2": 161320,
+ "serialsInSequence": true,
+ "listeners": {
+  "webglcontextlost": 1,
+  "webglcontextrestored": 1
+ },
+ "pass": true
+}
+messages: 1
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0

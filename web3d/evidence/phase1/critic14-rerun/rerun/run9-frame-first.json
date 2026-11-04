@@ -1,0 +1,38 @@
+{
+  "started": "2026-11-04T03:23:59.499Z",
+  "console": [],
+  "pageErrors": [],
+  "browser": "Chrome 157.0.8103.38 (headless, own instance)",
+  "probes": [
+    {
+      "id": "N10d",
+      "claim": "a frame's copy made the shared state on the top window, then the frame was removed: the top window's copy still creates, draws, recovers from a loss and refuses a second renderer",
+      "pass": true,
+      "detail": {
+        "stateMadeInFrame": true,
+        "frameDraw": [
+          56,
+          255,
+          56
+        ],
+        "draw": [
+          56,
+          255,
+          56
+        ],
+        "restored": "webglcontextrestored",
+        "calls": {
+          "lost": 1,
+          "restored": 1
+        },
+        "next": [
+          56,
+          255,
+          56
+        ],
+        "shared": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)"
+      }
+    }
+  ],
+  "passed": 1
+}

@@ -1,0 +1,452 @@
+{
+  "started": "2026-11-04T03:23:57.275Z",
+  "console": [
+    "warning: WebGL: INVALID_OPERATION: restoreContext: context restoration not allowed"
+  ],
+  "pageErrors": [],
+  "browser": "Chrome 157.0.8103.38 (headless, own instance)",
+  "probes": [
+    {
+      "id": "N1",
+      "claim": "WEB3D.md 'Context loss': on webglcontextrestored the controller calls onContextRestored for the renderer that was live at the loss. Here the page's own restored listener, added before web3d's, disposes that renderer first.",
+      "pass": true,
+      "detail": {
+        "got": "webglcontextrestored",
+        "calls": {
+          "restored": 1,
+          "lost": 1
+        },
+        "disposedIn": "restored",
+        "nextPixel": [
+          56,
+          255,
+          56
+        ]
+      }
+    },
+    {
+      "id": "N1b",
+      "claim": "disposed in the page's own lost listener (before web3d's): onContextRestored still comes once (onContextLost does not: it was no longer live)",
+      "pass": true,
+      "detail": {
+        "got": "webglcontextrestored",
+        "calls": {
+          "restored": 1,
+          "lost": 0
+        }
+      }
+    },
+    {
+      "id": "N2",
+      "claim": "three failed creates (one function given twice, once through a second module copy) and the live renderer disposed while lost: each hook runs once on the restore; a new renderer then draws; the canvas holds exactly one lost and one restored listener",
+      "pass": true,
+      "detail": {
+        "got": "webglcontextrestored",
+        "d": {
+          "a": "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore",
+          "b": "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore",
+          "s1": "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore",
+          "s2": "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore",
+          "shared": "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore"
+        },
+        "calls": {
+          "live": 1,
+          "a": 1,
+          "b": 1,
+          "shared": 1
+        },
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "glError": 0,
+        "listenersBefore": {
+          "webglcontextlost": 1,
+          "webglcontextrestored": 1
+        },
+        "listenersAfter": {
+          "webglcontextlost": 1,
+          "webglcontextrestored": 1
+        }
+      }
+    },
+    {
+      "id": "N3",
+      "claim": "a loss and restore both between two checks finish the old renderer (frame() false, creates and resize throw); a new renderer may take the canvas while the old is undisposed; disposing the old one then sends nothing into the new one's context",
+      "pass": true,
+      "detail": {
+        "got": "webglcontextrestored",
+        "calls": {
+          "lost": 1,
+          "restored": 1
+        },
+        "frame": {
+          "threw": false,
+          "value": false
+        },
+        "lostFlag": true,
+        "mesh": {
+          "threw": true,
+          "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
+        },
+        "resize": {
+          "threw": true,
+          "message": "web3d: the WebGL context is lost; dispose this renderer, then create a new one once the context is restored (onContextRestored is called then, also after dispose) and upload everything again"
+        },
+        "fresh": "created",
+        "pixelAfterOldDispose": [
+          56,
+          255,
+          56
+        ],
+        "glError": 0,
+        "freshStillOwns": {
+          "threw": false
+        }
+      }
+    },
+    {
+      "id": "N4",
+      "claim": "disposed between loseContext() and the lost event: onContextLost is not called (no live renderer), onContextRestored is called once",
+      "pass": true,
+      "detail": {
+        "before": {
+          "contextLost": true,
+          "frame": false
+        },
+        "got": "webglcontextrestored",
+        "calls": {
+          "lost": 0,
+          "restored": 1
+        }
+      }
+    },
+    {
+      "id": "N5",
+      "claim": "a throwing onContextLost and onContextRestored are reported and stop nothing; a create made inside onContextLost fails as lost and its hook runs once on the restore; a create made inside that hook draws",
+      "pass": true,
+      "detail": {
+        "order": [
+          "lost",
+          "restored(inner)",
+          "restored(live)"
+        ],
+        "inLost": "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore",
+        "second": "created",
+        "pixel": [
+          56,
+          255,
+          56
+        ],
+        "reported": [
+          "c9: onContextLost throws on purpose",
+          "c9: onContextRestored throws on purpose"
+        ]
+      }
+    },
+    {
+      "id": "N6",
+      "claim": "hooks that dispose: A's onContextLost disposes B on another canvas (B's canvas takes a new renderer); on one canvas the new renderer's onContextLost disposes the old one and itself, its onContextRestored creates a third that draws; the old one hears nothing more",
+      "pass": true,
+      "detail": {
+        "a": "webglcontextrestored",
+        "bAfter": [
+          56,
+          255,
+          56
+        ],
+        "same": "webglcontextrestored",
+        "third": [
+          56,
+          255,
+          56
+        ],
+        "calls": {
+          "oldLost": 1,
+          "oldRestored": 1,
+          "newLost": 1,
+          "newRestored": 1
+        }
+      }
+    },
+    {
+      "id": "N7a",
+      "claim": "a page-made context lost (event not cancelled) before web3d used the canvas: the create says it was lost before web3d; no restore and no hook (as WEB3D.md says)",
+      "pass": true,
+      "detail": {
+        "aCreate": "web3d: the canvas's WebGL context is lost; it was lost before web3d first used this canvas, and it is restored if its lost event is cancelled, which web3d now does if that event is still to come (one dispatched before this call began only the page could have cancelled), and then this call's onContextRestored is called",
+        "aRestoreError": 37442,
+        "aRestored": "timeout",
+        "aCalls": 0,
+        "bCreate": "web3d: the canvas's WebGL context is lost; it was lost before web3d first used this canvas, and it is restored if its lost event is cancelled, which web3d now does if that event is still to come (one dispatched before this call began only the page could have cancelled), and then this call's onContextRestored is called",
+        "bPrevented": true,
+        "bRestored": "webglcontextrestored",
+        "bCalls": 1,
+        "bAgain": [
+          56,
+          255,
+          56
+        ],
+        "cCreate": "web3d: the canvas's WebGL context is lost; it was lost before web3d first used this canvas, and it is restored if its lost event is cancelled, which web3d now does if that event is still to come (one dispatched before this call began only the page could have cancelled), and then this call's onContextRestored is called",
+        "cRestored": "webglcontextrestored",
+        "cCalls": 1,
+        "cAgain": [
+          56,
+          255,
+          56
+        ]
+      }
+    },
+    {
+      "id": "N7b",
+      "claim": "lost but its event not yet dispatched when the create starts: the canvas is restored and the hook comes once, and the message is right about it",
+      "pass": false,
+      "detail": {
+        "bCreate": "web3d: the canvas's WebGL context is lost; it was lost before web3d first used this canvas, and it is restored if its lost event is cancelled, which web3d now does if that event is still to come (one dispatched before this call began only the page could have cancelled), and then this call's onContextRestored is called",
+        "bPrevented": true,
+        "bRestored": "webglcontextrestored",
+        "bCalls": 1,
+        "bAgain": [
+          56,
+          255,
+          56
+        ]
+      }
+    },
+    {
+      "id": "N7c",
+      "claim": "lost and cancelled by the page before web3d used the canvas: the hook comes once on the restore and a new renderer draws",
+      "pass": true,
+      "detail": {
+        "cCreate": "web3d: the canvas's WebGL context is lost; it was lost before web3d first used this canvas, and it is restored if its lost event is cancelled, which web3d now does if that event is still to come (one dispatched before this call began only the page could have cancelled), and then this call's onContextRestored is called",
+        "cRestored": "webglcontextrestored",
+        "cCalls": 1,
+        "cAgain": [
+          56,
+          255,
+          56
+        ]
+      }
+    },
+    {
+      "id": "N8",
+      "claim": "WEB3D.md: a page-made context is refused only without depth or with another antialias; one that suits is used. Does web3d draw (and upload) right with the state a page left on it?",
+      "pass": true,
+      "detail": [
+        {
+          "name": "scissor test on, a 1x1 box at the corner",
+          "pageError": 0,
+          "glError": 0,
+          "pixel": [
+            56,
+            255,
+            56
+          ],
+          "drawn": true
+        },
+        {
+          "name": "colour mask all false",
+          "pageError": 0,
+          "glError": 0,
+          "pixel": [
+            56,
+            255,
+            56
+          ],
+          "drawn": true
+        },
+        {
+          "name": "depth func NEVER",
+          "pageError": 0,
+          "glError": 0,
+          "pixel": [
+            56,
+            255,
+            56
+          ],
+          "drawn": true
+        },
+        {
+          "name": "cull face FRONT",
+          "pageError": 0,
+          "glError": 0,
+          "pixel": [
+            56,
+            255,
+            56
+          ],
+          "drawn": true
+        },
+        {
+          "name": "clear depth 0",
+          "pageError": 0,
+          "glError": 0,
+          "pixel": [
+            56,
+            255,
+            56
+          ],
+          "drawn": true
+        },
+        {
+          "name": "depth range 1..1",
+          "pageError": 0,
+          "glError": 0,
+          "pixel": [
+            56,
+            255,
+            56
+          ],
+          "drawn": true
+        },
+        {
+          "name": "rasterizer discard on",
+          "pageError": 0,
+          "glError": 0,
+          "pixel": [
+            56,
+            255,
+            56
+          ],
+          "drawn": true
+        },
+        {
+          "name": "draw buffers NONE on the default framebuffer",
+          "pageError": 0,
+          "glError": 0,
+          "pixel": [
+            56,
+            255,
+            56
+          ],
+          "drawn": true
+        },
+        {
+          "name": "a framebuffer of its own left bound",
+          "pageError": 0,
+          "glError": 0,
+          "pixel": [
+            56,
+            255,
+            56
+          ],
+          "drawn": true
+        },
+        {
+          "name": "nothing changed (control)",
+          "pageError": 0,
+          "glError": 0,
+          "pixel": [
+            56,
+            255,
+            56
+          ],
+          "drawn": true
+        },
+        {
+          "name": "UNPACK_SKIP_PIXELS 1",
+          "texture": "created",
+          "drawn": true
+        },
+        {
+          "name": "UNPACK_SKIP_ROWS 1",
+          "texture": "created",
+          "drawn": true
+        },
+        {
+          "name": "a PIXEL_UNPACK_BUFFER left bound",
+          "texture": "created",
+          "drawn": true
+        },
+        {
+          "name": "nothing changed (control)",
+          "texture": "created",
+          "drawn": true
+        }
+      ]
+    },
+    {
+      "id": "N9",
+      "claim": "two copies of the module share one controller a canvas: one copy's live renderer refuses the other's create; hooks from both copies run once; the second copy's renderer hears the next loss and restore; the canvas has one listener of each kind",
+      "pass": true,
+      "detail": {
+        "bWhileALive": "web3d: this canvas already has a live renderer; dispose it first (two renderers would share one WebGL context)",
+        "bWhileLost": "web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore",
+        "first": "webglcontextrestored",
+        "rb": [
+          56,
+          255,
+          56
+        ],
+        "second": "webglcontextrestored",
+        "rbFrame": false,
+        "listeners": {
+          "webglcontextlost": 1,
+          "webglcontextrestored": 1
+        },
+        "calls": {
+          "a": 1,
+          "b": 1,
+          "bLost": 1,
+          "b2Restored": 1
+        }
+      }
+    },
+    {
+      "id": "N10",
+      "claim": "the probe ran to its end",
+      "pass": false,
+      "detail": "Error: web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d drives a canvas element only from a copy of web3d loaded in the window whose document holds it, so load web3d there\n    at canvasKind (http://127.0.0.1:5664/web3d/pkg/web3d.js:389:15)\n    at readOptions (http://127.0.0.1:5664/web3d/pkg/web3d.js:620:16)\n    at Object.createRenderer (http://127.0.0.1:5664/web3d/pkg/web3d.js:658:13)\n    at n10 (http://127.0.0.1:5664/c/probe9.js:507:53)\n    at async main (http://127.0.0.1:5664/c/probe9.js:616:7)\n    at async <anonymous>:396:30"
+    },
+    {
+      "id": "N10b",
+      "claim": "a frame's renderer on the frame's own canvas loses and restores; its hooks run once; the top window's renderer is untouched",
+      "pass": true,
+      "detail": {
+        "got": "webglcontextrestored",
+        "calls": {
+          "lost": 1,
+          "restored": 1
+        },
+        "oursFrame": true,
+        "ours": [
+          56,
+          255,
+          56
+        ]
+      }
+    },
+    {
+      "id": "N11",
+      "claim": "WEB3D.md createTexture: telling a bitmaprenderer canvas apart asks the canvas for a '2d' context; 'a canvas with none gets a blank 2d one, which uploads the same transparent pixels'. Does that leave the caller's canvas as it was in every way that matters?",
+      "pass": false,
+      "detail": {
+        "elTexture": "created",
+        "elWebgl2After": "null: the canvas can no longer have a WebGL context",
+        "elBitmaprendererAfter": "null",
+        "elTransfer": "throws: can no longer be transferred",
+        "el2dOptions": {
+          "alpha": true,
+          "colorSpace": "srgb",
+          "colorType": "unorm8",
+          "desynchronized": false,
+          "toneMapping": {
+            "mode": "standard"
+          },
+          "willReadFrequently": false
+        },
+        "elRenderer": "web3d: WebGL2 is not available here, or this canvas already has another kind of context",
+        "offTexture": "created",
+        "offWebgl2After": "null",
+        "controlWebgl2": "a context",
+        "webglSource": "created",
+        "sameSize": {
+          "threw": true,
+          "message": "web3d: a canvas with a 'bitmaprenderer' context is not accepted as a texture source, because the bitmap it shows need not be its size; pass the ImageBitmap itself"
+        }
+      }
+    }
+  ],
+  "passed": 12
+}

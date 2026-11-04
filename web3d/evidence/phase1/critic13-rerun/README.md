@@ -1,10 +1,12 @@
 # The thirteenth critic's findings, answered, and every critic's probes rerun (2026-11-04)
 
 The fourteenth builder round, on the working tree of loadngo `web3d-phase1` at `757d0100`. Chrome
-156.0.8078.80 headless (`channel: 'chrome'`, ANGLE over Metal, Apple M4 Pro); rustc 1.99.0,
-wasm-opt 133. The Mac's GPU was claimed for the runs and shared with another session, whose
-headless Chromes drew during this round; `gates-contention/contention-during.txt` records which
-Chromes were alive, and whose, every 5 s of the gate run.
+157.0.8103.38 headless (`channel: 'chrome'`, ANGLE over Metal, Apple M4 Pro), as every result of
+this round records; rustc 1.99.0, wasm-opt 133. (Corrected in the fifteenth round: this line said
+Chrome 156.0.8078.80, the fourteenth critic's F4.) The Mac's GPU was claimed for the runs and
+shared with another session, whose headless Chromes drew during this round;
+`gates-contention/contention-during.txt` records which Chromes were alive, and whose, every 5 s of
+the gate run.
 
 The supported model is unchanged: one copy of web3d, in the canvas's own realm, drives a canvas,
 and a canvas element is taken only when its owner document is this window's document. This round
@@ -91,12 +93,17 @@ Why not the critic's code fix (a capturing listener on the canvas's root node, e
 once): the root changes as the canvas moves between the document and shadow roots, so the listener
 would have to follow it, come back after each reopening (the root's listeners are erased too), and
 dedupe against the canvas's own pair, which a canvas in no document still needs. That is new state
-and ordering for a page that reopens its own document from inside a WebGL event. A smaller idea,
-calling the missed restore's hooks from the observer when it finds the context restored, was
-rejected as unsafe: it cannot tell a missed restore from one whose event is still to come. Called
-early, the hook lets the page create its next renderer, and the restored event that then arrives
-calls that new renderer's `onContextRestored` for a loss it never had. WEB3D.md gives the reason
-for the limit in a sentence.
+and ordering for a page that reopens its own document from inside a WebGL event.
+
+**Corrected in the fifteenth round** (the fourteenth critic's F2(b)): this paragraph went on to
+reject calling the missed restore's hooks from the observer because "it cannot tell a missed
+restore from one whose event is still to come". That does not hold: in Chrome no task sees a
+restored context before its restored event has run, so a check in a later task can tell them apart
+(`../critic14/results/c7-restore-gap.json`); and during a lost event's dispatch the observer runs
+while `window.event` is that event, so it could cancel a lost event for a canvas outside any shadow
+tree (`../critic14/results/c3-reopen.json`, R6). The reason these cases stay open is now the page
+contract (WEB3D.md, "The page contract" and "Why the last two cases stay open"): they are outside
+it, and web3d carries no code for pages outside it.
 
 The comments on `controllerFor` and `arm` that said the observer re-arms "before any lost event can
 be dispatched" now say what holds: before any later event, and before one being dispatched reaches

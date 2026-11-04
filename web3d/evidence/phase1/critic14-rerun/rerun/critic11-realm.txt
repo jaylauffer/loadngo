@@ -1,0 +1,97 @@
+{
+ "A1 frame canvas adopted into the top document": {
+  "ownerIsTop": true,
+  "protoIsFrames": true,
+  "protoIsTops": false,
+  "topCopy": "accepted",
+  "frameCopy": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d dri"
+ },
+ "A2 frame's renderer on an adopted canvas, frame kept (control), then a loss": {
+  "create": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d dri"
+ },
+ "A2 frame's renderer on an adopted canvas, frame removed, then a loss": {
+  "create": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d dri"
+ },
+ "A3 top canvas adopted into a frame document": {
+  "ownerIsFrame": true,
+  "protoIsTops": true,
+  "protoIsFrames": false,
+  "topCopy": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d dri",
+  "frameCopy": "accepted"
+ },
+ "A4 adoptNode / importNode / createElement through another document": {
+  "topAdoptNode": {
+   "owner": "top",
+   "proto": "frame"
+  },
+  "topImportNode": {
+   "owner": "top",
+   "proto": "top"
+  },
+  "frameDocImportNodeCalledFromTop": {
+   "owner": "frame",
+   "proto": "frame"
+  },
+  "frameDocCreateElementCalledFromTop": {
+   "proto": "frame"
+  },
+  "topDocCreateElementCalledFromFrame": {
+   "owner": "top",
+   "proto": "top"
+  },
+  "frameParsedCanvas": {
+   "proto": "frame"
+  },
+  "adoptNode: top copy": "accepted",
+  "importNode: top copy": "accepted"
+ },
+ "A5 customised built-in canvas (is=)": {
+  "isX": true,
+  "top": "accepted"
+ },
+ "A5b subclass made in a frame, extending the top HTMLCanvasElement, registered here": {
+  "top": "accepted",
+  "frame": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d dri"
+ },
+ "A6 Object.setPrototypeOf on a frame canvas": {
+  "topCopyOnFrameDocCanvas": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d dri"
+ },
+ "A7 about:blank frame": {
+  "ownCanvas": "accepted",
+  "topCanvas": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d dri",
+  "topCopyOnItsCanvas": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d dri",
+  "sharesHome": false
+ },
+ "A7b srcdoc frame": {
+  "ownCanvas": "accepted",
+  "topCanvas": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d dri"
+ },
+ "A8 top renderer, canvas then moved into a frame, frame removed, then a loss": {
+  "threw": "web3d: this renderer's canvas has been moved to another document than this window's, which web3d does not support (its context-loss listeners belong to this win"
+ },
+ "A9 window.open popup": {
+  "popupTopIsItself": true,
+  "popupCopyOnOpenerCanvas": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d dri",
+  "openerCopyOnPopupCanvas": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d dri",
+  "openerCopyOnItsCanvasNowInPopup": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d dri",
+  "popupCopyOnItsCanvasNowHere": "web3d: this canvas element is in another document than this window's (another window's, or one with no window, such as a template's or a DOMParser's); web3d dri"
+ },
+ "A10 worker: OffscreenCanvas made there, transferred there, and sent back": {
+  "own": {
+   "ok": true,
+   "homeIsSelf": true
+  },
+  "transferred": {
+   "ok": true
+  },
+  "sentBack": "received",
+  "windowCopyOnCanvasFromWorker": "accepted",
+  "windowOffscreenSentToWorkerNotTransferred": {
+   "op": "unknown"
+  }
+ }
+}
+messages: 1
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0

@@ -1,127 +1,89 @@
-# The fourteenth critic's findings: the fifteenth round, stopped partway (2026-11-04)
+# The fourteenth critic's findings, answered: the fifteenth round (2026-11-04)
 
-**Status: incomplete.** The session ended about a third of the way through the round. Some code and
-comment changes are made, in `js/web3d.js` and `js/web3d.d.ts`. No gate has run on them, no probe
-has run, and WEB3D.md is unchanged. Nothing is committed or staged. The fourteenth critic's folder
-(`../critic14/`) is untouched.
+The fifteenth builder round, on loadngo `web3d-phase1` from `9a4ab9c7` (the fourteenth critic judged
+that commit; its own evidence is `../critic14/`, untouched). A first session made part of the round
+and stopped (`e6a78183`, WIP, no gate run); a second finished it. Chrome 157.0.8103.38 headless
+(`channel: 'chrome'`, ANGLE over Metal, Apple M4 Pro); rustc 1.99.0, wasm-opt 133. The Mac's GPU was
+claimed for every run; during the gates only a desktop Chrome window shared it
+(`gates-contention/contention-during.txt`, with a note on reading it).
 
-The working tree is loadngo `web3d-phase1` at `9a4ab9c7`, plus the changes listed under "Files".
+## What the round decided
 
-## The page contract (drafted here, not yet in WEB3D.md)
+The supported model is written down as **the page contract** (WEB3D.md, "The page contract"): one
+copy of web3d, in the canvas's own realm, drives a canvas, on a page that does not keep a WebGL
+context event from web3d's listener (stopping it, or reopening the document from a listener ahead
+of web3d's), does not shadow or patch a built-in web3d reads, and does not move a driven canvas
+element to another document. web3d carries no code for pages outside it; WEB3D.md states what each
+case costs, with where it was measured. Fourteen rounds each found one more way a hostile page can
+break recovery; the contract is where that stops, and it is set by how web3d is used.
 
-The supported model stays as it is: one copy of web3d, in the canvas's own realm, drives a canvas,
-and it takes an element only if the element's owner document is this window's. web3d supports a
-**cooperative page**: one that does none of the following. web3d has no code against these cases,
-and none of them is tested as supported.
+## Each finding
 
-1. **It does not stop or reorder a WebGL context event before web3d's listener has run.** This
-   covers `webglcontextlost` and `webglcontextrestored` on a canvas web3d has armed.
-   - It does not call `stopPropagation()` or `stopImmediatePropagation()`, or set
-     `cancelBubble = true`, in a capturing listener on a node the event passes through before the
-     canvas: the window, the document, an ancestor element, or the shadow root the canvas is in.
-   - It does not call `stopImmediatePropagation()` in a listener on the canvas that sits ahead of
-     web3d's. A page listener gets ahead in three ways: it was added before web3d's first create on
-     the canvas in this realm; or after a failed create took web3d's listeners off, before the next
-     create; or after a `document.open()` erased web3d's listeners, before web3d's observer put
-     them back.
-   - It does not reopen the canvas's document (`document.open()`, or `document.write()` once the
-     document has loaded) from inside a listener for these events.
-
-   **If it does:** a lost event that web3d's listener never sees is not cancelled, so the context
-   is lost for good and no `onContextLost` is called (`../critic14/results/c3-reopen.json`, R1 and
-   R5). A restored event that web3d's listener never sees still brings the context back, but no
-   `onContextRestored` is called then. With this round's code change (F2(a) below), the hooks that
-   restore owed come at the canvas's next restore, if one comes, whatever the page does in between,
-   and each is called once.
-
-   Measured, though not supported: a reopening from a listener anywhere other than on the canvas
-   ahead of web3d's is still handled, because the observer puts web3d's listeners back before the
-   event reaches the canvas (`../critic13-rerun/results/reopen-paths.json`).
-
-   Still to measure: the draft says that `stopPropagation()` in a canvas listener ahead of web3d's
-   does not stop web3d's own listener, which is on the same node. That follows from the DOM
-   standard but was not run this round.
-
-2. **It does not shadow or patch a built-in that web3d reads.** This covers a global declaration of
-   any kind named after one (`var`, `let`, `const`, `function` or `class` at a classic script's top
-   level: `let` and `class` shadow a bare global name for module code too), an assignment to one,
-   `Object.defineProperty` or `delete` on one, and a patched prototype method or accessor.
-   - **If it does:** what happens depends on the built-in; there is no general guarantee.
-   - **Still to do:** list the built-ins by name in WEB3D.md. Every built-in read at load or call
-     time in `js/web3d.js` and `js/gl.js` belongs on that list, including the WebGL2 methods, which
-     `gl.js` calls on the prototype each time.
-
-3. **It does not move a driven canvas to another document.**
-   - **If it does:** `frame()`, `resize()` and the creates throw while the canvas is away, and work
-     again once it is back. If the other document was reopened while the canvas was in it, the
-     canvas comes back with none of web3d's listeners, so its next loss is for good.
-   - Handing a canvas between windows between renderers (dispose, move, create) stays supported.
-
-The other limits outside this contract stay as WEB3D.md states them: the page leaves web3d's own
-state under `Symbol.for('loadngo-web3d')` and a renderer's private fields alone, and a copy run in
-an extension's isolated world is out of scope.
-
-## Each item: done or not
-
-| Item | State |
-| --- | --- |
-| F1, the removed-frame check | **Code done, not run.** `ownRealm()` now reads the built-in `top` getter, taken at load (`TOP`), instead of `closed`: `GLOBAL[SHARED_KEY] === REALM_STATE && (TOP === undefined \|\| TOP.call(GLOBAL) !== null)`. This differs from the critic's tried line (`GLOBAL.top !== null`) on purpose. In a window the two are the same, since `top` is an own, non-configurable accessor from the window's start. In a worker, which has no built-in `top`, a page's `globalThis.top = null` would turn the critic's line false, and so refuse every canvas; it leaves `TOP` undefined. `CLOSED` is gone. The comment above `GLOBAL` and the comment on `ownRealm()` are corrected. Not run against the 80 probes or any critic's pages; the module only loads in Node. **Left:** WEB3D.md 244-248 and 299 ("`closed`"), and the 772-802 mentions; an NV case for a frame that declares `function closed() {}` (planned as a new `demo/probe-frame-closed.html`; not written); measuring when a closed popup's `top` reads null (the new message assumes "once the browser has discarded it") |
-| F2(a), a missed restore's hooks | **Code done, not run.** It is the critic's tried fix, verbatim: `take()` runs `if (controller.current) waitForRestore(controller, controller.current.onRestored);` before setting `current`. On top of that, the lost listener now clears `current.onLost` after calling it, so a renderer still current at a later loss (one that missed the restore in between) gets no second `onContextLost`. That makes the critic's "neither disposes nor creates" case read "first lost", then "first restored" at the second restore. Inside the contract nothing changes, since a handled restore clears `current`. **Left:** rerun `../critic14/site/c3-reopen.html` and `c6-r4-fix.html` against the new `pkg/` |
-| F2(b), the wrong reasons | **Not done.** WEB3D.md 489-515 and `../critic13-rerun/README.md` ("Why not the critic's code fix") still give the reasons the critic disproved. Rewrite them as the contract's first item and its stated limit. Also fold in the nit at 496 (the third way a listener gets ahead), which the contract draft above already lists |
-| F3, stopping propagation | **Comments done; WEB3D.md not.** The comment at the top of `js/web3d.js` now says the controller cancels every lost event "that reaches its listener" and names the contract. So do the `controllerFor` comment and the `onContextRestored` comment in `js/web3d.d.ts`. **Left:** WEB3D.md 528 ("however the page orders its own listeners") and 519-526 |
-| F4, the browser version | **Not done.** `../critic13-rerun/README.md` lines 3-4 still say Chrome 156.0.8078.80; every result of that round records 157.0.8103.38. WEB3D.md 768-777 should say that the browser changed (156 to 157) and that the GPU conclusion still holds: the fourteenth critic's near-quiet run on 157 matched the table within 0.03 ms at the median |
-| Polish: a closing popup's message | **Code done.** `NAVIGATED` now also names "a window that has been closed", and keeps "navigated away", which probe NV matches. Every "navigated away or its frame has been removed" in `js/web3d.js` and `js/web3d.d.ts` now names closed windows too |
-| Polish: the unwrapped `.d.ts` line | **Done** (the `createRenderer` comment) |
-| The CI-step gate | **Not done.** Planned, cheap tightenings of `../ci-step.rb`, one per critic attack: refuse any `env` key at the step, job or workflow level outside an allow-list (`CARGO_TERM_COLOR`, `LOADNGO_CAS_MIN_FREE_GIB`); refuse any `run` that writes `GITHUB_ENV` or `GITHUB_PATH`; refuse a job `if`; allow no `push` or `pull_request` filter except `paths-ignore`, and require that no pattern in it matches the crate's sources, `Cargo.toml`, `Cargo.lock` or the workflow. Then state in WEB3D.md 945-953 exactly what the gate checks and what it does not: the actions the job uses, the toolchain step, the working directory, and repository config such as `.cargo/config.toml`. The control script also needs fixing: each changed copy should have to fail with the gate's own refusal (a distinct exit code and the expected reason), so that a Ruby error no longer counts as an expected failure |
-| The confidentiality scan | **Not done** (it lives in the game's repository). The scan script is unchanged, so it still misses all ten of the critic's controls. A draft of the wider pass, compiled but never run, sits in that repository's round-15 folder, with a README giving its state. No controls script was written, and the branch was not scanned this round |
-| Other WEB3D.md updates | **Not done.** The status line ("thirteen critic rounds"), the critics table (a fourteenth row), the probe list, the "By hand" list, and the Limits section (point it at the contract) |
+| Finding | What changed | Evidence |
+| --- | --- | --- |
+| F1, a page's `function closed() {}` turns the removed-frame check off | `ownRealm()` reads two built-in getters of the window, taken at load: `top`, which no page code can replace (a page's `function top() {}` throws) and which reads null from a removal's own task on; and `closed`, which reads true from `close()` on, so a closing window is refused at once, as before. A page's `function closed() {}` leaves `CLOSED` undefined, and `top` alone still sees a removal. The critic's tried line (`GLOBAL.top !== null`) was not taken as it stood: in a worker, which has no built-in `top`, a page's `globalThis.top = null` would turn it false and refuse every canvas; the built-in getter is undefined there | `results/r15.json` T1 (both frames: `top` null in the removal's task, every canvas then taken by this window's copy), T2 (a plain popup refused from `close()` on; one that declared `function closed` refused once `top` reads null, 3 ms later; its `closed` key is missing from the JSON because the value is the page's function), T3 (a worker: a data `top` harmless; a page-defined `top` getter refuses every canvas, now in the contract); probe NV's new case (`demo/probe-frame-closed.html`) in the rendered check |
+| F2(a), a missed restore's hooks | `take()` moves a still-current renderer's `onContextRestored` to the waiting set before the new renderer takes the canvas (the critic's tried fix, verbatim), and the lost listener clears `onLost` after calling it, so a renderer hears one loss | `results/r15.json` T5: each of the critic's four R4 variants gets each renderer's `onContextLost` once and the first renderer's `onContextRestored` once at the next restore |
+| F2(b), the reasons for leaving the cases open | WEB3D.md's paragraph and `../critic13-rerun/README.md` no longer give the disproved reasons. WEB3D.md, "Why the last two cases stay open", says what the critic showed (both cases could be narrowed), what no fix covers (a canvas in a shadow root; a listener that stops the event), and that they stay open because they are outside the contract. The third way a listener gets ahead (after a failed create took web3d's off) is listed | WEB3D.md, "The loss controller"; `../critic13-rerun/README.md`, marked corrected |
+| F3, stopping propagation | The contract's first item names each place, measured. A capturing listener on the canvas itself runs before web3d's whatever the order, so its `stopPropagation()` keeps the event from web3d's listener too; a non-capturing listener ahead of web3d's may call `stopPropagation()` or set `cancelBubble` without effect on web3d, which is on the same node. The comments in `js/web3d.js` and `js/web3d.d.ts` say "every lost event that reaches its listener" and point to the contract | `results/r15.json` T4: 13 places for each of the two events, each with its outcome; the controls recover |
+| F4, the browser version | `../critic13-rerun/README.md` names Chrome 157.0.8103.38, marked corrected. WEB3D.md's Results says the browser changed from 156 to 157 since the quiet table, and that the near-quiet runs on 157 (the critic's and this round's) agree with it | WEB3D.md, Results |
+| Note: the CI-step gate | `../ci-step.rb` now refuses (exit 2, with its reason; a Ruby error exits 1) an `env` name outside `CARGO_TERM_COLOR` and `LOADNGO_CAS_MIN_FREE_GIB` at any level, a `run` naming `GITHUB_ENV` or `GITHUB_PATH`, a job `if`, job keys beyond today's, another `runs-on`, actions or inputs beyond today's two, a step outside the checkout, filters other than `paths-ignore`, and a `paths-ignore` pattern that matches what the step reads. WEB3D.md states what it checks and what it does not | `yaml-gate/run.sh` and `results.txt`: 53 of 53 rows hold, among them the critic's seven copies, each refused with its expected reason, and two broken gate copies judged not to refuse; `yaml-gate/critic14-run.sh`, the critic's own probe, copied: all seven refused |
+| Note: the confidentiality scan | Widened in the game's repository, where its pattern lives | that repository's `evidence/web3d/round15/` |
+| Polish | A closing popup's `frame()` names a closed window; the `createRenderer` comment in `js/web3d.d.ts` is wrapped | `js/web3d.js` `NAVIGATED` |
 
 ## Gates
 
-**None of the round's gates has run.** No `cargo` command ran, nor `build.sh`, the rendered check,
-the blind run, the CI-step gate, or the critics' reruns. `../gates.txt` is still the fourteenth
-round's record. `pkg/` is that round's build: `js/` now differs from `pkg/`, so `pkg/` must be
-rebuilt before any rendered check.
+`../gates.sh 5662 5663`, run through `gates-contention/run.sh`: **every gate held** (`../gates.txt`).
 
-The only check run, without the GPU: `js/web3d.js` loads as a module under Node 24 and exports
-`Renderer`, `compile` and `createRenderer`.
+- fmt; clippy as CI runs it and for the crate on wasm32, aarch64 Linux, Windows MSVC and the host;
+  75 tests, debug and release;
+- three builds byte-identical: wasm `4d6594b5…` (unchanged, so the GPU's work is too), `gl.js`
+  `6542cb39…`, `web3d.js` `bdbf9ec6…`, `web3d.d.ts` `2f7be9a7…`; no local path in `pkg/`;
+- `three-reference.mjs --check`: 20 lines verbatim; `ci-step.rb` on the real workflow: exit 0;
+- the rendered check: 80 of 80 probes, no `INVALID_OPERATION`, 2 pending errors raised on purpose,
+  no context lost to Chrome's limit; steady allocation 0.09 sampled bytes a frame (56 bytes, the
+  check's own call; none in `pkg/`), control 88.9; the blind run exited 3, its control 0.5.
 
-The Rust source is unchanged, so the wasm should come out byte for byte the same (`4d6594b5…`). The
-GPU's work is then unchanged too, and a contended timed run, labelled as contended, would be
-acceptable.
+| Canvas | GPU ms mean | p50 | p95 | CPU ms p50 (p95) |
+| --- | --- | --- | --- | --- |
+| 1024x576, MSAA 4x | 0.855 | 0.847 | 0.884 | 0.05 (0.245) |
+| 1366x768, MSAA 4x | 1.056 | 1.048 | 1.116 | 0.175 (0.255) |
+| 1024x576, no MSAA | 0.566 | 0.565 | 0.579 | 0.045 (0.055) |
 
-## What's left, in order
+The medians are within 0.02 ms of WEB3D.md's quiet table (Chrome 156), the p95s within 0.05 ms.
 
-1. Finish WEB3D.md: put the contract above near the top of a supported-model subsection, after the
-   API table. Then do F1's, F2(b)'s, F3's and F4's corrections and the other updates in the table.
-   Correct `../critic13-rerun/README.md` (F4's Chrome version, F2(b)'s reason), with a note that it
-   was corrected in this round.
-2. Add the NV case: a frame declaring `function closed() {}`, removed during a create that has
-   already compiled the module, and called after its removal. This window's copy should take both
-   canvases, draw on each, and recover each.
-3. A page of this round's own under `site/`, testing:
-   - `top` in a removed frame;
-   - `top` in a closing popup, right after `close()` and later;
-   - a module worker that sets `globalThis.top = null` before it imports web3d;
-   - `stopPropagation()` and `cancelBubble` at each place in the event's path;
-   - the critic's four R4 variants with this round's code.
-4. Tighten the CI-step gate and fix its control script (above).
-5. Claim the Mac GPU on the board. Then run `../gates.sh <port> <port>` with ports from 5661-5679,
-   and the critics' reruns: a copy of `../critic13-rerun/rerun-critics.sh` that adds the fourteenth
-   critic's `c1`-`c7` pages (`c2` needs its no-DevTools driver). Compare booleans with
-   `../critic14/`, and argue each case that now differs or falls outside the contract.
-6. Rerun the confidentiality scan on the final branch.
+## Every critic's probes, rerun
+
+`rerun-critics.sh 5664` (`rerun-critics.log`, outputs in `rerun/` and `results/`): **64 runs, each
+exiting 0**: every earlier critic's scripts and pages, the twelfth and fourteenth rounds' pages, the
+fourteenth critic's seven (`c2` also with no DevTools client, which keeps prerendering on), and this
+round's `r15.html`.
+
+`booleans.sh` compares every boolean leaf with the fourteenth critic's own rerun and pages
+(`booleans.txt`): **0 differ in all 61 files.** The critic's pages record some outcomes as strings,
+so those were compared too (every non-number leaf, `c1-closed` and `c3-reopen`):
+
+- `c1-closed`, A1 (a frame that declared `function closed() {}` before web3d loaded) and A1d (one
+  that redefined `closed`, outside the contract): the removed copy's create is now refused ("navigated
+  away, ... removed or ... closed") where it was "still pending after 500 ms", and this window's copy
+  creates and draws where it was refused "already has a live renderer". F1's fix.
+- `c3-reopen`, R4: "no dispose, then create" now reads "first restored" then "second restored" at
+  the second restore, and "no dispose, no create" reads "first lost" once and "first restored" at the
+  second restore. F2(a)'s fix.
+- Every other string that differs is the refusal's message, which now names a closed window.
+  `G_popup`'s `frameRightAfterClose` is still refused at once.
+
+`c5-top-fix` and `c6-r4-fix` load the critic's own trial packages, so they reproduce its trials, not
+this round's code; `r15.html` T5 runs `c6`'s four variants against this round's code.
 
 ## Files
 
-Changed in this round:
+- `site/`: this round's page `r15.html`, with `frame.html`, `frame-fnclosed.html`, `popup.html`,
+  `popup-fnclosed.html` and `worker-top.js`. `results/r15.json` is its result.
+- `tools/run.mjs` and `tools/no-devtools.mjs`: the fourteenth critic's drivers, copied to write
+  here. `run10-copy.mjs`: the tenth critic's driver, likewise.
+- `rerun-critics.sh` (every critic's scripts and pages, this round's page among them; `rerun/`,
+  `results/rerun-*.json`, `rerun-critics.log`) and `booleans.sh` (`booleans.txt`).
+- `gates-contention/`: `run.sh` and its record.
+- `yaml-gate/`: the CI-step gate's controls.
 
-- `web3d/js/web3d.js`: F1 (`TOP` replaces `CLOSED`, in `ownRealm()`); F2(a) (`take()`, and the lost
-  listener's single `onContextLost`); the `NAVIGATED` message; comments for F1, F3 and closed
-  windows.
-- `web3d/js/web3d.d.ts`: the rewrapped `createRenderer` comment; the `onContextRestored` comment
-  (F3, the contract); closed windows.
-- `web3d/evidence/phase1/critic14-rerun/README.md`: this file.
-
-Not changed: `docs/WEB3D.md`, `web3d/demo/`, `web3d/pkg/`, `web3d/evidence/phase1/ci-step.rb`,
-`../gates.txt`, and every earlier critic's folder.
+Run the page: `PLAYWRIGHT_CORE=.../playwright-core/index.mjs node tools/run.mjs <port> r15.html --timeout 300000`.
