@@ -1,0 +1,5 @@
+Chrome 157.0.8103.38 (headless, own instance)
+pass  N10d  a frame's copy made the shared state on the top window, then the frame was removed: the top window's copy still creates, draws, recovers from a loss and refuses a second renderer
+passed 1 of 1; page errors 0
+browser and server stopped
+>>> exit 0

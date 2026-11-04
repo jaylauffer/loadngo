@@ -1,0 +1,39 @@
+<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><title>critic 16: what frame() checks first on a lost renderer</title>
+<body><script type="module">
+// Critic 16, O1 (BSD-3-Clause; see the repository's LICENSE). The sixteenth round's new sentence on
+// frame(): "returns false once the context is lost (before any other check)" (WEB3D.md's API table;
+// web3d.d.ts: "false from the context's loss on, for good (before any other check)"; js/web3d.js:
+// "Once lost it returns false before any other check"). A cooperative page does what "Context loss"
+// says, disposing its lost renderer in onContextLost, and its animation loop calls frame() once more
+// before it sees the hook's flag; and, for comparison, the same renderer left undisposed.
+import { sleep, err, attempt, OPTS, green, page, until } from '../../critic13/site/common.js';
+import * as web3d from '/pkg/web3d.js';
+
+page(async (out) => {
+  for (const dispose of [false, true]) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 16;
+    document.body.append(c);
+    let r = null;
+    const t = {};
+    r = await web3d.createRenderer(c, { ...OPTS, onContextLost: () => { t.hook = 'onContextLost'; if (dispose) r.dispose(); } });
+    t.drew = green(r).isGreen;
+    const lc = r.gl.getExtension('WEBGL_lose_context');
+    lc.loseContext();
+    await until(() => t.hook, 3000);
+    await sleep(20);
+    t.lostGetter = r.lost;
+    t.contextLost = r.gl.isContextLost();
+    const f = attempt(() => r.frame());
+    t.frame = f.ok ? `returned ${f.v}` : `threw: ${f.message}`;
+    lc.restoreContext();
+    await until(() => !r.gl.isContextLost(), 3000);
+    await sleep(50);
+    const g = attempt(() => r.frame());
+    t.frameAfterRestore = g.ok ? `returned ${g.v}` : `threw: ${g.message}`;
+    attempt(() => r.dispose());
+    out[`O1 ${dispose ? 'disposed in onContextLost, as "Context loss" says' : 'left undisposed (control)'}`] = t;
+    c.remove();
+  }
+});
+</script></body>

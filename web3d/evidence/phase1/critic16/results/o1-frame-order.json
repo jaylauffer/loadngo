@@ -1,0 +1,25 @@
+{
+  "page": "evidence/phase1/critic16/site/o1-frame-order.html",
+  "host": "127.0.0.1",
+  "chrome": "157.0.8103.38",
+  "args": [],
+  "result": {
+    "O1 left undisposed (control)": {
+      "drew": true,
+      "hook": "onContextLost",
+      "lostGetter": true,
+      "contextLost": true,
+      "frame": "returned false",
+      "frameAfterRestore": "returned false"
+    },
+    "O1 disposed in onContextLost, as \"Context loss\" says": {
+      "drew": true,
+      "hook": "onContextLost",
+      "lostGetter": true,
+      "contextLost": true,
+      "frame": "threw: web3d: renderer disposed",
+      "frameAfterRestore": "threw: web3d: renderer disposed"
+    }
+  },
+  "messages": []
+}

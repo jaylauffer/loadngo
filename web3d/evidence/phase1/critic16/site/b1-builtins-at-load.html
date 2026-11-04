@@ -1,0 +1,91 @@
+<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><title>critic 16: built-ins web3d uses only when it loads</title>
+<body><canvas id="c" width="16" height="16"></canvas><canvas id="d" width="16" height="16"></canvas><script type="module">
+// Critic 16, B1 (BSD-3-Clause; see the repository's LICENSE). WEB3D.md's page contract, item 2,
+// as the sixteenth round restated it: "web3d takes the getters and methods its checks rely on when
+// it loads (the module-level constants in js/web3d.js) ...; it also calls crypto.getRandomValues
+// once then, to start its serial counter. Every other built-in it uses it reads at each call".
+// The converse of the fifteenth critic's S3: after web3d has loaded, this page replaces built-ins
+// that js/web3d.js uses only while it loads (to make its constants and shared state, not as a
+// getter or method a check relies on) with wrappers that count their calls and otherwise behave as
+// the built-in, makes web3d do the same ordinary work S3 did, and counts what reached each from
+// js/web3d.js or js/gl.js. A count of 0 is a built-in web3d uses but does not read at any call. (Outside the contract by
+// construction, as S3 was; it only measures the sentence.)
+import { settle, attempt, OPTS, green, page, until, sleep } from '../../critic13/site/common.js';
+import * as web3d from '/pkg/web3d.js';
+
+page(async (out) => {
+  // Set is the positive control: web3d makes one at every restore (the fifteenth critic's S3).
+  const counts = { 'Set (control)': 0, Map: 0, WeakMap: 0, WeakSet: 0, 'Symbol.for': 0, 'Object.freeze': 0, 'Object.getPrototypeOf': 0, 'Object.getOwnPropertyDescriptor': 0, 'crypto.getRandomValues': 0 };
+  const others = {};
+  const saved = { Error, Set, Map, WeakMap, WeakSet, symbolFor: Symbol.for, freeze: Object.freeze, getPrototypeOf: Object.getPrototypeOf, gopd: Object.getOwnPropertyDescriptor, grv: crypto.getRandomValues };
+  const warm = await web3d.createRenderer(document.getElementById('d'), OPTS);
+  warm.dispose();
+  const wasmBytes = new Uint8Array(await (await fetch('/pkg/loadngo_web3d.wasm')).arrayBuffer());
+  const wrap = (name, Base) => {
+    const W = class extends Base { constructor(...a) { count(name); super(...a); } };
+    saved.defineProperty ??= Object.defineProperty;
+    saved.defineProperty(W, 'name', { value: Base.name });
+    return W;
+  };
+  // A call counts only when js/web3d.js or js/gl.js (served from /pkg/) is on its stack; any other
+  // (the page driver's own evaluation script calls Map) is kept apart, with where it came from.
+  const count = (name) => {
+    const stack = String(new saved.Error().stack);
+    if (/\/pkg\/(web3d|gl)\.js/.test(stack)) counts[name]++;
+    else (others[name] ??= []).push(stack.split('\n').slice(2, 4).join(' | ').slice(0, 200));
+  };
+  const fn = (name, f, self) => function (...a) { count(name); return f.apply(self ?? this, a); };
+  globalThis.Set = wrap('Set (control)', saved.Set);
+  globalThis.Map = wrap('Map', saved.Map);
+  globalThis.WeakMap = wrap('WeakMap', saved.WeakMap);
+  globalThis.WeakSet = wrap('WeakSet', saved.WeakSet);
+  Symbol.for = fn('Symbol.for', saved.symbolFor, Symbol);
+  Object.freeze = fn('Object.freeze', saved.freeze, Object);
+  Object.getPrototypeOf = fn('Object.getPrototypeOf', saved.getPrototypeOf, Object);
+  Object.getOwnPropertyDescriptor = fn('Object.getOwnPropertyDescriptor', saved.gopd, Object);
+  crypto.getRandomValues = fn('crypto.getRandomValues', saved.grv, crypto);
+  const steps = {};
+  try {
+    const c = document.getElementById('c');
+    const lost = [];
+    const r = await web3d.createRenderer(c, { ...OPTS, onContextLost: () => lost.push('lost'), onContextRestored: () => lost.push('restored') });
+    steps.create = { ...counts };
+    steps.draws = green(r).isGreen;
+    steps.refusedCall = attempt(() => r.createMesh({ positions: 'x', indices: new Uint16Array(3) })).message;
+    const mesh = r.createMesh({ positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), indices: new Uint16Array([0, 1, 2]) });
+    steps.rustRefusal = attempt(() => r.destroyMesh(mesh + 1)).message;
+    for (let i = 0; i < 30; i++) r.frame();
+    steps.afterCalls = { ...counts };
+    const lc = r.gl.getExtension('WEBGL_lose_context');
+    lc.loseContext();
+    await until(() => r.gl.isContextLost(), 3000);
+    await sleep(30);
+    lc.restoreContext();
+    await until(() => !r.gl.isContextLost(), 3000);
+    await sleep(50);
+    steps.hooks = [...lost];
+    r.dispose();
+    const next = await settle(web3d.createRenderer(c, OPTS));
+    steps.nextDraws = next.ok ? green(next.r).isGreen : next.message;
+    if (next.ok) next.r.dispose();
+    steps.compileBytes = (await settle(web3d.compile(wasmBytes))).ok;
+    steps.afterCompileBytes = { ...counts };
+    steps.compileOtherUrl = (await settle(web3d.compile('/pkg/loadngo_web3d.wasm?again'))).ok;
+    steps.afterAll = { ...counts };
+  } finally {
+    globalThis.Set = saved.Set;
+    globalThis.Map = saved.Map;
+    globalThis.WeakMap = saved.WeakMap;
+    globalThis.WeakSet = saved.WeakSet;
+    Symbol.for = saved.symbolFor;
+    Object.freeze = saved.freeze;
+    Object.getPrototypeOf = saved.getPrototypeOf;
+    Object.getOwnPropertyDescriptor = saved.gopd;
+    crypto.getRandomValues = saved.grv;
+  }
+  out['B1 steps, with the counts after each'] = steps;
+  out['B1 built-ins js/web3d.js uses that no call of web3d reached'] = Object.entries(steps.afterAll).filter(([, n]) => n === 0).map(([k]) => k);
+  out['B1 calls from neither file (not counted), with where they came from'] = others;
+  out['B1 built-ins a call of web3d reached'] = Object.entries(steps.afterAll).filter(([, n]) => n > 0).map(([k, n]) => `${k} (${n})`);
+});
+</script></body>

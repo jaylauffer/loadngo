@@ -1,0 +1,115 @@
+<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><title>critic 16: a loss of the new renderer inside the restore's dispatch</title>
+<body><script type="module">
+// Critic 16, G1 (BSD-3-Clause; see the repository's LICENSE). A cooperative page: it stops no
+// event, reopens no document, patches no built-in and moves no canvas. As in the fifteenth critic's
+// S1, a webglcontextrestored listener of its own, ahead of web3d's, makes the next renderer (r2),
+// which the round's fix keeps live. Then, still inside that restore's dispatch (in the create's
+// `then`, or in a second listener of the page's ahead of web3d's), the page loses r2's context with
+// WEBGL_lose_context, as web3d's own probes do. Are r2's hooks for that loss, as WEB3D.md and
+// web3d.d.ts say ("its hooks are for its own later losses"; onContextLost "is called when the
+// canvas's context is lost while this renderer is the canvas's live one")?
+// Each case logs, in order: the page's listeners, each hook (with what isContextLost() read when
+// it ran), the create's resolution, and the events of r2's loss and restore. One case loses the
+// context in the page's listener before its create, which then fails because of that loss.
+// ?pkg=fix runs it against ../fix-pkg/ (critic 16's trial: the restored listener compares the loss
+// count r2 took its context at), ?pkg=fix2 against ../fix-pkg-2/ (that, and each waiting
+// onContextRestored tagged with the loss whose restore it waits for), ?pkg=old against
+// ../at-226b7c92-pkg/ (web3d.js as the fifteenth critic judged it), instead of web3d/pkg/.
+import { sleep, err, settle, attempt, OPTS, green, page, until } from '../../critic13/site/common.js';
+const PKG = { fix: '../fix-pkg/web3d.js', fix2: '../fix-pkg-2/web3d.js', fix3: '../fix-pkg-3/web3d.js', old: '../at-226b7c92-pkg/web3d.js' }[new URLSearchParams(location.search).get('pkg')] ?? '/pkg/web3d.js';
+const web3d = await import(PKG);
+
+const fresh = (id) => {
+  const c = document.createElement('canvas');
+  c.id = id;
+  c.width = c.height = 16;
+  document.body.append(c);
+  return c;
+};
+
+page(async (out) => {
+  out.pkg = PKG;
+  const cases = [
+    // [label, where the page loses r2's context, whether it disposes r1 first, whether it disposes r2 after losing it]
+    ['lost in the create\'s then, r1 disposed first', 'then', true, false],
+    ['lost in the create\'s then, r1 not disposed', 'then', false, false],
+    ['lost in a second page listener ahead of web3d\'s, r1 disposed first', 'second', true, false],
+    ['lost in the create\'s then, and r2 disposed there (disposed while lost)', 'then', true, true],
+    ['lost in listener 1 before the create, which fails because of the loss', 'before', true, false],
+    ['control: lost in a task after the dispatch', 'later', true, false],
+  ];
+  for (const [label, where, disposeR1, disposeR2] of cases) {
+    const c = fresh(`g1-${where}-${disposeR1}-${disposeR2}`);
+    const log = [];
+    const s = { r1: null, r2: null, lc: null };
+    const ctx = () => (s.r1.gl.isContextLost() ? 'context lost' : 'context live');
+    const hooks = (name) => ({
+      onContextLost: () => log.push(`${name} onContextLost (${ctx()})`),
+      onContextRestored: () => log.push(`${name} onContextRestored (${ctx()})`),
+    });
+    const loseR2 = (tag) => {
+      s.lc.loseContext();
+      log.push(`page: loseContext() on r2's context ${tag} (${ctx()})`);
+      if (disposeR2) { s.r2.dispose(); log.push('page: r2 disposed'); }
+    };
+    c.addEventListener('webglcontextrestored', () => {
+      log.push(`page listener 1 (ahead of web3d's): ${ctx()}`);
+      if (disposeR1) s.r1.dispose();
+      if (where === 'before') { s.lc.loseContext(); log.push(`page: loseContext() in listener 1, then a create (${ctx()})`); }
+      web3d.createRenderer(c, { ...OPTS, ...hooks('r2') }).then(
+        (r) => {
+          s.r2 = r;
+          log.push('r2 created');
+          if (where === 'then') loseR2('in its then');
+          if (where === 'later') setTimeout(() => loseR2('in a later task'), 0);
+        },
+        (e) => log.push(`r2 create refused: ${err(e)}`),
+      );
+    }, { once: true });
+    if (where === 'second') {
+      c.addEventListener('webglcontextrestored', () => {
+        log.push(`page listener 2 (ahead of web3d's): r2 ${s.r2 ? 'made' : 'not made'}`);
+        if (s.r2) loseR2('in listener 2');
+      }, { once: true });
+    }
+    s.r1 = await web3d.createRenderer(c, { ...OPTS, ...hooks('r1') });
+    c.addEventListener('webglcontextlost', (e) => log.push(`event: webglcontextlost (cancelled ${e.defaultPrevented})`));
+    c.addEventListener('webglcontextrestored', () => log.push('event: webglcontextrestored (after web3d\'s listener)'));
+    const t = { drew1: green(s.r1).isGreen };
+    s.lc = s.r1.gl.getExtension('WEBGL_lose_context');
+    s.lc.loseContext();
+    await until(() => s.r1.gl.isContextLost(), 3000);
+    await sleep(50);
+    t.restore1 = attempt(() => s.lc.restoreContext()).ok;
+    await sleep(200); // the restore, the page's listeners, r2's create, and r2's loss event
+    log.push('-- r2\'s loss: now restore it');
+    t.lostBeforeRestore2 = s.r1.gl.isContextLost();
+    t.restore2 = attempt(() => s.lc.restoreContext());
+    await until(() => !s.r1.gl.isContextLost(), 1500);
+    await sleep(200);
+    t.r2Created = !!s.r2;
+    if (s.r2) {
+      t.r2Frame = attempt(() => s.r2.frame());
+      attempt(() => s.r2.dispose());
+    }
+    // The page that recreates when a hook says the context is back: does a new renderer draw now?
+    const next = await settle(web3d.createRenderer(c, OPTS));
+    t.nextDraws = next.ok ? green(next.r).isGreen : next.message;
+    if (next.ok) next.r.dispose();
+    t.log = log;
+    const lines = log.filter((l) => / on|created/.test(l));
+    t.r2Hooks = lines.filter((l) => l.startsWith('r2 on'));
+    // What WEB3D.md and web3d.d.ts say: r2's hooks are for its own loss. r2 (if not disposed) gets
+    // onContextLost once, after the page lost its context; and onContextRestored once, at the
+    // restore of that loss, with the context live.
+    const i2 = log.indexOf('-- r2\'s loss: now restore it');
+    const r2Restored = log.filter((l) => l.startsWith('r2 onContextRestored'));
+    t.r2RestoredOnlyAtItsOwnRestore = r2Restored.length === 1 && log.indexOf(r2Restored[0]) > i2 && r2Restored[0].includes('context live');
+    t.r2LostOnce = disposeR2 || where === 'before' ? log.filter((l) => l.startsWith('r2 onContextLost')).length === 0 : log.filter((l) => l.startsWith('r2 onContextLost')).length === 1;
+    t.asDocumented = (t.r2Created || where === 'before') && t.r2RestoredOnlyAtItsOwnRestore && t.r2LostOnce && t.nextDraws === true;
+    out[`G1 ${label}`] = t;
+    attempt(() => s.r1.dispose());
+    c.remove();
+  }
+});
+</script></body>

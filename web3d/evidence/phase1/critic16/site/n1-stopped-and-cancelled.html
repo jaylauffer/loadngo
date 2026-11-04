@@ -1,0 +1,48 @@
+<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><title>critic 16: a lost event the page stops and cancels itself</title>
+<body><script type="module">
+// Critic 16, N1 (BSD-3-Clause; see the repository's LICENSE). Outside the page contract by
+// construction (its item 1): a capturing listener on the window stops the lost event before
+// web3d's listener, and cancels it itself, so the context can be restored. WEB3D.md says of a lost
+// event web3d's listener does not see that it "is not cancelled, so the context is lost for good".
+// What does web3d do when the page cancels it? The round's restored listener now finishes the
+// current renderer only if its shim reads lost; the shim latches a loss only when something asks it
+// while the context reads lost. Two variants: the renderer's frame() called while lost (as a page's
+// animation loop would), and not. ?pkg=old runs it against ../at-226b7c92-pkg/.
+import { sleep, err, attempt, settle, OPTS, green, redraw, page, until } from '../../critic13/site/common.js';
+const PKG = { old: '../at-226b7c92-pkg/web3d.js' }[new URLSearchParams(location.search).get('pkg')] ?? '/pkg/web3d.js';
+const web3d = await import(PKG);
+
+page(async (out) => {
+  out.pkg = PKG;
+  for (const framesWhileLost of [false, true]) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 16;
+    document.body.append(c);
+    const hooks = [];
+    const r = await web3d.createRenderer(c, { ...OPTS, onContextLost: () => hooks.push('lost'), onContextRestored: () => hooks.push('restored') });
+    const t = { drew: green(r).isGreen };
+    const stop = (e) => { if (e.target === c) { e.stopPropagation(); e.preventDefault(); hooks.push('page stopped and cancelled the lost event'); } };
+    window.addEventListener('webglcontextlost', stop, { capture: true, once: true });
+    const lc = r.gl.getExtension('WEBGL_lose_context');
+    lc.loseContext();
+    await until(() => hooks.length > 0, 3000);
+    if (framesWhileLost) t.frameWhileLost = attempt(() => r.frame());
+    await sleep(30);
+    t.restoreCall = attempt(() => lc.restoreContext()).ok;
+    t.restored = !!(await until(() => !r.gl.isContextLost(), 2000));
+    await sleep(50);
+    t.hooks = [...hooks];
+    t.lostGetter = r.lost;
+    while (r.gl.getError() !== 0);
+    const f = attempt(() => redraw(r));
+    t.frameAfter = f.ok ? { drew: f.v.drew, isGreen: f.v.isGreen } : f.message;
+    t.glErrorAfterFrame = r.gl.getError();
+    const next = await settle(web3d.createRenderer(c, OPTS));
+    t.nextCreate = next.ok ? (green(next.r).isGreen ? 'created, draws' : 'created, does not draw') : next.message;
+    if (next.ok) next.r.dispose();
+    attempt(() => r.dispose());
+    out[`N1 ${framesWhileLost ? "frame() called while lost" : "no frame() while lost"}`] = t;
+    c.remove();
+  }
+});
+</script></body>

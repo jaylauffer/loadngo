@@ -1,0 +1,28 @@
+# every 5 s during: node web3d/demo/check.mjs --port 5481 --out .../critic16/gates/rendered --seconds 10 --steady 60  ("before": running when it began)
+2026-11-04T04:35:49Z browsers: before desktop pid 1228; gpu processes: 3
+2026-11-04T04:35:54Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:35:59Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:36:04Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:36:09Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:36:15Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:36:20Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:36:25Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:36:30Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:36:35Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:36:40Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:36:45Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:36:50Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:36:55Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:37:00Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:37:05Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:37:10Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:37:16Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:37:21Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:37:26Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:37:31Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:37:36Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:37:41Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:37:46Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:37:51Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:37:56Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4
+2026-11-04T04:38:01Z browsers: before desktop pid 1228; since headless pid 42436; gpu processes: 4

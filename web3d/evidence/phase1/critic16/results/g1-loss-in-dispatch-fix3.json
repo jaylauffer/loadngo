@@ -1,0 +1,214 @@
+{
+  "page": "evidence/phase1/critic16/site/g1-loss-in-dispatch.html?pkg=fix3",
+  "host": "127.0.0.1",
+  "chrome": "157.0.8103.38",
+  "args": [],
+  "result": {
+    "pkg": "../fix-pkg-3/web3d.js",
+    "G1 lost in the create's then, r1 disposed first": {
+      "drew1": true,
+      "restore1": true,
+      "lostBeforeRestore2": true,
+      "restore2": {
+        "ok": true
+      },
+      "r2Created": true,
+      "r2Frame": {
+        "ok": true,
+        "v": false
+      },
+      "nextDraws": true,
+      "log": [
+        "r1 onContextLost (context lost)",
+        "event: webglcontextlost (cancelled true)",
+        "page listener 1 (ahead of web3d's): context live",
+        "r2 created",
+        "page: loseContext() on r2's context in its then (context lost)",
+        "event: webglcontextrestored (after web3d's listener)",
+        "r2 onContextLost (context lost)",
+        "event: webglcontextlost (cancelled true)",
+        "-- r2's loss: now restore it",
+        "r1 onContextRestored (context live)",
+        "r2 onContextRestored (context live)",
+        "event: webglcontextrestored (after web3d's listener)"
+      ],
+      "r2Hooks": [
+        "r2 onContextLost (context lost)",
+        "r2 onContextRestored (context live)"
+      ],
+      "r2RestoredOnlyAtItsOwnRestore": true,
+      "r2LostOnce": true,
+      "asDocumented": true
+    },
+    "G1 lost in the create's then, r1 not disposed": {
+      "drew1": true,
+      "restore1": true,
+      "lostBeforeRestore2": true,
+      "restore2": {
+        "ok": true
+      },
+      "r2Created": true,
+      "r2Frame": {
+        "ok": true,
+        "v": false
+      },
+      "nextDraws": true,
+      "log": [
+        "r1 onContextLost (context lost)",
+        "event: webglcontextlost (cancelled true)",
+        "page listener 1 (ahead of web3d's): context live",
+        "r2 created",
+        "page: loseContext() on r2's context in its then (context lost)",
+        "event: webglcontextrestored (after web3d's listener)",
+        "r2 onContextLost (context lost)",
+        "event: webglcontextlost (cancelled true)",
+        "-- r2's loss: now restore it",
+        "r1 onContextRestored (context live)",
+        "r2 onContextRestored (context live)",
+        "event: webglcontextrestored (after web3d's listener)"
+      ],
+      "r2Hooks": [
+        "r2 onContextLost (context lost)",
+        "r2 onContextRestored (context live)"
+      ],
+      "r2RestoredOnlyAtItsOwnRestore": true,
+      "r2LostOnce": true,
+      "asDocumented": true
+    },
+    "G1 lost in a second page listener ahead of web3d's, r1 disposed first": {
+      "drew1": true,
+      "restore1": true,
+      "lostBeforeRestore2": true,
+      "restore2": {
+        "ok": true
+      },
+      "r2Created": true,
+      "r2Frame": {
+        "ok": true,
+        "v": false
+      },
+      "nextDraws": true,
+      "log": [
+        "r1 onContextLost (context lost)",
+        "event: webglcontextlost (cancelled true)",
+        "page listener 1 (ahead of web3d's): context live",
+        "r2 created",
+        "page listener 2 (ahead of web3d's): r2 made",
+        "page: loseContext() on r2's context in listener 2 (context lost)",
+        "event: webglcontextrestored (after web3d's listener)",
+        "r2 onContextLost (context lost)",
+        "event: webglcontextlost (cancelled true)",
+        "-- r2's loss: now restore it",
+        "r1 onContextRestored (context live)",
+        "r2 onContextRestored (context live)",
+        "event: webglcontextrestored (after web3d's listener)"
+      ],
+      "r2Hooks": [
+        "r2 onContextLost (context lost)",
+        "r2 onContextRestored (context live)"
+      ],
+      "r2RestoredOnlyAtItsOwnRestore": true,
+      "r2LostOnce": true,
+      "asDocumented": true
+    },
+    "G1 lost in the create's then, and r2 disposed there (disposed while lost)": {
+      "drew1": true,
+      "restore1": true,
+      "lostBeforeRestore2": true,
+      "restore2": {
+        "ok": true
+      },
+      "r2Created": true,
+      "r2Frame": {
+        "ok": false,
+        "message": "web3d: renderer disposed"
+      },
+      "nextDraws": true,
+      "log": [
+        "r1 onContextLost (context lost)",
+        "event: webglcontextlost (cancelled true)",
+        "page listener 1 (ahead of web3d's): context live",
+        "r2 created",
+        "page: loseContext() on r2's context in its then (context lost)",
+        "page: r2 disposed",
+        "event: webglcontextrestored (after web3d's listener)",
+        "event: webglcontextlost (cancelled true)",
+        "-- r2's loss: now restore it",
+        "r1 onContextRestored (context live)",
+        "r2 onContextRestored (context live)",
+        "event: webglcontextrestored (after web3d's listener)"
+      ],
+      "r2Hooks": [
+        "r2 onContextRestored (context live)"
+      ],
+      "r2RestoredOnlyAtItsOwnRestore": true,
+      "r2LostOnce": true,
+      "asDocumented": true
+    },
+    "G1 lost in listener 1 before the create, which fails because of the loss": {
+      "drew1": true,
+      "restore1": true,
+      "lostBeforeRestore2": true,
+      "restore2": {
+        "ok": true
+      },
+      "r2Created": false,
+      "nextDraws": true,
+      "log": [
+        "r1 onContextLost (context lost)",
+        "event: webglcontextlost (cancelled true)",
+        "page listener 1 (ahead of web3d's): context live",
+        "page: loseContext() in listener 1, then a create (context lost)",
+        "r2 create refused: web3d: the canvas's WebGL context is lost; create the renderer again when this call's onContextRestored is called, on the restore",
+        "event: webglcontextrestored (after web3d's listener)",
+        "event: webglcontextlost (cancelled true)",
+        "-- r2's loss: now restore it",
+        "r1 onContextRestored (context live)",
+        "r2 onContextRestored (context live)",
+        "event: webglcontextrestored (after web3d's listener)"
+      ],
+      "r2Hooks": [
+        "r2 onContextRestored (context live)"
+      ],
+      "r2RestoredOnlyAtItsOwnRestore": true,
+      "r2LostOnce": true,
+      "asDocumented": true
+    },
+    "G1 control: lost in a task after the dispatch": {
+      "drew1": true,
+      "restore1": true,
+      "lostBeforeRestore2": true,
+      "restore2": {
+        "ok": true
+      },
+      "r2Created": true,
+      "r2Frame": {
+        "ok": true,
+        "v": false
+      },
+      "nextDraws": true,
+      "log": [
+        "r1 onContextLost (context lost)",
+        "event: webglcontextlost (cancelled true)",
+        "page listener 1 (ahead of web3d's): context live",
+        "r2 created",
+        "r1 onContextRestored (context live)",
+        "event: webglcontextrestored (after web3d's listener)",
+        "page: loseContext() on r2's context in a later task (context lost)",
+        "r2 onContextLost (context lost)",
+        "event: webglcontextlost (cancelled true)",
+        "-- r2's loss: now restore it",
+        "r2 onContextRestored (context live)",
+        "event: webglcontextrestored (after web3d's listener)"
+      ],
+      "r2Hooks": [
+        "r2 onContextLost (context lost)",
+        "r2 onContextRestored (context live)"
+      ],
+      "r2RestoredOnlyAtItsOwnRestore": true,
+      "r2LostOnce": true,
+      "asDocumented": true
+    }
+  },
+  "messages": []
+}

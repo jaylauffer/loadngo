@@ -1,0 +1,144 @@
+{
+  "page": "evidence/phase1/critic12/site/nav.html",
+  "host": "127.0.0.1",
+  "chrome": "157.0.8103.38",
+  "args": [],
+  "result": {
+    "step": 6,
+    "prototypes": {
+      "adopted": "frame",
+      "first": "frame"
+    },
+    "oldCopyOnOwnCanvasBefore": true,
+    "windowProxySame": true,
+    "newRealm": true,
+    "oldRealmGlobalDocument": "the NEW page's document",
+    "fixSignal": {
+      "oldRealmStateThroughGlobalIsItsOwn": false,
+      "oldRealmReadsNewWindowsState": true,
+      "globalNodeIsOwnNode": false
+    },
+    "oldCopyOwnRendererAfterNav": {
+      "drew": false,
+      "centre": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "corner": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "isGreen": false
+    },
+    "oldCopyOnOldDocCanvas": "NEVER SETTLED",
+    "newCopyOnFreshCanvasBefore": true,
+    "oldCopyCallOnNewCanvas": "returned a promise",
+    "oldCopyOnNewPageCanvasSettled": "NEVER SETTLED",
+    "newCanvasHasContextAfterOldCall": "n/a",
+    "newCopyOnItsOwnCanvasAfterOldCall": "draws",
+    "newCanvasListeners": {
+      "webglcontextlost": 1,
+      "webglcontextrestored": 1
+    },
+    "oldCopyOnNewPageCanvas": "NEVER SETTLED",
+    "newCopyOnOwnCanvas": {
+      "drew": true,
+      "lostEvent": "webglcontextlost",
+      "prevented": true,
+      "restored": "webglcontextrestored",
+      "calls": {
+        "lost": 1,
+        "restored": 1
+      },
+      "after": true,
+      "ok": true
+    },
+    "topRenderers": {
+      "adopted": {
+        "before": true,
+        "afterNav": "draws",
+        "lostEvent": "lost",
+        "prevented": true,
+        "restored": "restored",
+        "calls": {
+          "lost": 1,
+          "restored": 1
+        },
+        "twoMoreCycles": [
+          {
+            "drew": true,
+            "lostEvent": "webglcontextlost",
+            "prevented": true,
+            "restored": "webglcontextrestored",
+            "calls": {
+              "lost": 1,
+              "restored": 1
+            },
+            "after": true,
+            "ok": true
+          },
+          {
+            "drew": true,
+            "lostEvent": "webglcontextlost",
+            "prevented": true,
+            "restored": "webglcontextrestored",
+            "calls": {
+              "lost": 1,
+              "restored": 1
+            },
+            "after": true,
+            "ok": true
+          }
+        ]
+      },
+      "first": {
+        "before": true,
+        "afterNav": "draws",
+        "lostEvent": "lost",
+        "prevented": true,
+        "restored": "restored",
+        "calls": {
+          "lost": 1,
+          "restored": 1
+        },
+        "twoMoreCycles": [
+          {
+            "drew": true,
+            "lostEvent": "webglcontextlost",
+            "prevented": true,
+            "restored": "webglcontextrestored",
+            "calls": {
+              "lost": 1,
+              "restored": 1
+            },
+            "after": true,
+            "ok": true
+          },
+          {
+            "drew": true,
+            "lostEvent": "webglcontextlost",
+            "prevented": true,
+            "restored": "webglcontextrestored",
+            "calls": {
+              "lost": 1,
+              "restored": 1
+            },
+            "after": true,
+            "ok": true
+          }
+        ]
+      }
+    },
+    "pass": {
+      "newPageCopyGetsItsOwnCanvasAfterTheOldCopyWasCalled": true,
+      "topRenderersSurviveFrameNavigation": true
+    }
+  },
+  "messages": [
+    "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

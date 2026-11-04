@@ -1,0 +1,63 @@
+# the sixteenth critic's rerun against the round's, every string or null leaf of each page's result (node tools/leaf-diff.mjs <round's file> <this rerun's file>)
+## results/rerun-critic11-dd.json: 4 string leaves; 2 differ
+  /top: "http://a.localhost:5668" -> "http://a.localhost:5485"
+  /frameOrigin: "http://b.a.localhost:5668" -> "http://b.a.localhost:5485"
+## results/rerun-critic11-intent.json: 6 string leaves; 0 differ
+## results/rerun-critic11-nowarn.json: 1 string leaves; 0 differ
+## results/rerun-critic11-observe.json: 3 string leaves; 0 differ
+## results/rerun-critic11-realm.json: 35 string leaves; 0 differ
+## results/rerun-critic11-reset.json: 15 string leaves; 0 differ
+## results/rerun-critic12-adopt.json: 54 string leaves; 0 differ
+## results/rerun-critic12-bf.json: 7 string leaves; 0 differ
+## results/rerun-critic12-blank.json: 15 string leaves; 0 differ
+## results/rerun-critic12-counter.json: 1 string leaves; 0 differ
+## results/rerun-critic12-dd2.json: 4 string leaves; 1 differ
+  /frameOrigin: "http://b.a.localhost:5668" -> "http://b.a.localhost:5485"
+## results/rerun-critic12-docopen.json: 10 string leaves; 0 differ
+## results/rerun-critic12-f4.json: 30 string leaves; 0 differ
+## results/rerun-critic12-midcreate.json: 7 string leaves; 0 differ
+## results/rerun-critic12-nav.json: 25 string leaves; 0 differ
+## results/rerun-critic12-override.json: 8 string leaves; 0 differ
+## results/rerun-critic12-per.json: 19 string leaves; 13 differ
+  /topCanvasTopListener/0/origin: "http://127.0.0.1:5668" -> "http://127.0.0.1:5485"
+  /topCanvasTopListener/0/frameId: "247483" -> "FA49F0"
+  /topCanvasTopListener/1/origin: "http://127.0.0.1:5668" -> "http://127.0.0.1:5485"
+  /topCanvasTopListener/1/frameId: "E05267" -> "F251FA"
+  /frameCanvasOneListenerOfEachRealm/0/origin: "http://127.0.0.1:5668" -> "http://127.0.0.1:5485"
+  /frameCanvasOneListenerOfEachRealm/0/frameId: "247483" -> "FA49F0"
+  /frameCanvasOneListenerOfEachRealm/1/origin: "http://127.0.0.1:5668" -> "http://127.0.0.1:5485"
+  /frameCanvasOneListenerOfEachRealm/1/frameId: "E05267" -> "F251FA"
+  /frameOffscreenTopListener/0/origin: "http://127.0.0.1:5668" -> "http://127.0.0.1:5485"
+  /frameOffscreenTopListener/0/frameId: "247483" -> "FA49F0"
+  /frameOffscreenTopListener/1/origin: "http://127.0.0.1:5668" -> "http://127.0.0.1:5485"
+  /frameOffscreenTopListener/1/frameId: "E05267" -> "F251FA"
+  /topOrigin: "http://127.0.0.1:5668" -> "http://127.0.0.1:5485"
+## results/rerun-critic12-transfer.json: 9 string leaves; 0 differ
+## results/rerun-critic13-f1.json: 45 string leaves; 0 differ
+## results/rerun-critic13-f1b.json: 20 string leaves; 0 differ
+## results/rerun-critic13-f2-fix.json: 3 string leaves; 0 differ
+## results/rerun-critic13-f2.json: 13 string leaves; 0 differ
+## results/rerun-critic13-f2b.json: 7 string leaves; 0 differ
+## results/rerun-critic13-f2c.json: 12 string leaves; 0 differ
+## results/rerun-critic13-f3.json: 12 string leaves; 0 differ
+## results/rerun-critic13-f4.json: 16 string leaves; 0 differ
+## results/rerun-critic14-c1-closed.json: 33 string leaves; 0 differ
+## results/rerun-critic14-c2-prerender.json: 2 string leaves; 0 differ
+## results/rerun-critic14-c3-reopen.json: 47 string leaves; 0 differ
+## results/rerun-critic14-c4-top.json: 3 string leaves; 0 differ
+## results/rerun-critic14-c5-top-fix.json: 21 string leaves; 0 differ
+## results/rerun-critic14-c6-r4-fix.json: 26 string leaves; 0 differ
+## results/rerun-critic14-c7-restore-gap.json: 0 string leaves; 0 differ
+## results/rerun-critic14-prerender-no-devtools.json: 2 string leaves; 0 differ
+## results/rerun-critic15-s1-restored-create.json: 65 string leaves; 0 differ
+## results/rerun-critic15-s2-worker-closed.json: 5 string leaves; 0 differ
+## results/rerun-critic15-s3-builtins-per-call.json: 10 string leaves; 1 differ
+  /S3 steps, with the counts after each/rustRefusal: "web3d: 882446262337539 is not a valid mesh handle: not live in this renderer (destroyed,  -> "web3d: 995910708363267 is not a valid mesh handle: not live in this renderer (destroyed, 
+## results/rerun-round12-dd.json: 5 string leaves; 2 differ
+  /top: "http://a.localhost:5668" -> "http://a.localhost:5485"
+  /frameOrigin: "http://b.a.localhost:5668" -> "http://b.a.localhost:5485"
+## results/rerun-round12-facts.json: 13 string leaves; 0 differ
+## results/rerun-round12-intent.json: 36 string leaves; 0 differ
+## results/rerun-round12-listeners.json: 0 string leaves; 0 differ
+## results/rerun-round14-reopen-paths.json: 14 string leaves; 0 differ
+## results/rerun-round15-r15.json: 149 string leaves; 0 differ

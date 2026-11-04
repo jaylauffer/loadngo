@@ -1,0 +1,31 @@
+{
+ "control": "created, draws",
+ "claimed": {
+  "web3d": "created",
+  "rawContext": "live"
+ },
+ "signals": {
+  "attached": {
+   "closed": false,
+   "parent": "an object",
+   "top": "an object",
+   "defaultViewIsNull": false
+  },
+  "removed": {
+   "closed": true,
+   "parent": "null",
+   "top": "null",
+   "defaultViewIsNull": true
+  },
+  "navigatedSameOrigin": {
+   "closed": false
+  },
+  "topWindow": {
+   "closed": false
+  }
+ }
+}
+messages: 1
+  error: Failed to load resource: the server responded with a status of 404 (Not Found)
+browser and server stopped
+>>> exit 0
