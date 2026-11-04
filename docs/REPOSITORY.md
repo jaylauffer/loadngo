@@ -124,6 +124,11 @@ reachable from a head or a kept claim, every tree and file below them), and refu
 run if a repository cannot be read. Do not run either while a commit, import or receive
 is writing to the same root.
 
+**Builds of `archive_cas_gc`, `archive_cas_purge` or `archive_cas_browser` from before
+`d9d3586c` do not know about repositories and would delete every repository object as
+unreferenced.** Until every machine's copies are rebuilt, keep repositories in stores of
+their own (`~/.loadngo/store`), not in shared archive roots such as `pudding-cas`.
+
 Every object is written durably (synced) before a head names it. That costs: about 3
 syncs per object, so the first import of loadngo spends most of its 79 s waiting on the
 disk. Batching the syncs is open below.
