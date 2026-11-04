@@ -5,7 +5,7 @@ to WebAssembly, and drawing through WebGL2. It is built for small scenes with sk
 morph-targeted characters, on GPUs as slow as a Raspberry Pi 5's V3D 7.1, at 30 fps. The application
 loads its data with three.js, so matrices and light units follow three.js r180.
 
-**Status:** phase 1 of 5, the skeleton, is built (2026-11-03) and has been through fourteen critic
+**Status:** phase 1 of 5, the skeleton, is built (2026-11-03) and has been through fifteen critic
 rounds. It draws a procedural test scene and reports fps, GPU ms and CPU ms.
 
 **Sources.** Each figure below names where it comes from:
@@ -97,7 +97,7 @@ JS (`web3d.js`). Colours are linear, matrices column-major.
 | `createObject(mesh, material, matrix)`, `setTransform`, `setVisible` | A mesh placed with a material |
 | `setCamera(view, projection)`, `setCameraLookAt(eye, target, fovY, near, far)` | three.js's `matrixWorldInverse` and `projectionMatrix`, or a look-at |
 | `setKeyLight(x, y, z, r, g, b, intensity)`, `setAmbient(skyR, skyG, skyB, groundR, groundG, groundB, intensity)` | One directional light and one hemisphere light, in three.js r180's units |
-| `setClearColor`, `resize(width, height)`, `frame()` | `frame()` draws; call it from `requestAnimationFrame`. It returns false once the context is lost, and throws if the canvas element has been moved to another document or the copy's window has navigated away, been closed or had its frame removed |
+| `setClearColor`, `resize(width, height)`, `frame()` | `frame()` draws; call it from `requestAnimationFrame`. It returns false once the context is lost (before any other check), and otherwise throws if the canvas element has been moved to another document or the copy's window has navigated away, been closed or had its frame removed |
 | `gpuMs`, `cpuMs`, `readStats(out)`, `setCpuTiming(on)` | The last frame's numbers; `readStats` fills a reused `Float64Array(8)` |
 | `destroy*`, `dispose` | Destroying something still in use is refused |
 
@@ -141,16 +141,21 @@ of them.
    top level; `let`, `const` and `class` there shadow a bare global name for module code too), no
    assignment, `Object.defineProperty` or `delete` on one, and no patched prototype method or
    accessor. web3d takes the getters and methods its checks rely on when it loads (the module-level
-   constants in `js/web3d.js`), so a patch made after it loads does not reach those. It reads the
-   rest at each call: the global functions and constructors it calls (`WebAssembly`'s, `fetch`,
-   `Object`'s, `Reflect`'s and `Number`'s statics, `crypto.getRandomValues`, `reportError`,
-   `setTimeout`, `performance.now`) and every WebGL2 method `js/gl.js` calls on the context, through
-   its prototype. **If it does:** what happens depends on the built-in; there is no general
-   guarantee. One case is handled anyway: a page's `function closed() {}` ("One realm drives a
-   canvas"). In a worker, which has no built-in `top`, the page also does not give the global a
-   `top` getter before web3d loads: web3d would read it as a window's, and refuse every canvas with
-   the message that its window has navigated away or been closed (`r15.json`, T3; a plain
-   `globalThis.top = null` changes nothing).
+   constants in `js/web3d.js`), so a patch made after it loads does not reach those; it also calls
+   `crypto.getRandomValues` once then, to start its serial counter. Every other built-in it uses it
+   reads at each call, among them the global constructors and functions (`URL`, `Set`, `WeakRef`,
+   `Error`, `TextDecoder`, the typed-array constructors, `WebAssembly`'s and `fetch`), the statics
+   of `Object`, `Reflect`, `Number`, `Array`, `ArrayBuffer` and `Math`, `reportError`, `setTimeout`,
+   `performance.now`, the methods and iterators of the maps, sets and arrays it keeps or loops over,
+   and every WebGL2 method `js/gl.js` calls on the context, through its prototype. **If it does:** what
+   happens depends on the built-in; there is no general guarantee. One case is handled anyway: a
+   page's `function closed() {}` ("One realm drives a canvas"). A worker has neither of the
+   window's `top` and `closed` getters, so there the page also does not give its global either name
+   with a getter before web3d loads: web3d would read them as a window's, and a `top` getter that
+   returns null, a `closed` one that returns true, or either that throws has every canvas refused
+   with the message that its window has navigated away or been closed (`r15.json`, T3, and the
+   fifteenth critic's `critic15/results/s2-worker-closed.json`; a plain `globalThis.top = null`
+   changes nothing).
 
 3. **It does not move a driven canvas element to another document.** **If it does:** `frame()`,
    `resize()` and the creates throw while the canvas is away, and work again once it is back; if the
@@ -314,7 +319,8 @@ copies of web3d in the canvas's own realm.
     getter and reads `top` alone: a removed frame is still refused from the removal's task on (T1,
     and probe NV), but a closed window's copy drives until `top` reads null (T2).
 
-  A worker has neither getter and is always its own. Once the window has navigated away, been
+  A worker has neither built-in getter and is always its own (unless the page gives its global a
+  getter of either name, which the page contract rules out). Once the window has navigated away, been
   closed or had its frame removed:
   - `createRenderer` refuses every canvas before it records anything on it;
   - `frame()`, `resize()` and the creates throw "navigated away" (the message names each case);
@@ -575,10 +581,12 @@ item, the other two outside its first):
 - the same during a **restored** event's dispatch (the thirteenth critic's F2). The context is
   restored, but nothing calls that restore's hooks then. They come at the canvas's next restore, if
   one comes, each once, whatever the page does in between. A renderer still current when the next
-  one is created was finished by a loss whose restore web3d never heard, since in Chrome the
-  context reads restored only once its restored event has run (`critic14/results/c7-restore-gap.json`),
-  so `take` in `js/web3d.js` moves its hook to the controller's waiting set before the new renderer
-  takes the canvas. And a renderer hears one loss: one left undisposed and still current at the
+  one is created was finished by a loss (a live one refuses the create) whose restore web3d's
+  listener has not handled: either the create runs in a page listener ahead of web3d's, during the
+  restore's dispatch, when the context already reads restored (probe LR), and web3d's listener
+  calls the hook later in that dispatch; or the restore was kept from web3d's listener, as here,
+  and the hook waits for the next. So `take` in `js/web3d.js` moves the hook to the controller's
+  waiting set before the new renderer takes the canvas. And a renderer hears one loss: one left undisposed and still current at the
   next loss is not told of it again (the fourteenth critic's F2(a)). Each of the four things a page
   may do after the missed restore (dispose in `onContextLost` and create; create without disposing;
   neither; dispose after the restore and create) gets each renderer's `onContextLost` once and the
@@ -608,15 +616,20 @@ only the browser's say the context was lost or restored (probe SY). Then:
   `onContextLost`;
 - on `webglcontextrestored` it calls `onContextRestored` for the renderer that was live at the loss,
   for every renderer disposed while the context was lost, and for every create that failed because
-  of the loss, one function once however often it was given. Then no renderer is live until a new one
-  is created, so a lost renderer left undisposed hears no later loss or restore.
+  of the loss, one function once however often it was given. A renderer made since the loss, by a
+  restored listener of the page's that runs before web3d's, is not among them: the context reads
+  restored in that listener, and a create from the cached module finishes before web3d's listener
+  runs, so that renderer took the restored context. It stays live, and its hooks are for its own
+  later losses (probe LR, the first renderer disposed there or not; the fifteenth critic's F1).
+  Otherwise no renderer is live until a new one is created, so a lost renderer left undisposed hears
+  no later loss or restore.
 
 On a cooperative page the renderer live at the loss gets its hook however the page orders its own
 listeners: disposed in a lost or restored listener of the page's that runs before web3d's, it is
 still waiting for its hook, since the controller clears the live renderer only when it handles the
 restore (probe LR). A listener that runs first and stops the event is outside the page contract,
-which states what it costs. Each hook
-runs in its own `try`; what it throws is reported with `reportError`, and the other hooks still run.
+which states what it costs. Each hook runs in its own `try`; what it throws is reported with
+`reportError`, and the other hooks still run.
 A create takes the context only after its last await, so a loss and its restore cannot both fall
 inside the part of it that uses the context. A loss and restore while it loads the module come before
 it takes the context, which is then the restored one: the create succeeds, and its hooks are for
@@ -894,7 +907,7 @@ this round's (below) medians within 0.02 ms and p95s within 0.05 ms:
   declared `function closed() {}`.
 - The critics' scripts and pages, all rerun this round (`critic14-rerun/`, its README): 64 runs,
   each exiting 0, and each probe passes, or fails only by the premise the table gives. Against the
-  fourteenth critic's own rerun and pages, no boolean differs in any of the 61 result files
+  fourteenth critic's own rerun and pages, no boolean differs in any of the 60 result files
   (`critic14-rerun/booleans.txt`); among the outcomes its pages record as strings, `c1-closed`'s A1
   now creates and draws where it was refused (F1's fix), and `c3-reopen`'s R4 calls the first
   renderer's `onContextRestored` once at the next restore (F2(a)'s).
@@ -982,7 +995,8 @@ holds them; the allocation run uses it), `knots`, `tubular` and `radial`.
 - page-made contexts left with the page's state: 37 states and two controls, each drawn, uploaded
   or read back as on a new context, the page's objects kept, and wide lines with polygons drawn as
   lines among them (PS); the page's own lost or restored listener disposing the live renderer before
-  web3d's runs (LR); a canvas of another realm refused, in both directions, for elements and
+  web3d's runs, or its restored listener making the next renderer there, which keeps its hooks for
+  its own loss (LR, with the fifteenth critic's F1); a canvas of another realm refused, in both directions, for elements and
   `OffscreenCanvas`es, and under a top window of another origin (served from `localhost` beside
   `127.0.0.1`), with the child's copy loaded before its parent's (XR, with
   `demo/probe-xorigin.html`); an element judged by its document, not its prototype: adopted each

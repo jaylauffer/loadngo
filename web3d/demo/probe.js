@@ -1741,7 +1741,8 @@ async function pageState() {
  * LR: the order of listeners on the canvas (the ninth critic's N1). A page's own restored listener,
  * added before web3d's, disposes the renderer live at the loss: its onContextRestored still comes,
  * once. The same in the page's lost listener; and a dispose after web3d handled the restore adds no
- * second call.
+ * second call. And a renderer the page's restored listener makes ahead of web3d's keeps its hooks
+ * for its own later loss (the fifteenth critic's F1).
  */
 async function listenerOrder() {
   const opts = { width: 16, height: 16, antialias: false };
@@ -1786,11 +1787,52 @@ async function listenerOrder() {
     d.late = { before, after: calls.restored, frame: attempt(() => r.frame()).message };
     release(r.gl);
   }
+  // The page's own restored listener, ahead of web3d's, makes the next renderer there, having
+  // disposed the first or not (the fifteenth critic's F1). The context reads restored then, and the
+  // create, from the cached module, finishes before web3d's listener runs. The first renderer's
+  // onContextRestored comes once and the new one's does not; the new one draws, and at its own loss
+  // gets onContextLost and onContextRestored once each; after it, a new renderer draws.
+  for (const dispose of [true, false]) {
+    const c = canvasFor(`lr-recreate-${dispose ? 'dispose' : 'keep'}`);
+    const hooks = [];
+    let r1 = null;
+    let r2 = null;
+    c.addEventListener('webglcontextrestored', () => {
+      if (dispose) r1.dispose();
+      createRenderer(c, { ...opts, onContextLost: () => hooks.push('r2 lost'), onContextRestored: () => hooks.push('r2 restored') }).then(
+        (r) => { r2 = r; hooks.push('r2 created'); },
+        (e) => hooks.push(`r2 refused: ${e.message}`),
+      );
+    }, { once: true });
+    r1 = await createRenderer(c, { ...opts, onContextLost: () => hooks.push('r1 lost'), onContextRestored: () => hooks.push('r1 restored') });
+    const e = { first: await lossAndRestore(c, r1.gl.getExtension('WEBGL_lose_context')) };
+    await timeout(20);
+    e.atFirst = hooks.splice(0);
+    e.draws = r2 ? greenOn(r2) : 'no second renderer';
+    if (r2) {
+      e.second = await lossAndRestore(c, r2.gl.getExtension('WEBGL_lose_context'));
+      await timeout(20);
+      e.atSecond = hooks.splice(0);
+      r2.dispose();
+      const next = await settle(createRenderer(c, opts));
+      e.next = next.ok ? greenOn(next.r) : next.message;
+      if (next.ok) {
+        next.r.dispose();
+        release(next.r.gl);
+      }
+    }
+    attempt(() => r1.dispose());
+    d[`recreate${dispose ? 'Disposed' : 'Kept'}`] = e;
+  }
+  const recreated = (e) =>
+    e.first === 'webglcontextrestored' && JSON.stringify(e.atFirst) === '["r1 lost","r2 created","r1 restored"]' && isGreen(e.draws) &&
+    e.second === 'webglcontextrestored' && JSON.stringify(e.atSecond) === '["r2 lost","r2 restored"]' && isGreen(e.next);
   log(
-    "LR a page's own restored listener that runs before web3d's disposes the live renderer: onContextRestored comes once (N1); disposed in the page's lost listener instead: once, and no onContextLost; disposed after the restore was handled: no second call",
+    "LR a page's own restored listener that runs before web3d's disposes the live renderer: onContextRestored comes once (N1); disposed in the page's lost listener instead: once, and no onContextLost; disposed after the restore was handled: no second call; a renderer the page's restored listener makes there, the first disposed or not, keeps its hooks for its own loss (F1 of the fifteenth critic)",
     d.restoredEvent === 'webglcontextrestored' && d.restoredLostAtDispose === false && d.restored.lost === 1 && d.restored.restored === 1 && isGreen(d.restoredNext) &&
       d.lostEvent === 'webglcontextrestored' && d.lostLostAtDispose === true && d.lost.lost === 0 && d.lost.restored === 1 && isGreen(d.lostNext) &&
-      d.lateEvent === 'webglcontextrestored' && d.late.before === 1 && d.late.after === 1,
+      d.lateEvent === 'webglcontextrestored' && d.late.before === 1 && d.late.after === 1 &&
+      recreated(d.recreateDisposed) && recreated(d.recreateKept),
     d,
   );
 }

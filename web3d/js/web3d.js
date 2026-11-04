@@ -323,7 +323,8 @@ const IS_PROTOTYPE_OF = Object.prototype.isPrototypeOf;
 // replace it (a page's `function top() {}` throws, and a `var top` changes nothing). `closed`'s
 // reads true from `close()` on, but it is configurable, and a page's `function closed() {}`
 // declared before this module loads replaces it (the fourteenth critic's F1): CLOSED is then
-// undefined, and `top` alone still sees a removal. A worker has neither getter (both undefined).
+// undefined, and `top` alone still sees a removal. A worker has neither built-in getter: both are
+// undefined unless the page gave its global one of those names, which the page contract rules out.
 const GLOBAL = globalThis;
 const TOP = getter(globalThis, 'top');
 const CLOSED = getter(globalThis, 'closed');
@@ -748,9 +749,11 @@ function take(canvas, o, record, controller, create, shim, x) {
     const renderer = new Renderer(canvas, o.kind, gl, shim, x, w, serial, record);
     // Only now do the page's hooks belong to the canvas: a loss during the create makes it fail with
     // "lost", and does not call onContextLost. A renderer still current here was finished by a loss
-    // whose restore web3d's listener never heard (outside the page contract: docs/WEB3D.md), since
-    // the context reads restored only once its restored event has run; its hook waits for the next
-    // restore instead of being dropped (the fourteenth critic's F2).
+    // (a live one refuses the create), and web3d's restored listener has not yet handled the restore:
+    // either this create runs in a page listener ahead of it, during the restore's dispatch, when the
+    // context already reads restored, and that listener calls the hook later in the dispatch; or the
+    // restore was kept from it (outside the page contract: docs/WEB3D.md), and the hook waits for the
+    // next. Either way it is called once, not dropped (the fourteenth and fifteenth critics' F2, F1).
     if (controller.current) waitForRestore(controller, controller.current.onRestored);
     controller.current = { renderer, onLost: o.onContextLost, onRestored: o.onContextRestored };
     record.owner = renderer;
@@ -819,8 +822,12 @@ function contextMismatch(antialias) {
  * - on `webglcontextrestored` it calls, once each (one function once, however often it was given),
  *   the `onContextRestored` of the renderer that was live at the loss (whenever the page disposes
  *   it, even in a restored listener of its own that runs first), of every renderer disposed while
- *   lost, and of every create that failed because of the loss. Then no renderer is live until a new
- *   one is created, so a lost renderer left undisposed hears no later loss or restore.
+ *   lost, and of every create that failed because of the loss. A renderer made after the loss, by a
+ *   restored listener of the page's that runs first (the context reads restored then, and a create
+ *   from the cached module finishes before this listener runs), took the restored context: it stays
+ *   live, and its hooks are for its own later losses (the fifteenth critic's F1). Otherwise no
+ *   renderer is live until a new one is created, so a lost renderer left undisposed hears no later
+ *   loss or restore.
  * Both ignore an event the page dispatched itself (one not `isTrusted`): only the browser's say that
  * the context was lost or restored. Each hook runs in its own `try`; what it throws is reported
  * (`reportError`) and the rest still run.
@@ -844,9 +851,13 @@ function controllerFor(canvas, record) {
     if (!event.isTrusted) return;
     const hooks = new Set(c.waiting);
     c.waiting.clear();
-    const hook = c.current?.onRestored;
-    if (typeof hook === 'function') hooks.add(hook);
-    c.current = null;
+    // Only a renderer finished by a loss is done with here; one made since the loss was counted is
+    // live on the restored context and stays current.
+    const current = c.current;
+    if (current && current.renderer._shim.lost()) {
+      if (typeof current.onRestored === 'function') hooks.add(current.onRestored);
+      c.current = null;
+    }
     for (const h of hooks) callHook(h);
   };
   CONTROLLERS.set(canvas, c);
@@ -1397,8 +1408,9 @@ export class Renderer {
    * Draws a frame; returns false (and draws nothing) once the context is lost: from the moment
    * `gl.isContextLost()` says so, or web3d's listeners (of any realm) have counted a loss on the
    * canvas since this renderer was made, whichever comes first (the lost event can come later).
-   * Throws if the canvas element has been moved to another document, or this copy's window has
-   * navigated away, been closed or had its frame removed. With CPU timing on, wasm reads the clock
+   * Once lost it returns false before any other check. Otherwise it throws if the canvas element has
+   * been moved to another document, or this copy's window has navigated away, been closed or had its
+   * frame removed. With CPU timing on, wasm reads the clock
    * twice around its work; each reading is a number V8 boxes (22 sampled bytes a frame for the two,
    * measured in evidence/phase1/critic10-rerun/cpu-timing/), which is why timing is off unless
    * asked for.
