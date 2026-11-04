@@ -55,13 +55,14 @@ export interface RendererOptions {
    * live (disposed or not, at any time after the loss, even in a restored listener of the page's
    * that runs before web3d's), disposed while lost, or a create that failed because of the loss.
    * Create the next renderer then, or in a restored listener of the page's own: a renderer made
-   * there, even before web3d's listener runs, has its hooks for its own later losses. web3d keeps
-   * one loss controller a canvas, in the canvas's own realm, the only one web3d drives it from: it
-   * cancels every lost event the browser dispatches that reaches its listener, so the context can
-   * be restored, and runs each hook once in its own try. Its two listeners go on the canvas at
-   * every create, and back on after a document.open() takes them off. On a cooperative page every
-   * context event reaches them (docs/WEB3D.md, "The page contract"): the page stops none before
-   * they run and reopens no document from inside one.
+   * there, even before web3d's listener runs, has its hooks for its own later losses; if the page
+   * loses the context again during that restore's dispatch, every hook waits for the restore after
+   * that loss. web3d keeps one loss controller a canvas, in the canvas's own realm, the only one
+   * web3d drives it from: it cancels every lost event the browser dispatches that reaches its
+   * listener, so the context can be restored, and runs each hook once in its own try. Its two
+   * listeners go on the canvas at every create, and back on after a document.open() takes them off.
+   * On a cooperative page every context event reaches them (docs/WEB3D.md, "The page contract"):
+   * the page stops none before they run and reopens no document from inside one.
    */
   onContextRestored?: () => void;
 }
@@ -186,9 +187,10 @@ export class Renderer {
   /** Times frames on the CPU; off by default (two boxed numbers a frame in V8). */
   setCpuTiming(on: boolean): void;
   /**
-   * Draws a frame; false from the context's loss on, for good (before any other check): after a
-   * restore, create a new renderer. Otherwise throws if the canvas element has been moved to another
-   * document, or the copy's window has navigated away, been closed or had its frame removed.
+   * Draws a frame; false from the context's loss on, for good (once disposed it throws, as every
+   * method does): after a restore, create a new renderer. Otherwise throws if the canvas element has
+   * been moved to another document, or the copy's window has navigated away, been closed or had its
+   * frame removed.
    */
   frame(): boolean;
   /** [cpuMs, gpuMs or NaN, GPU frame, draws, triangles, culled, program binds, material binds]; `out` holds at least 8. */

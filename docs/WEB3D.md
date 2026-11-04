@@ -97,7 +97,7 @@ JS (`web3d.js`). Colours are linear, matrices column-major.
 | `createObject(mesh, material, matrix)`, `setTransform`, `setVisible` | A mesh placed with a material |
 | `setCamera(view, projection)`, `setCameraLookAt(eye, target, fovY, near, far)` | three.js's `matrixWorldInverse` and `projectionMatrix`, or a look-at |
 | `setKeyLight(x, y, z, r, g, b, intensity)`, `setAmbient(skyR, skyG, skyB, groundR, groundG, groundB, intensity)` | One directional light and one hemisphere light, in three.js r180's units |
-| `setClearColor`, `resize(width, height)`, `frame()` | `frame()` draws; call it from `requestAnimationFrame`. It returns false once the context is lost (before any other check), and otherwise throws if the canvas element has been moved to another document or the copy's window has navigated away, been closed or had its frame removed |
+| `setClearColor`, `resize(width, height)`, `frame()` | `frame()` draws; call it from `requestAnimationFrame`. It returns false once the context is lost (checked after the disposed and re-entrancy checks, which throw, and before the others), and otherwise throws if the canvas element has been moved to another document or the copy's window has navigated away, been closed or had its frame removed |
 | `gpuMs`, `cpuMs`, `readStats(out)`, `setCpuTiming(on)` | The last frame's numbers; `readStats` fills a reused `Float64Array(8)` |
 | `destroy*`, `dispose` | Destroying something still in use is refused |
 
@@ -127,9 +127,13 @@ of them.
    node, so it still runs. The events do not bubble, so no non-capturing listener elsewhere sees
    them (`web3d/evidence/phase1/critic14-rerun/results/r15.json`, T4, each place for each event).
 
-   **If it does:** a lost event that web3d's listener does not see is not cancelled, so the context
-   is lost for good, and no `onContextLost` is called (T4; the fourteenth critic's
-   `critic14/results/c3-reopen.json`, R1 and R5). A restored event that it does not see still brings
+   **If it does:** a lost event that web3d's listener does not see is not cancelled by web3d, so the
+   context is lost for good, and no `onContextLost` is called (T4; the fourteenth critic's
+   `critic14/results/c3-reopen.json`, R1 and R5). If the page cancels it itself, the context comes
+   back, but web3d counted no loss: a renderer that read nothing while the context was lost (no
+   `frame()`, no `lost`) still reads live, draws with the lost context's objects (WebGL's
+   `INVALID_OPERATION`), keeps the canvas from a new create, and gets no hook (the sixteenth
+   critic's `critic16/results/n1-stopped-and-cancelled.json`). A restored event that it does not see still brings
    the context back, but its hooks are not called then: they come at the canvas's next restore, if
    one comes, each once, whatever the page does in between (T4, and T5 for the four things a page
    may do after the missed restore; "The loss controller"). A page that follows "Context loss"
@@ -141,18 +145,22 @@ of them.
    top level; `let`, `const` and `class` there shadow a bare global name for module code too), no
    assignment, `Object.defineProperty` or `delete` on one, and no patched prototype method or
    accessor. web3d takes the getters and methods its checks rely on when it loads (the module-level
-   constants in `js/web3d.js`), so a patch made after it loads does not reach those; it also calls
-   `crypto.getRandomValues` once then, to start its serial counter. Every other built-in it uses it
-   reads at each call, among them the global constructors and functions (`URL`, `Set`, `WeakRef`,
-   `Error`, `TextDecoder`, the typed-array constructors, `WebAssembly`'s and `fetch`), the statics
-   of `Object`, `Reflect`, `Number`, `Array`, `ArrayBuffer` and `Math`, `reportError`, `setTimeout`,
-   `performance.now`, the methods and iterators of the maps, sets and arrays it keeps or loops over,
-   and every WebGL2 method `js/gl.js` calls on the context, through its prototype. **If it does:** what
+   constants in `js/web3d.js`), so a patch made after it loads does not reach those. Some other
+   built-ins it uses only while it loads, among them `Map`, `WeakMap`, `WeakSet`, `Symbol.for`, some
+   of `Object`'s statics (`freeze`, `getPrototypeOf`, `getOwnPropertyDescriptor`) and
+   `crypto.getRandomValues`, called once to start its serial counter (the sixteenth critic's
+   `critic16/results/b1-builtins-at-load.json`). The rest it reads at each call, among them the
+   global constructors and functions (`URL`, `Set`, `WeakRef`, `Error`, `TextDecoder`, the
+   typed-array constructors, `WebAssembly`'s and `fetch`), the statics of `Reflect`, `Number`,
+   `Array`, `ArrayBuffer` and `Math`, `reportError`, `setTimeout`, `performance.now`, the methods and
+   iterators of the maps, sets and arrays it keeps or loops over, and every WebGL2 method `js/gl.js`
+   calls on the context, through its prototype. **If it does:** what
    happens depends on the built-in; there is no general guarantee. One case is handled anyway: a
    page's `function closed() {}` ("One realm drives a canvas"). A worker has neither of the
    window's `top` and `closed` getters, so there the page also does not give its global either name
    with a getter before web3d loads: web3d would read them as a window's, and a `top` getter that
-   returns null, a `closed` one that returns true, or either that throws has every canvas refused
+   returns null, a `closed` one that returns a truthy value, or either that throws has every canvas
+   refused
    with the message that its window has navigated away or been closed (`r15.json`, T3, and the
    fifteenth critic's `critic15/results/s2-worker-closed.json`; a plain `globalThis.top = null`
    changes nothing).
@@ -620,9 +628,13 @@ only the browser's say the context was lost or restored (probe SY). Then:
   restored listener of the page's that runs before web3d's, is not among them: the context reads
   restored in that listener, and a create from the cached module finishes before web3d's listener
   runs, so that renderer took the restored context. It stays live, and its hooks are for its own
-  later losses (probe LR, the first renderer disposed there or not; the fifteenth critic's F1).
-  Otherwise no renderer is live until a new one is created, so a lost renderer left undisposed hears
-  no later loss or restore.
+  later losses (probe LR, the first renderer disposed there or not; the fifteenth critic's F1). A
+  renderer is finished here only when a loss was counted after it took the context. If the context
+  reads lost again when this listener runs (page code lost it during the restore's dispatch, with
+  `loseContext()` in a listener of its own or in a create's `then`), the listener calls nothing and
+  changes nothing: the live renderer hears that loss, and every hook comes at the restore after it,
+  with the context live (probe LR; the sixteenth critic's F1). Otherwise no renderer is live until a
+  new one is created, so a lost renderer left undisposed hears no later loss or restore.
 
 On a cooperative page the renderer live at the loss gets its hook however the page orders its own
 listeners: disposed in a lost or restored listener of the page's that runs before web3d's, it is
@@ -1003,7 +1015,8 @@ holds them; the allocation run uses it), `knots`, `tubular` and `radial`.
   or read back as on a new context, the page's objects kept, and wide lines with polygons drawn as
   lines among them (PS); the page's own lost or restored listener disposing the live renderer before
   web3d's runs, or its restored listener making the next renderer there, which keeps its hooks for
-  its own loss (LR, with the fifteenth critic's F1); a canvas of another realm refused, in both directions, for elements and
+  its own loss, also when the page loses the context again inside that dispatch (LR, with the
+  fifteenth and sixteenth critics' F1s); a canvas of another realm refused, in both directions, for elements and
   `OffscreenCanvas`es, and under a top window of another origin (served from `localhost` beside
   `127.0.0.1`), with the child's copy loaded before its parent's (XR, with
   `demo/probe-xorigin.html`); an element judged by its document, not its prototype: adopted each

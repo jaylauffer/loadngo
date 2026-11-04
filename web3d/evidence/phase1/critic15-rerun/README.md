@@ -17,7 +17,7 @@ contract (F2) and a miscount (F3).
 | F2(a), the built-ins "read at each call" | The contract no longer reads as a complete list: "among them", with `URL`, `Set`, `WeakRef`, `Error`, `TextDecoder`, the typed-array constructors, the statics of `Array`, `ArrayBuffer` and `Math`, and the methods and iterators of web3d's maps, sets and arrays added; `crypto.getRandomValues` moved to load, where it is called once. `Map` is not listed as a constructor: web3d makes its maps at load | WEB3D.md, "The page contract", item 2; each name checked against `js/web3d.js` and `js/gl.js` |
 | F2(b), a worker's `closed` | Item 2 and "One realm drives a canvas" name both of the window's getters for a worker, and what refuses: a `top` getter that returns null, a `closed` one that returns true, or either that throws. The comment in `js/web3d.js` says so too | the critic's `results/s2-worker-closed.json`; `ownRealm` |
 | F3, 61 files | 60, in WEB3D.md and `../critic14-rerun/README.md` | `../critic14-rerun/booleans.txt` |
-| Notes | `frame()`'s docs (WEB3D.md's API table, `js/web3d.js`, `js/web3d.d.ts`) say that a lost renderer returns false before any other check, so a closed window's lost renderer returns false rather than throwing; `../critic14-rerun/README.md` says `onLost` is cleared just before its call | |
+| Notes | `frame()`'s docs (WEB3D.md's API table, `js/web3d.js`, `js/web3d.d.ts`) say that a lost renderer returns false before the place checks, so a closed window's lost renderer returns false rather than throwing (corrected in the seventeenth round: this said "before any other check", but a disposed renderer throws first, the sixteenth critic's F3); `../critic14-rerun/README.md` says `onLost` is cleared just before its call | |
 
 ## Gates
 

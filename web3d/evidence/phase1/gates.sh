@@ -10,8 +10,9 @@
 # alone, which check.mjs reports as exit 3 (any other failure, such as a port taken or Chrome
 # missing, exits 1, and is not counted as the blind run holding). Each gate is judged by its exit
 # status (and the builds by their hashes); the script exits 1 if any gate did not hold, and the last
-# lines of gates.txt name each one that did not. It does not run the critics' probe scripts:
-# critic13-rerun/rerun-critics.sh does. Uses the Mac's GPU: claim it first.
+# lines of gates.txt name each one that did not. It does not run the critics' probe scripts: the
+# newest round's rerun-critics.sh does (docs/WEB3D.md, "By hand", names it). Uses the Mac's GPU:
+# claim it first.
 #   PLAYWRIGHT_CORE=.../playwright-core/index.mjs THREE_DIR=.../node_modules/three \
 #     bash web3d/evidence/phase1/gates.sh <port> <port for --blind>
 set -u

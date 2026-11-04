@@ -755,7 +755,9 @@ function take(canvas, o, record, controller, create, shim, x) {
     // restore was kept from it (outside the page contract: docs/WEB3D.md), and the hook waits for the
     // next. Either way it is called once, not dropped (the fourteenth and fifteenth critics' F2, F1).
     if (controller.current) waitForRestore(controller, controller.current.onRestored);
-    controller.current = { renderer, onLost: o.onContextLost, onRestored: o.onContextRestored };
+    // `losses` is the count this renderer took the context at: a loss counted since finishes it.
+    controller.current = { renderer, losses, onLost: o.onContextLost, onRestored: o.onContextRestored };
+    controller.gl = gl;
     record.owner = renderer;
     return renderer;
   } catch (error) {
@@ -825,9 +827,11 @@ function contextMismatch(antialias) {
  *   lost, and of every create that failed because of the loss. A renderer made after the loss, by a
  *   restored listener of the page's that runs first (the context reads restored then, and a create
  *   from the cached module finishes before this listener runs), took the restored context: it stays
- *   live, and its hooks are for its own later losses (the fifteenth critic's F1). Otherwise no
- *   renderer is live until a new one is created, so a lost renderer left undisposed hears no later
- *   loss or restore.
+ *   live, and its hooks are for its own later losses (the fifteenth critic's F1). If the context
+ *   reads lost again when this listener runs (page code lost it during the restore's dispatch), it
+ *   calls nothing and changes nothing: every hook waits for the restore after that loss (the
+ *   sixteenth critic's F1). Otherwise no renderer is live until a new one is created, so a lost
+ *   renderer left undisposed hears no later loss or restore.
  * Both ignore an event the page dispatched itself (one not `isTrusted`): only the browser's say that
  * the context was lost or restored. Each hook runs in its own `try`; what it throws is reported
  * (`reportError`) and the rest still run.
@@ -835,7 +839,7 @@ function contextMismatch(antialias) {
 function controllerFor(canvas, record) {
   let c = CONTROLLERS.get(canvas);
   if (c) return c;
-  c = { current: null, waiting: new Set(), armed: false, ref: null, lostListener: null, restoredListener: null };
+  c = { current: null, waiting: new Set(), gl: null, armed: false, ref: null, lostListener: null, restoredListener: null };
   c.lostListener = (event) => {
     if (!event.isTrusted) return;
     event.preventDefault();
@@ -849,12 +853,20 @@ function controllerFor(canvas, record) {
   };
   c.restoredListener = (event) => {
     if (!event.isTrusted) return;
+    // A context that reads lost again here was lost by page code during this restore's dispatch,
+    // before this listener (loseContext() in a listener of its own, or in a create's then); its lost
+    // event is still to come. Every hook waits for the restore after that loss, and the current
+    // renderer stays current to hear it (the sixteenth critic's F1). `gl` is the canvas's one
+    // context, known once a create has taken it in this realm; before that nothing is current, and
+    // a waiting create's hook that runs early only meets a create that fails "lost" and waits again.
+    if (c.gl !== null && c.gl.isContextLost()) return;
     const hooks = new Set(c.waiting);
     c.waiting.clear();
-    // Only a renderer finished by a loss is done with here; one made since the loss was counted is
-    // live on the restored context and stays current.
+    // Only a renderer finished by a loss is done with here: one that took the context before a loss
+    // was counted. One made since, by a page listener during this dispatch, is live on the restored
+    // context and stays current (the fifteenth critic's F1).
     const current = c.current;
-    if (current && current.renderer._shim.lost()) {
+    if (current && record.losses !== current.losses) {
       if (typeof current.onRestored === 'function') hooks.add(current.onRestored);
       c.current = null;
     }
@@ -1408,9 +1420,9 @@ export class Renderer {
    * Draws a frame; returns false (and draws nothing) once the context is lost: from the moment
    * `gl.isContextLost()` says so, or web3d's listeners (of any realm) have counted a loss on the
    * canvas since this renderer was made, whichever comes first (the lost event can come later).
-   * Once lost it returns false before any other check. Otherwise it throws if the canvas element has
-   * been moved to another document, or this copy's window has navigated away, been closed or had its
-   * frame removed. With CPU timing on, wasm reads the clock
+   * Once lost it returns false, before every check but the disposed and re-entrancy ones (which
+   * throw). Otherwise it throws if the canvas element has been moved to another document, or this
+   * copy's window has navigated away, been closed or had its frame removed. With CPU timing on, wasm reads the clock
    * twice around its work; each reading is a number V8 boxes (22 sampled bytes a frame for the two,
    * measured in evidence/phase1/critic10-rerun/cpu-timing/), which is why timing is off unless
    * asked for.
