@@ -107,6 +107,18 @@ every backend must interpret, put the interpretation in one shared tested
 function rather than in per-backend arms — see
 [`docs/CLIP_AND_SCISSOR.md`](docs/CLIP_AND_SCISSOR.md).
 
+## Branches
+
+Work lands on `dev`. `main` follows it: when CI passes on `dev`,
+[`promote-main.yml`](.github/workflows/promote-main.yml) fast-forwards `main`
+to the commit CI tested. Docs-only pushes skip CI, so they move `main` when
+nothing but documentation separates it from `dev`. Nobody commits to `main`
+directly, and it is never forced.
+
+The checkout at `~/pudding/loadngo` stays on `dev`. Longer work goes in its
+own worktree (`git worktree add ../loadngo-<topic> <branch>`), so the shared
+checkout never changes branch under another session.
+
 ## Architecture docs
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): layering and ownership boundaries.
 - [`docs/GAMEPAD_INPUT.md`](docs/GAMEPAD_INPUT.md): platform-agnostic gamepad/controller input design and platform rollout plan.
