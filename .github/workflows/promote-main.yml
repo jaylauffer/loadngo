@@ -1,0 +1,102 @@
+# Keeps main at the newest commit on dev that passed CI (Jay, 2026-11-07).
+#
+# - When CI passes on dev, main fast-forwards to the commit CI tested, plus
+#   any docs-only commits pushed on top of it (those never run CI; see the
+#   paths-ignore in ci.yml).
+# - When a docs-only push lands on dev, main fast-forwards to it if nothing
+#   but documentation separates main from dev.
+#
+# main only ever fast-forwards: nothing is forced. If main has commits dev
+# lacks, the job fails and a person sorts it out. GitHub may refuse a
+# GITHUB_TOKEN push that changes .github/workflows/; the job then fails with
+# the command to fast-forward by hand.
+#
+# workflow_run runs this file as it is on main (the default branch), and
+# checks out main; it runs only git commands, never code from the commit.
+name: Promote main
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [dev]
+  push:
+    branches: [dev]
+    paths:
+      - "**/*.md"
+      - "docs/**"
+
+concurrency:
+  group: promote-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       (github.event.workflow_run.event == 'push' ||
+        github.event.workflow_run.event == 'workflow_dispatch'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fast-forward main
+        env:
+          TESTED: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin dev main
+          dev=$(git rev-parse origin/dev)
+          main=$(git rev-parse origin/main)
+
+          # True when every file changed between two commits is documentation,
+          # matching ci.yml's paths-ignore ("**/*.md", "docs/**").
+          docs_only() {
+            local f
+            while IFS= read -r f; do
+              case "$f" in
+                *.md | docs/*) ;;
+                *) return 1 ;;
+              esac
+            done < <(git diff --name-only "$1" "$2")
+          }
+
+          if [ "$GITHUB_EVENT_NAME" = workflow_run ]; then
+            target=$TESTED
+            if ! git merge-base --is-ancestor "$target" "$dev"; then
+              echo "$target is not on dev; nothing to promote."
+              exit 0
+            fi
+            if [ "$target" != "$dev" ] && docs_only "$target" "$dev"; then
+              echo "Docs-only commits follow the tested commit; taking dev ($dev)."
+              target=$dev
+            fi
+          else
+            target=$dev
+            if ! docs_only "$main" "$target"; then
+              echo "Code changed between main and dev; main moves when CI passes."
+              exit 0
+            fi
+          fi
+
+          if git merge-base --is-ancestor "$target" "$main"; then
+            echo "main ($main) already contains $target."
+            exit 0
+          fi
+          if ! git merge-base --is-ancestor "$main" "$target"; then
+            echo "::error::main ($main) has commits that $target lacks, so it cannot fast-forward. Fix by hand."
+            exit 1
+          fi
+          if ! git push origin "$target:refs/heads/main"; then
+            echo "::error::Push refused. If main..$target changes .github/workflows/, GITHUB_TOKEN may not push it; fast-forward by hand: git push github $target:main"
+            exit 1
+          fi
+          echo "main: $main -> $target"
