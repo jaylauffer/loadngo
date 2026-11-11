@@ -833,16 +833,20 @@ mod tests {
             "hips {hips:?} against {:?}",
             seat.hips
         );
-        c.go_to(&[c.root().translation, Vec3::new(2.0, 0.0, 3.0)], 0.8, None);
+        // Then a walk on the way it faces as it stands up. The synthetic clips walk straight, idle
+        // and sit: they have no stop and no turn, so this asks that it stands up, walks to the goal
+        // and does not veer off the way (round 8 asked it to walk 2 m to the side, a 90 degree turn
+        // these clips cannot make: it reached that goal only while a transition counted the turn
+        // rate's offset twice, which spun the root up to 1 rad/s; with the offset counted once it
+        // turned too slowly to come within 0.6 m; round 9).
+        let goal = Vec3::new(0.0, 0.0, 5.0);
+        c.go_to(&[c.root().translation, goal], 0.8, None);
         assert_eq!(c.state(), State::StandingUp);
-        // The synthetic clips have no stop (a steady walk and an idle): with the root's velocity
-        // kept continuous across transitions it walks on past the goal rather than stop on it, so
-        // this asks only that it stands up and walks there. (It once stopped within 0.6 m: a
-        // transition counted the root's velocity offset twice, which braked it; round 8.)
-        let mut nearest = f32::INFINITY;
+        let (mut nearest, mut off_way) = (f32::INFINITY, 0.0f32);
         for i in 0..(60 * 12) {
             c.step(1.0 / 60.0);
-            nearest = nearest.min((c.root().translation - Vec3::new(2.0, 0.0, 3.0)).length());
+            nearest = nearest.min((c.root().translation - goal).length());
+            off_way = off_way.max(c.root().translation.x.abs());
             if std::env::var_os("CHAR_DEBUG").is_some() && i % 30 == 0 {
                 eprintln!(
                     "u {} root {:?} state {:?} action {:?} clip {:?}",
@@ -860,6 +864,7 @@ mod tests {
             c.state()
         );
         assert!(nearest < 0.3, "came no nearer the goal than {nearest} m");
+        assert!(off_way < 0.15, "veered {off_way} m off its way");
         assert!(c.world_positions().iter().all(|p| p.is_finite()));
     }
 

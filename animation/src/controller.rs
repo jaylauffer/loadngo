@@ -391,6 +391,10 @@ pub struct MotionMatcher {
     root: Transform,
     root_velocity: Vec3,
     root_yaw_rate: f32,
+    /// The root's turn rate the animation gave last step (rad/s): the clip's own, its
+    /// inertialization offset included, before the pull towards the simulation or an action's
+    /// warp (none while an action pins the root). A transition keeps this continuous.
+    anim_yaw_rate: f32,
     // Simulation.
     sim_pos: VelocitySpring,
     sim_rot: RotationSpring,
@@ -451,6 +455,7 @@ impl MotionMatcher {
             root: Transform::new(position.flat(), rot),
             root_velocity: Vec3::ZERO,
             root_yaw_rate: 0.0,
+            anim_yaw_rate: 0.0,
             sim_pos: VelocitySpring {
                 position: position.flat(),
                 ..VelocitySpring::default()
@@ -801,6 +806,7 @@ impl MotionMatcher {
         self.yaw_rate_blend = InertialVec3::default();
         self.root_velocity = velocity;
         self.root_yaw_rate = 0.0;
+        self.anim_yaw_rate = 0.0;
         self.frame = to;
         self.frac = 0.0;
         self.anchor = root.compose(self.db_root(to, 0.0).inverse());
@@ -948,15 +954,15 @@ impl MotionMatcher {
             self.root_vel_blend.offset = self.root_velocity - v_new;
         }
         let yaw_new = wrap_angle(db.root_rot[t1].yaw() - db.root_rot[t0].yaw()) / dt;
-        // (The turn rate is still given as the animation's, its offset counted twice: taken as
-        // shown, a synthetic walk after standing up veered 0.6 m off its way; not understood, so
-        // left as it was.)
-        self.yaw_rate_blend.transition(
-            Vec3::new(self.root_yaw_rate, 0.0, 0.0),
-            Vec3::ZERO,
-            Vec3::new(yaw_new, 0.0, 0.0),
-            Vec3::ZERO,
-        );
+        // The turn rate goes on as the animation gave it (its offset already in it) less the new
+        // clip's: neither the offset counted again nor the pull towards the simulation's facing
+        // kept as the clip's own (round 9). Given the shown rate as the animation's, the offset
+        // doubled at each transition: transitions every 0.05 s spun a root at 188 rad/s, and at the
+        // usual 0.1 s a turn the data cannot make was spun up to 1 rad/s. Given it as shown
+        // (round 8's velocity fix), the pull was wound up: a transition every few frames kept each
+        // one's pull as the next clip's turn, and a walk the synthetic data could not turn kept
+        // turning at 0.31 rad/s past the way wanted, round 8's "veer".
+        self.yaw_rate_blend.offset.x = self.anim_yaw_rate - yaw_new;
         self.anchor = new_anchor;
         self.frame = to;
         self.frac = 0.0;
@@ -1210,12 +1216,14 @@ impl MotionMatcher {
             .x;
         let mut pos = self.root.translation + vel * dt;
         let mut yaw = self.root.rotation.yaw() + yaw_rate * dt;
+        self.anim_yaw_rate = yaw_rate;
         if let Some(mut st) = self.action {
             // An action: its own root motion (none when pinned), warped onto its target, and
             // the hips' height eased from where it was to where the action ends.
             if st.action.pin_root {
                 pos = self.root.translation;
                 yaw = self.root.rotation.yaw();
+                self.anim_yaw_rate = 0.0;
             }
             let span = ((st.action.end - st.action.start).max(2) - 1) as f32;
             let u = (((self.frame - st.action.start) as f32 + self.frac) / span).clamp(0.0, 1.0);
@@ -1866,8 +1874,12 @@ mod tests {
         };
         let (kept, free) = (turned(true), turned(false));
         assert!(kept < 0.002, "a held foot turned {kept} rad in a step");
+        // (These clips walk straight: the root turns only by its pull towards the simulation's
+        // facing, 0.2-0.25 rad/s, and a free held foot about 0.005 rad a step. It turned 0.011
+        // while a transition counted the turn rate's offset twice, which spun the root round the
+        // circle at 0.5-0.8 rad/s; round 9.)
         assert!(
-            free > 3.0 * kept.max(0.002),
+            free > 3.0 * kept.max(0.001),
             "without it the feet turned only {free} rad"
         );
     }
@@ -2033,6 +2045,46 @@ mod tests {
         let p = m.root().translation;
         assert!((p - Vec3::new(0.0, 0.0, 6.0)).length() < 0.5, "{p:?}");
         assert!(m.stats().searches > 10);
+    }
+
+    #[test]
+    fn quick_transitions_neither_double_nor_wind_up_the_roots_turn() {
+        // Straight walks only, searched every 0.05 s and made to transition at every search, asked
+        // to walk 0.5 rad to the left. No clip turns (beyond the root's facing following the hips'
+        // sway), so the root turns only by its pull towards the simulation's facing, at most 30%
+        // of its own speed's worth: never fast, and it stops turning once it faces the way wanted.
+        // A transition that counted the turn rate's offset again spun it at 188 rad/s; one that
+        // kept the pull as the next clip's own turn carried it on at 0.6 rad/s (round 9).
+        let cfg = Config {
+            search_interval: 0.05,
+            transition_cost: -1.0e6,
+            ..Config::default()
+        };
+        let facing = 0.5f32;
+        let s = ConstantSteering {
+            velocity: Vec3::new(facing.sin(), 0.0, facing.cos()) * 0.9,
+            facing,
+        };
+        let mut m = MotionMatcher::new(db(), cfg, Vec3::ZERO, 0.0);
+        let dt = 1.0 / 60.0;
+        let mut most = 0.0f32;
+        let mut was = m.root().rotation.yaw();
+        for _ in 0..(60 * 12) {
+            m.step(dt, &s);
+            let yaw = m.root().rotation.yaw();
+            most = most.max(wrap_angle(yaw - was).abs() / dt);
+            was = yaw;
+        }
+        assert!(
+            m.stats().transitions > 200,
+            "only {} transitions",
+            m.stats().transitions
+        );
+        assert!(most < 0.4, "the root turned at {most} rad/s");
+        assert!(
+            wrap_angle(was - facing).abs() < 0.05,
+            "it faces {was} rad, asked {facing}"
+        );
     }
 
     #[test]
