@@ -24,7 +24,8 @@ Only datasets whose licences allow commercial use are used. Non-commercial datas
   states (`license: cc-by-4.0`, checked 2026-11-11).
 - **What we used:** the `Neutral` style ("Normal walking"): `Neutral_FW` (forward walking),
   `Neutral_ID` (idling) and `Neutral_TR1` (transitions), trimmed by the dataset's own
-  `Frame_Cuts.csv`.
+  `Frame_Cuts.csv`; and since round 9 `Neutral_BW` (backward walking), two stretches of it in
+  `animation/data/walk-core.json` (8.5-12.8 s and 136.9-139.5 s), tagged `back`.
 - **Changes:** retargeted to other skeletons, resampled, floor-levelled, mirrored left to right,
   labelled with foot contacts, and stored with derived features in a motion-matching database.
 - **Attribution to carry:** "Motion from the 100STYLE dataset by Ian Mason, Sebastian Starke and

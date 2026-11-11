@@ -340,6 +340,8 @@ who.lookAt([x, y, z]); who.gesture([0.2, 0.7], 0.6); who.handTo('right', [x, y, 
 who.plantFeet([lx, lz], [rx, rz]);             // taking a body over from other animation
 who.takeOver(x, z, facing, pose);              // ... from its pose, laid out as step()'s (round 3)
 who.takeOverMoving(x, z, facing, pose, [vx, vz], [[lvx, lvz], [rvx, rvz]], [leftDown, rightDown]); // walking (round 4)
+who.takeOver(x, z, facing, pose, prevPose, dt, [px, pz, pfacing]); // ... keeping its motion: the frame before (round 9)
+who.stepBack(0.3, 0.4);                        // a half step back, facing kept (clips tagged back; round 9)
 db.clipName(who.frame);                        // which capture is playing, for checks
 // on each frame the host asks for:
 applyPose(who.step(dt), avatar, bonesInDbOrder);
@@ -680,6 +682,59 @@ turned through itself on all four bodies, far less on the women's headscarves. O
 lowest tier its frame floor holds (3.9-4.5% of frames over 33.4 ms after the first minute; at most 3.3 ms of motion a
 frame in the walk with the learner, and 9 ms once as someone rises and sets off, not yet traced).
 
+### Round 9 (loadngo)
+
+On the `motion-matching` branch, this Mac, release builds; evidence in `animation/evidence/round-9/`. Measured on the
+canonical humanoid and on a man's and a woman's body from a browser game (as `anim_build` targets).
+
+- **The root's turn rate across transitions** (`34f22a3a`, `turn-rate.md`). A transition gave the turn rate's
+  inertialization the rate the root had turned as the animation's, so the offset already in it was counted again:
+  transitions every 0.05 s on straight synthetic walks spun a root at 188 rad/s, and at the usual 0.1 s a turn the clips
+  cannot make was spun up to 1 rad/s. Taken as shown instead (round 8's velocity form), the root's pull towards the
+  simulation was kept as each next clip's own turn: that was round 8's "veer" (its sit test's walk after standing up asked
+  for a 90 degree turn its synthetic clips cannot make, ping-ponged between two clip ends and turned on at 0.31 rad/s).
+  Now the offset is the turn the animation gave (`anim_yaw_rate`, before the pull and any warp) less the new clip's. With
+  `walk-core.json` the root's turn changes 2-4 times less in a frame in turns from standing (turn off 80 degrees 0.93 ->
+  0.21 rad/s, about-turn 0.76-1.06 -> 0.27-0.30) and less in every other run but a man's slow walk alongside (0.10 ->
+  0.24, at a clip's end: see below); end facings are within 0.07 rad of before but in that run (0.12). Worst single contacts move both ways
+  between near-tied clips.
+- **The root's velocity** (not changed). Round 8's velocity offset (`shown - new`) still keeps the pull towards the
+  simulation at each transition. Taken out as the turn rate's is, the root's largest acceleration fell in 15 of 24
+  walking runs (three databases, eight scenarios; a woman's about-turn from standing 0.82 -> 0.08 cm a frame squared),
+  rose in one (a woman's turn left, 0.79 -> 0.93) and was the same in 8. Left for a game's checks to decide.
+- **A kept foot's turn** (`ffc35868`). Round 9's `109c79bd` let a held foot pivot on its held point once its kept turn
+  passed 0.45 rad (`TWIST_KEPT_MOST`). In the game a flat planted foot then slid 3.8 cm on the floor as the body turned on
+  the spot at a bench, and held feet stood 26-30 degrees off their knees at a hand-over, so that bound is taken out: a
+  kept foot never turns while held (round 8's rule). Its kept turn (here 1.4-2.0 rad) is released in the air at most 5
+  rad/s (`TWIST_RATE_MOST`): once a landing is in view the release is planned so its cubic peaks within that and lands
+  still, and the rest stays the landed foot's kept turn (a plain clamp landed feet still turning 0.12-0.16 rad a frame).
+  The test's lifted foot turns at most 0.118 rad a frame (the cap's 0.083 and the body's own 0.035) and lands turning at
+  most 0.083 (round 8's form: 0.138 landing, 0.175 lifted).
+- **A take-over keeps the body's motion** (`f840dd11`, `68f97037`). `take_over_from` (`takeOver(x, z, facing, pose,
+  prevPose, dt, prevRoot)`) is also given the body a frame before; each bone's and the hips' offset rate is then the
+  shown motion's (the offset's own rotation-vector rate, `68f97037`; at most 3 m/s and 15 rad/s) instead of zero. A body's
+  hips rising at 0.6 m/s change their velocity by 0.020 m/s in the frame after (0.58 from the pose alone); through the
+  wasm module on a man's database they go on at 0.576 m/s. A game reported a forward bend carried sideways in a rise
+  facing about -x; not reproduced here from poses formed as `take_over` takes them (a bending spine facing 0, +-90 and
+  180 degrees, and four captured rises at facings 0 and -1.471 rad, alike).
+- **A half step back** (`dd54c90d`, `step-back.md`; not yet used by the game). A new tag `back`, never searched unless
+  asked for (`Config::step_back`, or `Character::step_back(distance, speed)` / `stepBack` for its own walk) and left out of
+  the features' normalisation; `walk-core.json` appends 100STYLE's backward walk and its stop. `step_back` sets off on
+  the trajectory alone once its simulation leads by 0.12 m and lands on its end: 0.2 / 0.3 / 0.4 m asked, 0.202-0.203 /
+  0.302 / 0.402 m back on both bodies, 1 mm aside, turned at most 0.106 rad, feet sliding at most 1.5 cm; it sets off
+  after 0.8-0.9 s. Each body's database grows 828 frames, 138 KB; every other frame matches as before (`motion_eval`
+  per-frame output byte-identical in all ten scenarios on both bodies).
+- **Trunk lean** (`trunk-lean.md`; nothing changed). The game's trunk lean by part rose 4.7 -> 8.3 degrees in round 8;
+  measured on the bodies 4.9 -> 8.6. It is round 8's chest alignment following the capture: on each capture's own skeleton
+  the walks lean as round 8 shows them (within about a degree on average), and round 7's alignment on a shoulder had leaned them
+  2.3-6.1 degrees less and 4-6 more to the side. CMU subjects 16's and 69's walks lean 6.6-9.2 degrees by part.
+- **Seen in passing:** playback holds a clip's last frame for one step before the search moves on (`at_clip_end`), the
+  root's own motion stopping with it (a man's slow walk alongside reached one while turning); the canonical humanoid's
+  straight walk on today's `walk-core.json` has a 30.5 cm worst contact from CMU 69_24's mirror image (its capture slides
+  21-24 cm on its own).
+- **Not done this round:** Mesh2Motion's sits and rises (their export's UE-style names need a bone map) and the knee at
+  heel strike (loadngo's share of 19-23 degrees).
+
 ## What is short
 
 - **The hand-back's blend** (round 6, done in the game): a foot is newly held during the fade only if both walks have it
@@ -691,10 +746,14 @@ frame in the walk with the learner, and 9 ms once as someone rises and sets off,
 - **Which frame wins a near tie** decides a run's worst contact, and it moves between databases
   (the tables above); judge a database by its 95th percentiles and gait, and by a game's checks.
 - **Seated idles** come from three captures (CMU 86_15, 113_15, 143_18); the clips' talking and
-  gestures while seated (tagged) are not used as idles. Mesh2Motion's seated idles and talking need
-  a Blender export (not done).
-- **Database size:** 2.6-3.3 MB per body build for a web game's walking with 32-bit rotations (round 7's set); every clip
-  19 MB at 48 bits.
+  gestures while seated (tagged) are not used as idles. Mesh2Motion's seated idles and talking are
+  exported from Blender as BVH (UE-style names) but need a bone map (not done).
+- **A step back** (round 9) sets off after 0.8-0.9 s (no standing pose leads into one) and has one captured stop, which
+  drifts sideways on its own; the game does not use it yet.
+- **The root's velocity** across transitions still keeps the pull towards the simulation (round 9 measured taking it out:
+  see "Round 9 (loadngo)").
+- **Database size:** 2.6-3.3 MB per body build for a web game's walking with 32-bit rotations (round 7's set; 2.7-3.4 MB
+  with round 9's backward clips); every clip 19 MB at 48 bits.
 - **Flat ground only:** contacts are held at the floor's height (a game lifts soles onto its own
   ground).
 - **One machine for the harness:** round 3's tables are this Mac's; dolores ran the tests and lints (Linux aarch64)
@@ -703,8 +762,9 @@ frame in the walk with the learner, and 9 ms once as someone rises and sets off,
 ## Next
 
 1. **A game's critic** of round 8; then the last turn and chair, a stop within a step for someone close in front (the
-   capture needs most of a step; its stop is not braked), and the rises and sits on capture (Mesh2Motion's keyed sits
-   export from Blender as BVH, on a skeleton the `mesh2motion` map does not name yet).
+   capture needs most of a step; its stop is not braked; round 9's step back can give the room back after it, not yet in
+   the game), and the rises and sits on capture (Mesh2Motion's keyed sits export from Blender as BVH, on a skeleton the
+   `mesh2motion` map does not name yet).
 2. **Seats in the game:** the framework's sits land to the centimetre on any seat height; a game
    with sliding chairs and hands to a table or lap needs its seat poses joined to the framework's.
 3. **Reactions while standing:** the look-at, reach and beats layers in a game whose people stand and talk.
