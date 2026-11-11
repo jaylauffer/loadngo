@@ -716,17 +716,71 @@
    "to": 3.5
   },
   {
-   "name": "cmu-86-15-seated",
+   "name": "cmu-86-15-sit",
    "skeleton": "cmu/subjects/86/86.asf",
    "motion": "cmu/subjects/86/86_15.amc",
    "fps": 120,
    "map": "cmu-asf",
+   "mirror": true,
+   "tags": [
+    "sit-down"
+   ],
+   "from": 10.6,
+   "to": 12.8
+  },
+  {
+   "name": "cmu-86-15-seated-calm-a",
+   "skeleton": "cmu/subjects/86/86.asf",
+   "motion": "cmu/subjects/86/86_15.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "mirror": true,
    "tags": [
     "seated"
    ],
+   "from": 17.6,
+   "to": 23.4
+  },
+  {
+   "name": "cmu-86-15-seated-talk",
+   "skeleton": "cmu/subjects/86/86.asf",
+   "motion": "cmu/subjects/86/86_15.amc",
+   "fps": 120,
+   "map": "cmu-asf",
    "mirror": true,
-   "from": 13.0,
-   "to": 40.0
+   "tags": [
+    "seated",
+    "talk",
+    "gesture"
+   ],
+   "from": 23.4,
+   "to": 37.0
+  },
+  {
+   "name": "cmu-86-15-seated-calm-b",
+   "skeleton": "cmu/subjects/86/86.asf",
+   "motion": "cmu/subjects/86/86_15.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "mirror": true,
+   "tags": [
+    "seated"
+   ],
+   "from": 37.0,
+   "to": 43.2
+  },
+  {
+   "name": "cmu-86-15-stand",
+   "skeleton": "cmu/subjects/86/86.asf",
+   "motion": "cmu/subjects/86/86_15.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "mirror": true,
+   "tags": [
+    "stand-up"
+   ],
+   "from": 52.3,
+   "to": 54.6
   },
   {
    "name": "mesh2motion-turn-45-left",

@@ -7,6 +7,8 @@
 //   who.setPath([0, 0, 0, 6, 6, 6], 0.83);              // x, z pairs; m/s
 //   // each frame the host asks for:
 //   const pose = who.step(dt);                          // a Float32Array view, rewritten in place
+//   who.sit(hx, hy, hz, facing); who.stand();           // seats: the seated hips, the way they face
+//   who.lookAt([x, y, z]); who.gesture([0.2, 0.7], 0.6); // layers over the matched motion
 //
 // The module has no imports and allocates nothing in step(). Its memory grows only when a
 // database or character is made; the views here are remade then.
@@ -16,6 +18,7 @@
 // db.parents). applyPose() below writes it into three.js-style objects.
 
 const decoder = new TextDecoder();
+const STATES = ['standing', 'walking', 'approaching', 'sitting-down', 'seated', 'standing-up'];
 const encoder = new TextEncoder();
 
 export async function loadMotion(source) {
@@ -118,6 +121,45 @@ export class MotionCharacter {
     this.motion.x.anim_free(p, n);
     this.view();
     this.check(r);
+  }
+  /** Turn to face `facing` (radians), standing. */
+  face(facing) {
+    this.check(this.motion.x.anim_character_face(this.h, facing));
+  }
+  /** Keep to (ox right, oz ahead) of someone at x, z moving at vx, vz facing heading; call each frame. */
+  follow(x, z, vx, vz, heading, ox, oz) {
+    this.check(this.motion.x.anim_character_follow(this.h, x, z, vx, vz, heading, ox, oz));
+  }
+  /** Sit on a seat: the seated hips at (hx, hy, hz) in world space, facing `facing`. */
+  sit(hx, hy, hz, facing) {
+    this.check(this.motion.x.anim_character_sit(this.h, hx, hy, hz, facing));
+  }
+  /** Stand up from a seat (a later command waits until standing). */
+  stand() {
+    this.check(this.motion.x.anim_character_stand(this.h));
+  }
+  /** Beat gestures on word times (seconds from now) at a strength (0..1). */
+  gesture(wordTimes, strength = 1) {
+    const f = Float32Array.from(wordTimes);
+    const [p, n] = this.motion.stage(new Uint8Array(f.buffer));
+    const r = this.motion.x.anim_character_gesture(this.h, p, f.length, strength);
+    this.motion.x.anim_free(p, n);
+    this.view();
+    this.check(r);
+  }
+  /** Look at a world point, or stop looking with null. */
+  lookAt(point) {
+    const [x, y, z] = point ?? [NaN, 0, 0];
+    this.check(this.motion.x.anim_character_look_at(this.h, x, y, z));
+  }
+  /** Reach hand `side` ('left' or 'right') to a world point (the wrist), or let go with null. */
+  handTo(side, point) {
+    const [x, y, z] = point ?? [NaN, 0, 0];
+    this.check(this.motion.x.anim_character_hand_to(this.h, side === 'left' ? 0 : 1, x, y, z));
+  }
+  /** 'standing', 'walking', 'approaching', 'sitting-down', 'seated' or 'standing-up'. */
+  get state() {
+    return STATES[this.motion.x.anim_character_state(this.h)];
   }
   teleport(x, z, facing) {
     this.check(this.motion.x.anim_character_teleport(this.h, x, z, facing));

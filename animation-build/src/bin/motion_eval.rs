@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use data::cli::{read_args, ArgDoc, Usage};
+use loadngo_animation::character::{Character, Seat, State};
 use loadngo_animation::controller::{Config, MotionMatcher};
 use loadngo_animation::database::Database;
 use loadngo_animation::eval::{self, Metrics, Recording};
@@ -51,7 +52,7 @@ const USAGE: Usage = Usage {
     args: &[
         ArgDoc::required("--db", "<database.lmm>", "the database anim_build wrote"),
         ArgDoc::required("--out-dir", "<directory>", "where the report (report.json, report.md) and strips (<scenario>.png) go; created if missing"),
-        ArgDoc::repeated("--scenario", "<name>", "run only these (straight, start-stop, turn-left-90, turn-right-90, curve, alongside-slow); default all"),
+        ArgDoc::repeated("--scenario", "<name>", "run only these (straight, start-stop, turn-left-90, turn-right-90, turn-off-80, turn-off-180, curve, alongside-slow, sit-bench, sit-chair); default all"),
         ArgDoc::optional("--hz", "<rate>", "steps a second (default 60)"),
         ArgDoc::optional("--repeat", "<n>", "run every scenario n times for timing (default 1)"),
         ArgDoc::switch("--no-strips", "skip the PNG strips"),
@@ -69,7 +70,8 @@ const USAGE: Usage = Usage {
     notes: &[
         "Foot slide is measured from the output's joints, never from the database's labels: per contact, how far the point on the floor (the ball while within 1 cm of its floor height, else the heel) moved since it touched down.",
         "Per-frame figures are per 1/60 s frame whatever --hz is, as a 60 Hz check states them.",
-        "Allocations are counted only inside MotionMatcher::step; anything but 0 is a defect.",
+        "Allocations are counted only inside MotionMatcher::step (Character::step for the seat scenarios); anything but 0 is a defect.",
+        "MOTION_EVAL_VERBOSE=1 also prints the largest accelerations with the clip playing; MOTION_EVAL_STATES=1 prints a seat scenario's state, root and hips four times a second.",
     ],
 };
 
@@ -235,6 +237,120 @@ fn run(
     }
 }
 
+/// A scenario with seats, played through the character controller: each leg is a command,
+/// ending when the character is where the command leaves it.
+fn run_character(
+    db: &Arc<Database>,
+    s: &Scenario,
+    hz: f32,
+    foot_lock: bool,
+    settings: &[(String, String)],
+) -> Run {
+    let mut cfg = Config {
+        foot_lock,
+        ..Config::default()
+    };
+    for (k, v) in settings {
+        cfg.set(k, v).unwrap_or_else(|e| fail(&e));
+    }
+    let mut c = Character::new(Arc::clone(db), cfg, s.start, s.facing);
+    let frames = (s.seconds * hz) as usize;
+    let mut rec = Recording::new(hz, db.bone_count());
+    let mut sim = Vec::with_capacity(frames);
+    let mut step_ns = Vec::with_capacity(frames);
+    let mut searched = Vec::with_capacity(frames);
+    let mut held = Vec::with_capacity(frames);
+    let mut db_frame = Vec::with_capacity(frames);
+    let dt = 1.0 / hz;
+    let mut allocs = 0;
+    let (mut leg, mut leg_time, mut entered) = (0usize, 0.0f32, false);
+    for _ in 0..frames {
+        if !entered {
+            match &s.legs[leg] {
+                Leg::Walk(p, speed) => c.go_to(p, *speed, None),
+                Leg::Wait(_) => {}
+                Leg::Sit(hips, facing) => c.sit(Seat {
+                    hips: *hips,
+                    facing: *facing,
+                }),
+                Leg::Stand => c.stand(),
+            }
+            entered = true;
+            leg_time = 0.0;
+        }
+        let before = c.matcher().stats().searches;
+        ALLOCS.store(0, Ordering::Relaxed);
+        COUNTING.store(true, Ordering::Relaxed);
+        let t0 = Instant::now();
+        c.step(dt);
+        let ns = t0.elapsed().as_nanos() as u64;
+        COUNTING.store(false, Ordering::Relaxed);
+        allocs += ALLOCS.load(Ordering::Relaxed);
+        step_ns.push(ns);
+        searched.push(c.matcher().stats().searches > before);
+        leg_time += dt;
+        let r = c.root();
+        rec.push(
+            c.world_positions(),
+            r.translation,
+            r.rotation.yaw(),
+            c.matcher().stats().transitions,
+        );
+        sim.push(c.matcher().simulation().translation);
+        let fh = c.matcher().feet_held();
+        held.push(u8::from(fh[0]) | (u8::from(fh[1]) << 1));
+        db_frame.push((c.matcher().frame(), c.matcher().contacts()));
+        if std::env::var_os("MOTION_EVAL_STATES").is_some()
+            && rec.frames().is_multiple_of((hz as usize / 4).max(1))
+        {
+            let fr = c.matcher().frame();
+            eprintln!(
+                "  {:.2}s {:?} root ({:.2}, {:.2}) facing {:.2} approach ({:.2}, {:.2}) {:.2} hips ({:.2}, {:.2}, {:.2}) playing {}",
+                rec.frames() as f32 / hz,
+                c.state(),
+                r.translation.x,
+                r.translation.z,
+                r.rotation.yaw(),
+                c.approach_spot().translation.x,
+                c.approach_spot().translation.z,
+                c.approach_spot().rotation.yaw(),
+                c.world_positions()[0].x,
+                c.world_positions()[0].y,
+                c.world_positions()[0].z,
+                db.clip_of(fr).map_or("?".to_string(), |k| format!("{}{} @{}", k.name, if k.mirrored { "-m" } else { "" }, fr - k.start))
+            );
+        }
+        let done = match &s.legs[leg] {
+            Leg::Wait(t) => leg_time >= *t,
+            Leg::Walk(..) | Leg::Stand => leg_time > 0.25 && c.state() == State::Standing,
+            Leg::Sit(..) => c.state() == State::Seated,
+        };
+        if done && leg + 1 < s.legs.len() {
+            if std::env::var_os("MOTION_EVAL_VERBOSE").is_some() {
+                eprintln!(
+                    "  {}: leg {leg} done at {:.2}s",
+                    s.name,
+                    rec.frames() as f32 / hz
+                );
+            }
+            leg += 1;
+            entered = false;
+        }
+    }
+    let m = c.matcher();
+    Run {
+        rec,
+        sim,
+        step_ns,
+        searched,
+        allocs,
+        held,
+        db_frame,
+        searches: m.stats().searches,
+        unlocks: m.stats().unlocks_by_radius,
+    }
+}
+
 fn speed_of(m: &MotionMatcher) -> f32 {
     // The simulation's speed: how far the next predicted point is over its horizon.
     let t = m.trajectory();
@@ -352,7 +468,7 @@ fn strips(
         for l in &s.legs {
             match l {
                 Leg::Wait(w) => t += w,
-                Leg::Walk(..) => {
+                Leg::Walk(..) | Leg::Sit(..) | Leg::Stand => {
                     found = t;
                     break;
                 }
@@ -362,6 +478,7 @@ fn strips(
     };
     let (from, step, count): (f32, f32, usize) = match (s.name.as_str(), s.steady) {
         ("start-stop", _) => (walk_start - 0.2, 0.3, 30),
+        _ if s.uses_seats() => (walk_start, (s.seconds - walk_start) / 45.0, 45),
         (_, Some((t0, _))) => (t0 + 1.0, 0.1, 14),
         _ => {
             // Around the turn: when the facing changes fastest.
@@ -827,9 +944,10 @@ fn main() {
         report.push(json);
     }
     for s in chosen {
-        let mut r = run(&db, s, a.hz, a.foot_lock, &a.settings);
+        let play = if s.uses_seats() { run_character } else { run };
+        let mut r = play(&db, s, a.hz, a.foot_lock, &a.settings);
         for _ in 1..a.repeat {
-            let again = run(&db, s, a.hz, a.foot_lock, &a.settings);
+            let again = play(&db, s, a.hz, a.foot_lock, &a.settings);
             r.step_ns.extend_from_slice(&again.step_ns);
             r.searched.extend_from_slice(&again.searched);
             r.allocs += again.allocs;

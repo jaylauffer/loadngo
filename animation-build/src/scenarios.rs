@@ -13,6 +13,21 @@ pub enum Leg {
     Walk(Vec<Vec3>, f32),
     /// Stand for this many seconds.
     Wait(f32),
+    /// Sit on a seat: the seated hips (world; `y` their height) and the way they face. The
+    /// leg ends when seated. Played through `character::Character`, not the bare matcher.
+    Sit(Vec3, f32),
+    /// Stand up from the seat; the leg ends when standing.
+    Stand,
+}
+
+impl Scenario {
+    /// Whether the scenario sits or stands (and so needs the character controller).
+    #[must_use]
+    pub fn uses_seats(&self) -> bool {
+        self.legs
+            .iter()
+            .any(|l| matches!(l, Leg::Sit(..) | Leg::Stand))
+    }
 }
 
 /// A named script.
@@ -243,6 +258,39 @@ pub fn standard() -> Vec<Scenario> {
             start: Vec3::ZERO,
             facing: 0.0,
         },
+        Scenario {
+            name: "sit-bench".into(),
+            about: "walk 3 m to a bench, turn and sit (hips 0.45 m up), sit 4 s, stand, walk 2 m away".into(),
+            legs: vec![
+                Leg::Wait(0.5),
+                Leg::Sit(Vec3::new(0.6, 0.45, 3.2), -std::f32::consts::FRAC_PI_2),
+                Leg::Wait(4.0),
+                Leg::Stand,
+                Leg::Walk(vec![Vec3::new(0.6, 0.0, 3.2), Vec3::new(-1.4, 0.0, 3.2)], STROLL),
+                Leg::Wait(1.0),
+            ],
+            steady: None,
+            seconds: 22.0,
+            pace: STROLL,
+            start: Vec3::ZERO,
+            facing: 0.0,
+        },
+        Scenario {
+            name: "sit-chair".into(),
+            about: "a chair 2.5 m ahead facing the walker (hips 0.5 m up): walk up, turn about, sit 3 s, stand".into(),
+            legs: vec![
+                Leg::Wait(0.5),
+                Leg::Sit(Vec3::new(0.0, 0.5, 2.5), std::f32::consts::PI),
+                Leg::Wait(3.0),
+                Leg::Stand,
+                Leg::Wait(1.5),
+            ],
+            steady: None,
+            seconds: 18.0,
+            pace: STROLL,
+            start: Vec3::ZERO,
+            facing: 0.0,
+        },
     ]
 }
 
@@ -304,6 +352,7 @@ impl Script {
                 }
                 arrived
             }
+            Some(Leg::Sit(..) | Leg::Stand) => true,
             None => false,
         };
         if next && self.at + 1 < self.legs.len() {

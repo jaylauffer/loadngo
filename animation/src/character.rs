@@ -101,6 +101,14 @@ impl Steering for Steer {
 
 const MAX_BEATS: usize = 64;
 
+/// How far from the sit's starting spot (m) a settled character may begin the sit, the
+/// clip's warp taking up the rest.
+const APPROACH_SLACK: f32 = 0.35;
+
+/// How far (m) a half turn in place carries a character forward, in the capture: the walk
+/// to a seat stops this much short (scaled by the turn) so that turning round lands on it.
+const TURN_LEAD: f32 = 0.3;
+
 #[derive(Debug, Clone, Copy)]
 struct Arm {
     shoulder: usize,
@@ -118,7 +126,10 @@ pub struct Character {
     state: State,
     seat: Option<Seat>,
     sit: Option<Action>,
+    hold: Option<(usize, usize)>,
     approach: Transform,
+    last_root: Vec3,
+    settled: f32,
     clock: f32,
     beats: [f32; MAX_BEATS],
     beat_count: usize,
@@ -136,6 +147,23 @@ pub struct Character {
     world_rot: Vec<Quat>,
     world_pos: Vec<Vec3>,
     local_pos: Vec<Vec3>,
+}
+
+/// The feet's places relative to the hips (on the root's axes), from the features.
+fn feet_from_hips(db: &Database, f: usize) -> [Vec3; 2] {
+    let v = db.feature(f);
+    let at = |k: usize| v[k] * db.feature_scale[k] + db.feature_mean[k];
+    let h = db.hips_pos[f];
+    [
+        Vec3::new(at(0), at(1), at(2)) - h,
+        Vec3::new(at(3), at(4), at(5)) - h,
+    ]
+}
+
+/// How far (m) the feet would move if frame `b`'s hips were put where frame `a`'s are.
+fn seat_distance(db: &Database, a: usize, b: usize) -> f32 {
+    let (pa, pb) = (feet_from_hips(db, a), feet_from_hips(db, b));
+    (pa[0] - pb[0]).length() + (pa[1] - pb[1]).length()
 }
 
 fn smooth_to(current: f32, target: f32, halflife: f32, dt: f32) -> f32 {
@@ -167,7 +195,10 @@ impl Character {
             state: State::Standing,
             seat: None,
             sit: None,
+            hold: None,
             approach: Transform::IDENTITY,
+            last_root: position,
+            settled: 0.0,
             clock: 0.0,
             beats: [0.0; MAX_BEATS],
             beat_count: 0,
@@ -187,6 +218,13 @@ impl Character {
             local_pos,
             db,
         }
+    }
+
+    /// Where a sit begins: the spot and facing the chosen sitting-down clip starts from
+    /// (meaningful while approaching a seat). A host routing round obstacles aims here.
+    #[must_use]
+    pub fn approach_spot(&self) -> Transform {
+        self.approach
     }
 
     /// The matcher underneath (its settings, stats and feet).
@@ -247,6 +285,25 @@ impl Character {
         self.standing_or_queue(Steer::Follow(follow));
     }
 
+    /// Steers by a ground velocity (m/s) and a facing: a stick, or a host that steers itself.
+    pub fn steer(&mut self, velocity: Vec3, facing: f32) {
+        self.standing_or_queue(Steer::Constant(ConstantSteering { velocity, facing }));
+    }
+
+    /// Places the character at once, standing (a cut).
+    pub fn teleport(&mut self, position: Vec3, facing: f32) {
+        self.m.stop_action();
+        self.m.teleport(position, facing);
+        self.state = State::Standing;
+        self.sit = None;
+        self.seat = None;
+        self.after_standing = None;
+        self.steer = Steer::Constant(ConstantSteering {
+            velocity: Vec3::ZERO,
+            facing,
+        });
+    }
+
     /// Stops and stands about where it is (idles).
     pub fn idle(&mut self) {
         let facing = self.m.root().rotation.yaw();
@@ -261,19 +318,27 @@ impl Character {
     /// its back to the seat, and sits, the hips landing on `seat.hips`. Then a seated loop.
     pub fn sit(&mut self, seat: Seat) {
         let db = Arc::clone(&self.db);
-        // The sitting-down clip whose seated hips are nearest the seat's height.
-        let mut best: Option<(f32, usize, usize)> = None;
+        // The sitting-down clip and the seated loop to follow it, chosen together: the sit's
+        // seated hips near the seat's height, and the loop's feet near where the sit leaves
+        // them (a capture's own sit and seated stretch, where the data has both).
+        let mut best: Option<(f32, usize, usize, (usize, usize))> = None;
         for c in &db.clips {
             if !self.clip_ok(c.tags, tags::SIT_DOWN) {
                 continue;
             }
             let h = db.hips_pos[c.end - 1].y;
-            let d = (h - seat.hips.y).abs();
+            let Some((feet, hold)) = self.seated_after(c.end - 1) else {
+                continue;
+            };
+            let d = 2.0 * (h - seat.hips.y).abs() + feet;
             if best.is_none_or(|b| d < b.0) {
-                best = Some((d, c.start, c.end));
+                best = Some((d, c.start, c.end, hold));
             }
         }
-        let Some((_, start, end)) = best else { return };
+        let Some((_, start, end, hold)) = best else {
+            return;
+        };
+        self.hold = Some(hold);
         let last = end - 1;
         let facing = Quat::from_yaw(seat.facing);
         let hips_end = db.hips_pos[last];
@@ -290,8 +355,14 @@ impl Character {
             hips_height_target: Some(seat.hips.y),
         });
         self.seat = Some(seat);
+        // Stop short of the spot along the way in, by about what turning round there will
+        // carry the character on (the capture's turns in place step forward as they turn).
         let here = self.m.root().translation;
-        let to = self.approach.translation;
+        let spot = self.approach.translation;
+        let way_in = (spot - here).flat();
+        let dir = way_in.normalize_or_zero();
+        let turn = wrap_angle(self.approach.rotation.yaw() - dir.x.atan2(dir.z)).abs();
+        let to = spot - dir * (TURN_LEAD * turn / std::f32::consts::PI).min(way_in.length());
         let mut p = PathSteering::new(&[here, to], 0.7);
         p.end_facing = Some(self.approach.rotation.yaw());
         p.arrive_radius = 0.05;
@@ -315,14 +386,21 @@ impl Character {
         }
         let db = Arc::clone(&self.db);
         let hips_now = self.m.hips_position().y;
+        let now = self.m.frame();
+        // The rising frame (in a clip's first half second) whose feet, from the hips, are
+        // nearest the pose held now, at about the height the hips are.
         let mut best: Option<(f32, usize, usize)> = None;
         for c in &db.clips {
             if !self.clip_ok(c.tags, tags::STAND_UP) {
                 continue;
             }
-            let d = (db.hips_pos[c.start].y + self.m.hips_lift() - hips_now).abs();
-            if best.is_none_or(|b| d < b.0) {
-                best = Some((d, c.start, c.end));
+            let lead = ((0.5 * db.fps) as usize).min((c.end - c.start) / 3);
+            for f in (c.start..=c.start + lead).step_by(4) {
+                let d = seat_distance(&db, now, f)
+                    + 2.0 * (db.hips_pos[f].y + self.m.hips_lift() - hips_now).abs();
+                if best.is_none_or(|b| d < b.0) {
+                    best = Some((d, f, c.end));
+                }
             }
         }
         let Some((_, start, end)) = best else { return };
@@ -368,11 +446,16 @@ impl Character {
         // The seat's sequence.
         match self.state {
             State::Approaching => {
+                // Sit once at the spot and turned; or, turned and near, once the feet have
+                // settled (small corrective steps look worse than the sit's own warp, which
+                // takes up what is left over the clip's length).
                 let r = self.m.root();
-                let close = (r.translation - self.approach.translation).flat().length() < 0.15;
+                let off = (r.translation - self.approach.translation).flat().length();
                 let turned =
                     wrap_angle(r.rotation.yaw() - self.approach.rotation.yaw()).abs() < 0.45;
-                if close && turned {
+                let moving = (r.translation - self.last_root).flat().length() / dt > 0.12;
+                self.settled = if moving { 0.0 } else { self.settled + dt };
+                if turned && (off < 0.12 || (off < APPROACH_SLACK && self.settled > 0.3)) {
                     if let Some(a) = self.sit {
                         self.m.play(a);
                         self.state = State::SittingDown;
@@ -387,6 +470,7 @@ impl Character {
             }
             _ => {}
         }
+        self.last_root = self.m.root().translation;
         self.m.step(dt, &self.steer);
         if self.m.action_finished() {
             match self.state {
@@ -416,20 +500,43 @@ impl Character {
         self.layers(dt);
     }
 
+    /// The seated loop to follow a sit ending on frame `from`: the seated frame whose feet,
+    /// its hips put where the sit's are, are nearest the sit's, with a long loop after it
+    /// (a short loop shows its seam every time it restarts). Returns how far the feet would
+    /// move (m) and the loop's frames.
+    fn seated_after(&self, from: usize) -> Option<(f32, (usize, usize))> {
+        let db = &self.db;
+        let mut best: Option<(f32, (usize, usize))> = None;
+        for min_loop in [(3.0 * db.fps) as usize, 2] {
+            for c in &db.clips {
+                if !self.clip_ok(c.tags, tags::SEATED) || c.tags & (tags::TALK | tags::GESTURE) != 0
+                {
+                    continue;
+                }
+                let mut f = c.start;
+                while f + min_loop <= c.end {
+                    let d = seat_distance(db, from, f);
+                    if best.is_none_or(|b| d < b.0) {
+                        best = Some((d, (f, c.end)));
+                    }
+                    f += 4;
+                }
+            }
+            if best.is_some() {
+                break;
+            }
+        }
+        best
+    }
+
     fn start_seated(&mut self) {
         let Some(seat) = self.seat else { return };
         let db = Arc::clone(&self.db);
-        let mut best: Option<(f32, usize, usize)> = None;
-        for c in &db.clips {
-            if !self.clip_ok(c.tags, tags::SEATED) {
-                continue;
-            }
-            let d = (db.hips_pos[c.start].y - seat.hips.y).abs();
-            if best.is_none_or(|b| d < b.0) {
-                best = Some((d, c.start, c.end));
-            }
-        }
-        let Some((_, start, end)) = best else {
+        let hold = self.hold.take().or_else(|| {
+            self.seated_after(self.sit.map_or(self.m.frame(), |a| a.end - 1))
+                .map(|b| b.1)
+        });
+        let Some((start, end)) = hold else {
             self.state = State::Seated;
             return;
         };

@@ -19,10 +19,11 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use crate::controller::{Config, MotionMatcher};
+use crate::character::{Character, Follow, Seat, State};
+use crate::controller::Config;
 use crate::database::Database;
 use crate::math::Vec3;
-use crate::path::{ConstantSteering, PathSteering, Steering, MAX_PATH_POINTS};
+use crate::path::MAX_PATH_POINTS;
 
 thread_local! {
     static ERROR: RefCell<String> = const { RefCell::new(String::new()) };
@@ -150,33 +151,17 @@ pub unsafe extern "C" fn anim_database_bone_name(db: *const DatabaseHandle, i: u
     }
 }
 
-enum Steer {
-    Constant(ConstantSteering),
-    /// Boxed: a path holds its points inline.
-    Path(Box<PathSteering>),
-}
-
-impl Steering for Steer {
-    fn desired(&self, p: Vec3) -> (Vec3, f32) {
-        match self {
-            Self::Constant(c) => c.desired(p),
-            Self::Path(s) => s.desired(p),
-        }
-    }
-}
-
 /// One character.
 pub struct CharacterHandle {
-    matcher: MotionMatcher,
-    steer: Steer,
+    c: Character,
     pose: Vec<f32>,
 }
 
 impl CharacterHandle {
     fn write_pose(&mut self) {
-        let m = &self.matcher;
+        let m = &self.c;
         let r = m.root();
-        let held = m.feet_held();
+        let held = m.matcher().feet_held();
         let h = m.hips_position();
         let p = &mut self.pose;
         p[0] = r.translation.x;
@@ -196,6 +181,23 @@ impl CharacterHandle {
     }
 }
 
+fn live<'a>(c: *mut CharacterHandle) -> Option<&'a mut CharacterHandle> {
+    let c = unsafe { c.as_mut() };
+    if c.is_none() {
+        fail("no character");
+    }
+    c
+}
+
+fn finite(v: &[f32]) -> bool {
+    if v.iter().all(|x| x.is_finite()) {
+        true
+    } else {
+        fail("numbers must be finite");
+        false
+    }
+}
+
 /// A character standing at `(x, z)` facing `facing` (radians about +Y, 0 = +Z), with the
 /// runtime's default settings; returns a handle or null.
 ///
@@ -212,26 +214,21 @@ pub unsafe extern "C" fn anim_character_create(
         fail("no database");
         return std::ptr::null_mut();
     };
-    if !(x.is_finite() && z.is_finite() && facing.is_finite()) {
-        fail("the position and facing must be finite");
+    if !finite(&[x, z, facing]) {
         return std::ptr::null_mut();
     }
-    let matcher = MotionMatcher::new(
+    let c = Character::new(
         Arc::clone(&d.db),
         Config::default(),
         Vec3::new(x, 0.0, z),
         facing,
     );
-    let mut c = CharacterHandle {
+    let mut h = CharacterHandle {
         pose: vec![0.0; 7 + 4 * d.db.bone_count()],
-        steer: Steer::Constant(ConstantSteering {
-            velocity: Vec3::ZERO,
-            facing,
-        }),
-        matcher,
+        c,
     };
-    c.write_pose();
-    Box::into_raw(Box::new(c))
+    h.write_pose();
+    Box::into_raw(Box::new(h))
 }
 
 /// Frees a character.
@@ -256,10 +253,7 @@ pub unsafe extern "C" fn anim_character_set(
     ptr: *const u8,
     len: usize,
 ) -> u32 {
-    let Some(c) = (unsafe { c.as_mut() }) else {
-        fail("no character");
-        return 1;
-    };
+    let Some(c) = live(c) else { return 1 };
     let text = unsafe { std::slice::from_raw_parts(ptr, len) };
     let Some((k, v)) = std::str::from_utf8(text)
         .ok()
@@ -268,10 +262,10 @@ pub unsafe extern "C" fn anim_character_set(
         fail("expected name=value");
         return 1;
     };
-    let mut cfg = c.matcher.config();
+    let mut cfg = c.c.matcher().config();
     match cfg.set(k.trim(), v.trim()) {
         Ok(()) => {
-            c.matcher.set_config(cfg);
+            c.c.set_config(cfg);
             0
         }
         Err(e) => {
@@ -281,7 +275,7 @@ pub unsafe extern "C" fn anim_character_set(
     }
 }
 
-/// Steers by a desired ground velocity `(vx, vz)` (m/s) and facing. 0 on success.
+/// Steers by a ground velocity `(vx, vz)` (m/s) and facing. 0 on success.
 ///
 /// # Safety
 /// `c` must be live.
@@ -292,24 +286,16 @@ pub unsafe extern "C" fn anim_character_set_desired(
     vz: f32,
     facing: f32,
 ) -> u32 {
-    let Some(c) = (unsafe { c.as_mut() }) else {
-        fail("no character");
-        return 1;
-    };
-    if !(vx.is_finite() && vz.is_finite() && facing.is_finite()) {
-        fail("the velocity and facing must be finite");
+    let Some(c) = live(c) else { return 1 };
+    if !finite(&[vx, vz, facing]) {
         return 1;
     }
-    c.steer = Steer::Constant(ConstantSteering {
-        velocity: Vec3::new(vx, 0.0, vz),
-        facing,
-    });
+    c.c.steer(Vec3::new(vx, 0.0, vz), facing);
     0
 }
 
-/// Steers along a path of `count` points (`x, z` pairs of `f32` at `ptr`, at most 64) at
-/// `speed` m/s, stopping at its end facing `end_facing` (NaN: the last segment's way).
-/// 0 on success.
+/// Walks a path of `count` points (`x, z` pairs of `f32` at `ptr`, at most 64) at `speed`
+/// m/s, stopping at its end facing `end_facing` (NaN: the last leg's way). 0 on success.
 ///
 /// # Safety
 /// `c` must be live; `ptr` must point at `2 * count` readable `f32`s.
@@ -321,10 +307,7 @@ pub unsafe extern "C" fn anim_character_set_path(
     speed: f32,
     end_facing: f32,
 ) -> u32 {
-    let Some(c) = (unsafe { c.as_mut() }) else {
-        fail("no character");
-        return 1;
-    };
+    let Some(c) = live(c) else { return 1 };
     if !(2..=MAX_PATH_POINTS).contains(&count)
         || ptr.is_null()
         || !(speed.is_finite() && speed >= 0.0)
@@ -335,18 +318,187 @@ pub unsafe extern "C" fn anim_character_set_path(
         return 1;
     }
     let xy = unsafe { std::slice::from_raw_parts(ptr, 2 * count) };
-    if xy.iter().any(|v| !v.is_finite()) {
-        fail("path points must be finite");
+    if !finite(xy) {
         return 1;
     }
     let mut pts = [Vec3::ZERO; MAX_PATH_POINTS];
     for (i, p) in pts.iter_mut().enumerate().take(count) {
         *p = Vec3::new(xy[2 * i], 0.0, xy[2 * i + 1]);
     }
-    let mut s = PathSteering::new(&pts[..count], speed);
-    s.end_facing = end_facing.is_finite().then_some(end_facing);
-    c.steer = Steer::Path(Box::new(s));
+    c.c.go_to(
+        &pts[..count],
+        speed,
+        end_facing.is_finite().then_some(end_facing),
+    );
     0
+}
+
+/// Turns to face `facing`, standing. 0 on success.
+///
+/// # Safety
+/// `c` must be live.
+#[no_mangle]
+pub unsafe extern "C" fn anim_character_face(c: *mut CharacterHandle, facing: f32) -> u32 {
+    let Some(c) = live(c) else { return 1 };
+    if !finite(&[facing]) {
+        return 1;
+    }
+    c.c.face(facing);
+    0
+}
+
+/// Keeps to `(ox, oz)` (right, ahead) of someone at `(x, z)` moving at `(vx, vz)` facing
+/// `heading`; call each frame. 0 on success.
+///
+/// # Safety
+/// `c` must be live.
+#[no_mangle]
+pub unsafe extern "C" fn anim_character_follow(
+    c: *mut CharacterHandle,
+    x: f32,
+    z: f32,
+    vx: f32,
+    vz: f32,
+    heading: f32,
+    ox: f32,
+    oz: f32,
+) -> u32 {
+    let Some(c) = live(c) else { return 1 };
+    if !finite(&[x, z, vx, vz, heading, ox, oz]) {
+        return 1;
+    }
+    c.c.follow(Follow {
+        position: Vec3::new(x, 0.0, z),
+        velocity: Vec3::new(vx, 0.0, vz),
+        heading,
+        offset: Vec3::new(ox, 0.0, oz),
+    });
+    0
+}
+
+/// Sits on a seat: the seated hips at `(hx, hy, hz)` (world; `hy` their height), facing
+/// `facing`. 0 on success.
+///
+/// # Safety
+/// `c` must be live.
+#[no_mangle]
+pub unsafe extern "C" fn anim_character_sit(
+    c: *mut CharacterHandle,
+    hx: f32,
+    hy: f32,
+    hz: f32,
+    facing: f32,
+) -> u32 {
+    let Some(c) = live(c) else { return 1 };
+    if !finite(&[hx, hy, hz, facing]) {
+        return 1;
+    }
+    c.c.sit(Seat {
+        hips: Vec3::new(hx, hy, hz),
+        facing,
+    });
+    0
+}
+
+/// Stands up from a seat. 0 on success.
+///
+/// # Safety
+/// `c` must be live.
+#[no_mangle]
+pub unsafe extern "C" fn anim_character_stand(c: *mut CharacterHandle) -> u32 {
+    let Some(c) = live(c) else { return 1 };
+    c.c.stand();
+    0
+}
+
+/// Beat gestures on `count` word times (seconds from now, `f32` at `ptr`) at `strength`. 0 on success.
+///
+/// # Safety
+/// `c` must be live; `ptr` must point at `count` readable `f32`s.
+#[no_mangle]
+pub unsafe extern "C" fn anim_character_gesture(
+    c: *mut CharacterHandle,
+    ptr: *const f32,
+    count: usize,
+    strength: f32,
+) -> u32 {
+    let Some(c) = live(c) else { return 1 };
+    if ptr.is_null() || count > 256 {
+        fail("up to 256 word times");
+        return 1;
+    }
+    let t = unsafe { std::slice::from_raw_parts(ptr, count) };
+    if !finite(t) || !finite(&[strength]) {
+        return 1;
+    }
+    c.c.gesture(t, strength);
+    0
+}
+
+/// Looks at `(x, y, z)` (world), or stops looking with NaN `x`. 0 on success.
+///
+/// # Safety
+/// `c` must be live.
+#[no_mangle]
+pub unsafe extern "C" fn anim_character_look_at(
+    c: *mut CharacterHandle,
+    x: f32,
+    y: f32,
+    z: f32,
+) -> u32 {
+    let Some(c) = live(c) else { return 1 };
+    c.c.look_at(if x.is_nan() {
+        None
+    } else if finite(&[x, y, z]) {
+        Some(Vec3::new(x, y, z))
+    } else {
+        return 1;
+    });
+    0
+}
+
+/// Reaches hand `side` (0 left, 1 right) to `(x, y, z)` (world, the wrist), or lets it go with
+/// NaN `x`. 0 on success.
+///
+/// # Safety
+/// `c` must be live.
+#[no_mangle]
+pub unsafe extern "C" fn anim_character_hand_to(
+    c: *mut CharacterHandle,
+    side: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+) -> u32 {
+    let Some(c) = live(c) else { return 1 };
+    c.c.hand_to(
+        side as usize,
+        if x.is_nan() {
+            None
+        } else if finite(&[x, y, z]) {
+            Some(Vec3::new(x, y, z))
+        } else {
+            return 1;
+        },
+    );
+    0
+}
+
+/// What the character is doing: 0 standing, 1 walking, 2 approaching a seat, 3 sitting down,
+/// 4 seated, 5 standing up.
+///
+/// # Safety
+/// `c` must be live.
+#[no_mangle]
+pub unsafe extern "C" fn anim_character_state(c: *const CharacterHandle) -> u32 {
+    unsafe { c.as_ref() }.map_or(0, |c| match c.c.state() {
+        State::Standing => 0,
+        State::Walking => 1,
+        State::Approaching => 2,
+        State::SittingDown => 3,
+        State::Seated => 4,
+        State::StandingUp => 5,
+    })
 }
 
 /// Places the character at once (a cut). 0 on success.
@@ -360,15 +512,11 @@ pub unsafe extern "C" fn anim_character_teleport(
     z: f32,
     facing: f32,
 ) -> u32 {
-    let Some(c) = (unsafe { c.as_mut() }) else {
-        fail("no character");
-        return 1;
-    };
-    if !(x.is_finite() && z.is_finite() && facing.is_finite()) {
-        fail("the position and facing must be finite");
+    let Some(c) = live(c) else { return 1 };
+    if !finite(&[x, z, facing]) {
         return 1;
     }
-    c.matcher.teleport(Vec3::new(x, 0.0, z), facing);
+    c.c.teleport(Vec3::new(x, 0.0, z), facing);
     c.write_pose();
     0
 }
@@ -379,16 +527,12 @@ pub unsafe extern "C" fn anim_character_teleport(
 /// `c` must be live.
 #[no_mangle]
 pub unsafe extern "C" fn anim_character_step(c: *mut CharacterHandle, dt: f32) -> u32 {
-    let Some(c) = (unsafe { c.as_mut() }) else {
-        fail("no character");
-        return 1;
-    };
+    let Some(c) = live(c) else { return 1 };
     if !(dt.is_finite() && dt > 0.0) {
         fail("dt must be positive");
         return 1;
     }
-    let CharacterHandle { matcher, steer, .. } = c;
-    matcher.step(dt, steer);
+    c.c.step(dt);
     c.write_pose();
     0
 }
@@ -417,7 +561,7 @@ pub unsafe extern "C" fn anim_character_pose_len(c: *const CharacterHandle) -> u
 /// `c` must be live.
 #[no_mangle]
 pub unsafe extern "C" fn anim_character_frame(c: *const CharacterHandle) -> u32 {
-    unsafe { c.as_ref() }.map_or(0, |c| c.matcher.frame() as u32)
+    unsafe { c.as_ref() }.map_or(0, |c| c.c.matcher().frame() as u32)
 }
 
 /// Transitions so far.
@@ -426,5 +570,5 @@ pub unsafe extern "C" fn anim_character_frame(c: *const CharacterHandle) -> u32 
 /// `c` must be live.
 #[no_mangle]
 pub unsafe extern "C" fn anim_character_transitions(c: *const CharacterHandle) -> u32 {
-    unsafe { c.as_ref() }.map_or(0, |c| c.matcher.stats().transitions as u32)
+    unsafe { c.as_ref() }.map_or(0, |c| c.c.matcher().stats().transitions as u32)
 }

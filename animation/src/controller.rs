@@ -206,8 +206,6 @@ pub struct Action {
 struct ActionState {
     action: Action,
     eased: f32,
-    warp_pos: Vec3,
-    warp_yaw: f32,
     lift_from: f32,
     lift_to: f32,
 }
@@ -405,22 +403,22 @@ impl MotionMatcher {
         let action = Action { end, ..action };
         self.transition(action.start);
         let last = end - 1;
-        let predicted = self.anchor.compose(self.db_root(last, 0.0));
-        let (warp_pos, warp_yaw) = match action.root_target {
-            Some(t) => (
-                (t.translation - predicted.translation).flat(),
-                wrap_angle(t.rotation.yaw() - predicted.rotation.yaw()),
-            ),
-            None => (Vec3::ZERO, 0.0),
-        };
-        let lift_to = action
-            .hips_height_target
-            .map_or(0.0, |h| h - db.hips_pos[last].y);
+        // A hold lifts by its first frame (a loop cut from a capture may end rising); a
+        // one-off by its last, where it should land.
+        let lift_to = action.hips_height_target.map_or(0.0, |h| {
+            h - db.hips_pos[if action.looping { action.start } else { last }].y
+        });
+        if action.looping {
+            // A hold (seated): its lift applies at once, and the hips' inertialization hides
+            // the step as it hides the clip's own, so the shown hips stay where they were.
+            // (Eased over the loop instead, two clips' different seat heights would show as
+            // a bob.)
+            self.hips_blend.offset.y += self.hips_lift - lift_to;
+            self.hips_lift = lift_to;
+        }
         self.action = Some(ActionState {
             action,
             eased: 0.0,
-            warp_pos,
-            warp_yaw,
             lift_from: self.hips_lift,
             lift_to,
         });
@@ -726,11 +724,9 @@ impl MotionMatcher {
             if end_of_clip || self.frame + 1 >= st.action.end {
                 if st.action.looping {
                     self.transition(st.action.start);
-                    // The warp is done; later loops only hold it.
+                    // Later loops hold the target the first one reached.
                     self.action = Some(ActionState {
                         eased: 0.0,
-                        warp_pos: Vec3::ZERO,
-                        warp_yaw: 0.0,
                         lift_from: st.lift_to,
                         ..st
                     });
@@ -889,8 +885,26 @@ impl MotionMatcher {
             let u = (((self.frame - st.action.start) as f32 + self.frac) / span).clamp(0.0, 1.0);
             let eased = u * u * (3.0 - 2.0 * u);
             let d = eased - st.eased;
-            pos += st.warp_pos * d;
-            yaw += st.warp_yaw * d;
+            if let Some(target) = st.action.root_target {
+                // Closed loop: where the clip's own motion ends from here (none when pinned),
+                // and a share of what is left, so the action ends on its target whatever the
+                // velocity blend carried in.
+                let rest = if st.action.pin_root {
+                    Transform::IDENTITY
+                } else {
+                    self.db_root(self.frame, self.frac)
+                        .inverse()
+                        .compose(self.db_root(st.action.end - 1, 0.0))
+                };
+                let end = Transform::new(pos.flat(), Quat::from_yaw(yaw)).compose(rest);
+                let share = if st.eased < 1.0 - 1e-4 {
+                    (d / (1.0 - st.eased)).clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
+                pos += (target.translation - end.translation).flat() * share;
+                yaw += wrap_angle(target.rotation.yaw() - end.rotation.yaw()) * share;
+            }
             st.eased = eased;
             self.hips_lift = st.lift_from + (st.lift_to - st.lift_from) * eased;
             self.action = Some(st);
@@ -1000,6 +1014,11 @@ impl MotionMatcher {
             };
             let ankle_in = self.world_pos[leg.ankle];
             let toe_in = self.world_pos[leg.toe];
+            // The hips' lift (a seat lower or higher than the capture's) moves the whole body;
+            // a foot the capture had on or near the floor goes back down (or up) to it.
+            let captured = ankle_in.y - self.hips_lift - heights[0];
+            let near_floor = (1.0 - captured / 0.25).clamp(0.0, 1.0);
+            let ground = Vec3::new(0.0, -self.hips_lift * near_floor, 0.0);
             let want = if contacts & ball_bit != 0 {
                 Some(Point::Ball)
             } else if contacts & heel_bit != 0 {
@@ -1030,7 +1049,7 @@ impl MotionMatcher {
                         foot.held = Some((w, at));
                     }
                     None => {
-                        foot.release.offset = foot.correction;
+                        foot.release.offset = foot.correction - ground;
                         foot.release.offset_vel = (foot.correction - foot.previous_correction) / dt;
                         foot.held = None;
                     }
@@ -1039,18 +1058,18 @@ impl MotionMatcher {
             let correction = match foot.held {
                 Some((p, at)) => {
                     let c = at - point_in(p);
-                    if c.length() > cfg.unlock_radius {
-                        foot.release.offset = foot.correction;
+                    if (c - ground).length() > cfg.unlock_radius {
+                        foot.release.offset = foot.correction - ground;
                         foot.release.offset_vel = Vec3::ZERO;
                         foot.released = Some(p);
                         foot.held = None;
                         self.stats.unlocks_by_radius += 1;
-                        foot.release.update(Vec3::ZERO, cfg.unlock_halflife, dt)
+                        foot.release.update(Vec3::ZERO, cfg.unlock_halflife, dt) + ground
                     } else {
                         c
                     }
                 }
-                None => foot.release.update(Vec3::ZERO, cfg.unlock_halflife, dt),
+                None => foot.release.update(Vec3::ZERO, cfg.unlock_halflife, dt) + ground,
             };
             foot.previous_correction = foot.correction;
             foot.correction = correction;
