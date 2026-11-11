@@ -351,6 +351,48 @@ fn run_character(
     }
 }
 
+/// A walk's parts (eval::walk_parts): its start, the worst of its windows between, its stop.
+fn print_parts(what: &str, rec: &Recording, parts: &[eval::WalkParts]) {
+    let s = |f: usize| f as f32 / rec.hz;
+    let one = |p: &eval::PartPosture| {
+        format!(
+            "knee at mid-stance {:.1}, elbow p10 {:.1}, trunk lean {:.1} deg, wrist {:.1} cm over the hip, bounce {:.1} cm",
+            p.posture.knee_midstance_deg,
+            p.posture.elbow_p10_deg,
+            p.posture.trunk_lean_deg,
+            -p.posture.wrist_below_hip_m * 100.0,
+            p.bounce_cm
+        )
+    };
+    for w in parts {
+        println!(
+            "  parts {what} walk {:.2}-{:.2} s: start {}; middle worst of {} windows: knee {:.1}, elbow p10 {:.1}, lean {:.1} deg, wrist {:.1} cm, bounce {:.1} cm; stop {}",
+            s(w.walk.0),
+            s(w.walk.1),
+            one(&w.start),
+            w.middle_windows,
+            w.middle_knee_midstance_deg,
+            w.middle_elbow_p10_deg,
+            w.middle_trunk_lean_deg,
+            w.middle_wrist_above_hip_m * 100.0,
+            w.middle_bounce_cm,
+            one(&w.stop)
+        );
+    }
+}
+
+/// How someone stands (eval::standing).
+fn print_standing(what: &str, st: &eval::Standing, hz: f32) {
+    println!(
+        "  standing {what}: {:.1} s, knees {:.1} (straighter) / {:.1} deg, feet {:.1} cm apart, hands {:.1} cm outside the shoulders",
+        st.frames as f32 / hz,
+        st.knee_straighter_deg,
+        st.knee_other_deg,
+        st.feet_apart_cm,
+        st.hands_out_cm
+    );
+}
+
 fn print_posture(what: &str, p: &eval::Posture) {
     eprintln!(
         "  posture {what}: forearm from vertical {:.1} / {:.1} deg (p50 / p90), elbow {:.1} / p10 {:.1} deg, forearm forward {:.1} / p10 {:.1} deg, wrist swing {:.3} m, wrist {:.3} m below the hip, trunk lean {:.1} deg, knee at mid-stance {:.1} deg",
@@ -892,6 +934,16 @@ fn main() {
                     &format!("capture {}", c.name),
                     &eval::posture(&rec, &db.humanoid, &pb, (edge, n - edge)),
                 );
+                if let Some(head) = loadngo_animation::humanoid::find_bone(&db.skeleton, "Head") {
+                    print_parts(
+                        &format!("capture {}", c.name),
+                        &rec,
+                        &eval::walk_parts(&rec, &db.humanoid, &pb, head, 4.0),
+                    );
+                }
+                if let Some(st) = eval::standing(&rec, &db.humanoid, &pb, 2.0) {
+                    print_standing(&format!("capture {}", c.name), &st, db.fps);
+                }
             }
             let mut worst: Vec<eval::Contact> = Vec::new();
             for side_i in 0..2 {

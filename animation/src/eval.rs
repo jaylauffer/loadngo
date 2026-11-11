@@ -507,6 +507,212 @@ pub fn posture(
     }
 }
 
+/// Root speed over the floor (m/s) at or over which a recording counts as walking ([`walks`]).
+pub const WALK_SPEED: f32 = 0.2;
+/// Root speed (m/s) under which a recording counts as standing ([`standing`]).
+pub const STAND_SPEED: f32 = 0.05;
+/// How long a walk's start and stop are, and its windows between (seconds): about three steps.
+pub const PART_S: f32 = 2.0;
+
+/// The root's speed over the floor at each frame (m/s), from its neighbours.
+fn root_speeds(rec: &Recording) -> Vec<f32> {
+    let n = rec.frames();
+    (0..n)
+        .map(|f| {
+            let (a, b) = (f.saturating_sub(1), (f + 1).min(n.saturating_sub(1)));
+            if b <= a {
+                0.0
+            } else {
+                (rec.root[b].0 - rec.root[a].0).flat().length() * rec.hz / (b - a) as f32
+            }
+        })
+        .collect()
+}
+
+/// Runs of frames where `on` holds, gaps under `gap` frames closed, at least `min` frames long.
+fn runs(on: &[bool], gap: usize, min: usize) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    let mut f = 0;
+    while f < on.len() {
+        if !on[f] {
+            f += 1;
+            continue;
+        }
+        let s = f;
+        while f < on.len() && on[f] {
+            f += 1;
+        }
+        match out.last_mut() {
+            Some(last) if s - last.1 < gap => last.1 = f,
+            _ => out.push((s, f)),
+        }
+    }
+    out.retain(|r| r.1 - r.0 >= min);
+    out
+}
+
+/// The walks in a recording: runs of frames whose root moves at [`WALK_SPEED`] or more over
+/// the floor (gaps under 0.3 s closed), at least `min_s` seconds long. Half-open ranges.
+#[must_use]
+pub fn walks(rec: &Recording, min_s: f32) -> Vec<(usize, usize)> {
+    let on: Vec<bool> = root_speeds(rec).iter().map(|v| *v >= WALK_SPEED).collect();
+    runs(&on, (0.3 * rec.hz) as usize, (min_s * rec.hz) as usize)
+}
+
+/// The head's rise and fall over `[a, z)` (cm): its highest less its lowest.
+#[must_use]
+pub fn bounce_cm(rec: &Recording, head: usize, a: usize, z: usize) -> f32 {
+    let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+    for f in a..z.min(rec.frames()) {
+        let y = rec.at(f, head).y;
+        lo = lo.min(y);
+        hi = hi.max(y);
+    }
+    if hi >= lo {
+        (hi - lo) * 100.0
+    } else {
+        0.0
+    }
+}
+
+/// How one part of a walk is carried: its posture and the head's rise and fall over it.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PartPosture {
+    pub from: usize,
+    pub to: usize,
+    pub posture: Posture,
+    pub bounce_cm: f32,
+}
+
+/// A walk taken in parts: its start (the first [`PART_S`]), its stop (the last), and over
+/// the windows of [`PART_S`] between them (stepped by a quarter of that) the worst of each
+/// measure: the most bent knee at mid-stance, the most bent elbow at its least, the most
+/// forward lean, the highest wrist and the most bounce. A walk of a robot's crouch in one
+/// part only shows in that part; over a whole walk its median can hide it.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct WalkParts {
+    pub walk: (usize, usize),
+    pub start: PartPosture,
+    pub stop: PartPosture,
+    pub middle_knee_midstance_deg: f32,
+    pub middle_elbow_p10_deg: f32,
+    pub middle_trunk_lean_deg: f32,
+    /// The highest wrist over the hip joint (m, positive above): the least `wrist_below_hip_m`.
+    pub middle_wrist_above_hip_m: f32,
+    pub middle_bounce_cm: f32,
+    /// Windows between the start and the stop.
+    pub middle_windows: usize,
+}
+
+/// [`WalkParts`] for every walk of `min_s` seconds or more in `rec`.
+#[must_use]
+pub fn walk_parts(
+    rec: &Recording,
+    humanoid: &Humanoid,
+    b: &PostureBones,
+    head: usize,
+    min_s: f32,
+) -> Vec<WalkParts> {
+    let part = (PART_S * rec.hz) as usize;
+    let step = (part / 4).max(1);
+    let one = |a: usize, z: usize| PartPosture {
+        from: a,
+        to: z,
+        posture: posture(rec, humanoid, b, (a, z)),
+        bounce_cm: bounce_cm(rec, head, a, z),
+    };
+    walks(rec, min_s.max(2.0 * PART_S))
+        .into_iter()
+        .map(|(a, z)| {
+            let mut w = WalkParts {
+                walk: (a, z),
+                start: one(a, a + part),
+                stop: one(z - part, z),
+                middle_wrist_above_hip_m: f32::NEG_INFINITY,
+                ..WalkParts::default()
+            };
+            let mut s = a + part;
+            while s + part <= z - part {
+                let p = one(s, s + part);
+                w.middle_knee_midstance_deg = w
+                    .middle_knee_midstance_deg
+                    .max(p.posture.knee_midstance_deg);
+                w.middle_elbow_p10_deg = w.middle_elbow_p10_deg.max(p.posture.elbow_p10_deg);
+                w.middle_trunk_lean_deg = w.middle_trunk_lean_deg.max(p.posture.trunk_lean_deg);
+                w.middle_wrist_above_hip_m =
+                    w.middle_wrist_above_hip_m.max(-p.posture.wrist_below_hip_m);
+                w.middle_bounce_cm = w.middle_bounce_cm.max(p.bounce_cm);
+                w.middle_windows += 1;
+                s += step;
+            }
+            if w.middle_windows == 0 {
+                w.middle_wrist_above_hip_m = 0.0;
+            }
+            w
+        })
+        .collect()
+}
+
+/// How someone stands, over every stretch of at least `min_s` seconds in which the root
+/// moves under [`STAND_SPEED`]: the straighter knee's bend and the other's (degrees,
+/// medians of each frame's straighter and more bent knee: a person at ease locks one), the
+/// ankles' distance apart across the body (cm, median), and how far the wrists hang outside
+/// their shoulders (cm, across the body, outward positive, the median of the farther one).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Standing {
+    pub frames: usize,
+    pub knee_straighter_deg: f32,
+    pub knee_other_deg: f32,
+    pub feet_apart_cm: f32,
+    pub hands_out_cm: f32,
+}
+
+/// [`Standing`] over `rec`, or `None` if it never stands still for `min_s` seconds.
+#[must_use]
+pub fn standing(
+    rec: &Recording,
+    humanoid: &Humanoid,
+    b: &PostureBones,
+    min_s: f32,
+) -> Option<Standing> {
+    let on: Vec<bool> = root_speeds(rec).iter().map(|v| *v < STAND_SPEED).collect();
+    let spans = runs(&on, 1, (min_s * rec.hz) as usize);
+    let (mut straight, mut other, mut apart, mut hands) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for (a, z) in spans {
+        for f in a..z {
+            let (k0, k1) = (
+                knee_bend(rec, f, humanoid, 0),
+                knee_bend(rec, f, humanoid, 1),
+            );
+            straight.push(k0.min(k1));
+            other.push(k0.max(k1));
+            // Across the body: from the right shoulder to the left, on the floor.
+            let across = (rec.at(f, b.arm[0]) - rec.at(f, b.arm[1]))
+                .flat()
+                .normalize_or_zero();
+            let (la, ra) = (
+                rec.at(f, humanoid.legs[0].ankle),
+                rec.at(f, humanoid.legs[1].ankle),
+            );
+            apart.push((la - ra).dot(across).abs() * 100.0);
+            let out_l = (rec.at(f, b.hand[0]) - rec.at(f, b.arm[0])).dot(across);
+            let out_r = -(rec.at(f, b.hand[1]) - rec.at(f, b.arm[1])).dot(across);
+            hands.push(out_l.max(out_r) * 100.0);
+        }
+    }
+    if straight.is_empty() {
+        return None;
+    }
+    Some(Standing {
+        frames: straight.len(),
+        knee_straighter_deg: percentile(&mut straight, 0.5),
+        knee_other_deg: percentile(&mut other, 0.5),
+        feet_apart_cm: percentile(&mut apart, 0.5),
+        hands_out_cm: percentile(&mut hands, 0.5),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -553,6 +759,80 @@ mod tests {
             hand: [8, 9],
         };
         (rec, h, b)
+    }
+
+    /// The figure carried along +Z: standing for `still` seconds, walking at 1 m/s for
+    /// `go` seconds (the head and every joint rising and falling `bounce` cm a stride, `end`
+    /// cm over its last 2 s), then standing for `still` seconds again.
+    fn walker(still: f32, go: f32, bounce: f32, end: f32) -> (Recording, Humanoid, PostureBones) {
+        let (base, h, b) = figure(0.0, 0.0);
+        let p0: Vec<Vec3> = (0..16).map(|i| base.at(0, i)).collect();
+        let mut rec = Recording::new(60.0, 16);
+        let (n0, n1) = ((still * 60.0) as usize, ((still + go) * 60.0) as usize);
+        let total = n1 + n0;
+        let mut z = 0.0;
+        for f in 0..total {
+            let walking = f >= n0 && f < n1;
+            if walking {
+                z += 1.0 / 60.0;
+            }
+            let t = f as f32 / 60.0;
+            let amp = if walking && f + 120 >= n1 {
+                end
+            } else {
+                bounce
+            };
+            let y = if walking {
+                0.005 * amp * (t * std::f32::consts::TAU / 0.6).sin()
+            } else {
+                0.0
+            };
+            let p: Vec<Vec3> = p0
+                .iter()
+                .map(|q| Vec3::new(q.x, q.y + y, q.z + z))
+                .collect();
+            rec.push(&p, Vec3::new(0.0, 0.0, z), 0.0, 0);
+        }
+        (rec, h, b)
+    }
+
+    #[test]
+    fn walks_are_found_by_the_roots_speed() {
+        let (rec, _, _) = walker(1.0, 6.0, 2.0, 2.0);
+        let w = walks(&rec, 4.0);
+        assert_eq!(w.len(), 1, "{w:?}");
+        let (a, z) = w[0];
+        assert!(a.abs_diff(60) <= 1 && z.abs_diff(420) <= 1, "{w:?}");
+        assert!(walks(&rec, 7.0).is_empty());
+    }
+
+    #[test]
+    fn walk_parts_find_a_bounce_only_in_the_stop() {
+        let (rec, h, b) = walker(1.0, 8.0, 2.0, 8.0);
+        let parts = walk_parts(&rec, &h, &b, 1, 4.0);
+        assert_eq!(parts.len(), 1);
+        let p = parts[0];
+        assert!((p.start.bounce_cm - 2.0).abs() < 0.2, "{p:?}");
+        assert!((p.stop.bounce_cm - 8.0).abs() < 0.3, "{p:?}");
+        assert!(p.middle_windows > 0 && p.middle_bounce_cm < 2.2, "{p:?}");
+        // Over the whole walk, the stop's bounce is a quarter of it.
+        assert!(bounce_cm(&rec, 1, p.walk.0, p.walk.1) > 7.5);
+    }
+
+    #[test]
+    fn standing_reads_knees_feet_and_hands() {
+        let (rec, h, b) = figure(0.0, 0.0);
+        let s = standing(&rec, &h, &b, 1.0).expect("stands");
+        assert_eq!(s.frames, 120);
+        assert!(
+            s.knee_straighter_deg < 0.5 && s.knee_other_deg < 0.5,
+            "{s:?}"
+        );
+        assert!((s.feet_apart_cm - 20.0).abs() < 0.1, "{s:?}");
+        // The wrists hang under the shoulders (0.18 m out from the middle each side).
+        assert!(s.hands_out_cm.abs() < 0.1, "{s:?}");
+        let (rec, _, _) = walker(0.5, 4.0, 2.0, 2.0);
+        assert!(standing(&rec, &h, &b, 1.0).is_none());
     }
 
     #[test]
