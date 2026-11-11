@@ -1,6 +1,6 @@
 # Animation: motion matching and the character framework
 
-Status: round 4, 2026-11-11. A motion-matching runtime, a character framework over it, and their
+Status: round 5, 2026-11-11. A motion-matching runtime, a character framework over it, and their
 pipeline, in Rust, for every loadngo target and for the browser as WebAssembly. Walking, turning,
 starting, stopping and standing come from real capture (100STYLE's normal walking, CMU's slow walks,
 turns, stops and standing; Mesh2Motion's turns in place in the full set only); sitting down on a seat
@@ -294,7 +294,9 @@ walking, turning and starting frames on the whole feature set (these feet and th
 hips' velocity, a straight path on at this velocity), the simulation and the root carry on at that
 velocity, the planted feet are held and the others left to the capture, and the pose is eased over
 a transition's half-life (over the standing take-over's longer one, a swinging foot was blended
-between two strides and landed sliding). Any take-over lets go of where the feet were held before.
+between two strides and landed sliding). Any take-over lets go of where the feet were held before,
+and (round 5) finds its frame through the search's bounding boxes, as any search does (a scan of
+every frame cost 10-12 ms once on a Raspberry Pi 5).
 
 **Standing calmly** (round 3). A character nobody asks to move searches only `Config::rest_tags`
 (idle and start-stop, say) and never `rest_exclude` (turn: a turn on the spot reads as fidgeting),
@@ -574,12 +576,25 @@ capture's standing feet need for their shoes, and solves the legs every frame wi
 - **Posture:** the knee at mid-stance 18-25 degrees with the game's ends included (limit 28; the made walk alone 29-37).
 - **On a Raspberry Pi 5 at the lowest tier:** the frame floor holds, the walking take-over's search costs 10-12 ms once.
 
+### In a browser game (round 5)
+
+The last four of the game's runs failed in its own stop after the hand-back. Their causes were the game's walk, not the
+matcher: a change of direction (turning to face a seat) eased at a rate began at full speed in a frame (now on a
+critically damped spring), a foot set down from a swing was stopped in a frame while its clip still moved it (now it
+comes to rest over 0.1 s), and a lifted foot's turn unwound from the wrong moment (a 3-4 degree turn in a frame). The
+hand-back now waits for a mid-stance where the two walks agree (not turning, the planted foot along the way, the game's
+walk with a moment whose feet are within 12 cm of the matched body's). With the take-over through the bounding boxes, the
+game's motion layer costs at most 8-9 ms in a frame on a Raspberry Pi 5 (was 10-12 ms). Every run passes every limit in
+every repeat at the game's lowest tier; at its automatic tier one or two repeats in eighteen still fail, in the 0.6 s
+the matched body fades out over the game's walk (a foot the game's walk swings is held for a frame, then lifted off
+that hold while the blend moves it, and the knee jerks).
+
 ## What is short
 
-- **The hand-back's moment** (round 4): a game's own stop after the hand-back is where its limits still break, by a
-  little; the hand-back holds a foot at the matched body's turn, which the game's walk then steps out of. Next: hand back
-  where the two agree in phase and foot direction.
-- **The walking take-over searches every frame** of the database (10-12 ms once on a Pi 5): bound it.
+- **The hand-back's blend:** a game's foot holds must not take hold of a foot its walk swings while the matched body
+  fades out over it (above).
+- **A frame of 8-9 ms** of the game's motion layer, once a walk, on a Pi 5 (after the bounded take-over search; the
+  cause of what remains is not yet traced).
 - **Turning starts from standing** are still not the capture's: played as a walking turn the root swings round with no
   foot down (round 3); turning on the spot first chose walking turns over the in-place ones. A game starts them itself.
 - **Which frame wins a near tie** decides a run's worst contact, and it moves between databases
@@ -596,7 +611,7 @@ capture's standing feet need for their shoes, and solves the legs every frame wi
 
 ## Next
 
-1. **The last of a game's limits at the hand-back** (above), then the matched walk a game's default for good.
+1. **A game's critic** of the hybrid walk, then the matched walk a game's default for good.
 2. **Seats in the game:** the framework's sits land to the centimetre on any seat height; a game
    with sliding chairs and hands to a table or lap needs its seat poses joined to the framework's.
 3. **Reactions while standing:** the look-at, reach and beats layers in a game whose people stand and talk.
