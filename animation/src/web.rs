@@ -20,7 +20,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use crate::character::{Character, Follow, Seat, State};
-use crate::controller::Config;
+use crate::controller::{Config, Moving};
 use crate::database::Database;
 use crate::math::{Quat, Transform, Vec3};
 use crate::path::MAX_PATH_POINTS;
@@ -560,6 +560,54 @@ pub unsafe extern "C" fn anim_character_take_over(
     count: usize,
 ) -> u32 {
     let Some(c) = live(c) else { return 1 };
+    take_over(c, x, z, facing, ptr, count, None)
+}
+
+/// As `anim_character_take_over`, for a body that is walking: its ground velocity `(vx, vz)`,
+/// each ankle's `(lvx, lvz)`, `(rvx, rvz)` (world, m/s), and which feet stand planted (`planted`:
+/// bit 0 the left, bit 1 the right). It walks on at that velocity until given a path. 0 on
+/// success.
+///
+/// # Safety
+/// `c` must be live; `ptr` must point at `count` readable `f32`s.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn anim_character_take_over_moving(
+    c: *mut CharacterHandle,
+    x: f32,
+    z: f32,
+    facing: f32,
+    vx: f32,
+    vz: f32,
+    lvx: f32,
+    lvz: f32,
+    rvx: f32,
+    rvz: f32,
+    planted: u32,
+    ptr: *const f32,
+    count: usize,
+) -> u32 {
+    let Some(c) = live(c) else { return 1 };
+    if !finite(&[vx, vz, lvx, lvz, rvx, rvz]) {
+        return 1;
+    }
+    let moving = Moving {
+        velocity: Vec3::new(vx, 0.0, vz),
+        ankle_velocities: [Vec3::new(lvx, 0.0, lvz), Vec3::new(rvx, 0.0, rvz)],
+        planted: [planted & 1 != 0, planted & 2 != 0],
+    };
+    take_over(c, x, z, facing, ptr, count, Some(moving))
+}
+
+fn take_over(
+    c: &mut CharacterHandle,
+    x: f32,
+    z: f32,
+    facing: f32,
+    ptr: *const f32,
+    count: usize,
+    moving: Option<Moving>,
+) -> u32 {
     let n = c.pose.len();
     if ptr.is_null() || count != n || !finite(&[x, z, facing]) {
         fail(format!("a pose of {n} numbers"));
@@ -576,11 +624,12 @@ pub unsafe extern "C" fn anim_character_take_over(
         let o = 7 + 4 * i;
         rot.push(Quat::new(p[o], p[o + 1], p[o + 2], p[o + 3]).normalize());
     }
-    c.c.take_over(
-        Transform::new(Vec3::new(x, 0.0, z), Quat::from_yaw(facing)),
-        Vec3::new(p[4], p[5], p[6]),
-        &rot,
-    );
+    let root = Transform::new(Vec3::new(x, 0.0, z), Quat::from_yaw(facing));
+    let hips = Vec3::new(p[4], p[5], p[6]);
+    match moving {
+        Some(m) => c.c.take_over_moving(root, hips, &rot, m),
+        None => c.c.take_over(root, hips, &rot),
+    }
     c.scratch = rot;
     c.write_pose();
     0

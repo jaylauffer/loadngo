@@ -226,6 +226,17 @@ impl Default for Config {
     }
 }
 
+/// A body taken over while it walks (`MotionMatcher::take_over_moving`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Moving {
+    /// The body's velocity over the ground (world, m/s).
+    pub velocity: Vec3,
+    /// Each ankle's velocity (world, m/s): left, right.
+    pub ankle_velocities: [Vec3; 2],
+    /// Which feet stand planted (held where they are): left, right.
+    pub planted: [bool; 2],
+}
+
 /// A clip played as it is instead of matched: sitting down, a seated loop, standing up.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Action {
@@ -620,6 +631,32 @@ impl MotionMatcher {
     /// is eased away by inertialization (`Config::takeover_halflife` for the first half second),
     /// the feet planted where they stand and the simulation at rest under the root.
     pub fn take_over(&mut self, root: Transform, hips: Vec3, rotations: &[Quat]) {
+        self.take_over_with(root, hips, rotations, None);
+    }
+
+    /// Takes over a body that is walking: as [`take_over`](Self::take_over), with the body's
+    /// ground `velocity` (world, m/s) and each ankle's (world), and which feet stand planted.
+    /// Playback continues from the frame among walking, turning and starting frames that best
+    /// fits this pose, these velocities and a straight path on at this velocity (the whole
+    /// feature set); the simulation and the root carry on at this velocity; the planted feet are
+    /// held where they stand, the others left to the capture.
+    pub fn take_over_moving(
+        &mut self,
+        root: Transform,
+        hips: Vec3,
+        rotations: &[Quat],
+        moving: Moving,
+    ) {
+        self.take_over_with(root, hips, rotations, Some(moving));
+    }
+
+    fn take_over_with(
+        &mut self,
+        root: Transform,
+        hips: Vec3,
+        rotations: &[Quat],
+        moving: Option<Moving>,
+    ) {
         let db = Arc::clone(&self.db);
         let b = db.bone_count();
         // This pose's ankles relative to the root, by forward kinematics from the rest offsets.
@@ -633,18 +670,21 @@ impl MotionMatcher {
         }
         let legs = db.humanoid.legs;
         let ankles = [self.world_pos[legs[0].ankle], self.world_pos[legs[1].ankle]];
-        // The query: these feet, at rest (no foot or hip velocity), standing (no trajectory).
+        // The query: these feet; standing, at rest (no foot or hip velocity) and going nowhere;
+        // walking, at their velocities and going on straight at the body's.
+        let velocity = moving.map_or(Vec3::ZERO, |m| m.velocity.flat());
         self.root = root;
         self.sim_pos = VelocitySpring {
             position: root.translation.flat(),
+            velocity,
             ..VelocitySpring::default()
         };
         self.sim_rot = RotationSpring {
             rotation: root.rotation,
             angular_velocity: Vec3::ZERO,
         };
-        for k in 0..3 {
-            self.trajectory[k] = (root.translation.flat(), root.rotation);
+        for (k, h) in HORIZON_SECONDS.iter().enumerate() {
+            self.trajectory[k] = (root.translation.flat() + velocity * *h, root.rotation);
         }
         self.build_query();
         for (side, a) in ankles.iter().enumerate() {
@@ -653,10 +693,26 @@ impl MotionMatcher {
                 self.query[k] = (v - db.feature_mean[k]) / db.feature_scale[k];
             }
         }
-        for k in 6..15 {
-            self.query[k] = -db.feature_mean[k] / db.feature_scale[k];
+        let in_root = |v: Vec3| root.rotation.inverse_rotate(v);
+        let (lv, rv) = moving.map_or((Vec3::ZERO, Vec3::ZERO), |m| {
+            (
+                in_root(m.ankle_velocities[0]),
+                in_root(m.ankle_velocities[1]),
+            )
+        });
+        let hv = in_root(velocity);
+        for (k, v) in [lv.x, lv.y, lv.z, rv.x, rv.y, rv.z, hv.x, hv.y, hv.z]
+            .into_iter()
+            .enumerate()
+        {
+            let k = 6 + k;
+            self.query[k] = (v - db.feature_mean[k]) / db.feature_scale[k];
         }
-        let wanted = tags::IDLE | tags::START_STOP | tags::WALK | tags::TURN;
+        let wanted = if moving.is_some() {
+            tags::START_STOP | tags::WALK | tags::TURN
+        } else {
+            tags::IDLE | tags::START_STOP | tags::WALK | tags::TURN
+        };
         let mut best = (f32::INFINITY, self.frame);
         for f in 0..db.frame_count() {
             let t = db.bounds.frame_tags[f];
@@ -692,22 +748,42 @@ impl MotionMatcher {
         };
         self.root_vel_blend = InertialVec3::default();
         self.yaw_rate_blend = InertialVec3::default();
-        self.root_velocity = Vec3::ZERO;
+        self.root_velocity = velocity;
         self.root_yaw_rate = 0.0;
         self.frame = to;
         self.frac = 0.0;
         self.anchor = root.compose(self.db_root(to, 0.0).inverse());
+        if moving.is_some() && self.config.blend_root_velocity {
+            // Walking on at the body's own velocity, eased into the capture's.
+            let t1 = (to + 1).min(self.clip_end(to) - 1);
+            let v_new = self
+                .anchor
+                .rotation
+                .rotate((db.root_pos[t1] - db.root_pos[to]) * db.fps);
+            self.root_vel_blend
+                .transition(velocity, Vec3::ZERO, v_new, Vec3::ZERO);
+        }
         self.action = None;
         self.action_finished = false;
         self.hips_lift = 0.0;
         self.stuck = 0.0;
         self.search_timer = 0.0;
-        self.taken_over = 0.5;
+        // A standing body differs from the capture by more than a transition does (the long
+        // half-life); a walking one, taken over on the capture's moment most like it, by about a
+        // transition's (eased over the long one, its swinging foot was blended between two strides
+        // and landed sliding).
+        self.taken_over = if moving.is_some() { 0.0 } else { 0.5 };
         self.stats.transitions += 1;
         let r = root.rotation;
+        let planted = moving.map_or([true, true], |m| m.planted);
+        // Whatever the feet were held at before (an earlier walk's last steps) is let go: a foot
+        // not planted now is the capture's, not pulled back to where it last stood.
+        for f in &mut self.feet {
+            *f = FootLock::default();
+        }
         self.plant_feet([
-            Some(root.translation + r.rotate(ankles[0])),
-            Some(root.translation + r.rotate(ankles[1])),
+            planted[0].then(|| root.translation + r.rotate(ankles[0])),
+            planted[1].then(|| root.translation + r.rotate(ankles[1])),
         ]);
         self.sample(to, 0.0);
         for i in 0..b {
@@ -961,7 +1037,15 @@ impl MotionMatcher {
                 self.last_desired = (desired_v, desired_f);
             }
             self.build_query();
-            let current = if end_of_clip {
+            // Carrying on is a choice only for a frame the search may choose: standing calmly on
+            // a walk or a turn (outside `rest_tags`, or in `rest_exclude`), it went on walking
+            // (a transitions clip carried a body asked to stand at 0.4-0.6 m/s for seconds, its
+            // cost less the transition cost below every idle frame's).
+            let tags_now = self.db.bounds.frame_tags[self.frame];
+            let resting_off = calm
+                && ((cfg.rest_tags != 0 && tags_now & cfg.rest_tags == 0)
+                    || tags_now & cfg.rest_exclude != 0);
+            let current = if end_of_clip || resting_off {
                 None
             } else {
                 Some(Match {
@@ -1348,6 +1432,45 @@ mod tests {
             synthetic_idle(&target, 300),
         ];
         Arc::new(Database::build(&target, &clips, &BuildConfig::default()).unwrap())
+    }
+
+    #[test]
+    fn standing_calmly_never_carries_on_a_walk() {
+        // Walking, then asked to stand: with rest tags (idle) set, the next search leaves the walk
+        // for an idle frame, however much carrying on is favoured (a huge transition cost).
+        let config = Config {
+            rest_tags: tags::IDLE,
+            transition_cost: 1.0e6,
+            ..Config::default()
+        };
+        let target = humanoid_skeleton(1.0);
+        let clips = [
+            synthetic_walk(&target, 3000, 1.0),
+            synthetic_idle(&target, 300),
+        ];
+        let db = Arc::new(Database::build(&target, &clips, &BuildConfig::default()).unwrap());
+        let mut m = MotionMatcher::new(db, config, Vec3::ZERO, 0.0);
+        let walk = ConstantSteering {
+            velocity: Vec3::new(0.0, 0.0, 1.0),
+            facing: 0.0,
+        };
+        for _ in 0..90 {
+            m.step(1.0 / 60.0, &walk);
+        }
+        assert!(m.db.bounds.frame_tags[m.frame()] & tags::WALK != 0);
+        let stand = ConstantSteering {
+            velocity: Vec3::ZERO,
+            facing: 0.0,
+        };
+        for _ in 0..180 {
+            m.step(1.0 / 60.0, &stand);
+        }
+        let t = m.db.bounds.frame_tags[m.frame()];
+        assert!(
+            t & tags::IDLE != 0,
+            "standing, it plays frame {} (tags {t:#x})",
+            m.frame()
+        );
     }
 
     #[test]

@@ -183,6 +183,20 @@ export class MotionCharacter {
     this.view();
     this.check(r);
   }
+  /**
+   * Take over a body that is walking: as takeOver, with its ground velocity [vx, vz] (m/s), each
+   * ankle's ([lvx, lvz], [rvx, rvz]) and which feet stand planted ([left, right] booleans). It
+   * walks on at that velocity until given a path.
+   */
+  takeOverMoving(x, z, facing, pose, velocity, ankles, planted) {
+    const [p, n] = this.motion.stage(new Uint8Array(pose.buffer, pose.byteOffset, pose.byteLength));
+    const [l, r] = ankles;
+    const bits = (planted[0] ? 1 : 0) | (planted[1] ? 2 : 0);
+    const res = this.motion.x.anim_character_take_over_moving(this.h, x, z, facing, velocity[0], velocity[1], l[0], l[1], r[0], r[1], bits, p, pose.length);
+    this.motion.x.anim_free(p, n);
+    this.view();
+    this.check(res);
+  }
   teleport(x, z, facing) {
     this.check(this.motion.x.anim_character_teleport(this.h, x, z, facing));
   }

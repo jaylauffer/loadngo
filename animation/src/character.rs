@@ -21,7 +21,7 @@
 
 use std::sync::Arc;
 
-use crate::controller::{Action, Config, MotionMatcher};
+use crate::controller::{Action, Config, MotionMatcher, Moving};
 use crate::database::{tags, Database};
 use crate::humanoid::find_bone;
 use crate::ik::two_bone;
@@ -338,6 +338,29 @@ impl Character {
         self.after_standing = None;
         self.steer = Steer::Constant(ConstantSteering {
             velocity: Vec3::ZERO,
+            facing: root.rotation.yaw(),
+        });
+        self.rot.copy_from_slice(self.m.local_rotations());
+        self.world_pos.copy_from_slice(self.m.world_positions());
+    }
+
+    /// Takes over a body that is walking (`MotionMatcher::take_over_moving`): it walks on at
+    /// that velocity until told otherwise (`go_to`, `steer`).
+    pub fn take_over_moving(
+        &mut self,
+        root: Transform,
+        hips: Vec3,
+        rotations: &[Quat],
+        moving: Moving,
+    ) {
+        self.m.take_over_moving(root, hips, rotations, moving);
+        self.state = State::Walking;
+        self.sit = None;
+        self.seat = None;
+        self.hold = None;
+        self.after_standing = None;
+        self.steer = Steer::Constant(ConstantSteering {
+            velocity: moving.velocity.flat(),
             facing: root.rotation.yaw(),
         });
         self.rot.copy_from_slice(self.m.local_rotations());
@@ -836,6 +859,111 @@ mod tests {
             c.root().translation
         );
         assert!(c.world_positions().iter().all(|p| p.is_finite()));
+    }
+
+    #[test]
+    fn a_walking_body_taken_over_walks_on() {
+        // A character walking straight; its pose, root and velocities a few seconds in are handed
+        // to a second character, which must carry on at about that speed with no jump, rather than
+        // stop as a standing take-over does.
+        let db = db();
+        let dt = 1.0 / 60.0;
+        let path = [Vec3::ZERO, Vec3::new(0.0, 0.0, 30.0)];
+        let mut a = Character::new(Arc::clone(&db), Config::default(), Vec3::ZERO, 0.0);
+        a.go_to(&path, 1.0, None);
+        for _ in 0..180 {
+            a.step(dt);
+        }
+        let legs = db.humanoid.legs;
+        let before = (
+            a.root(),
+            [
+                a.world_positions()[legs[0].ankle],
+                a.world_positions()[legs[1].ankle],
+            ],
+        );
+        a.step(dt);
+        let root = a.root();
+        let ankles = [
+            a.world_positions()[legs[0].ankle],
+            a.world_positions()[legs[1].ankle],
+        ];
+        let velocity = (root.translation - before.0.translation).flat() / dt;
+        let held = a.matcher().feet_held();
+        let moving = Moving {
+            velocity,
+            ankle_velocities: [
+                (ankles[0] - before.1[0]) / dt,
+                (ankles[1] - before.1[1]) / dt,
+            ],
+            planted: held,
+        };
+        let speed = |taken_moving: bool| {
+            let mut b = Character::new(
+                Arc::clone(&db),
+                Config::default(),
+                root.translation,
+                root.rotation.yaw(),
+            );
+            if taken_moving {
+                b.take_over_moving(root, a.hips_position(), a.local_rotations(), moving);
+            } else {
+                b.take_over(root, a.hips_position(), a.local_rotations());
+            }
+            let start = b.root().translation;
+            assert!((b.world_positions()[0] - a.world_positions()[0]).length() < 1e-3);
+            b.go_to(&[start, Vec3::new(start.x, 0.0, 30.0)], 1.0, None);
+            let mut last = start;
+            let mut most_step = 0.0f32;
+            for _ in 0..12 {
+                b.step(dt);
+                let r = b.root().translation;
+                most_step = most_step.max((r - last).flat().length());
+                last = r;
+            }
+            ((last - start).flat().length() / (12.0 * dt), most_step)
+        };
+        let v0 = velocity.length();
+        let (walked_on, step) = speed(true);
+        assert!(v0 > 0.5, "the first character walked at {v0} m/s");
+        assert!(
+            walked_on > 0.8 * v0,
+            "taken over walking, it went {walked_on} m/s against {v0}"
+        );
+        assert!(step < 2.0 * v0 * dt, "a root step of {step} m in a frame");
+        let (from_standing, _) = speed(false);
+        assert!(
+            from_standing < walked_on,
+            "taken over standing it went {from_standing} m/s"
+        );
+        // Taken over again after walking elsewhere (its feet held there), with one foot free: that
+        // foot stays where the body shows it, not pulled towards where it last stood.
+        let mut c = Character::new(
+            Arc::clone(&db),
+            Config::default(),
+            Vec3::new(5.0, 0.0, 0.0),
+            0.0,
+        );
+        c.go_to(
+            &[Vec3::new(5.0, 0.0, 0.0), Vec3::new(5.0, 0.0, 3.0)],
+            1.0,
+            None,
+        );
+        for _ in 0..300 {
+            c.step(dt);
+        }
+        let one_free = Moving {
+            planted: [false, true],
+            ..moving
+        };
+        c.take_over_moving(root, a.hips_position(), a.local_rotations(), one_free);
+        c.step(dt);
+        let now = c.world_positions()[legs[0].ankle];
+        let moved = (now - ankles[0]).flat().length();
+        assert!(
+            moved < 0.05,
+            "the free foot moved {moved} m in the frame after the take-over"
+        );
     }
 
     #[test]
