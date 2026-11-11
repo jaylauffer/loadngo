@@ -7,6 +7,20 @@
 
 use crate::database::{Database, FEATURES, LARGE_BOX, SMALL_BOX};
 
+/// A foot swinging now, which a frame the search returns must not put down: its contact bits
+/// (`database::LEFT_HEEL | LEFT_BALL`, or the right foot's) and for how many frames after that
+/// frame it must stay up too. No bits: no limit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Swing {
+    pub bits: u8,
+    pub frames: u8,
+}
+
+impl Swing {
+    /// No limit.
+    pub const NONE: Swing = Swing { bits: 0, frames: 0 };
+}
+
 /// What the search may not return.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Exclusions {
@@ -18,6 +32,21 @@ pub struct Exclusions {
     pub tags: u32,
     /// ... and none of these.
     pub exclude: u32,
+    /// Feet swinging now (left, right), which the frame must not put down.
+    pub swinging: [Swing; 2],
+}
+
+impl Exclusions {
+    /// Whether frame `f` puts down a foot [`Exclusions::swinging`] holds up, at `f` or within the
+    /// frames after it that the foot must stay up (within its clip).
+    fn lands(&self, db: &Database, f: usize) -> bool {
+        let end = db.bounds.clip_end[f] as usize;
+        self.swinging.iter().any(|s| {
+            s.bits != 0
+                && (f..=(f + usize::from(s.frames)).min(end - 1))
+                    .any(|g| db.contacts[g] & s.bits != 0)
+        })
+    }
 }
 
 /// The best frame and its squared feature distance.
@@ -137,7 +166,9 @@ pub fn search_features(
                         break;
                     }
                 }
-                if d < best_cost {
+                // (Checked only for a frame that would be the best yet: a swinging foot's phase is
+                // not in the boxes, and the check looks ahead in the contacts.)
+                if d < best_cost && !exclusions.lands(db, f) {
                     best_cost = d;
                     best = Some(Match { frame: f, cost: d });
                 }
@@ -164,6 +195,9 @@ pub fn search_brute_force(
             || db.bounds.frame_tags[f] & exclusions.tags == 0
             || db.bounds.frame_tags[f] & exclusions.exclude != 0
         {
+            continue;
+        }
+        if exclusions.lands(db, f) {
             continue;
         }
         let feat = db.feature(f);
@@ -195,6 +229,7 @@ mod tests {
             skip: (0, 0),
             tags: crate::database::tags::LOCOMOTION,
             exclude: 0,
+            swinging: [Swing::NONE; 2],
         };
         let mut tested = 0;
         for probe in (0..db.frame_count()).step_by(37) {
@@ -228,6 +263,7 @@ mod tests {
             skip: (0, 0),
             tags: crate::database::tags::LOCOMOTION,
             exclude: 0,
+            swinging: [Swing::NONE; 2],
         };
         for probe in (0..db.frame_count()).step_by(41) {
             let mut q = [0.0f32; FEATURES];

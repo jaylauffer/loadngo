@@ -30,7 +30,7 @@ use crate::database::{
 use crate::ik::two_bone;
 use crate::math::{wrap_angle, Quat, Transform, Vec3};
 use crate::path::Steering;
-use crate::search::{search, search_features, Exclusions, Match, SearchStats};
+use crate::search::{search, search_features, Exclusions, Match, SearchStats, Swing};
 use crate::spring::{angular_velocity, InertialQuat, InertialVec3, RotationSpring, VelocitySpring};
 
 /// Tuning of the runtime. The defaults suit a walking humanoid at 30-240 Hz.
@@ -95,6 +95,22 @@ pub struct Config {
     /// A transition must beat carrying on by at least this much feature cost (squared
     /// normalised distance), so near-equal frames do not trade places.
     pub transition_cost: f32,
+    /// A transition keeps a swinging foot swinging: while a foot is in the air (no contact in the
+    /// frame playing, not held) and its shown ankle moves faster than `swing_speed` over the
+    /// ground, the search passes over frames that put it down within `swing_k` seconds, unless
+    /// the clip playing puts it down about as soon. (On such a frame the foot lock took hold of a
+    /// foot still in mid-swing, moving 2-4.6 cm a frame, and stopped it in one.) Round 11a, work in
+    /// progress: see docs/ANIMATION.md.
+    pub swing_agree: bool,
+    /// WIP, measured and not chosen (option A): after a transition made with a foot in the air,
+    /// no search but at a clip's end for this long (s). 0: off. To be taken out.
+    pub swing_hold: f32,
+    /// WIP while the variants are compared: 1 the frame alone, 2 no sooner than the clip playing,
+    /// 3 (chosen) within `swing_k` (s); and the shown ankle's least ground speed (m/s) to count
+    /// as swinging (0.6 chosen). To become constants.
+    pub swing_mode: f32,
+    pub swing_speed: f32,
+    pub swing_k: f32,
     /// Keep the root's velocity continuous across a transition (true) or let the new
     /// clip's root motion take over at once (false).
     pub blend_root_velocity: bool,
@@ -183,6 +199,11 @@ impl Config {
             "force_search_velocity" => self.force_search_velocity = f()?,
             "force_search_facing" => self.force_search_facing = f()?,
             "transition_cost" => self.transition_cost = f()?,
+            "swing_agree" => self.swing_agree = b()?,
+            "swing_hold" => self.swing_hold = f()?,
+            "swing_mode" => self.swing_mode = f()?,
+            "swing_speed" => self.swing_speed = f()?,
+            "swing_k" => self.swing_k = f()?,
             "blend_root_velocity" => self.blend_root_velocity = b()?,
             "settle_halflife" => self.settle_halflife = f()?,
             "settle_facing" => self.settle_facing = f()?,
@@ -230,6 +251,11 @@ impl Default for Config {
             force_search_velocity: 0.25,
             force_search_facing: 0.35,
             transition_cost: 0.5,
+            swing_agree: true,
+            swing_hold: 0.0,
+            swing_mode: 3.0,
+            swing_speed: 0.6,
+            swing_k: 0.1,
             blend_root_velocity: true,
             settle_halflife: 0.0,
             settle_facing: 0.45,
@@ -355,6 +381,11 @@ struct FootLock {
     /// landing is in view (`None` while held, and before then).
     twist_landing: Option<f32>,
 }
+
+/// How far ahead (s) the search looks in the clip playing for where a swinging foot comes down
+/// (`Config::swing_agree`), and how much sooner (s) than that a frame it chooses may put it down.
+const SWING_LOOKAHEAD: f32 = 0.5;
+const SWING_SLACK: f32 = 0.05;
 
 /// The half-life (s) over which a newly held foot comes down onto the floor.
 const LOCK_SETTLE_HALFLIFE: f32 = 0.05;
@@ -501,6 +532,11 @@ pub struct MotionMatcher {
     /// Within this distance (m) of the steering's goal, land on it, whatever
     /// `Config::arrive_exact` says ([`Self::want_arrival`]).
     arrive_wanted: f32,
+    /// EXPERIMENT: seconds left with no search after a transition made mid-swing.
+    swing_held: f32,
+    /// Each ankle as shown the step before, and that step's length (s).
+    ankle_was: [Vec3; 2],
+    ankle_speed: [f32; 2],
 }
 
 impl MotionMatcher {
@@ -562,6 +598,9 @@ impl MotionMatcher {
             back_wanted: false,
             trajectory_search: false,
             arrive_wanted: 0.0,
+            swing_held: 0.0,
+            ankle_was: [Vec3::ZERO; 2],
+            ankle_speed: [0.0; 2],
             db,
         };
         // Start on the frame whose trajectory best matches standing still here (there is
@@ -917,6 +956,7 @@ impl MotionMatcher {
             skip: (0, 0),
             tags: wanted & search_tags,
             exclude,
+            swinging: [Swing::NONE; 2],
         };
         let mut st = SearchStats::default();
         let to = search(&db, &self.query, None, ex, &mut st).map_or(self.frame, |m| m.frame);
@@ -1078,6 +1118,62 @@ impl MotionMatcher {
             self.query[j] = (d.x - db.feature_mean[j]) / db.feature_scale[j];
             self.query[j + 1] = (d.z - db.feature_mean[j + 1]) / db.feature_scale[j + 1];
         }
+    }
+
+    /// The feet swinging now (`Config::swing_agree`): each foot the frame playing has in the air and
+    /// the foot lock does not hold, with how many frames after a frame the search returns it must
+    /// stay up: until the clip playing puts it down, less [`SWING_SLACK`] (none past
+    /// [`SWING_LOOKAHEAD`] or the clip's end: that frame alone).
+    fn swinging(&self) -> [Swing; 2] {
+        let mut out = [Swing::NONE; 2];
+        if !self.config.swing_agree {
+            return out;
+        }
+        let horizon = self.frames(SWING_LOOKAHEAD);
+        let slack = self.frames(SWING_SLACK);
+        let end = self.clip_end(self.frame);
+        for (side, swing) in out.iter_mut().enumerate() {
+            let bits = if side == 0 {
+                LEFT_HEEL | LEFT_BALL
+            } else {
+                RIGHT_HEEL | RIGHT_BALL
+            };
+            if self.db.contacts[self.frame] & bits != 0 || self.feet[side].held.is_some() {
+                continue;
+            }
+            if self.config.swing_speed > 0.0 && self.ankle_speed[side] < self.config.swing_speed {
+                continue;
+            }
+            let lands = (1..=horizon)
+                .map(|k| self.frame + k)
+                .take_while(|&f| f < end)
+                .position(|f| self.db.contacts[f] & bits != 0);
+            let frames = if self.config.swing_mode < 1.5 {
+                0
+            } else if self.config.swing_mode < 2.5 {
+                lands.map_or(0, |k| (k + 1).saturating_sub(slack))
+            } else {
+                let kk = self.frames(self.config.swing_k);
+                lands.map_or(kk, |k| (k + 1).saturating_sub(slack).min(kk))
+            };
+            *swing = Swing {
+                bits,
+                frames: frames.min(usize::from(u8::MAX)) as u8,
+            };
+        }
+        out
+    }
+
+    /// EXPERIMENT: a foot in the air now (no contact in the frame playing, not held).
+    fn swinging_now(&self) -> bool {
+        [
+            (0usize, LEFT_HEEL | LEFT_BALL),
+            (1, RIGHT_HEEL | RIGHT_BALL),
+        ]
+        .iter()
+        .any(|&(side, bits)| {
+            self.db.contacts[self.frame] & bits == 0 && self.feet[side].held.is_none()
+        })
     }
 
     fn cost_of(&self, frame: usize) -> f32 {
@@ -1251,6 +1347,7 @@ impl MotionMatcher {
                 skip: (0, 0),
                 tags: search_tags,
                 exclude,
+                swinging: [Swing::NONE; 2],
             };
             let mut st = SearchStats::default();
             let db = Arc::clone(&self.db);
@@ -1261,7 +1358,10 @@ impl MotionMatcher {
             }
             self.search_timer = cfg.search_interval;
         }
-        if self.action.is_none() && (self.search_timer <= 0.0 || force || end_of_clip) {
+        self.swing_held = (self.swing_held - dt).max(0.0);
+        if self.action.is_none()
+            && (end_of_clip || (self.swing_held <= 0.0 && (self.search_timer <= 0.0 || force)))
+        {
             self.search_timer = cfg.search_interval;
             if force {
                 self.last_desired = (desired_v, desired_f);
@@ -1307,14 +1407,27 @@ impl MotionMatcher {
                 } else {
                     exclude
                 },
+                swinging: self.swinging(),
             };
             let mut st = SearchStats::default();
-            let found = search(&self.db, &self.query, current, ex, &mut st);
+            let mut found = search(&self.db, &self.query, current, ex, &mut st);
+            if found.is_none() && ex.swinging != [Swing::NONE; 2] {
+                // No frame keeps the swinging foot up (standing, say, where every frame has both feet
+                // down), and carrying on is not a choice: the nearest frame as before.
+                let ex = Exclusions {
+                    swinging: [Swing::NONE; 2],
+                    ..ex
+                };
+                found = search(&self.db, &self.query, current, ex, &mut st);
+            }
             self.stats.searches += 1;
             self.stats.last_frames_tested = st.frames_tested;
             if let Some(best) = found {
                 self.stats.last_cost = best.cost;
                 if current.is_none_or(|c| best.frame != c.frame) {
+                    if cfg.swing_hold > 0.0 && self.swinging_now() {
+                        self.swing_held = cfg.swing_hold;
+                    }
                     self.transition(best.frame);
                 }
             }
@@ -1343,7 +1456,12 @@ impl MotionMatcher {
         while self.frac >= 1.0 {
             self.frac -= 1.0;
             if self.frame + 2 >= self.clip_end(self.frame) {
-                self.frac = 0.0;
+                // Played on to the clip's last frame (all but a thousandth of the way), the next
+                // step searching from there: held where it was instead, the pose and the root stood
+                // still for a step and the transition then set the root's velocity going again
+                // from zero (a walk's root 0.6 m/s to nothing in a frame and on again; a swinging
+                // ankle 3.5 cm a frame to under 0.5 and on).
+                self.frac = 1.0 - 1e-3;
                 self.at_clip_end = true;
                 break;
             }
@@ -1481,6 +1599,11 @@ impl MotionMatcher {
         self.pose_world();
         if cfg.foot_lock {
             self.lock_feet(dt);
+        }
+        for side in 0..2 {
+            let a = self.world_pos[self.db.humanoid.legs[side].ankle];
+            self.ankle_speed[side] = (a - self.ankle_was[side]).flat().length() / dt;
+            self.ankle_was[side] = a;
         }
     }
 
@@ -1857,6 +1980,7 @@ mod tests {
                 skip: (0, 0),
                 tags: wanted & search_tags,
                 exclude,
+                swinging: [Swing::NONE; 2],
             };
             let full = crate::search::search_brute_force(&db, &m.query, ex).map(|x| x.frame);
             assert_eq!(Some(m.frame()), full, "taken over from frame {f}");

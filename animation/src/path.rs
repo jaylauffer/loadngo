@@ -174,8 +174,12 @@ impl Steering for PathSteering {
         }
         let target = self.point_at(along + self.look_ahead);
         let dir = (target - position.flat()).normalize_or_zero();
-        // Brake so as to stop at the end: v² = 2 a d, never faster than cruising.
-        let speed = self.speed.min((2.0 * self.braking * remaining).sqrt());
+        // Brake so as to stop where the path is done (the arrive radius short of its end): v² = 2 a
+        // d, never faster than cruising. (Braking to the end itself, the speed wanted was still
+        // 0.43 m/s at the arrive radius and fell to nothing there in a frame.)
+        let speed = self
+            .speed
+            .min((2.0 * self.braking * (remaining - self.arrive_radius).max(0.0)).sqrt());
         let facing = if speed > 0.05 && !(self.end_facing.is_some() && remaining < self.face_from) {
             dir.x.atan2(dir.z)
         } else {

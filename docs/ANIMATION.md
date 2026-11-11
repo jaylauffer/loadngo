@@ -737,6 +737,52 @@ canonical humanoid and on a man's and a woman's body from a browser game (as `an
 - **Linux** (dolores, Raspberry Pi 5, aarch64; run after the round, on `55932122`): `cargo fmt --check`, clippy of both
   animation crates with all targets and features under `-D warnings`, and their tests (55, 1 and 8) pass.
 
+### Round 11a (loadngo; stopped as work in progress)
+
+Stopped at Jay's wrap-up (the work was heating the Mac). Committed as WIP: no gate has been run on the commit but
+`rustfmt` (its code built and its diagnostic tests ran before the last edits: comments, two default values); the wasm
+module is not rebuilt; no `motion_eval` tables; nothing on dolores. Measured with scratch probes (not committed) on
+three databases from `walk-core.json`: the canonical humanoid's, and a man's and a woman's body's from a browser game,
+with that game's settings.
+
+- **A clip played to its end held** (`controller.rs`, playback): its last frame but one stood for a step, the pose and
+  the root still, and the end-of-clip transition then set the root's velocity going again from zero. A swinging ankle
+  went about 3.5 cm a frame, then under 0.5, then on; at a path's end a walk's root went 0.6 m/s to nothing in a frame,
+  and the transition often chose a walk that set off again. Playback now goes on to the last frame (`frac` 0.999) and the
+  next step searches from there.
+- **A path braked to its end, not to where it is done** (`path.rs`): the wanted speed was still about 0.43 m/s at the
+  arrive radius and fell to nothing there in a frame. It now brakes to rest at the arrive radius, v = sqrt(2 a max(0,
+  remaining - arrive_radius)). Arrivals through `Character::go_to` (60 paths a database, 1.5-6 m, bent 0-1.2 rad, 0.6-1
+  m/s, at 60 Hz): the root's largest speed drop in a frame 0.53-0.72 -> 0.035-0.064 m/s, runs that stop dead a second
+  time 7-17 -> 0 of 60, the head's largest acceleration 1.5-1.7 -> 0.74-0.88 cm a frame squared; at 30 Hz the root's
+  drop 0.27 -> 0.13-0.14 (per 60 Hz frame). The hold's fix alone removes the dead stops; the path's alone does not (it
+  takes the wanted speed's largest drop in a frame from 0.49 to 0.15-0.23 m/s).
+- **A transition keeps a swinging foot up** (`search.rs` `Exclusions::swinging`, `controller.rs` `swinging()`,
+  `Config::swing_agree`, on): a transition onto a frame with a foot down that the body has swinging made the foot lock
+  take hold of it while it still moved, 2-4.6 cm a frame, most often at the second of two transitions 7 frames apart.
+  While a foot is up (no contact in the frame playing, not held) and its shown ankle moves over 0.6 m/s over the ground,
+  the search passes over frames that put it down within 0.1 s, unless the clip playing puts it down about as soon (less
+  0.05 s); if no frame is left and carrying on is not a choice (a clip's end, standing calmly) it searches as before. On
+  600 random turning walks a database (a game's settings, the hold and path fixes in both): transitions that put down a
+  foot moving over 1.5 cm a frame 111 / 150 / 142 -> 50 / 65 / 63 (woman, man, canonical); runs whose worst leg
+  acceleration while walking passes 6.6 cm a frame squared 1 / 5 / 7 -> 2 / 5 / 8; the root off the path 0.033 m on
+  average either way. Measured and not chosen: the same without the speed gate, or looking ahead to the clip playing's
+  own landing (more runs past 6.6 on two databases, 5 -> 12 and 7 -> 9-15: the choices it moves to land CMU 104's slow
+  walks, whose own landings jolt the knee); a pause in searching for 0.25 s after a transition made mid-swing (option A:
+  12% fewer such grabs, and no search, forced or not, meanwhile).
+- **Tests** (`animation/tests/transitions_and_arrival.rs`): diagnostics only so far, printing and asserting nothing.
+  `diag_swing` walks turning paths on synthetic clips (which end mid-stride): the swinging ankle's largest acceleration
+  across transitions 4.86 cm a frame squared on `ec820357` at 60 Hz and 1.17 now (the hold; the swing rule changes
+  nothing there). `diag_blind` (pose features weighted near zero) still finds one swinging foot put down, at a frame
+  with both feet down: probably the fall-back search.
+- **Where it stopped, what is next:** make the diagnostics asserting tests (the swing ankle across transitions; arrival:
+  the root's deceleration bounded and one stop only; a database that tells the swing rule's effect), fold the WIP
+  settings `swing_hold`, `swing_mode`, `swing_k`, `swing_speed` into constants (and take `swing_hold` out), run the gates
+  and `no_allocation.rs`, `motion_eval` before and after on the standard paths, `animation/build.sh`, dolores. The motion
+  databases need no rebuild for any of this (nothing in them changed).
+- **Seen in passing:** the foot lock taking hold of a landing foot still moving 1-2 cm a frame jolts the knee 7-10 cm a
+  frame squared with no transition near, on CMU 104's slow walks above all; not traced.
+
 ## What is short
 
 - **The hand-back's blend** (round 6, done in the game): a foot is newly held during the fade only if both walks have it
