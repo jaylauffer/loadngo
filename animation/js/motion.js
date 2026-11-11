@@ -167,6 +167,18 @@ export class MotionCharacter {
     const [rx, rz] = right ?? [NaN, NaN];
     this.check(this.motion.x.anim_character_plant_feet(this.h, lx, lz, rx, rz));
   }
+  /**
+   * Take a body over from other animation without a jump: the root at x, z facing `facing`, and
+   * `pose` (a Float32Array laid out as step() returns: its first four numbers ignored, then the
+   * hips relative to the root and each bone's rotation) as the body is shown now.
+   */
+  takeOver(x, z, facing, pose) {
+    const [p, n] = this.motion.stage(new Uint8Array(pose.buffer, pose.byteOffset, pose.byteLength));
+    const r = this.motion.x.anim_character_take_over(this.h, x, z, facing, p, pose.length);
+    this.motion.x.anim_free(p, n);
+    this.view();
+    this.check(r);
+  }
   teleport(x, z, facing) {
     this.check(this.motion.x.anim_character_teleport(this.h, x, z, facing));
   }

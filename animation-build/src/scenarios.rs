@@ -363,6 +363,19 @@ impl Script {
 }
 
 impl Steering for Script {
+    fn goal(&self) -> Option<Vec3> {
+        match self.legs.get(self.at) {
+            Some(Leg::Walk(p, _)) => p.last().copied(),
+            _ => self.legs[..self.at.min(self.legs.len())]
+                .iter()
+                .rev()
+                .find_map(|l| match l {
+                    Leg::Walk(p, _) => p.last().copied(),
+                    _ => None,
+                }),
+        }
+    }
+
     fn desired(&self, position: Vec3) -> (Vec3, f32) {
         match &self.current {
             Some(p) => p.desired(position),

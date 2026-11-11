@@ -90,6 +90,13 @@ enum Steer {
 }
 
 impl Steering for Steer {
+    fn goal(&self) -> Option<Vec3> {
+        match self {
+            Self::Path(s) => s.goal(),
+            _ => None,
+        }
+    }
+
     fn desired(&self, p: Vec3) -> (Vec3, f32) {
         match self {
             Self::Constant(c) => c.desired(p),
@@ -274,6 +281,13 @@ impl Character {
 
     /// Stands and turns to face `facing`.
     pub fn face(&mut self, facing: f32) {
+        // Stood at a path's end, it keeps that end as its goal (`Config::arrive_exact`).
+        if let (State::Standing, Steer::Path(p)) = (self.state, &self.steer) {
+            let mut p = p.clone();
+            p.end_facing = Some(facing);
+            self.steer = Steer::Path(p);
+            return;
+        }
         self.standing_or_queue(Steer::Constant(ConstantSteering {
             velocity: Vec3::ZERO,
             facing,
@@ -309,6 +323,24 @@ impl Character {
     /// (`MotionMatcher::plant_feet`).
     pub fn plant_feet(&mut self, ankles: [Option<Vec3>; 2]) {
         self.m.plant_feet(ankles);
+    }
+
+    /// Takes a body over from other animation without a jump (`MotionMatcher::take_over`):
+    /// `root` on the ground, `hips` relative to it, `rotations` as `local_rotations` gives
+    /// them. The character is then standing there; the layers start from rest.
+    pub fn take_over(&mut self, root: Transform, hips: Vec3, rotations: &[Quat]) {
+        self.m.take_over(root, hips, rotations);
+        self.state = State::Standing;
+        self.sit = None;
+        self.seat = None;
+        self.hold = None;
+        self.after_standing = None;
+        self.steer = Steer::Constant(ConstantSteering {
+            velocity: Vec3::ZERO,
+            facing: root.rotation.yaw(),
+        });
+        self.rot.copy_from_slice(self.m.local_rotations());
+        self.world_pos.copy_from_slice(self.m.world_positions());
     }
 
     /// Stops and stands about where it is (idles).

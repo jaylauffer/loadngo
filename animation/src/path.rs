@@ -10,6 +10,12 @@ use crate::math::Vec3;
 /// a character whose simulated position is `position`.
 pub trait Steering {
     fn desired(&self, position: Vec3) -> (Vec3, f32);
+
+    /// Where the steering means the character to stop, if anywhere (a path's end):
+    /// `Config::arrive_exact` brings the character onto it.
+    fn goal(&self) -> Option<Vec3> {
+        None
+    }
 }
 
 /// The same velocity and facing everywhere: a stick, a key, or a host that steers itself.
@@ -135,6 +141,10 @@ impl PathSteering {
 }
 
 impl Steering for PathSteering {
+    fn goal(&self) -> Option<Vec3> {
+        (self.count >= 2).then(|| self.points[self.count - 1])
+    }
+
     fn desired(&self, position: Vec3) -> (Vec3, f32) {
         if self.count < 2 {
             return (Vec3::ZERO, self.end_facing.unwrap_or(0.0));

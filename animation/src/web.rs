@@ -22,7 +22,7 @@ use std::sync::Arc;
 use crate::character::{Character, Follow, Seat, State};
 use crate::controller::Config;
 use crate::database::Database;
-use crate::math::Vec3;
+use crate::math::{Quat, Transform, Vec3};
 use crate::path::MAX_PATH_POINTS;
 
 thread_local! {
@@ -155,6 +155,8 @@ pub unsafe extern "C" fn anim_database_bone_name(db: *const DatabaseHandle, i: u
 pub struct CharacterHandle {
     c: Character,
     pose: Vec<f32>,
+    /// Rotations read in by `anim_character_take_over`, kept to be reused.
+    scratch: Vec<Quat>,
 }
 
 impl CharacterHandle {
@@ -225,6 +227,7 @@ pub unsafe extern "C" fn anim_character_create(
     );
     let mut h = CharacterHandle {
         pose: vec![0.0; 7 + 4 * d.db.bone_count()],
+        scratch: Vec::with_capacity(d.db.bone_count()),
         c,
     };
     h.write_pose();
@@ -517,6 +520,49 @@ pub unsafe extern "C" fn anim_character_teleport(
         return 1;
     }
     c.c.teleport(Vec3::new(x, 0.0, z), facing);
+    c.write_pose();
+    0
+}
+
+/// Takes a body over from other animation without a jump: the root at `(x, z)` facing
+/// `facing`, and the pose shown now as `count` numbers at `ptr` laid out as the pose buffer is
+/// (its first four ignored; then the hips relative to the root and each driven bone's
+/// rotation). 0 on success.
+///
+/// # Safety
+/// `c` must be live; `ptr` must point at `count` readable `f32`s.
+#[no_mangle]
+pub unsafe extern "C" fn anim_character_take_over(
+    c: *mut CharacterHandle,
+    x: f32,
+    z: f32,
+    facing: f32,
+    ptr: *const f32,
+    count: usize,
+) -> u32 {
+    let Some(c) = live(c) else { return 1 };
+    let n = c.pose.len();
+    if ptr.is_null() || count != n || !finite(&[x, z, facing]) {
+        fail(format!("a pose of {n} numbers"));
+        return 1;
+    }
+    let p = unsafe { std::slice::from_raw_parts(ptr, count) };
+    if !finite(p) {
+        return 1;
+    }
+    let bones = (n - 7) / 4;
+    let mut rot = std::mem::take(&mut c.scratch);
+    rot.clear();
+    for i in 0..bones {
+        let o = 7 + 4 * i;
+        rot.push(Quat::new(p[o], p[o + 1], p[o + 2], p[o + 3]).normalize());
+    }
+    c.c.take_over(
+        Transform::new(Vec3::new(x, 0.0, z), Quat::from_yaw(facing)),
+        Vec3::new(p[4], p[5], p[6]),
+        &rot,
+    );
+    c.scratch = rot;
     c.write_pose();
     0
 }

@@ -40,6 +40,9 @@ pub struct Config {
     pub search_interval: f32,
     /// Half-life of transition blends (s).
     pub blend_halflife: f32,
+    /// The inertialization half-life (s) for the first moments after `take_over`: the body
+    /// handed over differs from the capture by more than a transition between frames does.
+    pub takeover_halflife: f32,
     /// Half-lives of the simulation's velocity and facing springs (s).
     pub velocity_halflife: f32,
     pub facing_halflife: f32,
@@ -95,6 +98,13 @@ pub struct Config {
     pub time_warp: f32,
     /// Seconds a still character may lag its simulation before the search drops the pose.
     pub stuck_after: f32,
+    /// Within this distance (m) of the steering's goal (a path's end), bring the character
+    /// onto it: the simulation stays on the goal rather than settling onto the character, the
+    /// root is pulled towards it at `arrive_ratio` of its own speed, and standing, at most
+    /// `arrive_creep` m/s. 0: off (a stop lands where its capture takes it).
+    pub arrive_exact: f32,
+    pub arrive_ratio: f32,
+    pub arrive_creep: f32,
 }
 
 impl Config {
@@ -121,6 +131,7 @@ impl Config {
         match name {
             "search_interval" => self.search_interval = f()?,
             "blend_halflife" => self.blend_halflife = f()?,
+            "takeover_halflife" => self.takeover_halflife = f()?,
             "velocity_halflife" => self.velocity_halflife = f()?,
             "facing_halflife" => self.facing_halflife = f()?,
             "adjust_position_halflife" => self.adjust_position_halflife = f()?,
@@ -146,6 +157,9 @@ impl Config {
             "simulate_from_character" => self.simulate_from_character = b()?,
             "time_warp" => self.time_warp = f()?,
             "stuck_after" => self.stuck_after = f()?,
+            "arrive_exact" => self.arrive_exact = f()?,
+            "arrive_ratio" => self.arrive_ratio = f()?,
+            "arrive_creep" => self.arrive_creep = f()?,
             _ => return Err(format!("no setting named {name:?}")),
         }
         Ok(())
@@ -157,6 +171,7 @@ impl Default for Config {
         Self {
             search_interval: 0.1,
             blend_halflife: 0.1,
+            takeover_halflife: 0.25,
             velocity_halflife: 0.3,
             facing_halflife: 0.3,
             adjust_position_halflife: 0.15,
@@ -182,6 +197,9 @@ impl Default for Config {
             simulate_from_character: true,
             time_warp: 0.0,
             stuck_after: 0.4,
+            arrive_exact: 0.0,
+            arrive_ratio: 0.8,
+            arrive_creep: 0.06,
         }
     }
 }
@@ -302,6 +320,10 @@ pub struct MotionMatcher {
     stuck: f32,
     /// Added to the hips' height (m): an action's warp, kept after it ends (seated).
     hips_lift: f32,
+    /// Seconds left of the slower inertialization after `take_over`.
+    taken_over: f32,
+    /// The goal being landed on this step (`Config::arrive_exact`).
+    arriving: Option<Vec3>,
 }
 
 impl MotionMatcher {
@@ -356,6 +378,8 @@ impl MotionMatcher {
             action_finished: false,
             stuck: 0.0,
             hips_lift: 0.0,
+            taken_over: 0.0,
+            arriving: None,
             db,
         };
         // Start on the frame whose trajectory best matches standing still here (there is
@@ -560,6 +584,111 @@ impl MotionMatcher {
         }
     }
 
+    /// Takes a body over from other animation without a jump: `root` on the ground, `hips`
+    /// relative to it and `rotations` of the driven bones as `local_rotations` gives them (the
+    /// hips' relative to the root, the others to their parents). Playback continues from the
+    /// database frame whose feet (relative to the root) are most like this pose's, among frames
+    /// the search may use that stand or set off (idle, start-stop, walk, turn); the difference
+    /// is eased away by inertialization (`Config::takeover_halflife` for the first half second),
+    /// the feet planted where they stand and the simulation at rest under the root.
+    pub fn take_over(&mut self, root: Transform, hips: Vec3, rotations: &[Quat]) {
+        let db = Arc::clone(&self.db);
+        let b = db.bone_count();
+        // This pose's ankles relative to the root, by forward kinematics from the rest offsets.
+        self.world_pos[0] = hips;
+        self.world_rot[0] = rotations.first().copied().unwrap_or(Quat::IDENTITY);
+        for i in 1..b {
+            let p = db.skeleton.parents[i].unwrap_or(0);
+            let r = rotations.get(i).copied().unwrap_or(db.rotations[i]);
+            self.world_pos[i] = self.world_pos[p] + self.world_rot[p].rotate(self.local_pos[i]);
+            self.world_rot[i] = self.world_rot[p] * r;
+        }
+        let legs = db.humanoid.legs;
+        let ankles = [self.world_pos[legs[0].ankle], self.world_pos[legs[1].ankle]];
+        // The query: these feet, at rest (no foot or hip velocity), standing (no trajectory).
+        self.root = root;
+        self.sim_pos = VelocitySpring {
+            position: root.translation.flat(),
+            ..VelocitySpring::default()
+        };
+        self.sim_rot = RotationSpring {
+            rotation: root.rotation,
+            angular_velocity: Vec3::ZERO,
+        };
+        for k in 0..3 {
+            self.trajectory[k] = (root.translation.flat(), root.rotation);
+        }
+        self.build_query();
+        for (side, a) in ankles.iter().enumerate() {
+            for (c, v) in [a.x, a.y, a.z].into_iter().enumerate() {
+                let k = 3 * side + c;
+                self.query[k] = (v - db.feature_mean[k]) / db.feature_scale[k];
+            }
+        }
+        for k in 6..15 {
+            self.query[k] = -db.feature_mean[k] / db.feature_scale[k];
+        }
+        let wanted = tags::IDLE | tags::START_STOP | tags::WALK | tags::TURN;
+        let mut best = (f32::INFINITY, self.frame);
+        for f in 0..db.frame_count() {
+            let t = db.bounds.frame_tags[f];
+            if f + self.frames(self.config.end_margin) >= self.clip_end(f)
+                || t & wanted == 0
+                || t & self.config.search_tags == 0
+                || t & self.config.exclude_tags != 0
+            {
+                continue;
+            }
+            let cost = self.cost_of(f);
+            if cost < best.0 {
+                best = (cost, f);
+            }
+        }
+        let to = best.1;
+        // Shown as given; the capture's frame underneath.
+        for i in 0..b {
+            let shown = rotations
+                .get(i)
+                .copied()
+                .unwrap_or(db.rotations[to * b + i]);
+            self.bone_blend[i] = InertialQuat {
+                offset: (shown * db.rotations[to * b + i].inverse())
+                    .abs()
+                    .normalize(),
+                offset_vel: Vec3::ZERO,
+            };
+        }
+        self.hips_blend = InertialVec3 {
+            offset: hips - db.hips_pos[to],
+            offset_vel: Vec3::ZERO,
+        };
+        self.root_vel_blend = InertialVec3::default();
+        self.yaw_rate_blend = InertialVec3::default();
+        self.root_velocity = Vec3::ZERO;
+        self.root_yaw_rate = 0.0;
+        self.frame = to;
+        self.frac = 0.0;
+        self.anchor = root.compose(self.db_root(to, 0.0).inverse());
+        self.action = None;
+        self.action_finished = false;
+        self.hips_lift = 0.0;
+        self.stuck = 0.0;
+        self.search_timer = 0.0;
+        self.taken_over = 0.5;
+        self.stats.transitions += 1;
+        let r = root.rotation;
+        self.plant_feet([
+            Some(root.translation + r.rotate(ankles[0])),
+            Some(root.translation + r.rotate(ankles[1])),
+        ]);
+        self.sample(to, 0.0);
+        for i in 0..b {
+            self.out_rot[i] = self.bone_blend[i].apply(self.anim_rot[i]);
+        }
+        self.out_hips = hips;
+        self.pose_world();
+    }
+
     /// `seconds` in database frames.
     fn frames(&self, seconds: f32) -> usize {
         (seconds * self.db.fps).round() as usize
@@ -718,9 +847,20 @@ impl MotionMatcher {
         }
         self.sim_pos
             .update(desired_v.flat(), cfg.velocity_halflife, dt);
-        // At rest, with nobody wanting to move, the simulation settles onto the character:
-        // a few centimetres short of a goal is a person standing, not a cue to shuffle.
-        if resting {
+        // Near the goal it is to land on (arrive_exact), the simulation stays on it.
+        let goal = steering.goal().filter(|g| {
+            self.action.is_none()
+                && cfg.arrive_exact > 0.0
+                && (*g - self.root.translation).flat().length() < cfg.arrive_exact
+        });
+        self.arriving = goal;
+        if let (true, Some(g)) = (resting, goal) {
+            self.sim_pos.position = g.flat();
+            self.sim_pos.velocity = Vec3::ZERO;
+        } else if resting {
+            // At rest, with nobody wanting to move, the simulation settles onto the
+            // character: a few centimetres short of a goal is a person standing, not a cue
+            // to shuffle.
             let k = 1.0 - (-std::f32::consts::LN_2 * dt / cfg.settle_halflife).exp();
             self.sim_pos.position += (self.root.translation - self.sim_pos.position).flat() * k;
         }
@@ -870,12 +1010,18 @@ impl MotionMatcher {
         // 4. Pose with inertialization.
         self.sample(self.frame, self.frac);
         let b = self.db.bone_count();
+        let pose_halflife = if self.taken_over > 0.0 {
+            cfg.takeover_halflife.max(cfg.blend_halflife)
+        } else {
+            cfg.blend_halflife
+        };
+        self.taken_over = (self.taken_over - dt).max(0.0);
         for i in 0..b {
-            self.out_rot[i] = self.bone_blend[i].update(self.anim_rot[i], cfg.blend_halflife, dt);
+            self.out_rot[i] = self.bone_blend[i].update(self.anim_rot[i], pose_halflife, dt);
         }
         let next = (self.frame + 1).min(self.clip_end(self.frame) - 1);
         let hips_anim = self.db.hips_pos[self.frame].lerp(self.db.hips_pos[next], self.frac);
-        self.out_hips = self.hips_blend.update(hips_anim, cfg.blend_halflife, dt);
+        self.out_hips = self.hips_blend.update(hips_anim, pose_halflife, dt);
         self.out_hips.y += self.hips_lift;
 
         // 5. Root: animation root motion, blended velocity, nudged towards the simulation.
@@ -926,7 +1072,11 @@ impl MotionMatcher {
             let to_sim = (self.sim_pos.position - pos).flat();
             let pull = to_sim
                 * (1.0 - (-std::f32::consts::LN_2 * dt / cfg.adjust_position_halflife).exp());
-            let max_pull = cfg.adjust_velocity_ratio * vel.length() * dt;
+            let max_pull = match self.arriving {
+                // Landing on a goal: pulled harder while moving, and creeping onto it standing.
+                Some(_) => (cfg.arrive_ratio * vel.length() + cfg.arrive_creep) * dt,
+                None => cfg.adjust_velocity_ratio * vel.length() * dt,
+            };
             pos += if pull.length() > max_pull {
                 pull.normalize_or_zero() * max_pull
             } else {
@@ -1153,6 +1303,65 @@ mod tests {
             synthetic_idle(&target, 300),
         ];
         Arc::new(Database::build(&target, &clips, &BuildConfig::default()).unwrap())
+    }
+
+    #[test]
+    fn take_over_starts_from_the_pose_shown_and_eases_into_the_capture() {
+        let db = db();
+        let b = db.bone_count();
+        let mut m = MotionMatcher::new(Arc::clone(&db), Config::default(), Vec3::ZERO, 0.0);
+        // Another animation's pose: a walking frame's, every bone turned a little more.
+        let f = 120;
+        let twist = Quat::from_axis_angle(Vec3::X, 0.08);
+        // (The legs as they are, so the feet stand on the floor as another animation's would.)
+        let leg = |i: usize| {
+            ["Leg", "Foot", "Toe"]
+                .iter()
+                .any(|n| db.skeleton.names[i].contains(n))
+        };
+        let shown: Vec<Quat> = (0..b)
+            .map(|i| {
+                let q = db.rotations[f * b + i];
+                if leg(i) || i == 0 {
+                    q
+                } else {
+                    (q * twist).normalize()
+                }
+            })
+            .collect();
+        let hips = db.hips_pos[f] + Vec3::new(0.02, 0.0, 0.02);
+        let root = Transform::new(Vec3::new(2.0, 0.0, 1.0), Quat::from_yaw(0.7));
+        m.take_over(root, hips, &shown);
+        for (i, (got, want)) in m.local_rotations().iter().zip(&shown).enumerate() {
+            assert!(got.angle_to(*want) < 1e-3, "bone {i}");
+        }
+        assert!((m.hips_position() - hips).length() < 1e-4);
+        assert!((m.root().translation - root.translation).length() < 1e-5);
+        // Standing on: no joint jumps in a frame, and the difference eases away.
+        let s = ConstantSteering {
+            velocity: Vec3::ZERO,
+            facing: 0.7,
+        };
+        let mut was = m.world_positions().to_vec();
+        // (Over the take-over's half second; the synthetic idle's own foot releases come later.)
+        for _ in 0..30 {
+            m.step(1.0 / 60.0, &s);
+            for (p, q) in m.world_positions().iter().zip(&was) {
+                assert!(
+                    (*p - *q).length() < 0.035,
+                    "a joint moved {} m in a frame",
+                    (*p - *q).length()
+                );
+            }
+            was.copy_from_slice(m.world_positions());
+        }
+        for _ in 0..90 {
+            m.step(1.0 / 60.0, &s);
+        }
+        let left = (0..b)
+            .map(|i| m.bone_blend[i].offset.angle_to(Quat::IDENTITY))
+            .fold(0.0f32, f32::max);
+        assert!(left < 0.05, "offset left {left}");
     }
 
     #[test]
