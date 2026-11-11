@@ -1,0 +1,20 @@
+[package]
+name = "loadngo-animation-build"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+description = "The animation pipeline's tools: anim_build (motion capture to a motion-matching database) and motion_eval (scripted walks, metrics and frame strips); see docs/ANIMATION.md"
+
+# Everything here is already in the workspace: the core, the proactor for file I/O,
+# thermal admission for the worker lane, data::cli for the command-line conventions,
+# serde_json for glTF and reports, image for the frame strips' PNGs.
+[dependencies]
+loadngo-animation = { path = "../animation" }
+loadngo-proactor = { path = "../proactor" }
+loadngo-thermal = { path = "../thermal" }
+data = { path = "../data" }
+serde_json.workspace = true
+image.workspace = true
+blake3.workspace = true

@@ -37,6 +37,8 @@ members = [
     "terminal",
     "game-menu",
     "bitmap-editor",
+    "animation",
+    "animation-build",
 ]
 default-members = [
     "task",
@@ -70,6 +72,8 @@ default-members = [
     "terminal",
     "game-menu",
     "bitmap-editor",
+    "animation",
+    "animation-build",
 ]
 resolver = "2"
 

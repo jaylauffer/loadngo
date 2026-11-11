@@ -1,0 +1,157 @@
+// motion.js: loads loadngo-animation's WebAssembly module and wraps it (docs/ANIMATION.md).
+//
+//   import { loadMotion } from './motion.js';
+//   const motion = await loadMotion(new URL('./loadngo_animation.wasm', import.meta.url));
+//   const db = motion.loadDatabase(await (await fetch('walk.lmm')).arrayBuffer());
+//   const who = db.createCharacter(0, 0, 0);            // x, z, facing (radians about +Y, 0 = +Z)
+//   who.setPath([0, 0, 0, 6, 6, 6], 0.83);              // x, z pairs; m/s
+//   // each frame the host asks for:
+//   const pose = who.step(dt);                          // a Float32Array view, rewritten in place
+//
+// The module has no imports and allocates nothing in step(). Its memory grows only when a
+// database or character is made; the views here are remade then.
+//
+// pose: [rootX, rootZ, facing, feetHeld, hipsX, hipsY, hipsZ, then x, y, z, w per bone]: the
+// hips' rotation relative to the root, every other bone's relative to its parent (db.boneNames,
+// db.parents). applyPose() below writes it into three.js-style objects.
+
+const decoder = new TextDecoder();
+const encoder = new TextEncoder();
+
+export async function loadMotion(source) {
+  let module;
+  if (source instanceof WebAssembly.Module) module = source;
+  else if (source instanceof ArrayBuffer || ArrayBuffer.isView(source)) module = await WebAssembly.compile(source);
+  else module = await WebAssembly.compileStreaming(fetch(source));
+  const instance = await WebAssembly.instantiate(module, {});
+  return new Motion(instance.exports);
+}
+
+export class Motion {
+  constructor(exports) {
+    this.x = exports;
+  }
+  /** The text the module last left (an error or a bone name). */
+  text() {
+    const x = this.x;
+    return decoder.decode(new Uint8Array(x.memory.buffer, x.anim_error_ptr(), x.anim_error_len()));
+  }
+  stage(bytes) {
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes.buffer ?? bytes, bytes.byteOffset ?? 0, bytes.byteLength);
+    const p = this.x.anim_alloc(u8.byteLength);
+    new Uint8Array(this.x.memory.buffer, p, u8.byteLength).set(u8);
+    return [p, u8.byteLength];
+  }
+  /** A database from an anim_build file (its hash and version are checked). */
+  loadDatabase(bytes) {
+    const [p, n] = this.stage(bytes);
+    const h = this.x.anim_database_load(p, n);
+    this.x.anim_free(p, n);
+    if (!h) throw new Error(`motion: ${this.text()}`);
+    return new MotionDatabase(this, h);
+  }
+}
+
+export class MotionDatabase {
+  constructor(motion, handle) {
+    this.motion = motion;
+    this.h = handle;
+    const x = motion.x;
+    const n = x.anim_database_bone_count(handle);
+    this.boneNames = [];
+    this.parents = new Int32Array(n);
+    for (let i = 0; i < n; i++) {
+      x.anim_database_bone_name(handle, i);
+      this.boneNames.push(motion.text());
+      this.parents[i] = x.anim_database_bone_parent(handle, i);
+    }
+    this.frameCount = x.anim_database_frame_count(handle);
+  }
+  createCharacter(x = 0, z = 0, facing = 0) {
+    const h = this.motion.x.anim_character_create(this.h, x, z, facing);
+    if (!h) throw new Error(`motion: ${this.motion.text()}`);
+    return new MotionCharacter(this, h);
+  }
+  dispose() {
+    if (this.h) this.motion.x.anim_database_free(this.h);
+    this.h = 0;
+  }
+}
+
+export class MotionCharacter {
+  constructor(db, handle) {
+    this.db = db;
+    this.motion = db.motion;
+    this.h = handle;
+    this.buffer = null;
+    this.pose = null;
+    this.view();
+  }
+  view() {
+    const x = this.motion.x;
+    if (this.buffer !== x.memory.buffer) {
+      this.buffer = x.memory.buffer;
+      this.pose = new Float32Array(this.buffer, x.anim_character_pose(this.h), x.anim_character_pose_len(this.h));
+    }
+    return this.pose;
+  }
+  check(r) {
+    if (r !== 0) throw new Error(`motion: ${this.motion.text()}`);
+  }
+  /** Steer by a ground velocity (m/s) and facing (radians). */
+  setDesired(vx, vz, facing) {
+    this.check(this.motion.x.anim_character_set_desired(this.h, vx, vz, facing));
+  }
+  /** Steer along x, z pairs at speed (m/s), stopping at the end facing endFacing (NaN: the last segment's way). */
+  setPath(points, speed, endFacing = NaN) {
+    const f = Float32Array.from(points);
+    const [p, n] = this.motion.stage(new Uint8Array(f.buffer));
+    const r = this.motion.x.anim_character_set_path(this.h, p, f.length / 2, speed, endFacing);
+    this.motion.x.anim_free(p, n);
+    this.view();
+    this.check(r);
+  }
+  /** One runtime setting by name (controller::Config), e.g. set('transition_cost', 0.5). */
+  set(name, value) {
+    const [p, n] = this.motion.stage(encoder.encode(`${name}=${value}`));
+    const r = this.motion.x.anim_character_set(this.h, p, n);
+    this.motion.x.anim_free(p, n);
+    this.view();
+    this.check(r);
+  }
+  teleport(x, z, facing) {
+    this.check(this.motion.x.anim_character_teleport(this.h, x, z, facing));
+  }
+  /** Advance by dt seconds; returns the pose view (no allocation). */
+  step(dt) {
+    this.check(this.motion.x.anim_character_step(this.h, dt));
+    return this.view();
+  }
+  get frame() {
+    return this.motion.x.anim_character_frame(this.h);
+  }
+  get transitions() {
+    return this.motion.x.anim_character_transitions(this.h);
+  }
+  dispose() {
+    if (this.h) this.motion.x.anim_character_free(this.h);
+    this.h = 0;
+  }
+}
+
+/**
+ * Writes a pose into three.js-style objects without importing three: `root` (an Object3D
+ * placed on the ground) takes x, z and the facing; `bones[i]` (Bones in db.boneNames order)
+ * take their rotations, and bones[0] (the hips) its position relative to the root. The hips'
+ * parent must sit at the root (an armature node with no transform of its own).
+ */
+export function applyPose(pose, root, bones) {
+  root.position.x = pose[0];
+  root.position.z = pose[1];
+  root.rotation.y = pose[2];
+  bones[0].position.set(pose[4], pose[5], pose[6]);
+  for (let i = 0; i < bones.length; i++) {
+    const o = 7 + 4 * i;
+    bones[i].quaternion.set(pose[o], pose[o + 1], pose[o + 2], pose[o + 3]);
+  }
+}

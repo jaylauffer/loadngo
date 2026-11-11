@@ -1534,6 +1534,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "loadngo-animation"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+]
+
+[[package]]
+name = "loadngo-animation-build"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "data",
+ "image 0.24.9",
+ "loadngo-animation",
+ "loadngo-proactor",
+ "loadngo-thermal",
+ "serde_json",
+]
+
+[[package]]
 name = "loadngo-audio-io"
 version = "0.1.0"
 dependencies = [

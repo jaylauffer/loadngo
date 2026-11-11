@@ -1,0 +1,13 @@
+[package]
+name = "loadngo-animation"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Motion matching over captured motion: skeletons, BVH import, retargeting, the motion database, its search and runtime, for native targets and wasm32; see docs/ANIMATION.md"
+
+# One dependency: BLAKE3, already in the workspace, hashes the database file so a reader
+# (native or the browser) refuses a truncated or damaged one. It builds for wasm32 as
+# portable Rust.
+[dependencies]
+blake3.workspace = true
