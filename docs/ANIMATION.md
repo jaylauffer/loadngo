@@ -1,6 +1,6 @@
 # Animation: motion matching and the character framework
 
-Status: round 3, 2026-11-11. A motion-matching runtime, a character framework over it, and their
+Status: round 4, 2026-11-11. A motion-matching runtime, a character framework over it, and their
 pipeline, in Rust, for every loadngo target and for the browser as WebAssembly. Walking, turning,
 starting, stopping and standing come from real capture (100STYLE's normal walking, CMU's slow walks,
 turns, stops and standing; Mesh2Motion's turns in place in the full set only); sitting down on a seat
@@ -8,7 +8,8 @@ of any height, sitting and standing up from CMU's sits; looking, reaching and ta
 layers over it. Everything is retargeted to a Mixamo-named humanoid. Round 1's and round 2's
 measurements are kept below; round 3's follow them. Round 3 takes a body over from other animation
 without a jump, stands calmly, measures posture against real walking and stores rotations in 32
-bits; in a browser game it is the default walk (see "In a browser game (round 3)").
+bits; round 4 takes over a body that is walking, so a game can start and stop a walk on its own
+animation and hand the steady middle to the matcher (see "In a browser game (round 4)").
 
 | Where | What |
 | --- | --- |
@@ -287,10 +288,19 @@ the other animation's pose itself, starts playback on the database frame whose f
 the root) are most like it, among frames that stand or set off, and eases the difference away by
 inertialization (`Config::takeover_halflife`, longer than a transition's for the first half
 second), the feet planted where they stand. The body is never faded from one pose to another.
+`take_over_moving(root, hips, rotations, Moving { velocity, ankle_velocities, planted })` (round 4;
+`takeOverMoving()` in the browser) takes over a body that is walking: the frame is found among
+walking, turning and starting frames on the whole feature set (these feet and their velocities, the
+hips' velocity, a straight path on at this velocity), the simulation and the root carry on at that
+velocity, the planted feet are held and the others left to the capture, and the pose is eased over
+a transition's half-life (over the standing take-over's longer one, a swinging foot was blended
+between two strides and landed sliding). Any take-over lets go of where the feet were held before.
 
 **Standing calmly** (round 3). A character nobody asks to move searches only `Config::rest_tags`
 (idle and start-stop, say) and never `rest_exclude` (turn: a turn on the spot reads as fidgeting),
-once it also faces about the way wanted; standing, transitions take at least
+once it also faces about the way wanted, and (round 4) never carries on a frame outside them: the
+carry-on candidate, favoured by the transition cost, had kept a body asked to stand walking on a
+transitions clip for seconds; standing, transitions take at least
 `Config::rest_halflife` (the pose features hold the feet and hips but not the arms, so a jump between
 two idles can swing an arm a long way, and at 0.1 s it whips). A path takes its end's facing within
 `Config::face_from` of its end rather than once stopped, so an arrival does not end in a turn on
@@ -323,6 +333,7 @@ who.sit(hx, hy, hz, facing); who.stand();      // a seat: the seated hips, the w
 who.lookAt([x, y, z]); who.gesture([0.2, 0.7], 0.6); who.handTo('right', [x, y, z]);
 who.plantFeet([lx, lz], [rx, rz]);             // taking a body over from other animation
 who.takeOver(x, z, facing, pose);              // ... from its pose, laid out as step()'s (round 3)
+who.takeOverMoving(x, z, facing, pose, [vx, vz], [[lvx, lvz], [rvx, rvz]], [leftDown, rightDown]); // walking (round 4)
 db.clipName(who.frame);                        // which capture is playing, for checks
 // on each frame the host asks for:
 applyPose(who.step(dt), avatar, bonesInDbOrder);
@@ -545,16 +556,32 @@ handed back once both feet are down, and the databases load after the game's fir
   one 10 ms motion frame and the walk one 83 ms frame a play.
 - **Download:** 6.1 MB over the wire (module 0.18, the two databases 2.7 and 3.2), all after the first playable.
 
+### In a browser game (round 4)
+
+The game's made walk passes its own limits on its foot holds, starts, turns and stops; the matched walk wins on the body.
+So the game now walks a hybrid: its own walk sets off (a turn from a chair, the first steps), `take_over_moving` hands
+the body to the matcher at the first steady step (mid-stance), and 4.5 m from the end, at the matcher's mid-stance, its
+own walk takes the body back walking and stops as it always has. While matched, the game keeps each shoe's sole off the
+ground point by point (its outline and tread sampled from the mesh, skinned as the mesh is), raises the body by what the
+capture's standing feet need for their shoes, and solves the legs every frame with almost no soft reach.
+
+- **8 of the game's 12 runs pass every limit** (worst of three, both tiers), the four posture limits included; 4 do
+  not, each by one limit, in the game's own stop after the hand-back (an arm's jog at 2.12 against 1.9 on one body,
+  where the game's walk alone reaches 1.89; a leg's at 2.06 in some repeats sitting down).
+- **The landings are solved by the shoe, not the skeleton:** a capture's heel comes down pitched while the foot still
+  travels; with the sole sampled from the mesh and kept clear by speed, the 9-21 cm landing slides of round 3 became
+  2-4 cm. The standing clip's rest heights had held matched feet 1.3 cm up, so their contacts went unseen.
+- **Posture:** the knee at mid-stance 18-25 degrees with the game's ends included (limit 28; the made walk alone 29-37).
+- **On a Raspberry Pi 5 at the lowest tier:** the frame floor holds, the walking take-over's search costs 10-12 ms once.
+
 ## What is short
 
-- **Starts, landings and stops on a game's bodies** (round 3, "In a browser game (round 3)"). Taken over without a
-  fade, standing calmly and handed back without a lurch, the walk still breaks a game's sole limits where the capture
-  meets a body with shoes: a heel set down while the foot still travels 1.5-2 m/s (its shoe's back edge within 8 mm of
-  the ground for 4-5 frames, counted as 9 cm of slide), a toe rolled along the ground at push-off, and a start that
-  turns 110° or more played as a walking turn (the root swings round with neither foot down for 0.8 s). The joints
-  themselves slide 2-3 cm (the tables above): the shoe's own shape, not the skeleton, is what is short. Next: the
-  shoe's heel and toe as contact points of their own (measured from the mesh, not the bones), and turning-start
-  capture chosen over walking turns.
+- **The hand-back's moment** (round 4): a game's own stop after the hand-back is where its limits still break, by a
+  little; the hand-back holds a foot at the matched body's turn, which the game's walk then steps out of. Next: hand back
+  where the two agree in phase and foot direction.
+- **The walking take-over searches every frame** of the database (10-12 ms once on a Pi 5): bound it.
+- **Turning starts from standing** are still not the capture's: played as a walking turn the root swings round with no
+  foot down (round 3); turning on the spot first chose walking turns over the in-place ones. A game starts them itself.
 - **Which frame wins a near tie** decides a run's worst contact, and it moves between databases
   (the tables above); judge a database by its 95th percentiles and gait, and by a game's checks.
 - **Seated idles** come from three captures (CMU 86_15, 113_15, 143_18); the clips' talking and
@@ -569,8 +596,7 @@ handed back once both feet are down, and the databases load after the game's fir
 
 ## Next
 
-1. **Pass a game's sole limits at landings, push-offs and turning starts** (above), then make the matched walk a
-   game's default for good.
+1. **The last of a game's limits at the hand-back** (above), then the matched walk a game's default for good.
 2. **Seats in the game:** the framework's sits land to the centimetre on any seat height; a game
    with sliding chairs and hands to a table or lap needs its seat poses joined to the framework's.
 3. **Reactions while standing:** the look-at, reach and beats layers in a game whose people stand and talk.
