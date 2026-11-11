@@ -1,6 +1,6 @@
 # Animation: motion matching and the character framework
 
-Status: round 7, 2026-11-12. A motion-matching runtime, a character framework over it, and their
+Status: round 8, 2026-11-12. A motion-matching runtime, a character framework over it, and their
 pipeline, in Rust, for every loadngo target and for the browser as WebAssembly. Walking, turning,
 starting, stopping and standing come from real capture (100STYLE's normal walking and idle, CMU's
 slow walks, turns, stops and turns in place; Mesh2Motion's turns in place in the full set only);
@@ -12,7 +12,8 @@ in 32 bits; round 4 takes over a body that is walking, so a game can start and s
 own animation and hand the steady middle to the matcher (see "In a browser game (round 4)"); round
 7 measures posture by part of a walk and standing, keeps planted feet from sliding or turning on the
 floor, bounds the last unbounded search, and lets a game walk whole walks on the capture again (see
-"In a browser game (round 7)").
+"In a browser game (round 7)"); round 8 aligns the chest along its neck, levels a capture's head, keeps the root's
+speed across transitions and eases a released foot's turn (see "In a browser game (round 8)").
 
 | Where | What |
 | --- | --- |
@@ -643,6 +644,42 @@ degrees), and the game's own rises and sits.
 where the two walks agree (not turning, the planted foot along the way, ... within 12 cm)". The game's code never had that
 rule: it handed back at a one-foot stance of 0.1-0.3 s, or at the latest 3.9 m out. The game's sixth critic found it.
 
+### In a browser game (round 8)
+
+The game's round 7 left women's heads swinging about 22 degrees to either side as they walked, their headscarves
+folding through themselves, and four of its six moves breaking a limit by a little. Traced and fixed here:
+
+- **The chest aligned on a shoulder** (`retarget.rs`): a bone's rest alignment pairs it with a child both skeletons
+  share, and the chest took the first one found. An avatar's Spine2 lists LeftShoulder before Neck, and a CMU
+  capture's clavicles start where its neck does (at the thorax's end), so the chest was turned to put the avatar's
+  shoulder where the capture's neck goes: it stood 12-17 degrees to one side through every walk, on both builds. The
+  chest now aligns on its neck (Spine1 on Spine2, Spine on Spine1). The capture played as recorded on the game's
+  bodies: the trunk's side lean (p90, `eval::Posture::trunk_side_p90_deg`, new) 1.5-2.8 degrees, as on the canonical
+  skeleton, from 4-10.
+- **Levelled heads** (`anim_build`, `clips::level_head`; `walk-core.json` sets `level_head`): CMU subject 113's
+  skeleton zig-zags its neck at rest (the lower neck 10 degrees to one side, the upper 20 to the other) and its walk
+  turns them back by 30-43 degrees; an avatar's one neck bone follows the lower neck alone, and the women's walk (the
+  build's one walk tagged `woman` is 113's) held the head 20-35 degrees to the side. Each clip's average turn of the
+  neck and the head from their parents is taken back to the target's rest, the motion about it kept. In the game the
+  women's head tops swing -7.0 to 6.8 degrees to the side (p10, p90) where they swung -23 to 24, and walking the men's
+  faces look 9-10 degrees down (median) where they looked 22-25 down; the women's 3.5 (2.5).
+- **The root's speed across transitions** (`controller.rs`): a transition gave the root's velocity blend the velocity
+  shown (the offset already in it) as the animation's, and added the offset again; quick transitions in a turn built
+  0.9 m/s up to 2.0 and a root jolted 1.1 cm a frame. The offset is now what was shown less the new clip's. The turn
+  rate's blend has the same fault and is left as it was: taken as shown, a synthetic walk after standing up veered
+  0.6 m off its way, not understood. The synthetic sit test no longer expects its walk after standing up to stop on
+  its goal (its clips have no stop; it stopped there only through the doubled offset).
+- **A released foot's turn** (`controller.rs`, `TWIST_RELEASE_HALFLIFE` 0.15 s): a foot kept turned while planted
+  (`keep_turn_planted`) eases to the capture's in the air as a released critically damped spring from the rate it had,
+  not from its full rate at once (a foot let go 50 degrees off swung 14 degrees in a frame).
+
+**Measured in the game** (its twelve runs, worst of three at two tiers): 24 of 36 runs pass, four of its six moves in
+every repeat at both tiers (round 7: two). Still over: a foot's turn changing 12.9 degrees a frame (limit 12) as it
+lands turned at a bench, and a shoe 1.1-1.2 cm into a chair (limit 1). Its fold check on garments still finds cloth
+turned through itself on all four bodies, far less on the women's headscarves. On a Raspberry Pi 5 at the game's
+lowest tier its frame floor holds (3.9-4.5% of frames over 33.4 ms after the first minute; at most 3.3 ms of motion a
+frame in the walk with the learner, and 9 ms once as someone rises and sets off, not yet traced).
+
 ## What is short
 
 - **The hand-back's blend** (round 6, done in the game): a foot is newly held during the fade only if both walks have it
@@ -665,8 +702,9 @@ rule: it handed back at a one-foot stance of 0.1-0.3 s, or at the latest 3.9 m o
 
 ## Next
 
-1. **A game's critic** of round 7's whole walk; then its last slides and turns, a stop within a step, and the rises and
-   sits on capture.
+1. **A game's critic** of round 8; then the last turn and chair, a stop within a step for someone close in front (the
+   capture needs most of a step; its stop is not braked), and the rises and sits on capture (Mesh2Motion's keyed sits
+   export from Blender as BVH, on a skeleton the `mesh2motion` map does not name yet).
 2. **Seats in the game:** the framework's sits land to the centimetre on any seat height; a game
    with sliding chairs and hands to a table or lap needs its seat poses joined to the framework's.
 3. **Reactions while standing:** the look-at, reach and beats layers in a game whose people stand and talk.
