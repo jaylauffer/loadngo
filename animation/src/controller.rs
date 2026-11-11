@@ -283,7 +283,12 @@ struct FootLock {
     release: InertialVec3,
     /// Asked to be planted here (the ankle's place on the ground) on the next step: see `plant_feet`.
     plant: Option<Vec3>,
+    /// How far above the floor the held point still is (m), easing to 0 since it was taken.
+    settle: f32,
 }
+
+/// The half-life (s) over which a newly held foot comes down onto the floor.
+const LOCK_SETTLE_HALFLIFE: f32 = 0.05;
 
 impl Default for FootLock {
     fn default() -> Self {
@@ -294,6 +299,7 @@ impl Default for FootLock {
             previous_correction: Vec3::ZERO,
             release: InertialVec3::default(),
             plant: None,
+            settle: 0.0,
         }
     }
 }
@@ -1262,11 +1268,15 @@ impl MotionMatcher {
                 match want {
                     Some(w) => {
                         let mut at = point_in(w) + foot.correction;
+                        let shown = at.y;
                         at.y = if w == Point::Heel {
                             heights[0]
                         } else {
                             heights[1]
                         };
+                        // Down onto the floor over a moment, not in a frame: a heel held 4 cm
+                        // above it pulled the knee down 9 cm at once.
+                        foot.settle = shown - at.y;
                         foot.held = Some((w, at));
                     }
                     None => {
@@ -1276,9 +1286,10 @@ impl MotionMatcher {
                     }
                 }
             }
+            foot.settle *= (-std::f32::consts::LN_2 * dt / LOCK_SETTLE_HALFLIFE).exp();
             let correction = match foot.held {
                 Some((p, at)) => {
-                    let c = at - point_in(p);
+                    let c = at - point_in(p) + Vec3::new(0.0, foot.settle, 0.0);
                     if (c - ground).length() > cfg.unlock_radius {
                         foot.release.offset = foot.correction - ground;
                         foot.release.offset_vel = Vec3::ZERO;
