@@ -420,6 +420,20 @@ pub struct Posture {
     /// degrees), median and 90th percentile over both arms and every steady frame.
     pub forearm_p50_deg: f32,
     pub forearm_p90_deg: f32,
+    /// The elbow's bend (upper arm against forearm, degrees), median: arms that hang are
+    /// nearly straight; arms held out in front are bent.
+    pub elbow_p50_deg: f32,
+    /// ...and its 10th percentile: a swinging arm straightens on its back swing; one held
+    /// out stays bent.
+    pub elbow_p10_deg: f32,
+    /// The forearm's tilt forward of hanging (degrees, along the walker's facing, back
+    /// negative), median and 10th percentile: a swinging arm passes behind the vertical;
+    /// one held out in front never does.
+    pub forearm_forward_p50_deg: f32,
+    pub forearm_forward_p10_deg: f32,
+    /// How far each wrist swings forward and back of its shoulder along the facing (m, 5th
+    /// to 95th percentile), the larger side.
+    pub wrist_swing_m: f32,
     /// The wrist's height below the hip joint (m, positive below), median over both sides.
     pub wrist_below_hip_m: f32,
     /// The trunk's lean from the vertical (hips to neck, degrees, positive forward along the
@@ -444,18 +458,26 @@ pub fn posture(
         return Posture::default();
     }
     let mut fore = Vec::with_capacity(2 * (z - a));
+    let mut elbow = Vec::with_capacity(2 * (z - a));
+    let mut tilt = Vec::with_capacity(2 * (z - a));
     let mut wrist = Vec::with_capacity(2 * (z - a));
+    let mut swing = [Vec::with_capacity(z - a), Vec::with_capacity(z - a)];
     let mut lean = Vec::with_capacity(z - a);
     for f in a..z {
-        for s in 0..2 {
+        let (_, facing) = rec.root[f];
+        let fwd = Vec3::new(facing.sin(), 0.0, facing.cos());
+        for (s, side_swing) in swing.iter_mut().enumerate() {
+            let sh = rec.at(f, b.arm[s]);
             let e = rec.at(f, b.fore_arm[s]);
             let w = rec.at(f, b.hand[s]);
             let d = (w - e).normalize_or_zero();
             fore.push((-d.y).clamp(-1.0, 1.0).acos().to_degrees());
+            let u = (e - sh).normalize_or_zero();
+            elbow.push(u.dot(d).clamp(-1.0, 1.0).acos().to_degrees());
+            tilt.push(d.dot(fwd).atan2(-d.y).to_degrees());
             wrist.push(rec.at(f, b.up_leg[s]).y - w.y);
+            side_swing.push((w - sh).dot(fwd));
         }
-        let (_, facing) = rec.root[f];
-        let fwd = Vec3::new(facing.sin(), 0.0, facing.cos());
         let t = (rec.at(f, b.neck) - rec.at(f, b.hips)).normalize_or_zero();
         lean.push(t.dot(fwd).atan2(t.y).to_degrees());
     }
@@ -471,6 +493,14 @@ pub fn posture(
     Posture {
         forearm_p50_deg: percentile(&mut fore.clone(), 0.5),
         forearm_p90_deg: percentile(&mut fore, 0.9),
+        elbow_p50_deg: percentile(&mut elbow.clone(), 0.5),
+        elbow_p10_deg: percentile(&mut elbow, 0.1),
+        forearm_forward_p50_deg: percentile(&mut tilt.clone(), 0.5),
+        forearm_forward_p10_deg: percentile(&mut tilt, 0.1),
+        wrist_swing_m: swing
+            .iter_mut()
+            .map(|v| percentile(&mut v.clone(), 0.95) - percentile(v, 0.05))
+            .fold(0.0, f32::max),
         wrist_below_hip_m: percentile(&mut wrist, 0.5),
         trunk_lean_deg: percentile(&mut lean, 0.5),
         knee_midstance_deg: percentile(&mut knees, 0.5),
@@ -532,9 +562,12 @@ mod tests {
         assert!(p.forearm_p50_deg < 0.5, "{p:?}");
         assert!(p.trunk_lean_deg.abs() < 0.5);
         assert!(p.knee_midstance_deg < 0.5);
+        assert!(p.elbow_p50_deg < 0.5 && p.forearm_forward_p50_deg.abs() < 0.5);
         let (rec, h, b) = figure(60.0, 12.0);
         let p = posture(&rec, &h, &b, (0, 120));
         assert!((p.forearm_p50_deg - 60.0).abs() < 0.5, "{p:?}");
+        assert!((p.elbow_p50_deg - 60.0).abs() < 0.5);
+        assert!((p.forearm_forward_p10_deg - 60.0).abs() < 0.5);
         assert!((p.trunk_lean_deg - 12.0).abs() < 0.5);
         // The wrist 0.3 + 0.25 cos 60 below the shoulder, the shoulder 0.5 cos 12 over the hips.
         let wrist = 1.0 + 0.5 * 12f32.to_radians().cos() - 0.3 - 0.125;

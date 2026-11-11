@@ -353,8 +353,8 @@ fn run_character(
 
 fn print_posture(what: &str, p: &eval::Posture) {
     eprintln!(
-        "  posture {what}: forearm from vertical {:.1} / {:.1} deg (p50 / p90), wrist {:.3} m below the hip, trunk lean {:.1} deg, knee at mid-stance {:.1} deg",
-        p.forearm_p50_deg, p.forearm_p90_deg, p.wrist_below_hip_m, p.trunk_lean_deg, p.knee_midstance_deg
+        "  posture {what}: forearm from vertical {:.1} / {:.1} deg (p50 / p90), elbow {:.1} / p10 {:.1} deg, forearm forward {:.1} / p10 {:.1} deg, wrist swing {:.3} m, wrist {:.3} m below the hip, trunk lean {:.1} deg, knee at mid-stance {:.1} deg",
+        p.forearm_p50_deg, p.forearm_p90_deg, p.elbow_p50_deg, p.elbow_p10_deg, p.forearm_forward_p50_deg, p.forearm_forward_p10_deg, p.wrist_swing_m, p.wrist_below_hip_m, p.trunk_lean_deg, p.knee_midstance_deg
     );
 }
 
@@ -1104,6 +1104,7 @@ fn main() {
             "worst_contacts": worst_json,
             "posture": pose.filter(|_| s.steady.is_some()).map(|p| serde_json::json!({
                 "forearm_from_vertical_p50_deg": p.forearm_p50_deg, "forearm_from_vertical_p90_deg": p.forearm_p90_deg,
+                "elbow_p50_deg": p.elbow_p50_deg, "elbow_p10_deg": p.elbow_p10_deg, "forearm_forward_p50_deg": p.forearm_forward_p50_deg, "forearm_forward_p10_deg": p.forearm_forward_p10_deg, "wrist_swing_m": p.wrist_swing_m,
                 "wrist_below_hip_m": p.wrist_below_hip_m, "trunk_lean_deg": p.trunk_lean_deg, "knee_midstance_deg": p.knee_midstance_deg,
             })),
         }));
