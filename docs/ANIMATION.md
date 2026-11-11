@@ -591,8 +591,8 @@ that hold while the blend moves it, and the knee jerks).
 
 ## What is short
 
-- **The hand-back's blend:** a game's foot holds must not take hold of a foot its walk swings while the matched body
-  fades out over it (above).
+- **The hand-back's blend** (round 6, done in the game): a foot is newly held during the fade only if both walks have it
+  planted; the game then passes 35 of its 36 runs (the last a seated hand before any walk).
 - **A frame of 8-9 ms** of the game's motion layer, once a walk, on a Pi 5 (after the bounded take-over search; the
   cause of what remains is not yet traced).
 - **Turning starts from standing** are still not the capture's: played as a walking turn the root swings round with no
