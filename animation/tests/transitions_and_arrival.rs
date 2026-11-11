@@ -1,5 +1,6 @@
 //! A swinging foot is not caught by a transition, and a walk comes to rest at a path's end
-//! without stopping dead (round 11a).
+//! without stopping dead (round 11a, docs/ANIMATION.md). Accelerations are in cm per 60 Hz
+//! frame squared, as a game's checks count them.
 
 use std::sync::Arc;
 
@@ -8,7 +9,7 @@ use loadngo_animation::database::{
     BuildConfig, Database, LEFT_BALL, LEFT_HEEL, RIGHT_BALL, RIGHT_HEEL,
 };
 use loadngo_animation::math::Vec3;
-use loadngo_animation::path::PathSteering;
+use loadngo_animation::path::{ConstantSteering, PathSteering, Steering};
 use loadngo_animation::testing::{
     humanoid_skeleton, synthetic_idle, synthetic_turn, synthetic_walk, synthetic_walk_to_stop,
 };
@@ -34,17 +35,21 @@ fn arc(c: Vec3, r: f32, from: f32, to: f32, n: usize) -> Vec<Vec3> {
         .collect()
 }
 
-/// Per 60 Hz frame, cm.
-fn swing_report(db: &Arc<Database>, points: &[Vec3], speed: f32, hz: f32) -> (f32, usize, u64) {
-    let cfg = Config {
-        swing_agree: std::env::var_os("SWING_OFF").is_none(),
-        ..Config::default()
-    };
-    let mut m = MotionMatcher::new(Arc::clone(db), cfg, points[0], 0.0);
+const FEET: [u8; 2] = [LEFT_HEEL | LEFT_BALL, RIGHT_HEEL | RIGHT_BALL];
+
+/// The largest acceleration of an ankle that was swinging (up, and not held) when a transition
+/// was made, over the frame before, the frame of and the frame after it, on a walk along
+/// `points`; and how many such ankles there were.
+fn swing_across_transitions(
+    db: &Arc<Database>,
+    points: &[Vec3],
+    speed: f32,
+    hz: f32,
+) -> (f32, usize) {
+    let mut m = MotionMatcher::new(Arc::clone(db), Config::default(), points[0], 0.0);
     let path = PathSteering::new(points, speed);
     let dt = 1.0 / hz;
     let legs = db.humanoid.legs;
-    let bits = [LEFT_HEEL | LEFT_BALL, RIGHT_HEEL | RIGHT_BALL];
     let frames = (14.0 * hz) as usize;
     let mut ankles: Vec<[Vec3; 2]> = Vec::with_capacity(frames);
     let mut swinging: Vec<[bool; 2]> = Vec::with_capacity(frames);
@@ -52,15 +57,14 @@ fn swing_report(db: &Arc<Database>, points: &[Vec3], speed: f32, hz: f32) -> (f3
     for _ in 0..frames {
         let c = m.contacts();
         let held = m.feet_held();
-        swinging.push([c & bits[0] == 0 && !held[0], c & bits[1] == 0 && !held[1]]);
+        swinging.push([c & FEET[0] == 0 && !held[0], c & FEET[1] == 0 && !held[1]]);
         let t0 = m.stats().transitions;
         m.step(dt, &path);
         transitioned.push(m.stats().transitions != t0);
         let w = m.world_positions();
         ankles.push([w[legs[0].ankle], w[legs[1].ankle]]);
     }
-    let scale =
-        100.0 * (60.0 / hz) * (60.0 / hz) / ((60.0 / hz) * (60.0 / hz)) * (hz / 60.0) * (hz / 60.0);
+    let scale = 100.0 * (hz / 60.0) * (hz / 60.0);
     let mut most = 0.0f32;
     let mut n = 0;
     for f in 2..frames - 2 {
@@ -80,111 +84,49 @@ fn swing_report(db: &Arc<Database>, points: &[Vec3], speed: f32, hz: f32) -> (f3
             }
         }
     }
-    (most, n, m.stats().transitions)
+    (most, n)
 }
 
+/// The synthetic clips end mid-stride, so walking a path crosses clip ends with a foot in the
+/// air. A clip played to its end used to hold its last frame but one for a step and set off
+/// again from rest: the swinging ankle 4.86 cm a frame squared at 60 Hz (loadngo `ec820357`);
+/// 1.17 with playback carried to the last frame.
 #[test]
-fn diag_swing() {
+fn a_clips_end_does_not_jolt_a_swinging_ankle() {
     let db = db();
     let z = |d: f32| Vec3::new(0.0, 0.0, d);
-    for &r in &[0.6f32, 0.8, 1.2, 2.0] {
+    for &r in &[0.6f32, 2.0] {
         for &dir in &[1.0f32, -1.0] {
-            for &speed in &[0.8f32, 1.0] {
-                let mut p = vec![z(0.0), z(2.0)];
-                let (a0, a1) = if dir > 0.0 {
-                    (std::f32::consts::PI, -std::f32::consts::PI)
-                } else {
-                    (0.0, 2.0 * std::f32::consts::PI)
-                };
-                p.extend(
-                    arc(Vec3::new(dir * r, 0.0, 2.0), r, a0, a1, 40)
-                        .into_iter()
-                        .skip(1),
+            let mut p = vec![z(0.0), z(2.0)];
+            let (a0, a1) = if dir > 0.0 {
+                (std::f32::consts::PI, -std::f32::consts::PI)
+            } else {
+                (0.0, 2.0 * std::f32::consts::PI)
+            };
+            p.extend(
+                arc(Vec3::new(dir * r, 0.0, 2.0), r, a0, a1, 40)
+                    .into_iter()
+                    .skip(1),
+            );
+            for (hz, limit) in [(60.0f32, 1.6f32), (30.0, 1.2)] {
+                let (most, n) = swing_across_transitions(&db, &p, 0.8, hz);
+                assert!(
+                    n > 0,
+                    "r {r} dir {dir} {hz} Hz: no transition with a foot swinging"
                 );
-                for hz in [60.0f32, 30.0] {
-                    let (most, n, t) = swing_report(&db, &p, speed, hz);
-                    println!("r {r} dir {dir} v {speed} {hz} Hz: swing ankle acc at transitions {most:.2} over {n} swinging feet, {t} transitions");
-                }
+                assert!(
+                    most <= limit,
+                    "r {r} dir {dir} {hz} Hz: a swinging ankle {most:.2} cm a frame squared across a transition (limit {limit})"
+                );
             }
         }
     }
 }
 
-#[test]
-fn diag_let_go() {
-    use loadngo_animation::path::ConstantSteering;
-    let db = db();
-    let legs = db.humanoid.legs;
-    let bits = [LEFT_HEEL | LEFT_BALL, RIGHT_HEEL | RIGHT_BALL];
-    for hz in [60.0f32, 30.0] {
-        let dt = 1.0 / hz;
-        let mut worst = 0.0f32;
-        let mut grabs = 0;
-        for k in 0..30 {
-            let cfg = Config {
-                swing_agree: std::env::var_os("SWING_OFF").is_none(),
-                swing_speed: 0.6,
-                swing_mode: 3.0,
-                ..Config::default()
-            };
-            let mut m = MotionMatcher::new(Arc::clone(&db), cfg, Vec3::ZERO, 0.0);
-            let go = ConstantSteering {
-                velocity: Vec3::new(0.0, 0.0, 1.0),
-                facing: 0.0,
-            };
-            let stop = ConstantSteering {
-                velocity: Vec3::ZERO,
-                facing: 0.0,
-            };
-            let let_go = 3.0 + k as f32 * 0.04;
-            let frames = (6.0 * hz) as usize;
-            let mut ankles = Vec::new();
-            let mut ev = Vec::new();
-            for i in 0..frames {
-                let t = i as f32 * dt;
-                let c = m.contacts();
-                let held = m.feet_held();
-                let sw = [c & bits[0] == 0 && !held[0], c & bits[1] == 0 && !held[1]];
-                let t0 = m.stats().transitions;
-                if t < let_go {
-                    m.step(dt, &go)
-                } else {
-                    m.step(dt, &stop)
-                }
-                let w = m.world_positions();
-                ankles.push([w[legs[0].ankle], w[legs[1].ankle]]);
-                let h = m.feet_held();
-                if m.stats().transitions != t0 {
-                    for s in 0..2 {
-                        if sw[s] && h[s] {
-                            ev.push((i, s));
-                        }
-                    }
-                }
-            }
-            let sa = (hz / 60.0) * (hz / 60.0) * 100.0;
-            for &(i, s) in &ev {
-                if i < 2 || i + 2 >= frames {
-                    continue;
-                }
-                let v = (ankles[i - 1][s] - ankles[i - 2][s]).length() * 100.0 * 60.0 / hz;
-                if v > 1.0 {
-                    grabs += 1;
-                }
-                for g in i - 1..=i + 1 {
-                    worst = worst.max(
-                        (ankles[g + 1][s] - ankles[g][s] * 2.0 + ankles[g - 1][s]).length() * sa,
-                    );
-                }
-            }
-        }
-        println!("{hz} Hz: swinging feet put down by a transition {grabs} (moving over 1 cm a frame), worst ankle acc there {worst:.2}");
-    }
-}
-
-#[test]
-fn diag_blind() {
-    use loadngo_animation::path::ConstantSteering;
+/// Transitions that put down a foot which was swinging faster than 0.6 m/s over the ground,
+/// on a database whose pose features weigh almost nothing (so the search chooses frames by the
+/// trajectory alone, whatever the feet are doing), steered through changes of speed and facing.
+fn fast_feet_put_down(swing_agree: bool, hz: f32) -> usize {
     let target = humanoid_skeleton(1.0);
     let clips = [
         synthetic_walk(&target, 600, 1.0),
@@ -198,65 +140,95 @@ fn diag_blind() {
     };
     let db = Arc::new(Database::build(&target, &clips, &build).unwrap());
     let legs = db.humanoid.legs;
-    let bits = [LEFT_HEEL | LEFT_BALL, RIGHT_HEEL | RIGHT_BALL];
-    for hz in [60.0f32, 30.0] {
-        let dt = 1.0 / hz;
-        let mut cfg = Config::default();
-        if std::env::var_os("SWING_OFF").is_some() {
-            cfg.set("swing_agree", "false").unwrap();
-        }
-        let mut m = MotionMatcher::new(Arc::clone(&db), cfg, Vec3::ZERO, 0.0);
-        let frames = (20.0 * hz) as usize;
-        let mut ankles: Vec<[Vec3; 2]> = Vec::new();
-        let mut ev = Vec::new();
-        for i in 0..frames {
-            let t = i as f32 * dt;
-            let fast = (t / 0.7) as usize % 2 == 0;
-            let facing = 0.6 * (t * 0.8).sin();
-            let speed = if fast { 1.0 } else { 0.7 };
-            let s = ConstantSteering {
-                velocity: Vec3::new(facing.sin() * speed, 0.0, facing.cos() * speed),
-                facing,
-            };
-            let c = m.contacts();
-            let held = m.feet_held();
-            let sw = [c & bits[0] == 0 && !held[0], c & bits[1] == 0 && !held[1]];
-            let t0 = m.stats().transitions;
-            m.step(dt, &s);
-            let w = m.world_positions();
-            ankles.push([w[legs[0].ankle], w[legs[1].ankle]]);
-            let h = m.feet_held();
-            if m.stats().transitions != t0 {
-                for k in 0..2 {
-                    if sw[k] && h[k] {
-                        ev.push((i, k));
-                        println!(
-                            "   ev {:.3}s side {k} frame {} contacts {:04b} unstuck {}",
-                            t,
-                            m.frame(),
-                            m.contacts(),
-                            m.stats().unstuck
-                        );
-                    }
+    let dt = 1.0 / hz;
+    let cfg = Config {
+        swing_agree,
+        ..Config::default()
+    };
+    let mut m = MotionMatcher::new(Arc::clone(&db), cfg, Vec3::ZERO, 0.0);
+    let frames = (20.0 * hz) as usize;
+    let mut ankles: Vec<[Vec3; 2]> = Vec::with_capacity(frames);
+    let mut fast = 0;
+    for i in 0..frames {
+        let t = i as f32 * dt;
+        let facing = 0.6 * (t * 0.8).sin();
+        let speed = if ((t / 0.7) as usize).is_multiple_of(2) {
+            1.0
+        } else {
+            0.7
+        };
+        let s = ConstantSteering {
+            velocity: Vec3::new(facing.sin() * speed, 0.0, facing.cos() * speed),
+            facing,
+        };
+        let c = m.contacts();
+        let held = m.feet_held();
+        let up = [c & FEET[0] == 0 && !held[0], c & FEET[1] == 0 && !held[1]];
+        let t0 = m.stats().transitions;
+        m.step(dt, &s);
+        let w = m.world_positions();
+        ankles.push([w[legs[0].ankle], w[legs[1].ankle]]);
+        if m.stats().transitions != t0 && i >= 2 {
+            let now = m.feet_held();
+            for k in 0..2 {
+                let v = (ankles[i - 1][k] - ankles[i - 2][k]).flat().length() * hz;
+                if up[k] && now[k] && v > 0.6 {
+                    fast += 1;
                 }
             }
         }
-        let sa = (hz / 60.0) * (hz / 60.0) * 100.0;
-        let mut worst = 0.0f32;
-        let mut fast_grabs = 0;
-        for &(i, k) in &ev {
-            if i < 2 || i + 2 >= frames {
-                continue;
-            }
-            let v = (ankles[i - 1][k] - ankles[i - 2][k]).flat().length() * hz;
-            if v > 0.6 {
-                fast_grabs += 1;
-            }
-            for g in i - 1..=i + 1 {
-                worst = worst
-                    .max((ankles[g + 1][k] - ankles[g][k] * 2.0 + ankles[g - 1][k]).length() * sa);
+    }
+    fast
+}
+
+/// With the rule off this database puts a fast-swinging foot down at a transition (2 at 60 Hz, 1
+/// at 30 Hz: 3.62 and 2.27 cm a frame squared at the ankle); with it on, none.
+#[test]
+fn a_transition_keeps_a_fast_swinging_foot_up() {
+    for hz in [60.0f32, 30.0] {
+        assert!(
+            fast_feet_put_down(false, hz) > 0,
+            "{hz} Hz: this database no longer tells the rule's effect"
+        );
+        assert_eq!(fast_feet_put_down(true, hz), 0, "{hz} Hz");
+    }
+}
+
+/// A point that moves as a path wants comes to rest where the path is done: the speed wanted
+/// falls a little each step, never a walk's pace to nothing in one. (Braking to the path's end
+/// itself, the speed wanted was still 0.43-0.47 m/s at the arrive radius and nothing inside it:
+/// a matched walk's root stopped dead there, and the head with it.)
+#[test]
+fn a_path_brakes_to_rest_where_it_is_done() {
+    let z = |d: f32| Vec3::new(0.0, 0.0, d);
+    for &len in &[1.5f32, 4.0] {
+        for &speed in &[0.6f32, 1.0] {
+            for hz in [60.0f32, 30.0] {
+                let path = PathSteering::new(&[z(0.0), z(len)], speed);
+                let dt = 1.0 / hz;
+                let mut at = z(0.0);
+                let mut was = speed;
+                let mut drop = 0.0f32;
+                for _ in 0..(12.0 * hz) as usize {
+                    let v = path.desired(at).0;
+                    drop = drop.max(was - v.length());
+                    was = v.length();
+                    at += v * dt;
+                }
+                assert!(
+                    was == 0.0,
+                    "len {len} v {speed} {hz} Hz: still wanted {was} m/s"
+                );
+                assert!(
+                    (z(len) - at).length() <= path.arrive_radius + 1e-3,
+                    "len {len} v {speed} {hz} Hz: rests {} m from the end",
+                    (z(len) - at).length()
+                );
+                assert!(
+                    drop <= 0.12,
+                    "len {len} v {speed} {hz} Hz: the speed wanted fell {drop:.3} m/s in a step"
+                );
             }
         }
-        println!("{hz} Hz: {} transitions; swinging feet put down by one {} ({fast_grabs} moving over 0.6 m/s); worst ankle acc there {worst:.2}", m.stats().transitions, ev.len());
     }
 }

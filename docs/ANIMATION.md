@@ -737,13 +737,13 @@ canonical humanoid and on a man's and a woman's body from a browser game (as `an
 - **Linux** (dolores, Raspberry Pi 5, aarch64; run after the round, on `55932122`): `cargo fmt --check`, clippy of both
   animation crates with all targets and features under `-D warnings`, and their tests (55, 1 and 8) pass.
 
-### Round 11a (loadngo; stopped as work in progress)
+### Round 11a (loadngo)
 
-Stopped at Jay's wrap-up (the work was heating the Mac). Committed as WIP: no gate has been run on the commit but
-`rustfmt` (its code built and its diagnostic tests ran before the last edits: comments, two default values); the wasm
-module is not rebuilt; no `motion_eval` tables; nothing on dolores. Measured with scratch probes (not committed) on
-three databases from `walk-core.json`: the canonical humanoid's, and a man's and a woman's body's from a browser game,
-with that game's settings.
+Stopped once at Jay's wrap-up (the work was heating the Mac) and committed as work in progress (`58612237`), then
+finished on 2026-11-12: the settings below are constants, the diagnostics are asserting tests, and the gates ran
+(below). The figures in the first three items were measured with scratch probes (not committed) on three databases
+from `walk-core.json`: the canonical humanoid's, and a man's and a woman's body's from a browser game, with that
+game's settings; they predate the finishing changes and were not measured again.
 
 - **A clip played to its end held** (`controller.rs`, playback): its last frame but one stood for a step, the pose and
   the root still, and the end-of-clip transition then set the root's velocity going again from zero. A swinging ankle
@@ -770,16 +770,25 @@ with that game's settings.
   own landing (more runs past 6.6 on two databases, 5 -> 12 and 7 -> 9-15: the choices it moves to land CMU 104's slow
   walks, whose own landings jolt the knee); a pause in searching for 0.25 s after a transition made mid-swing (option A:
   12% fewer such grabs, and no search, forced or not, meanwhile).
-- **Tests** (`animation/tests/transitions_and_arrival.rs`): diagnostics only so far, printing and asserting nothing.
-  `diag_swing` walks turning paths on synthetic clips (which end mid-stride): the swinging ankle's largest acceleration
-  across transitions 4.86 cm a frame squared on `ec820357` at 60 Hz and 1.17 now (the hold; the swing rule changes
-  nothing there). `diag_blind` (pose features weighted near zero) still finds one swinging foot put down, at a frame
-  with both feet down: probably the fall-back search.
-- **Where it stopped, what is next:** make the diagnostics asserting tests (the swing ankle across transitions; arrival:
-  the root's deceleration bounded and one stop only; a database that tells the swing rule's effect), fold the WIP
-  settings `swing_hold`, `swing_mode`, `swing_k`, `swing_speed` into constants (and take `swing_hold` out), run the gates
-  and `no_allocation.rs`, `motion_eval` before and after on the standard paths, `animation/build.sh`, dolores. The motion
-  databases need no rebuild for any of this (nothing in them changed).
+- **Not once the body is to stand** (finishing): with the rule on, `walks_where_it_is_steered` (walks and an idle, no
+  stopping clip) drifted 2 m past its path's end and back, a transition every 0.1 s among walk frames with one foot up:
+  a stop puts both feet down, and the rule held the search off every frame that does while carrying on stayed a
+  choice. The rule now applies only while a speed is wanted (over 0.05 m/s); a stop is searched as before round 11a.
+- **Settings:** `Config::swing_agree` (on) stays; the compared variants are gone (`swing_hold`, `swing_mode`), and the
+  chosen values are the constants `SWING_SPEED` 0.6 m/s and `SWING_WITHIN` 0.1 s.
+- **Tests** (`animation/tests/transitions_and_arrival.rs`, each failing without its change):
+  `a_clips_end_does_not_jolt_a_swinging_ankle` (turning paths on the synthetic clips, which end mid-stride: the
+  swinging ankle across transitions 4.86 cm a frame squared on `ec820357` at 60 Hz, 1.17 now; limits 1.6 and 1.2 at
+  30 Hz); `a_transition_keeps_a_fast_swinging_foot_up` (a database whose pose features weigh almost nothing: with the
+  rule off 2 fast-swinging feet put down by a transition at 60 Hz and 1 at 30 Hz, with it on none);
+  `a_path_brakes_to_rest_where_it_is_done` (a point moved as the path wants: the speed wanted falls at most 0.12 m/s in
+  a step; braking to the end itself, 0.478). `a_kept_foot_turning_on_the_spot_lands_without_spinning` allows 0.11 rad a
+  frame at a landing (was 0.09): its turn clip ends with a foot in the air, which the idle puts down, at 0.083 after
+  the old step standing still and at 0.106 at the clip's own rate.
+- **Gates** (this Mac): `cargo fmt --check`; clippy `-D warnings` on both animation crates, all targets and features,
+  and on wasm32; tests 55 + 1 (`no_allocation`) + 3 + 8; `cargo check --target aarch64-apple-ios`;
+  `animation/build.sh` (wasm 195,179 bytes, sha256 `6ae37020...`). Not done: `motion_eval` before and after on the
+  standard paths; the three databases' figures above after the stand exemption.
 - **Seen in passing:** the foot lock taking hold of a landing foot still moving 1-2 cm a frame jolts the knee 7-10 cm a
   frame squared with no transition near, on CMU 104's slow walks above all; not traced.
 
