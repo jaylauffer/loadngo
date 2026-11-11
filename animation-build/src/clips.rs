@@ -192,6 +192,9 @@ pub struct ClipJob {
     /// Gaussian smoothing of every bone's rotation and the hips' travel (seconds; 0 keeps
     /// the capture as it is): takes out marker jitter a capture carries.
     pub smooth: f32,
+    /// Level the head ([`level_head`]): the neck's and head's turn from their parents, as the
+    /// clip holds them on average, taken back to the target's rest; their motion about it kept.
+    pub level_head: bool,
     /// Source units to metres; `None` guesses from the leg length.
     pub scale: Option<f32>,
     pub map: Option<MapKind>,
@@ -211,6 +214,9 @@ pub struct ClipOut {
     pub map: MapKind,
     pub mapped: usize,
     pub position_scale: f32,
+    /// What levelling the head took out (degrees): the neck's and the head's average turn
+    /// from their rest, before (0 when not levelled).
+    pub level_head_deg: [f32; 2],
 }
 
 /// Guesses source units from the rest leg length: over 10 units for a leg means
@@ -328,6 +334,11 @@ fn run_source(job: &ClipJob, clip: Source) -> Result<ClipOut, String> {
         );
         frames.push(out);
     }
+    let level_head_deg = if job.level_head {
+        level_head(&mut frames, target)
+    } else {
+        [0.0; 2]
+    };
     if job.smooth > 0.0 {
         smooth_frames(&mut frames, job.smooth * clip.fps);
     }
@@ -361,7 +372,48 @@ fn run_source(job: &ClipJob, clip: Source) -> Result<ClipOut, String> {
         map,
         mapped: bone_map.pairs.len(),
         position_scale: retarget.position_scale(),
+        level_head_deg,
     })
+}
+
+/// Levels a clip's head: for the neck and the head, the clip's average turn from its parent
+/// (sign-aligned, normalised) is taken back to the target's rest, and every frame's turn
+/// about that average is kept in the bone's own frame: `L' = R_rest * mean⁻¹ * L`.
+///
+/// Why: a capture's neck can carry its fitting's error as a constant turn. CMU subject 113's
+/// skeleton zig-zags its neck at rest (lower neck 10 degrees to one side, upper neck 20 to the
+/// other) and its motion turns them back by 30-43 degrees; an avatar's one neck bone follows
+/// the lower neck alone, so its walk carried the neck 35 degrees to the side and the head
+/// about 23 (a browser game's round 8: a headscarf folded through itself). A person walking
+/// looks where they go; the nods and turns of the capture stay. Returns the neck's and head's
+/// average turns from their rest, in degrees, before levelling.
+fn level_head(frames: &mut [Vec<Transform>], target: &Skeleton) -> [f32; 2] {
+    let mut out = [0.0f32; 2];
+    if frames.is_empty() {
+        return out;
+    }
+    for (k, name) in ["Neck", "Head"].iter().enumerate() {
+        let Some(b) = find_bone(target, name) else {
+            continue;
+        };
+        let first = frames[0][b].rotation;
+        let mut q = [0.0f32; 4];
+        for f in frames.iter() {
+            let r = f[b].rotation.nearest(first);
+            q[0] += r.x;
+            q[1] += r.y;
+            q[2] += r.z;
+            q[3] += r.w;
+        }
+        let mean = Quat::new(q[0], q[1], q[2], q[3]).normalize();
+        let rest = target.rest[b].rotation;
+        out[k] = rest.angle_to(mean).to_degrees();
+        let fix = rest * mean.inverse();
+        for f in frames.iter_mut() {
+            f[b].rotation = (fix * f[b].rotation).normalize();
+        }
+    }
+    out
 }
 
 /// Gaussian smoothing over frames of each bone's local rotation (sign-aligned, normalised)
@@ -430,6 +482,34 @@ pub fn frame_cuts(csv: &str) -> Vec<((String, String), (usize, usize))> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_levelled_head_keeps_its_motion_about_the_rest() {
+        // A neck held 30 degrees to the side on average, nodding 5 degrees either way about it:
+        // levelled, it nods the same about its rest.
+        let t = loadngo_animation::testing::humanoid_skeleton(1.0);
+        let neck = find_bone(&t, "Neck").unwrap();
+        let held = Quat::from_axis_angle(Vec3::Z, 30f32.to_radians());
+        let mut frames: Vec<Vec<Transform>> = (0..61)
+            .map(|f| {
+                let mut pose = t.rest.clone();
+                let nod =
+                    Quat::from_axis_angle(Vec3::X, (5.0 * (f as f32 * 0.1).sin()).to_radians());
+                pose[neck].rotation = t.rest[neck].rotation * held * nod;
+                pose
+            })
+            .collect();
+        let took = level_head(&mut frames, &t);
+        assert!((took[0] - 30.0).abs() < 0.5, "took {took:?}");
+        for (f, pose) in frames.iter().enumerate() {
+            let nod = Quat::from_axis_angle(Vec3::X, (5.0 * (f as f32 * 0.1).sin()).to_radians());
+            let want = t.rest[neck].rotation * nod;
+            assert!(
+                pose[neck].rotation.angle_to(want).to_degrees() < 1.0,
+                "frame {f}"
+            );
+        }
+    }
 
     #[test]
     fn frame_cuts_are_read_by_style_and_kind() {

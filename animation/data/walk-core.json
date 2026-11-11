@@ -1,6 +1,7 @@
 {
  "about": "A small locomotion set for a web game: strolling, starting and stopping, turning on the way and on the spot, standing about (100STYLE's idle). A subset of round-2.json (same sources and licences: 100STYLE Neutral CC BY 4.0, CMU Graphics Lab; Mesh2Motion raw captures CC0 not used here: their turns swing an arm and sweep a toe). Round 7 left out 100STYLE's TR1 (its turning starts pivot a planted foot on its ball through up to 90 degrees, and it takes in other movement than walking: animation/evidence/round-7/mac/posture-parts-capture.txt) and CMU's standing 77_02, 113_21 and 137_28 (their knees stay bent: 18.6, 33.4 and 22.5 degrees through the stance against 100STYLE's idle's 6.4, round-3/mac/posture-capture.txt). Build one per body with --skip-tags man or woman. See docs/ANIMATION.md, \"Sizes\".",
  "root": "~/.loadngo/data/mocap",
+ "level_head": true,
  "clips": [
   {
    "name": "100style-neutral-fw",

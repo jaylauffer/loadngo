@@ -35,6 +35,11 @@ itself is never here: `root` names where it was downloaded (see `docs/ANIMATION_
 - `tags` (at least one): `walk`, `idle`, `turn`, `start-stop`, `sit-down`, `stand-up`, `seated`,
   `talk`, `gesture`, `man`, `woman` (`database::tags`). The runtime searches and plays by them.
 - `mirror`: add the clip's mirror image (default: `anim_build`'s `--no-mirror` decides).
+- `level_head` (on the manifest, or a clip to override it; default false): the neck's and head's average turn from
+  their parents over the clip is taken back to the target's rest, their motion about it kept (`clips::level_head`).
+  A capture's neck can carry its fitting's error as a constant turn: CMU subject 113's skeleton zig-zags its neck at
+  rest and its motion turns it back by 30-43 degrees, which an avatar's one neck bone followed as a head held 20-35
+  degrees to one side. `anim_build` prints what it took out per clip. `walk-core.json` levels every clip.
 
 Build one database per body build, keeping the other build's captures out:
 

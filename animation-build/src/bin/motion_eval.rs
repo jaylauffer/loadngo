@@ -356,17 +356,19 @@ fn print_parts(what: &str, rec: &Recording, parts: &[eval::WalkParts]) {
     let s = |f: usize| f as f32 / rec.hz;
     let one = |p: &eval::PartPosture| {
         format!(
-            "knee at mid-stance {:.1}, elbow p10 {:.1}, trunk lean {:.1} deg, wrist {:.1} cm over the hip, bounce {:.1} cm",
+            "knee at mid-stance {:.1}, elbow p10 {:.1}, trunk lean {:.1} deg, wrist {:.1} cm over the hip, bounce {:.1} cm, side lean p90 trunk {:.1} / neck {:.1} deg",
             p.posture.knee_midstance_deg,
             p.posture.elbow_p10_deg,
             p.posture.trunk_lean_deg,
             -p.posture.wrist_below_hip_m * 100.0,
-            p.bounce_cm
+            p.bounce_cm,
+            p.posture.trunk_side_p90_deg,
+            p.posture.neck_side_p90_deg
         )
     };
     for w in parts {
         println!(
-            "  parts {what} walk {:.2}-{:.2} s: start {}; middle worst of {} windows: knee {:.1}, elbow p10 {:.1}, lean {:.1} deg, wrist {:.1} cm, bounce {:.1} cm; stop {}",
+            "  parts {what} walk {:.2}-{:.2} s: start {}; middle worst of {} windows: knee {:.1}, elbow p10 {:.1}, lean {:.1} deg, wrist {:.1} cm, bounce {:.1} cm, side lean trunk {:.1} / neck {:.1} deg; stop {}",
             s(w.walk.0),
             s(w.walk.1),
             one(&w.start),
@@ -376,6 +378,8 @@ fn print_parts(what: &str, rec: &Recording, parts: &[eval::WalkParts]) {
             w.middle_trunk_lean_deg,
             w.middle_wrist_above_hip_m * 100.0,
             w.middle_bounce_cm,
+            w.middle_trunk_side_deg,
+            w.middle_neck_side_deg,
             one(&w.stop)
         );
     }

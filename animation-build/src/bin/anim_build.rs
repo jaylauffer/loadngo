@@ -261,11 +261,13 @@ struct Entry {
     mirror: bool,
     map: Option<MapKind>,
     cut: Option<(usize, usize)>,
+    level_head: bool,
 }
 
-/// A manifest: `{"root": "~/.loadngo/data/mocap", "clips": [{"name", "motion", "skeleton",
-/// "fps", "from", "to", "tags": [...], "mirror", "map"}]}`. Paths are relative to `root`
-/// (`~` is the home directory), or to the manifest's folder without one.
+/// A manifest: `{"root": "~/.loadngo/data/mocap", "level_head": bool, "clips": [{"name",
+/// "motion", "skeleton", "fps", "from", "to", "tags": [...], "mirror", "map", "level_head"}]}`.
+/// Paths are relative to `root` (`~` is the home directory), or to the manifest's folder
+/// without one. A clip's `level_head` overrides the manifest's (default false).
 fn read_manifest(bytes: &[u8], path: &Path) -> Result<Vec<Entry>, String> {
     let v: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|e| format!("manifest JSON: {e}"))?;
@@ -283,6 +285,10 @@ fn read_manifest(bytes: &[u8], path: &Path) -> Result<Vec<Entry>, String> {
         .get("clips")
         .and_then(serde_json::Value::as_array)
         .ok_or("no \"clips\" array")?;
+    let level_all = v
+        .get("level_head")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     let mut out = Vec::with_capacity(clips.len());
     for c in clips {
         let st = |k: &str| c.get(k).and_then(serde_json::Value::as_str);
@@ -330,6 +336,10 @@ fn read_manifest(bytes: &[u8], path: &Path) -> Result<Vec<Entry>, String> {
                 .unwrap_or(true),
             map,
             cut: None,
+            level_head: c
+                .get("level_head")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(level_all),
         });
     }
     Ok(out)
@@ -427,6 +437,7 @@ fn main() {
                 mirror: true,
                 map: args.map,
                 cut,
+                level_head: false,
             }
         })
         .collect();
@@ -491,6 +502,7 @@ fn main() {
                 tags: e.tags,
                 mirror: e.mirror,
                 smooth: args.smooth,
+                level_head: e.level_head,
                 scale: args.scale,
                 map: e.map,
                 cut: e.cut,
@@ -573,7 +585,7 @@ fn main() {
                     Err(e) => fail(&e),
                     Ok(c) => {
                         eprintln!(
-                        "  {:<24} {:>6} frames at {:.0} fps -> {:>6} at {:.0}; scale {} map {:?} ({} bones), legs x{:.3}",
+                        "  {:<24} {:>6} frames at {:.0} fps -> {:>6} at {:.0}; scale {} map {:?} ({} bones), legs x{:.3}{}",
                         c.clip.name,
                         c.source_frames,
                         c.source_fps,
@@ -582,7 +594,15 @@ fn main() {
                         c.scale,
                         c.map,
                         c.mapped,
-                        c.position_scale
+                        c.position_scale,
+                        if c.level_head_deg == [0.0; 2] {
+                            String::new()
+                        } else {
+                            format!(
+                                "; head levelled (neck {:.1}, head {:.1} deg off rest)",
+                                c.level_head_deg[0], c.level_head_deg[1]
+                            )
+                        }
                     );
                         clips_out[id] = Some(c);
                         done += 1;
@@ -625,6 +645,7 @@ fn main() {
                 serde_json::json!({
                     "name": c.clip.name, "source_frames": c.source_frames, "source_fps": c.source_fps,
                     "scale": c.scale, "map": format!("{:?}", c.map), "mapped_bones": c.mapped, "leg_scale": c.position_scale,
+                    "level_head_deg": c.level_head_deg,
                 })
             })
             .collect();

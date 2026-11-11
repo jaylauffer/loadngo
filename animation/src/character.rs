@@ -835,8 +835,14 @@ mod tests {
         );
         c.go_to(&[c.root().translation, Vec3::new(2.0, 0.0, 3.0)], 0.8, None);
         assert_eq!(c.state(), State::StandingUp);
+        // The synthetic clips have no stop (a steady walk and an idle): with the root's velocity
+        // kept continuous across transitions it walks on past the goal rather than stop on it, so
+        // this asks only that it stands up and walks there. (It once stopped within 0.6 m: a
+        // transition counted the root's velocity offset twice, which braked it; round 8.)
+        let mut nearest = f32::INFINITY;
         for i in 0..(60 * 12) {
             c.step(1.0 / 60.0);
+            nearest = nearest.min((c.root().translation - Vec3::new(2.0, 0.0, 3.0)).length());
             if std::env::var_os("CHAR_DEBUG").is_some() && i % 30 == 0 {
                 eprintln!(
                     "u {} root {:?} state {:?} action {:?} clip {:?}",
@@ -853,11 +859,7 @@ mod tests {
             "{:?}",
             c.state()
         );
-        assert!(
-            (c.root().translation - Vec3::new(2.0, 0.0, 3.0)).length() < 0.6,
-            "{:?}",
-            c.root().translation
-        );
+        assert!(nearest < 0.3, "came no nearer the goal than {nearest} m");
         assert!(c.world_positions().iter().all(|p| p.is_finite()));
     }
 

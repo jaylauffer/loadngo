@@ -318,12 +318,16 @@ struct FootLock {
     /// The capture's own heading of that foot last step (radians).
     capture_was: f32,
     /// The turn added to the capture's foot (radians): the kept turn's difference while held,
-    /// eased away once the foot lifts.
+    /// eased away once the foot lifts, and how fast it changes (radians a second).
     twist: f32,
+    twist_vel: f32,
 }
 
 /// The half-life (s) over which a newly held foot comes down onto the floor.
 const LOCK_SETTLE_HALFLIFE: f32 = 0.05;
+/// The half-life (s) over which a foot let go eases its kept turn away in the air (at 0.1 s, a
+/// game's foot let go 50 degrees off the capture's turned 14.8 degrees in a frame; round 8).
+const TWIST_RELEASE_HALFLIFE: f32 = 0.15;
 
 impl Default for FootLock {
     fn default() -> Self {
@@ -338,6 +342,7 @@ impl Default for FootLock {
             turn: None,
             capture_was: 0.0,
             twist: 0.0,
+            twist_vel: 0.0,
         }
     }
 }
@@ -913,11 +918,18 @@ impl MotionMatcher {
         let v_new = new_anchor
             .rotation
             .rotate((db.root_pos[t1] - db.root_pos[t0]) / dt);
+        // The root's velocity goes on as it was shown: the offset is what was shown less the new
+        // clip's. (Given to the blend as the animation's, the offset already in it was counted
+        // twice, and each transition added the one before's to the root's speed: 0.9 m/s became
+        // 2.0 over four quick transitions in a turn, a game's root jolting 1.1 cm a frame;
+        // round 8.)
         if self.config.blend_root_velocity {
-            self.root_vel_blend
-                .transition(self.root_velocity, Vec3::ZERO, v_new, Vec3::ZERO);
+            self.root_vel_blend.offset = self.root_velocity - v_new;
         }
         let yaw_new = wrap_angle(db.root_rot[t1].yaw() - db.root_rot[t0].yaw()) / dt;
+        // (The turn rate is still given as the animation's, its offset counted twice: taken as
+        // shown, a synthetic walk after standing up veered 0.6 m off its way; not understood, so
+        // left as it was.)
         self.yaw_rate_blend.transition(
             Vec3::new(self.root_yaw_rate, 0.0, 0.0),
             Vec3::ZERO,
@@ -1361,18 +1373,29 @@ impl MotionMatcher {
                 own = 0.0;
             }
             foot.capture_was = capture_turn;
-            foot.twist = match (foot.held, foot.turn.as_mut()) {
+            match (foot.held, foot.turn.as_mut()) {
                 (Some(_), Some(turn)) => {
                     if !cfg.keep_turn_planted {
                         *turn = wrap_angle(*turn + own);
                     }
-                    wrap_angle(*turn - anim_turn)
+                    let twist = wrap_angle(*turn - anim_turn);
+                    foot.twist_vel = wrap_angle(twist - foot.twist) / dt;
+                    foot.twist = twist;
                 }
                 _ => {
+                    // Let go: the difference eases away like a released critically damped
+                    // spring, from the turn rate it had (a planted foot's: none on the floor).
+                    // Decayed from its full rate at once, a foot the capture had turned 50
+                    // degrees on the spot swung 14 degrees in the frame it lifted (a game's
+                    // walk to a bench, round 8).
                     foot.turn = None;
-                    foot.twist * (-std::f32::consts::LN_2 * dt / cfg.unlock_halflife).exp()
+                    let y = crate::spring::halflife_to_damping(TWIST_RELEASE_HALFLIFE) / 2.0;
+                    let j1 = foot.twist_vel + foot.twist * y;
+                    let e = (-y * dt).exp();
+                    foot.twist = (foot.twist + j1 * dt) * e;
+                    foot.twist_vel = (foot.twist_vel - j1 * (y * dt)) * e;
                 }
-            };
+            }
             let twist = Quat::from_yaw(foot.twist);
             // The toe as the foot is shown, turned about the ankle.
             let toe_in = ankle_in + twist.rotate(toe_raw - ankle_in);

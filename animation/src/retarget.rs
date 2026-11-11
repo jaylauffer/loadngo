@@ -205,7 +205,14 @@ impl Retargeter {
             };
             let preferred = match base_name(&target.names[b]) {
                 "Hips" => Some("Spine"),
-                "Spine2" | "Spine1" | "Spine" => None,
+                // The chest aligns along its neck. Its first child is often a shoulder (an
+                // avatar's Spine2 has LeftShoulder, Neck, RightShoulder), and a capture's
+                // shoulder joints start where its neck does (CMU's clavicles at the thorax's
+                // end): aligned on the left shoulder, the chest stood 12-17 degrees to one
+                // side through every walk (a browser game's round 8).
+                "Spine2" => Some("Neck"),
+                "Spine1" => Some("Spine2"),
+                "Spine" => Some("Spine1"),
                 n if n.ends_with("Hand") => Some(if n.starts_with("Left") {
                     "LeftHandMiddle1"
                 } else {
@@ -428,6 +435,50 @@ mod tests {
         assert!(tipped(&bent(0.0)) < 0.01);
         let b = tipped(&bent(20.0));
         assert!((b - 10.0).abs() < 0.05, "tipped {b} degrees");
+    }
+
+    #[test]
+    fn a_chest_aligns_along_its_neck_not_its_first_shoulder() {
+        // A target whose chest lists its shoulders before its neck (as an avatar's Spine2 does:
+        // LeftShoulder, Neck, RightShoulder), from a source whose shoulders start where its neck
+        // does (CMU's clavicles at the thorax's end). At the source's rest pose the chest stands
+        // as at its own rest; aligned on the left shoulder it stood 24 degrees off.
+        let mut src = crate::testing::humanoid_skeleton(1.0);
+        let neck = find_bone(&src, "Neck").unwrap();
+        for side in ["LeftShoulder", "RightShoulder"] {
+            let b = find_bone(&src, side).unwrap();
+            src.rest[b].translation = src.rest[neck].translation;
+        }
+        let t = crate::testing::humanoid_skeleton(1.0);
+        // The neck and everything under it moved after the shoulders.
+        let tn = find_bone(&t, "Neck").unwrap();
+        let under = |b: usize| b == tn || is_descendant(&t, b, tn);
+        let order: Vec<usize> = (0..t.len())
+            .filter(|&b| !under(b))
+            .chain((0..t.len()).filter(|&b| under(b)))
+            .collect();
+        let at = |old: usize| order.iter().position(|&o| o == old).unwrap();
+        let t = Skeleton::new(
+            order.iter().map(|&o| t.names[o].clone()).collect(),
+            order.iter().map(|&o| t.parents[o].map(at)).collect(),
+            order.iter().map(|&o| t.rest[o]).collect(),
+        )
+        .unwrap();
+        let chest = find_bone(&t, "Spine2").unwrap();
+        assert_eq!(
+            base_name(&t.names[t.children(chest).next().unwrap()]),
+            "LeftShoulder"
+        );
+        let r = Retargeter::new(&src, &t, &BoneMap::by_name(&src, &t)).unwrap();
+        let mut sw = vec![Transform::IDENTITY; src.len()];
+        let mut tw = vec![Quat::IDENTITY; t.len()];
+        let mut out = vec![Transform::IDENTITY; t.len()];
+        r.frame(&src, &src.rest, &mut sw, &mut tw, &mut out);
+        let off = t.rest_world()[chest]
+            .rotation
+            .angle_to(tw[chest])
+            .to_degrees();
+        assert!(off < 0.5, "the chest stood {off} degrees off its rest");
     }
 
     #[test]

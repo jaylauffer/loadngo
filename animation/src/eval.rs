@@ -385,6 +385,8 @@ pub fn measure(
 pub struct PostureBones {
     pub hips: usize,
     pub neck: usize,
+    /// The head, for the neck's side tilt (`None`: not measured).
+    pub head: Option<usize>,
     /// Per side (left, right): the thigh's root (hip joint), shoulder, elbow and wrist.
     pub up_leg: [usize; 2],
     pub arm: [usize; 2],
@@ -404,6 +406,7 @@ impl PostureBones {
         Some(Self {
             hips: f("Hips")?,
             neck: f("Neck")?,
+            head: f("Head"),
             up_leg: [f("LeftUpLeg")?, f("RightUpLeg")?],
             arm: [f("LeftArm")?, f("RightArm")?],
             fore_arm: [f("LeftForeArm")?, f("RightForeArm")?],
@@ -442,6 +445,12 @@ pub struct Posture {
     /// The knee's bend through mid-stance (degrees): at the middle frame of each foot
     /// contact, median over contacts.
     pub knee_midstance_deg: f32,
+    /// The trunk's lean to the side (hips to neck against the vertical, across the facing,
+    /// degrees), the 90th percentile of its size: people walk upright, swaying a few degrees.
+    pub trunk_side_p90_deg: f32,
+    /// The neck's tilt to the side (neck to head against the vertical, across the facing,
+    /// degrees), the 90th percentile of its size (0 when the head is not measured).
+    pub neck_side_p90_deg: f32,
 }
 
 /// Measures the posture of `rec` over `[steady.0, steady.1)`, mid-stance from the feet's
@@ -463,9 +472,12 @@ pub fn posture(
     let mut wrist = Vec::with_capacity(2 * (z - a));
     let mut swing = [Vec::with_capacity(z - a), Vec::with_capacity(z - a)];
     let mut lean = Vec::with_capacity(z - a);
+    let mut side = Vec::with_capacity(z - a);
+    let mut neck_side = Vec::with_capacity(z - a);
     for f in a..z {
         let (_, facing) = rec.root[f];
         let fwd = Vec3::new(facing.sin(), 0.0, facing.cos());
+        let right = Vec3::new(facing.cos(), 0.0, -facing.sin());
         for (s, side_swing) in swing.iter_mut().enumerate() {
             let sh = rec.at(f, b.arm[s]);
             let e = rec.at(f, b.fore_arm[s]);
@@ -480,6 +492,11 @@ pub fn posture(
         }
         let t = (rec.at(f, b.neck) - rec.at(f, b.hips)).normalize_or_zero();
         lean.push(t.dot(fwd).atan2(t.y).to_degrees());
+        side.push(t.dot(right).atan2(t.y).to_degrees().abs());
+        if let Some(h) = b.head {
+            let n = (rec.at(f, h) - rec.at(f, b.neck)).normalize_or_zero();
+            neck_side.push(n.dot(right).atan2(n.y).to_degrees().abs());
+        }
     }
     let mut knees = Vec::new();
     for side in 0..2 {
@@ -504,6 +521,8 @@ pub fn posture(
         wrist_below_hip_m: percentile(&mut wrist, 0.5),
         trunk_lean_deg: percentile(&mut lean, 0.5),
         knee_midstance_deg: percentile(&mut knees, 0.5),
+        trunk_side_p90_deg: percentile(&mut side, 0.9),
+        neck_side_p90_deg: percentile(&mut neck_side, 0.9),
     }
 }
 
@@ -600,6 +619,9 @@ pub struct WalkParts {
     /// The highest wrist over the hip joint (m, positive above): the least `wrist_below_hip_m`.
     pub middle_wrist_above_hip_m: f32,
     pub middle_bounce_cm: f32,
+    /// The most side lean of the trunk and side tilt of the neck ([`Posture`]).
+    pub middle_trunk_side_deg: f32,
+    pub middle_neck_side_deg: f32,
     /// Windows between the start and the stop.
     pub middle_windows: usize,
 }
@@ -642,6 +664,8 @@ pub fn walk_parts(
                 w.middle_wrist_above_hip_m =
                     w.middle_wrist_above_hip_m.max(-p.posture.wrist_below_hip_m);
                 w.middle_bounce_cm = w.middle_bounce_cm.max(p.bounce_cm);
+                w.middle_trunk_side_deg = w.middle_trunk_side_deg.max(p.posture.trunk_side_p90_deg);
+                w.middle_neck_side_deg = w.middle_neck_side_deg.max(p.posture.neck_side_p90_deg);
                 w.middle_windows += 1;
                 s += step;
             }
@@ -753,6 +777,7 @@ mod tests {
         let b = PostureBones {
             hips: 0,
             neck: 1,
+            head: None,
             up_leg: [2, 3],
             arm: [4, 5],
             fore_arm: [6, 7],
