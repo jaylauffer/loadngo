@@ -166,6 +166,92 @@ pub fn synthetic_walk(target: &Skeleton, frames: usize, speed: f32) -> SourceCli
     }
 }
 
+/// Turning on the spot on `target` at `rate` radians a second (positive: to the left), stepping
+/// round as a person does: each foot down for 0.6 of a 1.2 s stride and pivoting with the body
+/// while it is down (its heading turning on the floor, its ankle staying put), then lifted and set
+/// down again beside the body as it now faces.
+#[must_use]
+pub fn synthetic_turn(target: &Skeleton, frames: usize, rate: f32) -> SourceClip {
+    let n = target.len();
+    let f = |name: &str| find_bone(target, name).expect("fixture bone");
+    let hips = f("Hips");
+    let legs = [
+        (f("LeftUpLeg"), f("LeftLeg"), f("LeftFoot")),
+        (f("RightUpLeg"), f("RightLeg"), f("RightFoot")),
+    ];
+    let arms = [f("LeftArm"), f("RightArm")];
+    let rest_world = target.rest_world();
+    let hips_h = rest_world[hips].translation.y;
+    let ankle_h = rest_world[legs[0].2].translation.y;
+    let side_x = [
+        rest_world[legs[0].0].translation.x,
+        rest_world[legs[1].0].translation.x,
+    ];
+    let period = 1.2f32;
+    // Where a foot stands beside the body facing `yaw`.
+    let beside = |k: usize, yaw: f32| Quat::from_yaw(yaw).rotate(Vec3::new(side_x[k], 0.0, 0.0));
+    let mut out = Vec::with_capacity(frames * n);
+    let mut local = target.rest.clone();
+    let mut world = vec![Transform::IDENTITY; n];
+    for i in 0..frames {
+        let t = i as f32 / 60.0;
+        let yaw = rate * t;
+        local.clone_from(&target.rest);
+        local[hips].translation = Vec3::new(0.0, hips_h - 0.03, 0.0);
+        local[hips].rotation = Quat::from_yaw(yaw);
+        for (k, &arm) in arms.iter().enumerate() {
+            let side = if k == 0 { 1.0 } else { -1.0 };
+            local[arm].rotation = Quat::from_axis_angle(Vec3::Z, -1.3 * side);
+        }
+        forward_kinematics(&target.parents, &local, Transform::IDENTITY, &mut world);
+        for (k, &(up, knee, ankle)) in legs.iter().enumerate() {
+            let offset = if k == 0 { 0.0 } else { 0.5 };
+            let u_total = t / period + offset;
+            let cycle = u_total.floor();
+            let u = u_total - cycle;
+            // Down from the start of the cycle (set down as the body faced then), pivoting.
+            let landed = rate * (cycle - offset) * period;
+            let (at, heading, lift) = if u < 0.6 {
+                (beside(k, landed), yaw, 0.0)
+            } else {
+                let s = (u - 0.6) / 0.4;
+                let e = s * s * (3.0 - 2.0 * s);
+                let next = rate * (cycle + 1.0 - offset) * period;
+                let from = beside(k, landed);
+                (
+                    from + (beside(k, next) - from) * e,
+                    yaw,
+                    0.06 * (std::f32::consts::PI * s).sin(),
+                )
+            };
+            let target_p = Vec3::new(at.x, ankle_h + lift, at.z);
+            let sol = two_bone(
+                world[up].translation,
+                world[knee].translation,
+                world[ankle].translation,
+                target_p,
+                Quat::from_yaw(yaw).rotate(Vec3::Z),
+                0.02,
+                world[up].rotation,
+                world[knee].rotation,
+            );
+            let parent = target.parents[up].map_or(Quat::IDENTITY, |p| world[p].rotation);
+            local[up].rotation = (parent.inverse() * sol.root).normalize();
+            local[knee].rotation = (sol.root.inverse() * sol.mid).normalize();
+            // Flat on the ground, along the body's heading.
+            local[ankle].rotation = (sol.mid.inverse() * Quat::from_yaw(heading)).normalize();
+            forward_kinematics(&target.parents, &local, Transform::IDENTITY, &mut world);
+        }
+        out.extend_from_slice(&local);
+    }
+    SourceClip {
+        tags: crate::database::tags::TURN,
+        mirror: true,
+        name: format!("synthetic-turn-{rate:.2}"),
+        local: out,
+    }
+}
+
 /// An in-place idle on `target`: hips still but for breathing, arms down.
 #[must_use]
 pub fn synthetic_idle(target: &Skeleton, frames: usize) -> SourceClip {

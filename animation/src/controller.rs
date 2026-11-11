@@ -328,6 +328,27 @@ const LOCK_SETTLE_HALFLIFE: f32 = 0.05;
 /// The half-life (s) over which a foot let go eases its kept turn away in the air (at 0.1 s, a
 /// game's foot let go 50 degrees off the capture's turned 14.8 degrees in a frame; round 8).
 const TWIST_RELEASE_HALFLIFE: f32 = 0.15;
+/// How far ahead (s) a lifted foot looks in the clip playing for where the capture puts it down
+/// again, to have its kept turn eased away by then; and the least time it is given to do so.
+const TWIST_LAND_LOOKAHEAD: f32 = 0.8;
+const TWIST_LAND_LEAST: f32 = 0.15;
+/// The most (radians) a held foot's kept turn stays from the capture's.
+const TWIST_KEPT_MOST: f32 = 0.45;
+
+/// One step of a cubic that takes `x` (moving at `v`) to rest at 0 in `t` seconds: the value and
+/// rate after `dt`. Replanned each step from where it is, it follows the one cubic.
+fn ease_to_rest_by(x: f32, v: f32, t: f32, dt: f32) -> (f32, f32) {
+    if t <= dt {
+        return (0.0, 0.0);
+    }
+    let u = dt / t;
+    let (u2, u3) = (u * u, u * u * u);
+    let h00 = 2.0 * u3 - 3.0 * u2 + 1.0;
+    let h10 = u3 - 2.0 * u2 + u;
+    let d00 = 6.0 * u2 - 6.0 * u;
+    let d10 = 3.0 * u2 - 4.0 * u + 1.0;
+    (h00 * x + h10 * t * v, (d00 * x) / t + d10 * v)
+}
 
 impl Default for FootLock {
     fn default() -> Self {
@@ -1345,6 +1366,22 @@ impl MotionMatcher {
         false
     }
 
+    /// Seconds until the capture next puts down a foot (`bits`: its heel and ball), if it does
+    /// within the clip playing and `TWIST_LAND_LOOKAHEAD`; `None` if that foot is down now.
+    fn time_to_contact(&self, bits: u8) -> Option<f32> {
+        if self.db.contacts[self.frame] & bits != 0 {
+            return None;
+        }
+        let per_frame = 1.0 / (self.db.fps * self.rate.max(0.05));
+        let horizon = (TWIST_LAND_LOOKAHEAD * self.db.fps).ceil() as usize;
+        let end = self.clip_end(self.frame);
+        (1..=horizon)
+            .map(|k| self.frame + k)
+            .take_while(|&f| f < end)
+            .position(|f| self.db.contacts[f] & bits != 0)
+            .map(|k| ((k + 1) as f32 - self.frac) * per_frame)
+    }
+
     fn lock_feet(&mut self, dt: f32) {
         let cfg = self.config;
         let raw_turn = [self.capture_turn(0), self.capture_turn(1)];
@@ -1359,6 +1396,8 @@ impl MotionMatcher {
             };
             let ankle_in = self.world_pos[leg.ankle];
             let toe_raw = self.world_pos[leg.toe];
+            // When the capture puts this foot down next, if it does within the playing clip soon.
+            let lands_in = self.time_to_contact(heel_bit | ball_bit);
             let foot = &mut self.feet[side];
             // A foot a take-over planted keeps how far it stood turned from the capture while it
             // stays down (eased from the shown pose to the capture's, a planted foot turned on the
@@ -1378,6 +1417,15 @@ impl MotionMatcher {
                     if !cfg.keep_turn_planted {
                         *turn = wrap_angle(*turn + own);
                     }
+                    // Kept, a foot turns from the capture's no further than a leg can twist over
+                    // it: beyond that it pivots on its held point as the capture's does. A body
+                    // turning half round on the spot to sit had its planted feet kept 60-100
+                    // degrees from the capture's, and each swung that back in a step's 0.2 s, up
+                    // to 18 degrees a frame (a game's walk to a bench, round 9).
+                    let twist = wrap_angle(*turn - anim_turn);
+                    if twist.abs() > TWIST_KEPT_MOST {
+                        *turn = wrap_angle(anim_turn + TWIST_KEPT_MOST.copysign(twist));
+                    }
                     let twist = wrap_angle(*turn - anim_turn);
                     foot.twist_vel = wrap_angle(twist - foot.twist) / dt;
                     foot.twist = twist;
@@ -1388,12 +1436,34 @@ impl MotionMatcher {
                     // Decayed from its full rate at once, a foot the capture had turned 50
                     // degrees on the spot swung 14 degrees in the frame it lifted (a game's
                     // walk to a bench, round 8).
+                    //
+                    // When the capture puts the foot down again within the clip playing, the turn
+                    // is eased out over the swing instead, to be gone, and still, as the foot lands
+                    // (a cubic from where it is, at the rate it has, replanned each step): released
+                    // on the spring alone, a foot the capture had pivoted 60-100 degrees on was
+                    // still turning 13 degrees a frame as it touched down and was held, and its turn
+                    // stopped dead in a frame (a game's turn on the spot to sit on a bench, round 9).
                     foot.turn = None;
-                    let y = crate::spring::halflife_to_damping(TWIST_RELEASE_HALFLIFE) / 2.0;
-                    let j1 = foot.twist_vel + foot.twist * y;
-                    let e = (-y * dt).exp();
-                    foot.twist = (foot.twist + j1 * dt) * e;
-                    foot.twist_vel = (foot.twist_vel - j1 * (y * dt)) * e;
+                    match lands_in {
+                        Some(t) if t > dt => {
+                            let (twist, vel) = ease_to_rest_by(
+                                foot.twist,
+                                foot.twist_vel,
+                                t.max(TWIST_LAND_LEAST),
+                                dt,
+                            );
+                            foot.twist = twist;
+                            foot.twist_vel = vel;
+                        }
+                        _ => {
+                            let y =
+                                crate::spring::halflife_to_damping(TWIST_RELEASE_HALFLIFE) / 2.0;
+                            let j1 = foot.twist_vel + foot.twist * y;
+                            let e = (-y * dt).exp();
+                            foot.twist = (foot.twist + j1 * dt) * e;
+                            foot.twist_vel = (foot.twist_vel - j1 * (y * dt)) * e;
+                        }
+                    }
                 }
             }
             let twist = Quat::from_yaw(foot.twist);
@@ -1799,6 +1869,65 @@ mod tests {
         assert!(
             free > 3.0 * kept.max(0.002),
             "without it the feet turned only {free} rad"
+        );
+    }
+
+    #[test]
+    fn a_kept_foot_turning_on_the_spot_lands_without_spinning() {
+        // Turning half round on the spot with keep_turn_planted, the capture pivots on its planted
+        // feet; kept, a foot's turn from the capture's builds while it is down and is eased away
+        // in the air. It must be gone by the landing, and never swung back in a rush: a foot
+        // still turning as it touches down stops dead in a frame.
+        let cfg = Config {
+            keep_turn_planted: true,
+            ..Config::default()
+        };
+        let target = humanoid_skeleton(1.0);
+        let clips = [
+            crate::testing::synthetic_idle(&target, 300),
+            crate::testing::synthetic_turn(&target, 600, 1.6),
+        ];
+        let db = Arc::new(Database::build(&target, &clips, &BuildConfig::default()).unwrap());
+        let mut m = MotionMatcher::new(db, cfg, Vec3::ZERO, 0.0);
+        let still = ConstantSteering {
+            velocity: Vec3::ZERO,
+            facing: 0.0,
+        };
+        for _ in 0..60 {
+            m.step(1.0 / 60.0, &still);
+        }
+        let (mut most_rate, mut most_landing) = (0.0f32, 0.0f32);
+        let mut was = [(foot_heading(&m, 0), true), (foot_heading(&m, 1), true)];
+        let mut rate = [0.0f32; 2];
+        for turn in [std::f32::consts::PI, 0.0, std::f32::consts::PI] {
+            let s = ConstantSteering {
+                velocity: Vec3::ZERO,
+                facing: turn,
+            };
+            for _ in 0..180 {
+                m.step(1.0 / 60.0, &s);
+                for side in 0..2 {
+                    let h = foot_heading(&m, side);
+                    let held = m.feet_held()[side];
+                    let r = wrap_angle(h - was[side].0);
+                    if held && !was[side].1 {
+                        most_landing = most_landing.max(rate[side].abs());
+                    }
+                    if !held {
+                        most_rate = most_rate.max(r.abs());
+                    }
+                    rate[side] = r;
+                    was[side] = (h, held);
+                }
+            }
+        }
+        assert!(
+            most_landing < 0.09,
+            "a foot was turning {most_landing} rad a frame as it landed"
+        );
+        assert!(
+            most_rate < 0.13,
+            "a lifted foot turned {most_rate} rad in a frame"
         );
     }
 
