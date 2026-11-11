@@ -272,9 +272,24 @@ Against a real stroll (about 88 steps a minute of 0.55 m at 0.83 m/s; a man's hi
 that searched p50 5.6 µs, p99 50 µs; 0 allocations. In Chrome 157 on the same Mac
 (`animation/evidence/round-1/wasm/`, cross-origin isolated so timing resolves 5 µs): p50 5 µs,
 p99 50 µs; 16 characters a frame p50 40 µs, p99 270 µs; loading the 9 MB database with its hash
-check 28 ms. On dolores: see `animation/evidence/round-1/dolores/` and the table below.
+check 28 ms. dolores: `animation/evidence/round-1/dolores/` and the table below.
 
-<!-- dolores -->
+| Cost of a step (60 Hz) | p50 | p99 | Steps that searched, p99 | 16 characters a frame, p50 / p99 | Database load |
+| --- | --- | --- | --- | --- | --- |
+| Mac, native (M4 Pro) | 2.6 µs | 33 µs | 50 µs | | 21 ms |
+| Mac, Chrome 157, wasm | 5 µs | 50 µs | | 40 / 270 µs | 28 ms |
+| dolores, native (Pi 5, Cortex-A76) | 9.6 µs | 131 µs | 153 µs | | |
+| dolores, Chromium 156, wasm | 15 µs | 250 µs | | 155 µs / 1.0 ms | 130 ms |
+
+All with 0 allocations in a step. The browser's timer resolves 5 µs (cross-origin isolated); its
+largest single steps (0.5 ms on the Mac, 2.5 ms on dolores) are the first ones, before the engine
+optimises the module. On dolores `anim_build` built the same database in 0.3-0.5 s with 2 workers,
+thermal pressure nominal throughout (the kernel's thermal zone, 49-52 °C). Its file is not
+byte-identical to the Mac's (`99700c0f` against `8af43d2d`): the two platforms' maths libraries
+round `sin`, `exp` and `atan2` differently in the last bit. Builds on one platform are identical,
+and the motion is the same to the measures' precision, except where a near tie between two
+frames tips the other way (the left and right turns trade their worst slides, as mirror images
+would): read a single run's worst contact as one sample, not a property.
 
 ## What is short
 

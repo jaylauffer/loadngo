@@ -1,0 +1,78 @@
+{
+  "admission_held_back": 0,
+  "blake3": "99700c0ffa694eee75f23454f3fb00cb9b5c76b9a3b7cf0ec7a9ad0d77bf6c70",
+  "bones": [
+    "Hips",
+    "Spine",
+    "Spine1",
+    "Spine2",
+    "Neck",
+    "Head",
+    "LeftShoulder",
+    "LeftArm",
+    "LeftForeArm",
+    "LeftHand",
+    "RightShoulder",
+    "RightArm",
+    "RightForeArm",
+    "RightHand",
+    "LeftUpLeg",
+    "LeftLeg",
+    "LeftFoot",
+    "LeftToeBase",
+    "RightUpLeg",
+    "RightLeg",
+    "RightFoot",
+    "RightToeBase"
+  ],
+  "bytes": 8955615,
+  "bytes_read": 11985340,
+  "clips": 6,
+  "format_version": 1,
+  "fps": 60.0,
+  "frames": 28978,
+  "mirror": true,
+  "out": "neutral-canonical-dolores.lmm",
+  "seconds": 0.461544812,
+  "sources": [
+    {
+      "leg_scale": 0.9889810085296631,
+      "map": "Style100",
+      "mapped_bones": 22,
+      "name": "Neutral_FW",
+      "scale": 0.009999999776482582,
+      "source_fps": 59.998802185058594,
+      "source_frames": 7896
+    },
+    {
+      "leg_scale": 0.9889810085296631,
+      "map": "Style100",
+      "mapped_bones": 22,
+      "name": "Neutral_ID",
+      "scale": 0.009999999776482582,
+      "source_fps": 59.998802185058594,
+      "source_frames": 2103
+    },
+    {
+      "leg_scale": 0.9889810085296631,
+      "map": "Style100",
+      "mapped_bones": 22,
+      "name": "Neutral_TR1",
+      "scale": 0.009999999776482582,
+      "source_fps": 59.998802185058594,
+      "source_frames": 7119
+    }
+  ],
+  "thermal_pressures_seen": [
+    "nominal"
+  ],
+  "tool": "anim_build",
+  "weights": [
+    1.5,
+    1.0,
+    1.0,
+    1.0,
+    1.5
+  ],
+  "workers": 2
+}

@@ -1,0 +1,426 @@
+{
+  "db": "neutral-canonical.lmm",
+  "foot_lock": true,
+  "frames": 28978,
+  "hz": 60.0,
+  "load_ms": 66.015629,
+  "scenarios": [
+    {
+      "about": "12 m straight at a stroll (0.83 m/s), from standing to standing",
+      "allocations_in_step": 0,
+      "end_offset_m": 0.21325650811195374,
+      "metrics": {
+        "cadence_steps_per_min": 86.9215316772461,
+        "contacts": 23,
+        "hip_sway_cm": 4.429448127746582,
+        "jerk_rms_cm": 0.2267114818096161,
+        "jog_cm": 1.7594122886657715,
+        "knee_at_strike_deg": 12.691076278686523,
+        "knee_swing_deg": 62.8206672668457,
+        "limb_acc_cm": 3.9664175510406494,
+        "slide_p95_cm": 3.323181390762329,
+        "slide_worst_cm": 4.165398597717285,
+        "speed_m_s": 0.859721302986145,
+        "step_length_m": 0.6048786044120789,
+        "steps": 12,
+        "torso_acc_cm": 0.5921450257301331,
+        "transitions": 33,
+        "transitions_per_s": 1.649999976158142
+      },
+      "scenario": "straight",
+      "searches": 178,
+      "step_us": {
+        "max": 229.889,
+        "p50": 9.963,
+        "p99": 133.037
+      },
+      "unlocks_by_radius": 0,
+      "worst_contacts": [
+        {
+          "at_s": 0.0,
+          "frames": 123,
+          "joint": "toe",
+          "side": "right",
+          "slide_cm": 4.165398597717285
+        },
+        {
+          "at_s": 12.449999809265137,
+          "frames": 46,
+          "joint": "toe",
+          "side": "right",
+          "slide_cm": 3.323181390762329
+        },
+        {
+          "at_s": 14.533333778381348,
+          "frames": 48,
+          "joint": "toe",
+          "side": "left",
+          "slide_cm": 3.1089487075805664
+        },
+        {
+          "at_s": 4.833333492279053,
+          "frames": 46,
+          "joint": "toe",
+          "side": "left",
+          "slide_cm": 3.0696029663085938
+        },
+        {
+          "at_s": 13.833333015441895,
+          "frames": 46,
+          "joint": "toe",
+          "side": "right",
+          "slide_cm": 3.058845281600952
+        }
+      ]
+    },
+    {
+      "about": "stand, walk 4 m, stop and stand 2 s, walk 4 m, stop",
+      "allocations_in_step": 0,
+      "end_offset_m": 0.20650319755077362,
+      "metrics": {
+        "cadence_steps_per_min": 0.0,
+        "contacts": 18,
+        "hip_sway_cm": 0.0,
+        "jerk_rms_cm": 0.19932419061660767,
+        "jog_cm": 1.7565237283706665,
+        "knee_at_strike_deg": 0.0,
+        "knee_swing_deg": 0.0,
+        "limb_acc_cm": 3.9536209106445312,
+        "slide_p95_cm": 7.800091743469238,
+        "slide_worst_cm": 7.800091743469238,
+        "speed_m_s": 0.0,
+        "step_length_m": 0.0,
+        "steps": 0,
+        "torso_acc_cm": 0.5951535701751709,
+        "transitions": 41,
+        "transitions_per_s": 2.1578948497772217
+      },
+      "scenario": "start-stop",
+      "searches": 168,
+      "step_us": {
+        "max": 154.462,
+        "p50": 8.982,
+        "p99": 132.778
+      },
+      "unlocks_by_radius": 0,
+      "worst_contacts": [
+        {
+          "at_s": 0.0,
+          "frames": 162,
+          "joint": "toe",
+          "side": "right",
+          "slide_cm": 7.800091743469238
+        },
+        {
+          "at_s": 13.183333396911621,
+          "frames": 46,
+          "joint": "toe",
+          "side": "left",
+          "slide_cm": 3.112422466278076
+        },
+        {
+          "at_s": 11.800000190734863,
+          "frames": 46,
+          "joint": "toe",
+          "side": "left",
+          "slide_cm": 3.084894895553589
+        },
+        {
+          "at_s": 7.183333396911621,
+          "frames": 199,
+          "joint": "toe",
+          "side": "right",
+          "slide_cm": 2.798539638519287
+        },
+        {
+          "at_s": 5.400000095367432,
+          "frames": 45,
+          "joint": "toe",
+          "side": "left",
+          "slide_cm": 2.616577386856079
+        }
+      ]
+    },
+    {
+      "about": "6 m, a 90° turn to the left at a corner, 6 m",
+      "allocations_in_step": 0,
+      "end_offset_m": 0.20205625891685486,
+      "metrics": {
+        "cadence_steps_per_min": 0.0,
+        "contacts": 24,
+        "hip_sway_cm": 0.0,
+        "jerk_rms_cm": 0.2293233722448349,
+        "jog_cm": 1.7644522190093994,
+        "knee_at_strike_deg": 0.0,
+        "knee_swing_deg": 0.0,
+        "limb_acc_cm": 3.9664175510406494,
+        "slide_p95_cm": 4.165398597717285,
+        "slide_worst_cm": 7.4368767738342285,
+        "speed_m_s": 0.0,
+        "step_length_m": 0.0,
+        "steps": 0,
+        "torso_acc_cm": 0.5921450257301331,
+        "transitions": 35,
+        "transitions_per_s": 1.8421052694320679
+      },
+      "scenario": "turn-left-90",
+      "searches": 166,
+      "step_us": {
+        "max": 165.074,
+        "p50": 10.093,
+        "p99": 130.833
+      },
+      "unlocks_by_radius": 0,
+      "worst_contacts": [
+        {
+          "at_s": 6.916666507720947,
+          "frames": 48,
+          "joint": "toe",
+          "side": "right",
+          "slide_cm": 7.4368767738342285
+        },
+        {
+          "at_s": 0.0,
+          "frames": 123,
+          "joint": "toe",
+          "side": "right",
+          "slide_cm": 4.165398597717285
+        },
+        {
+          "at_s": 11.083333015441895,
+          "frames": 46,
+          "joint": "toe",
+          "side": "right",
+          "slide_cm": 3.6983237266540527
+        },
+        {
+          "at_s": 10.383333206176758,
+          "frames": 47,
+          "joint": "toe",
+          "side": "left",
+          "slide_cm": 3.64491868019104
+        },
+        {
+          "at_s": 4.833333492279053,
+          "frames": 46,
+          "joint": "toe",
+          "side": "left",
+          "slide_cm": 3.0696029663085938
+        }
+      ]
+    },
+    {
+      "about": "6 m, a 90° turn to the right at a corner, 6 m",
+      "allocations_in_step": 0,
+      "end_offset_m": 0.42315828800201416,
+      "metrics": {
+        "cadence_steps_per_min": 0.0,
+        "contacts": 25,
+        "hip_sway_cm": 0.0,
+        "jerk_rms_cm": 0.24526605010032654,
+        "jog_cm": 1.815629243850708,
+        "knee_at_strike_deg": 0.0,
+        "knee_swing_deg": 0.0,
+        "limb_acc_cm": 5.05093240737915,
+        "slide_p95_cm": 4.165398597717285,
+        "slide_worst_cm": 4.959675312042236,
+        "speed_m_s": 0.0,
+        "step_length_m": 0.0,
+        "steps": 0,
+        "torso_acc_cm": 0.5921450257301331,
+        "transitions": 41,
+        "transitions_per_s": 2.1578948497772217
+      },
+      "scenario": "turn-right-90",
+      "searches": 166,
+      "step_us": {
+        "max": 161.278,
+        "p50": 10.074,
+        "p99": 113.593
+      },
+      "unlocks_by_radius": 0,
+      "worst_contacts": [
+        {
+          "at_s": 14.483333587646484,
+          "frames": 46,
+          "joint": "toe",
+          "side": "left",
+          "slide_cm": 4.959675312042236
+        },
+        {
+          "at_s": 0.0,
+          "frames": 123,
+          "joint": "toe",
+          "side": "right",
+          "slide_cm": 4.165398597717285
+        },
+        {
+          "at_s": 8.283333778381348,
+          "frames": 4,
+          "joint": "toe",
+          "side": "left",
+          "slide_cm": 3.293048620223999
+        },
+        {
+          "at_s": 4.833333492279053,
+          "frames": 46,
+          "joint": "toe",
+          "side": "left",
+          "slide_cm": 3.0696029663085938
+        },
+        {
+          "at_s": 11.016666412353516,
+          "frames": 46,
+          "joint": "toe",
+          "side": "right",
+          "slide_cm": 2.501594305038452
+        }
+      ]
+    },
+    {
+      "about": "a gentle curve: a quarter circle of 5 m radius after 2 m straight",
+      "allocations_in_step": 0,
+      "end_offset_m": 0.15613846480846405,
+      "metrics": {
+        "cadence_steps_per_min": 84.15584564208984,
+        "contacts": 20,
+        "hip_sway_cm": 2.3356568813323975,
+        "jerk_rms_cm": 0.2157762348651886,
+        "jog_cm": 1.7289056777954102,
+        "knee_at_strike_deg": 12.915702819824219,
+        "knee_swing_deg": 61.714637756347656,
+        "limb_acc_cm": 3.9664175510406494,
+        "slide_p95_cm": 4.165398597717285,
+        "slide_worst_cm": 4.165398597717285,
+        "speed_m_s": 0.857856273651123,
+        "step_length_m": 0.6178663372993469,
+        "steps": 9,
+        "torso_acc_cm": 0.5921450257301331,
+        "transitions": 39,
+        "transitions_per_s": 2.1666667461395264
+      },
+      "scenario": "curve",
+      "searches": 159,
+      "step_us": {
+        "max": 174.574,
+        "p50": 19.13,
+        "p99": 133.741
+      },
+      "unlocks_by_radius": 0,
+      "worst_contacts": [
+        {
+          "at_s": 0.0,
+          "frames": 124,
+          "joint": "toe",
+          "side": "right",
+          "slide_cm": 4.165398597717285
+        },
+        {
+          "at_s": 6.316666603088379,
+          "frames": 47,
+          "joint": "toe",
+          "side": "left",
+          "slide_cm": 3.573897123336792
+        },
+        {
+          "at_s": 10.566666603088379,
+          "frames": 47,
+          "joint": "toe",
+          "side": "left",
+          "slide_cm": 3.194711685180664
+        },
+        {
+          "at_s": 9.166666984558105,
+          "frames": 46,
+          "joint": "toe",
+          "side": "left",
+          "slide_cm": 3.0573816299438477
+        },
+        {
+          "at_s": 12.699999809265137,
+          "frames": 5,
+          "joint": "toe",
+          "side": "left",
+          "slide_cm": 2.8542985916137695
+        }
+      ]
+    },
+    {
+      "about": "12 m straight at 0.6 m/s, keeping pace with someone slower",
+      "allocations_in_step": 0,
+      "end_offset_m": 0.35579004883766174,
+      "metrics": {
+        "cadence_steps_per_min": 113.467041015625,
+        "contacts": 29,
+        "hip_sway_cm": 4.734682559967041,
+        "jerk_rms_cm": 0.20578880608081818,
+        "jog_cm": 1.4464086294174194,
+        "knee_at_strike_deg": 20.342376708984375,
+        "knee_swing_deg": 55.86964797973633,
+        "limb_acc_cm": 4.195202350616455,
+        "slide_p95_cm": 4.068599700927734,
+        "slide_worst_cm": 4.63887357711792,
+        "speed_m_s": 0.6374423503875732,
+        "step_length_m": 0.35407158732414246,
+        "steps": 11,
+        "torso_acc_cm": 0.5335937142372131,
+        "transitions": 47,
+        "transitions_per_s": 1.8799999952316284
+      },
+      "scenario": "alongside-slow",
+      "searches": 215,
+      "step_us": {
+        "max": 163.648,
+        "p50": 8.537,
+        "p99": 127.648
+      },
+      "unlocks_by_radius": 9,
+      "worst_contacts": [
+        {
+          "at_s": 20.066667556762695,
+          "frames": 296,
+          "joint": "toe",
+          "side": "left",
+          "slide_cm": 4.63887357711792
+        },
+        {
+          "at_s": 3.7833333015441895,
+          "frames": 33,
+          "joint": "ankle",
+          "side": "right",
+          "slide_cm": 4.068599700927734
+        },
+        {
+          "at_s": 14.883333206176758,
+          "frames": 42,
+          "joint": "toe",
+          "side": "right",
+          "slide_cm": 4.000771522521973
+        },
+        {
+          "at_s": 8.233333587646484,
+          "frames": 42,
+          "joint": "toe",
+          "side": "right",
+          "slide_cm": 4.000723838806152
+        },
+        {
+          "at_s": 6.016666889190674,
+          "frames": 42,
+          "joint": "toe",
+          "side": "right",
+          "slide_cm": 4.000723361968994
+        }
+      ]
+    }
+  ],
+  "step_us": {
+    "p50": 9.611,
+    "p99": 130.592,
+    "plain_p50": 9.296,
+    "plain_p99": 20.463,
+    "search_p50": 21.907,
+    "search_p99": 153.296
+  },
+  "tool": "motion_eval"
+}
