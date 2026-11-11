@@ -84,6 +84,10 @@ pub struct Retargeter {
     hips_parent_world: Transform,
 }
 
+/// The share of its neck's rest alignment a head with no end site of its own takes (see
+/// `Retargeter::new`).
+const HEAD_SHARE: f32 = 0.5;
+
 fn basis(d: Vec3, sec: Vec3) -> Quat {
     let x = d.normalize_or_zero();
     let y = (sec - x * sec.dot(x)).normalize_or_zero();
@@ -232,6 +236,17 @@ impl Retargeter {
                 }
             }
             let inherited = target.parents[b].map_or(Quat::IDENTITY, |p| align[p]);
+            // A head with no end site of its own to pair (an avatar's: eyes beside its top) takes
+            // half of the neck's alignment. All of it, as any unpaired bone, tipped the head of a
+            // rig whose neck stands bent forward at rest back by the neck's straightening (21
+            // degrees bent: about 11 degrees back, the face to the sky); none of it pitched every
+            // head forward by the source's own head turn (4-13 degrees). Half put the head's top
+            // within 2 degrees of a game's own animation on four bodies, bent necks and straight
+            // (a browser game's round 7, measured on its records).
+            if base_name(&target.names[b]) == "Head" && child_pair.is_none() {
+                align[b] = Quat::IDENTITY.slerp(inherited, HEAD_SHARE);
+                continue;
+            }
             align[b] = match child_pair {
                 Some((c, sc)) => {
                     let dt = tgt_world[c].translation - tgt_world[b].translation;
@@ -369,6 +384,50 @@ mod tests {
         }
         let _ = arms_down;
         Skeleton::new(names, parents, rest).unwrap()
+    }
+
+    #[test]
+    fn a_head_on_a_bent_neck_takes_half_the_necks_alignment() {
+        // Two targets alike but for the neck's rest: straight up, or bent 20 degrees forward
+        // (the head turned back to level on it), each head with eyes beside its top. At the
+        // source's rest pose the straight one's head stands as at its rest, and the bent one's
+        // is tipped back by half of the 20 degrees its neck is straightened by, not all of it.
+        let src = crate::testing::humanoid_skeleton(1.0);
+        let bent = |deg: f32| {
+            let t = crate::testing::humanoid_skeleton(1.0);
+            let (neck, head) = (
+                find_bone(&t, "Neck").unwrap(),
+                find_bone(&t, "Head").unwrap(),
+            );
+            let (mut names, mut parents, mut rest) =
+                (t.names.clone(), t.parents.clone(), t.rest.clone());
+            rest[neck].rotation = Quat::from_axis_angle(Vec3::X, deg.to_radians());
+            rest[head].rotation = Quat::from_axis_angle(Vec3::X, -deg.to_radians());
+            for (n, x) in [("LeftEye", 0.03), ("RightEye", -0.03)] {
+                names.push(n.to_string());
+                parents.push(Some(head));
+                rest.push(Transform::new(Vec3::new(x, 0.1, 0.08), Quat::IDENTITY));
+            }
+            Skeleton::new(names, parents, rest).unwrap()
+        };
+        let tipped = |t: &Skeleton| {
+            // (The 22 driven bones only, as a capture's map gives them: no end site paired.)
+            let mut map = BoneMap::by_name(&src, t);
+            map.pairs.retain(|(n, _)| n != "HeadTop_End");
+            let r = Retargeter::new(&src, t, &map).unwrap();
+            let mut sw = vec![Transform::IDENTITY; src.len()];
+            let mut tw = vec![Quat::IDENTITY; t.len()];
+            let mut out = vec![Transform::IDENTITY; t.len()];
+            r.frame(&src, &src.rest, &mut sw, &mut tw, &mut out);
+            let head = find_bone(t, "Head").unwrap();
+            t.rest_world()[head]
+                .rotation
+                .angle_to(tw[head])
+                .to_degrees()
+        };
+        assert!(tipped(&bent(0.0)) < 0.01);
+        let b = tipped(&bent(20.0));
+        assert!((b - 10.0).abs() < 0.05, "tipped {b} degrees");
     }
 
     #[test]

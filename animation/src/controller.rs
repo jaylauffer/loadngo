@@ -30,7 +30,7 @@ use crate::database::{
 use crate::ik::two_bone;
 use crate::math::{wrap_angle, Quat, Transform, Vec3};
 use crate::path::Steering;
-use crate::search::{search, Exclusions, Match, SearchStats};
+use crate::search::{search, search_features, Exclusions, Match, SearchStats};
 use crate::spring::{angular_velocity, InertialQuat, InertialVec3, RotationSpring, VelocitySpring};
 
 /// Tuning of the runtime. The defaults suit a walking humanoid at 30-240 Hz.
@@ -1033,25 +1033,20 @@ impl MotionMatcher {
         if self.stuck > cfg.stuck_after {
             self.stuck = 0.0;
             self.build_query();
-            let mut best = (f32::INFINITY, self.frame);
-            for f in 0..self.db.frame_count() {
-                let t = self.db.bounds.frame_tags[f];
-                if f + self.frames(cfg.end_margin) >= self.clip_end(f)
-                    || t & cfg.search_tags == 0
-                    || t & cfg.exclude_tags != 0
-                {
-                    continue;
-                }
-                let feat = self.db.feature(f);
-                let cost: f32 = (15..FEATURES)
-                    .map(|k| (self.query[k] - feat[k]).powi(2))
-                    .sum();
-                if cost < best.0 {
-                    best = (cost, f);
-                }
-            }
-            if best.1 != self.frame {
-                self.transition(best.1);
+            // The trajectory's features only (the pose dropped), through the search's bounding
+            // boxes: a scan of every frame here was the kind that cost 10-12 ms once on a
+            // Raspberry Pi 5 in a take-over's frame.
+            let ex = Exclusions {
+                end_margin: self.frames(cfg.end_margin),
+                skip: (0, 0),
+                tags: cfg.search_tags,
+                exclude: cfg.exclude_tags,
+            };
+            let mut st = SearchStats::default();
+            let db = Arc::clone(&self.db);
+            let found = search_features(&db, &self.query, None, ex, &mut st, 15);
+            if let Some(m) = found.filter(|m| m.frame != self.frame) {
+                self.transition(m.frame);
                 self.stats.unstuck += 1;
             }
             self.search_timer = cfg.search_interval;

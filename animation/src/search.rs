@@ -35,9 +35,9 @@ pub struct SearchStats {
     pub large_boxes_tested: usize,
 }
 
-fn box_distance(query: &[f32; FEATURES], min: &[f32], max: &[f32], limit: f32) -> f32 {
+fn box_distance(query: &[f32; FEATURES], min: &[f32], max: &[f32], limit: f32, from: usize) -> f32 {
     let mut d = 0.0;
-    for k in 0..FEATURES {
+    for k in from..FEATURES {
         let q = query[k];
         let e = (min[k] - q).max(q - max[k]).max(0.0);
         d += e * e;
@@ -54,9 +54,24 @@ fn box_distance(query: &[f32; FEATURES], min: &[f32], max: &[f32], limit: f32) -
 pub fn search(
     db: &Database,
     query: &[f32; FEATURES],
+    best: Option<Match>,
+    exclusions: Exclusions,
+    stats: &mut SearchStats,
+) -> Option<Match> {
+    search_features(db, query, best, exclusions, stats, 0)
+}
+
+/// [`search`] over the features from `from` on only (the trajectory's, say, dropping the
+/// pose's), through the same bounding boxes: a box's distance over those features alone is
+/// still a lower bound. Allocates nothing.
+#[must_use]
+pub fn search_features(
+    db: &Database,
+    query: &[f32; FEATURES],
     mut best: Option<Match>,
     exclusions: Exclusions,
     stats: &mut SearchStats,
+    from: usize,
 ) -> Option<Match> {
     let total = db.frame_count();
     let b = &db.bounds;
@@ -74,6 +89,7 @@ pub fn search(
             &b.large_min[lo..lo + FEATURES],
             &b.large_max[lo..lo + FEATURES],
             best_cost,
+            from,
         ) >= best_cost
         {
             large += 1;
@@ -95,6 +111,7 @@ pub fn search(
                 &b.small_min[so..so + FEATURES],
                 &b.small_max[so..so + FEATURES],
                 best_cost,
+                from,
             ) >= best_cost
             {
                 continue;
@@ -113,7 +130,7 @@ pub fn search(
                 stats.frames_tested += 1;
                 let feat = &db.features[f * FEATURES..(f + 1) * FEATURES];
                 let mut d = 0.0;
-                for k in 0..FEATURES {
+                for k in from..FEATURES {
                     let e = query[k] - feat[k];
                     d += e * e;
                     if d >= best_cost {
@@ -196,5 +213,48 @@ mod tests {
             tested += stats.frames_tested;
         }
         assert!(tested > 0);
+    }
+
+    #[test]
+    fn a_search_over_some_features_finds_their_brute_force_frame() {
+        let target = humanoid_skeleton(1.0);
+        let clips = [
+            synthetic_walk(&target, 400, 0.8),
+            synthetic_idle(&target, 200),
+        ];
+        let db = Database::build(&target, &clips, &BuildConfig::default()).unwrap();
+        let ex = Exclusions {
+            end_margin: 20,
+            skip: (0, 0),
+            tags: crate::database::tags::LOCOMOTION,
+            exclude: 0,
+        };
+        for probe in (0..db.frame_count()).step_by(41) {
+            let mut q = [0.0f32; FEATURES];
+            q.copy_from_slice(db.feature(probe));
+            // The pose's features far off: they must not count.
+            for v in q.iter_mut().take(15) {
+                *v += 40.0;
+            }
+            let mut stats = SearchStats::default();
+            let a = search_features(&db, &q, None, ex, &mut stats, 15).unwrap();
+            let mut best = (f32::INFINITY, 0);
+            for f in 0..db.frame_count() {
+                if f + ex.end_margin >= db.bounds.clip_end[f] as usize
+                    || db.bounds.frame_tags[f] & ex.tags == 0
+                {
+                    continue;
+                }
+                let feat = db.feature(f);
+                let d: f32 = (15..FEATURES).map(|k| (q[k] - feat[k]).powi(2)).sum();
+                if d < best.0 {
+                    best = (d, f);
+                }
+            }
+            assert!(
+                (a.cost - best.0).abs() < 1e-4,
+                "probe {probe}: {a:?} vs {best:?}"
+            );
+        }
     }
 }
