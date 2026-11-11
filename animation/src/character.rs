@@ -304,6 +304,13 @@ impl Character {
         });
     }
 
+    /// Plants the feet where they stand now (each ankle's place on the ground, world; `None`
+    /// leaves a foot to the capture): for a body handed over from other animation
+    /// (`MotionMatcher::plant_feet`).
+    pub fn plant_feet(&mut self, ankles: [Option<Vec3>; 2]) {
+        self.m.plant_feet(ankles);
+    }
+
     /// Stops and stands about where it is (idles).
     pub fn idle(&mut self) {
         let facing = self.m.root().rotation.yaw();

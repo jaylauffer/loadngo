@@ -521,6 +521,26 @@ pub unsafe extern "C" fn anim_character_teleport(
     0
 }
 
+/// Plants the feet where they stand now: each ankle's place on the ground `(lx, lz)`, `(rx, rz)`
+/// (world), NaN to leave a foot to the capture; for a body handed over from other animation.
+/// 0 on success.
+///
+/// # Safety
+/// `c` must be live.
+#[no_mangle]
+pub unsafe extern "C" fn anim_character_plant_feet(
+    c: *mut CharacterHandle,
+    lx: f32,
+    lz: f32,
+    rx: f32,
+    rz: f32,
+) -> u32 {
+    let Some(c) = live(c) else { return 1 };
+    let at = |x: f32, z: f32| (x.is_finite() && z.is_finite()).then(|| Vec3::new(x, 0.0, z));
+    c.c.plant_feet([at(lx, lz), at(rx, rz)]);
+    0
+}
+
 /// Advances by `dt` seconds and rewrites the pose buffer. Allocates nothing. 0 on success.
 ///
 /// # Safety

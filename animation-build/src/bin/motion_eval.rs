@@ -972,7 +972,12 @@ fn main() {
         let worst_json: Vec<serde_json::Value> = worst
             .iter()
             .take(5)
-            .map(|c| serde_json::json!({ "side": if c.left { "left" } else { "right" }, "joint": if c.ball { "toe" } else { "ankle" }, "at_s": c.start as f32 / a.hz, "frames": c.frames, "slide_cm": c.slide * 100.0 }))
+            .map(|c| {
+                let clip = r.db_frame.get(c.start).and_then(|f| db.clip_of(f.0)).map_or(String::new(), |k| {
+                    format!("{}{}", k.name, if k.mirrored { "-m" } else { "" })
+                });
+                serde_json::json!({ "side": if c.left { "left" } else { "right" }, "joint": if c.ball { "toe" } else { "ankle" }, "at_s": c.start as f32 / a.hz, "frames": c.frames, "slide_cm": c.slide * 100.0, "clip": clip })
+            })
             .collect();
         if std::env::var_os("MOTION_EVAL_VERBOSE").is_some() {
             // The largest accelerations, and the clip playing there.

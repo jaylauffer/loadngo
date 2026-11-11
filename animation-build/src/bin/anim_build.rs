@@ -31,6 +31,8 @@ const USAGE: Usage = Usage {
         ArgDoc::required("--out", "<database.lmm>", "where to write the database (written to <out>.partial, then renamed)"),
         ArgDoc::repeated("--include", "<text>", "keep only source files whose path contains one of these (e.g. Neutral_FW)"),
         ArgDoc::repeated("--exclude", "<text>", "drop source files whose path contains any of these"),
+        ArgDoc::optional("--tags", "<tag,tag,...>", "with --manifest: keep only clips with any of these tags (walk, idle, turn, start-stop, sit-down, stand-up, seated, talk, gesture, man, woman)"),
+        ArgDoc::optional("--skip-tags", "<tag,tag,...>", "with --manifest: drop clips with any of these tags (e.g. woman, for a man's body)"),
         ArgDoc::optional("--map", "<auto|100style|cmu|name>", "how source bones map to the target's (default auto, from the joint names)"),
         ArgDoc::optional("--scale", "<auto|number>", "source units to metres (default auto: from the leg length, cm and mm recognised)"),
         ArgDoc::optional("--cuts", "<auto|none|Frame_Cuts.csv>", "frames to keep per clip; auto reads a 100STYLE Frame_Cuts.csv beside the files (default auto)"),
@@ -60,6 +62,8 @@ struct Args {
     out: PathBuf,
     include: Vec<String>,
     exclude: Vec<String>,
+    tags: u32,
+    skip_tags: u32,
     map: Option<MapKind>,
     scale: Option<f32>,
     cuts: String,
@@ -87,6 +91,8 @@ fn parse_args() -> Args {
         manifest: None,
         out: PathBuf::new(),
         include: Vec::new(),
+        tags: 0,
+        skip_tags: 0,
         exclude: Vec::new(),
         map: None,
         scale: None,
@@ -112,6 +118,18 @@ fn parse_args() -> Args {
             "--out" => a.out = PathBuf::from(value()),
             "--include" => a.include.push(value()),
             "--exclude" => a.exclude.push(value()),
+            "--tags" | "--skip-tags" => {
+                let mut bits = 0;
+                for t in value().split(',').map(str::trim).filter(|t| !t.is_empty()) {
+                    bits |= tags::parse(t)
+                        .unwrap_or_else(|| fail(&format!("{flag}: unknown tag {t:?}")));
+                }
+                if flag == "--tags" {
+                    a.tags |= bits;
+                } else {
+                    a.skip_tags |= bits;
+                }
+            }
             "--map" => {
                 let v = value();
                 a.map = MapKind::parse(&v).unwrap_or_else(|| {
@@ -334,7 +352,13 @@ fn main() {
     let manifest_entries = args.manifest.as_ref().map(|m| {
         let bytes =
             io::read_file(&proactor, m).unwrap_or_else(|e| fail(&format!("{}: {e}", m.display())));
-        read_manifest(&bytes, m).unwrap_or_else(|e| fail(&format!("{}: {e}", m.display())))
+        let mut e =
+            read_manifest(&bytes, m).unwrap_or_else(|e| fail(&format!("{}: {e}", m.display())));
+        e.retain(|c| (args.tags == 0 || c.tags & args.tags != 0) && c.tags & args.skip_tags == 0);
+        if e.is_empty() {
+            fail("--tags and --skip-tags left no clips");
+        }
+        e
     });
     for s in &args.sources {
         if !s.exists() {

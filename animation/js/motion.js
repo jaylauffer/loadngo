@@ -161,6 +161,12 @@ export class MotionCharacter {
   get state() {
     return STATES[this.motion.x.anim_character_state(this.h)];
   }
+  /** Plant the feet where they stand now: each ankle's [x, z] on the ground, or null to leave it to the capture. */
+  plantFeet(left, right) {
+    const [lx, lz] = left ?? [NaN, NaN];
+    const [rx, rz] = right ?? [NaN, NaN];
+    this.check(this.motion.x.anim_character_plant_feet(this.h, lx, lz, rx, rz));
+  }
   teleport(x, z, facing) {
     this.check(this.motion.x.anim_character_teleport(this.h, x, z, facing));
   }

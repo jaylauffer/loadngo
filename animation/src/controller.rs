@@ -241,6 +241,8 @@ struct FootLock {
     correction: Vec3,
     previous_correction: Vec3,
     release: InertialVec3,
+    /// Asked to be planted here (the ankle's place on the ground) on the next step: see `plant_feet`.
+    plant: Option<Vec3>,
 }
 
 impl Default for FootLock {
@@ -251,6 +253,7 @@ impl Default for FootLock {
             correction: Vec3::ZERO,
             previous_correction: Vec3::ZERO,
             release: InertialVec3::default(),
+            plant: None,
         }
     }
 }
@@ -544,6 +547,16 @@ impl MotionMatcher {
         };
         for f in &mut self.feet {
             *f = FootLock::default();
+        }
+    }
+
+    /// Plants the feet where a character placed mid-scene has them (each ankle's place on the
+    /// ground, world; `None` leaves a foot to the capture): from the next step the foot lock holds
+    /// a foot the pose has on the ground there, and eases one it lifts back to the pose from there,
+    /// so a body handed over from other animation keeps its feet where they stood.
+    pub fn plant_feet(&mut self, ankles: [Option<Vec3>; 2]) {
+        for (f, a) in self.feet.iter_mut().zip(ankles) {
+            f.plant = a;
         }
     }
 
@@ -1032,6 +1045,30 @@ impl MotionMatcher {
             }
             let want = if foot.released.is_some() { None } else { want };
             let point_in = |p: Point| if p == Point::Heel { ankle_in } else { toe_in };
+            if let Some(p) = foot.plant.take() {
+                // Taken up where it was planted: held there if the pose has it down, else let go
+                // from there.
+                let c = Vec3::new(p.x - ankle_in.x, 0.0, p.z - ankle_in.z);
+                foot.released = None;
+                foot.correction = c;
+                foot.previous_correction = c;
+                match want {
+                    Some(w) => {
+                        let mut at = point_in(w) + c;
+                        at.y = if w == Point::Heel {
+                            heights[0]
+                        } else {
+                            heights[1]
+                        };
+                        foot.held = Some((w, at));
+                    }
+                    None => {
+                        foot.held = None;
+                        foot.release.offset = c;
+                        foot.release.offset_vel = Vec3::ZERO;
+                    }
+                }
+            }
             let changed = match (foot.held, want) {
                 (Some((p, _)), Some(w)) => p != w,
                 (None, None) => false,
@@ -1116,6 +1153,30 @@ mod tests {
             synthetic_idle(&target, 300),
         ];
         Arc::new(Database::build(&target, &clips, &BuildConfig::default()).unwrap())
+    }
+
+    #[test]
+    fn planted_feet_stay_where_they_were_put() {
+        let mut m = MotionMatcher::new(db(), Config::default(), Vec3::ZERO, 0.0);
+        let s = ConstantSteering {
+            velocity: Vec3::ZERO,
+            facing: 0.0,
+        };
+        for _ in 0..120 {
+            m.step(1.0 / 60.0, &s);
+        }
+        // Handed over mid-scene: the feet where other animation left them, 4 cm off the pose's.
+        let legs = m.db.humanoid.legs;
+        let want = [0, 1].map(|i| m.world_positions()[legs[i].ankle] + Vec3::new(0.04, 0.0, -0.03));
+        m.plant_feet([Some(want[0]), Some(want[1])]);
+        m.step(1.0 / 60.0, &s);
+        for (i, w) in want.iter().enumerate() {
+            let at = m.world_positions()[legs[i].ankle];
+            assert!(
+                (at - *w).flat().length() < 0.01,
+                "foot {i} at {at:?}, planted at {w:?}"
+            );
+        }
     }
 
     #[test]
