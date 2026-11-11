@@ -1,18 +1,24 @@
-# Animation: motion matching
+# Animation: motion matching and the character framework
 
-Status: round 1, 2026-11-11. A motion-matching runtime and its pipeline, in Rust, for every
-loadngo target and for the browser as WebAssembly. Walking, turning, starting, stopping and
-standing come from real captured motion (100STYLE's normal walking), retargeted to a
-Mixamo-named humanoid. Measured on this Mac and on dolores (below). Sitting, standing up and the
-browser host's frame loop are the next rounds.
+Status: round 2, 2026-11-11. A motion-matching runtime, a character framework over it, and their
+pipeline, in Rust, for every loadngo target and for the browser as WebAssembly. Walking, turning,
+starting, stopping and standing come from real capture (100STYLE's normal walking, CMU's slow walks,
+turns and stops, Mesh2Motion's turns in place); sitting down on a seat of any height, sitting and
+standing up from CMU's sits; looking, reaching and talking beats are layers over it. Everything is
+retargeted to a Mixamo-named humanoid. Round 1's measurements are kept below; round 2's follow
+them. In a browser game the framework walks real bodies behind a flag (see "In a browser game").
 
 | Where | What |
 | --- | --- |
 | `animation/` (`loadngo-animation`) | The core: pure Rust, one dependency (BLAKE3). Builds for every loadngo target and `wasm32-unknown-unknown` |
+| `animation/src/controller.rs` | `MotionMatcher`: search, playback, inertialization, root, foot lock; actions |
+| `animation/src/character.rs` | `Character`: commands (walk, face, follow, sit, stand, gesture, look, reach), states and layers |
+| `animation/src/asf.rs` | CMU's ASF skeletons and AMC motion |
 | `animation/js/motion.js`, `animation/build.sh` | The browser module and its wrapper |
 | `animation/bench/` | The browser benchmark page and its server |
 | `animation-build/` (`loadngo-animation-build`) | The pipeline tool `anim_build` and the harness `motion_eval`, on loadngo-proactor |
-| `animation/evidence/round-1/` | Reports and frame strips |
+| `animation/data/` | Clip manifests: `round-2.json` (everything, 25 min), `walk-core.json` (a web game's walking, 6-7.5 min) |
+| `animation/evidence/round-1/` | Round 1's reports and frame strips |
 | `docs/ANIMATION_CREDITS.md` | Data sources and licences |
 
 ## Why motion matching
@@ -81,6 +87,17 @@ frames; end sites become leaf bones named `<parent>_End`. Units are guessed from
 trims each clip's calibration pose (`--cuts auto`). Clips are resampled to the database's rate
 (60 fps).
 
+### Importing CMU's ASF/AMC, and manifests
+
+`animation/src/asf.rs` reads an ASF skeleton (its axes, degrees of freedom and units) and AMC
+frames; each bone's rotation is `C · E · C⁻¹` from its axis rotation `C` and the frame's Euler
+angles `E` (Rz·Ry·Rx), lengths in metres from `units length`. Bone map `cmu-asf`.
+
+`anim_build --manifest clips.json` takes clips with their own skeletons, rates, time ranges, tags,
+mirroring and maps (`animation/data/README.md`); `--tags` and `--skip-tags` keep or drop clips by
+tag (`--skip-tags woman` for a man's body). The two manifests in `animation/data/` reproduce the
+databases measured here byte for byte.
+
 ### Retargeting
 
 `animation/src/retarget.rs`. Each mapped target bone takes its source bone's world-space change
@@ -127,15 +144,31 @@ The target is a glTF skin with Mixamo-style names (`--target avatar.glb`: the sk
 - **Mirror.** Each clip's mirror image is added (left and right swapped, about the delta from
   rest so an asymmetric rest still works), doubling turns and starts on both feet.
 
-**The file** (`.lmm`, version 1, little-endian): magic `LDGOANIM`, version, fps, bone, frame, clip
-and feature counts; each bone's name, parent and rest transform; the armature transform; the feet's
-rest heights; each clip's range, mirror flag and name; feature means, scales and weights; per
-frame the root (`x`, `z`, yaw) and hips position; every rotation as four 16-bit fixed-point
-numbers (at most 0.0002 rad of error); contact bytes; features as `f32`; then a BLAKE3 hash of
-everything before it. Readers refuse another version, a wrong hash, a short file or trailing bytes.
-The Neutral database is 9.0 MB, 7.9 MB gzipped: heavy for a page. Halving it is
-straightforward (features as 16-bit, rotations as smallest-three, the search at 30 fps) and is
-listed under "What is short".
+- **Tags.** Each clip's tags (above), with each frame's and each search box's union, so a search
+  limited by tag skips whole boxes.
+
+**The file** (`.lmm`, version 2, little-endian; version 1 still reads): magic `LDGOANIM`, version,
+fps, bone, frame, clip and feature counts; each bone's name, parent and rest transform; the
+armature transform; the feet's rest heights; each clip's range, mirror flag, tags and name; feature
+means, scales and weights; per frame the root (`x`, `z`, yaw) and hips position; every rotation in
+48 bits (smallest three, at most 0.0003 rad of error); contact bytes; features as 16-bit fixed
+point; then a BLAKE3 hash of everything before it. Readers refuse another version, a wrong hash, a
+short file or trailing bytes. A database built in memory is quantized the same way, so a built one
+and a loaded one match exactly.
+
+**Sizes** (60 fps; version 2 is 211 bytes a frame against round 1's 309):
+
+| Database | Motion | File |
+| --- | --- | --- |
+| Round 1's Neutral (100STYLE FW, ID, TR1) | 8.0 min | 9.0 MB (version 1) |
+| `round-2.json`, every clip | 25.2 min | 19.1 MB |
+| `round-2.json` at 30 fps | 25.2 min | 9.5 MB (adds pops: the search's poses are coarser) |
+| `walk-core.json`, a man's body (`--skip-tags woman`) | 7.5 min | 5.7 MB |
+| `walk-core.json`, a woman's body (`--skip-tags man`) | 6.3 min | 4.8 MB |
+
+A database is built for one skeleton; bodies of one build (the same rig scaled to the same hips
+height, as Ready Player Me and TalkingHead bodies are) can share one, the host scaling floor
+distances by the body's own scale.
 
 ## The runtime
 
@@ -170,7 +203,8 @@ listed under "What is short".
    own plane while it is bent and turning to the body's forward as it straightens, where the
    leg's plane is ill-defined (this cut knee pops from 9.9 to under 5 cm/frame²). A held point
    further than 0.2 m from the animated foot lets go and blends back over 0.1 s, and is not held
-   again until that contact ends.
+   again until that contact ends. Planted feet (`plant_feet`) are taken up the same way, from
+   where they were planted.
 
 **No allocation.** Every buffer is sized when the matcher is made; `step` allocates nothing,
 including searches and transitions. `animation/tests/no_allocation.rs` counts with its own
@@ -187,11 +221,65 @@ so idling at a lower frame demand is the host's policy.
 the end or past it, so an overshoot never turns them back). Every setting is in
 `controller::Config`, settable by name (`Config::set`) from tools and from the browser.
 
+## The framework
+
+`Character` (`animation/src/character.rs`) is what a game drives: commands in, a pose out. It
+owns a `MotionMatcher` and puts three things over it.
+
+**Commands.** `go_to(points, speed, end_facing)`, `steer(velocity, facing)`, `face(facing)`,
+`follow(Follow { position, velocity, heading, offset })` (keep beside someone, called each frame),
+`idle()`, `sit(Seat { hips, facing })`, `stand()`, `gesture(word_times, strength)`,
+`look_at(point)`, `hand_to(side, point)`, `teleport(position, facing)` and `plant_feet(ankles)`.
+A command given while seated stands first and then does it. `state()` says where it is:
+standing, walking, approaching a seat, sitting down, seated, standing up.
+
+**Search by tag.** Every clip carries tags (`database::tags`: walk, idle, turn, start-stop,
+sit-down, stand-up, seated, talk, gesture, man, woman). `Config::search_tags` and `exclude_tags`
+limit what the matcher may choose (a woman's body excludes the men's captures; locomotion never
+searches the seated stretches).
+
+**Actions.** `MotionMatcher::play(Action { start, end, looping, pin_root, root_target,
+hips_height_target })` plays a stretch of the database as it is, with the same inertialized
+transition in and out, instead of searching:
+
+- its root is warped onto `root_target` over its length, closed-loop: each step takes a share of
+  what is left between where the clip's own motion would end and the target, so it lands there
+  whatever the velocity blend carried in (open-loop it missed a seat by 20 cm and 0.3 rad);
+- its hips are lifted or lowered to `hips_height_target` (a seat lower or higher than the
+  capture's); the foot lock grounds a foot the capture had near the floor against that lift, so
+  the feet stay on the floor (they went 16 cm into it);
+- a looping hold (seated) takes its lift at once, the hips' inertialization hiding the step, and
+  `pin_root` keeps the root still.
+
+**Seats.** `sit(seat)` chooses the sitting-down clip and the seated loop to follow it together:
+the sit's seated hips near the seat's height, and the loop's frame the one whose feet, its hips
+put on the seat, are nearest where the sit leaves them, with at least 3 s of loop after it (a
+short loop shows its seam every time it restarts; clips tagged talk or gesture are not idles).
+From the sit's first frame and its root motion it works out where the sit begins (the approach
+spot) and walks there, stopping short by what turning round will carry the character on
+(0.3 m for a half turn, scaled by the turn); turned, and within 0.35 m once the feet have
+settled, it sits, the warp taking up the rest (small corrective steps look worse). `stand()`
+picks the rising frame, in the first half second of each stand-up clip, whose feet from the hips
+and hips height are nearest the pose held.
+
+**Layers**, each eased in and out, over the matched pose:
+
+- **Beats:** on each word time a small lift and turn of the forearms and a nod, at `strength`;
+- **Look-at:** the chest, neck and head turn towards a point, 0.2, 0.35 and 0.45 of the turn,
+  within a person's reach;
+- **Reach:** two-bone IK puts a wrist at a point (a cup, a table's edge).
+
+**Handing a body over.** A game that animates its own characters can give the body to the
+framework for some moves only (a walk) and take it back. `plant_feet(ankles)` takes up the feet
+where the other animation left them: the foot lock holds a foot the pose has on the ground there,
+and eases one the pose lifts back from there, so nothing slides as one pose fades into the other.
+
 ## In the browser
 
-`animation/build.sh` builds `animation/pkg/`: `loadngo_animation.wasm` (146 KB, 70 KB gzipped; 128-bit
-SIMD; no imports at all) and `motion.js`. The boundary follows web3d's: plain C-ABI functions over
-numbers and pointers into the module's memory, no wasm-bindgen.
+`animation/build.sh` builds `animation/pkg/`: `loadngo_animation.wasm` (174 KB, 82 KB gzipped;
+128-bit SIMD; no imports at all) and `motion.js`. The boundary follows web3d's: plain C-ABI
+functions over numbers and pointers into the module's memory, no wasm-bindgen. A character is a
+`Character`, so every command is there:
 
 ```js
 import { loadMotion, applyPose } from './pkg/motion.js';
@@ -199,28 +287,43 @@ const motion = await loadMotion(new URL('./pkg/loadngo_animation.wasm', import.m
 const db = motion.loadDatabase(await (await fetch('walk.lmm')).arrayBuffer());
 const who = db.createCharacter(0, 0, 0);       // x, z, facing
 who.setPath([0, 0, 0, 6, 6, 6], 0.83);         // x, z pairs; m/s
+who.sit(hx, hy, hz, facing); who.stand();      // a seat: the seated hips, the way they face
+who.lookAt([x, y, z]); who.gesture([0.2, 0.7], 0.6); who.handTo('right', [x, y, z]);
+who.plantFeet([lx, lz], [rx, rz]);             // taking a body over from other animation
 // on each frame the host asks for:
 applyPose(who.step(dt), avatar, bonesInDbOrder);
+who.state;                                     // 'standing', 'walking', 'seated', ...
 ```
 
 `step(dt)` returns one `Float32Array` view over the character's pose buffer, rewritten in place:
 `[rootX, rootZ, facing, feetHeld, hipsX, hipsY, hipsZ]` then `x, y, z, w` for each driven bone (the
 hips' rotation relative to the root, the others relative to their parents, in `db.boneNames`
-order). Nothing is allocated on either side of the boundary per frame; memory grows only when a
-database or character is made, and the wrapper remakes its views then. `applyPose` writes the
-buffer into three.js-style objects without importing three; it assumes the hips' parent sits at
-the model's root (an armature node with no transform, as Ready Player Me avatars have).
+order), the layers included. Nothing is allocated on either side of the boundary per frame; memory
+grows only when a database or character is made, and the wrapper remakes its views then.
+`applyPose` writes the buffer into three.js-style objects without importing three; it assumes the
+hips' parent sits at the model's root (an armature node with no transform, as Ready Player Me
+avatars have).
 
-### The browser host's seam (next round)
+A page that bundles its code with Vite cannot `import()` a file from its public folder in
+development; fetching `motion.js` as text and importing it from a blob URL works in both
+development and a build (the module has no imports of its own).
+
+### The browser host's seam (not taken this round)
 
 loadngo-proactor's browser backend (`BrowserHost`, branch `proactor-wasm`) runs one frame handler
 per `requestAnimationFrame` callback at a `FrameDemand`. The seam is that frame handler: it calls
-`MotionMatcher::step` for each visible character with the frame's `dt`, and the page draws from
-the pose buffers in `onFrame`. Characters out of view need not step every frame (a coarser
+`Character::step` for each visible character with the frame's `dt`, and the page draws from the
+pose buffers in `onFrame`. Characters out of view need not step every frame (a coarser
 `FrameDemand`, catching up with one larger `dt`, which the runtime accepts up to 0.1 s). Loading a
 database belongs to the host's external-operation path (`complete(id, bytes)`), so the fetch and
-the hash check never run inside a frame. When both crates link into one module (the game's), the
-`anim_*` exports sit beside the host's; `motion.js` takes any instance that has them.
+the hash check never run inside a frame. When both crates link into one module, the `anim_*`
+exports sit beside the host's; `motion.js` takes any instance that has them.
+
+Round 2's game does not use it: `BrowserHost` is still on an unmerged branch, and the game's frame
+loop is its own (three.js and its stage pace frames and measure them against its performance
+floor). The game steps each character from that loop, through its motion layer's existing
+`step(dt)`, and loads the databases beside its models before its Ready screen. Moving the game onto
+`BrowserHost` is a frame-loop change for the game as a whole, after that branch merges.
 
 ## Measured
 
@@ -293,33 +396,102 @@ and the motion is the same to the measures' precision, except where a near tie b
 frames tips the other way (the left and right turns trade their worst slides, as mirror images
 would): read a single run's worst contact as one sample, not a property.
 
+### Round 2 (this Mac, release build; `animation/evidence/round-2/mac/`)
+
+The same measures, two databases on the canonical humanoid: `round-2.json` whole (25 min) and
+`walk-core.json` (7.5 min, the set a web game ships). The worst contact of a run is one sample
+(see above); the 95th percentile is the steadier number.
+
+| Scenario | Every clip: slide worst / p95 (cm) | Walk set: slide worst / p95 (cm) | Every clip: gait | Walk set: gait |
+| --- | --- | --- | --- | --- |
+| Straight | 27.75 / 2.47 | 3.15 / 3.15 | 86.9 × 0.602 m at 0.85 m/s, sway 4.4, knee 12.8 / 62.3 | 86.9 × 0.602 m at 0.85, sway 4.3, knee 12.6 / 62.5 |
+| Start and stop | 2.42 / 2.38 | 4.82 / 2.29 | | |
+| 90° turn left | 25.44 / 13.38 | 3.60 / 2.59 | | |
+| 90° turn right | 15.96 / 13.38 | 28.32 / 5.16 | | |
+| Gentle curve | 13.38 / 4.78 | 23.94 / 17.88 | 86.9 × 0.612 m at 0.86, sway 4.7 | 88.3 × 0.585 m at 0.84, sway 4.3 |
+| Off 80° from standing | 3.61 / 3.61 | 53.93 / 53.93 | | |
+| Off 180° from standing | 10.17 / 10.17 | 2.77 / 2.77 | | |
+| Alongside at 0.6 m/s | 21.92 / 1.19 | 4.52 / 2.29 | 85.7 × 0.477 m at 0.66 m/s, sway 4.4, knee 12.2 / 61.9 | 87.8 × 0.529 m at 0.74, sway 3.8 |
+| Sit on a bench (hips 0.45 m) and stand | 25.69 / 25.69 | | | |
+| Sit on a chair facing (0.5 m) and stand | 15.20 / 15.20 | | | |
+
+- **Slow walking fixed by data:** alongside at 0.6 m/s now strolls (85.7 steps a minute of 0.48 m;
+  round 1 mixed turnarounds, 113.5 × 0.35 m), from CMU's slow walks.
+- **Seats:** the hips land on the seat to the centimetre and at its height (0.44-0.46 m on the
+  0.45 m bench, 0.49-0.51 on the 0.5 m chair, seated still); sitting down, seated and standing
+  up are frames in `sit-bench.png` and `sit-chair.png` (upright, thighs level, shins upright). The
+  slide figures for the seat scenarios count a seated toe as one contact for several seconds; the
+  worst is a turn-in-place step before the sit.
+- **Where the walk set loses:** single contacts at turns from standing and at a curve, a raw
+  capture's toe sweeping the floor (Mesh2Motion's turns) or a turning step from CMU. Which frame
+  wins a near tie moves the worst contact from scenario to scenario between databases; the
+  medians and the gait do not move.
+- **Cost:** p50 2.5 µs and p99 21 µs a step with the walk set (p99 37 µs searching), 45 / 97 µs
+  with every clip, 0 allocations in every step, seats and layers included.
+
+### In a browser game (round 2)
+
+A three.js game's people (Ready-Player-Me-style bodies under a talking-head layer, with a motion
+layer of their own built on made clips) walk on the framework behind a flag: walks of 2.5 m or
+more are matched on `walk-core.json`'s databases (a man's build and a woman's), the body handed
+over with its feet planted and handed back at the end; standing up, sitting down and standing
+about stay the game's. The game's own checks judge it, unchanged: sole vertices within 8 mm of
+the ground may slide at most 3.25 cm, no shoe 1 cm into the ground, nothing 1 cm into furniture,
+per-frame limits on every joint's step and acceleration, and the gait.
+
+- **It fails them.** Every run breaks limits, at the hand-overs and the first and last steps: a
+  walk that sets off turning 114° from a chair slides 8-17 cm in its first three contacts, a stop
+  6-21 cm, and hand-overs in short walks pop the arms and legs (fixed in part by keeping walks
+  under 2.5 m on the game's clips and a walk that follows a matched one on the matcher). Between,
+  every contact slides at most 3.25 cm. The game's made walk passes every limit.
+- **The steady walk:** hips 4.6 cm side to side (the made walk 3.1), 86.7 steps a minute of
+  0.61 m at 0.875 m/s (asked 0.81), the knee 68° in the swing and 30° at heel strike, as the made
+  walk's: lifting the capture's soles onto the bodies' own shoes bends the knee that much (12.6° on
+  the capture's skeleton alone).
+- **By eye:** upright, the arms hanging and swinging at the sides; the made walk holds the
+  forearms out in front. The game's limits do not measure the arms.
+- **What the hand-over needed:** the capture's foot lock alone under the matched body (the game's
+  own foot holds over it bent the knees), only the soles lifted onto the shoes' rest heights and a
+  moving toe kept clear by its speed (the capture's swing skims the ground at 0.6-1.6 cm), feet
+  planted at the hand-over (`plant_feet`), the walk asked to stop 0.3 m short of its end (its stops
+  carry on past), and the chest's walking pose eased in with the fade (at once, it jumped the head
+  5 cm).
+- **Cost:** the game's motion layer per frame p50 0.6 ms, p95 1.1 ms, as before (the matcher's
+  step is microseconds; the clips still run under it). Download: 10.6 MB more (two databases and the
+  module).
+
 ## What is short
 
-- **Slow steady walking.** 100STYLE's Neutral style has none: its slow stretches are
-  turnarounds. Bounded time-warping (`time_warp`, off) slows faster clips but lengthens the steps
-  (79 × 0.64 m at 0.83 m/s), so the fix is data: CMU's slow walks, or a short capture.
-- **Stops and starts.** About 14 stops in the data (and their mirrors); a stop overshoots its mark
-  by 0.1-0.4 m and the worst contacts of a run are at starts and stops (7-8 cm).
-- **Arrival precision.** The character stops where its stopping motion takes it, 0.16-0.42 m from
-  the path's end. A game placing someone exactly (before sitting) needs a final placement step.
-- **One performer, one style**, an inertial capture (its own foot drift is the floor of these
-  numbers).
-- **Database size**: 9.0 MB (7.9 MB gzipped) for 8 minutes of motion at 60 fps.
-- **Flat ground only**: contacts are held at the floor's height.
-- **Judged on stick figures and joint measures here.** The skinned characters, their sole
-  vertices and clipping are judged in the game.
+- **Starts and stops in a game.** The turning start from a chair and the stop, and the hand-overs
+  around them, are where a game's limits break (above). Next: more turning-start data, starting
+  the matcher from the other animation's last pose rather than fading over it (a pose-matched
+  first frame, as the seats choose theirs), and stops handed back only with both feet down.
+- **Arrival precision.** A stop carries the body 0.1-0.6 m past where it was asked; a game asks
+  for a point 0.3 m short and glides the rest, or sits (the seats' closed-loop warp lands
+  exactly).
+- **Which frame wins a near tie** decides a run's worst contact, and it moves between databases
+  (the tables above); judge a database by its 95th percentiles and gait, and by a game's checks.
+- **Raw turns** (Mesh2Motion's) sweep a toe along the floor; a database without them chose
+  cleaner turns in two of three turning scenarios and a worse one in the third.
+- **Seated idles** come from three captures (CMU 86_15, 113_15, 143_18); the clips' talking and
+  gestures while seated (tagged) are not used as idles. Mesh2Motion's seated idles and talking need
+  a Blender export (not done).
+- **Database size:** 5-6 MB per body build for a web game's walking; every clip 19 MB.
+- **Flat ground only:** contacts are held at the floor's height (a game lifts soles onto its own
+  ground, as above).
+- **One machine:** round 2 was measured on this Mac. dolores was held by another session; its
+  numbers are round 1's.
 
 ## Next
 
-1. **Into a game's motion layer**, first for a character walking beside the player: the
-   character steps through `motion.js` (its database built for that body: `anim_build --target
-   <avatar>.glb`), and the game's own motion checks judge it against its current walk.
-2. **More data:** CMU slow walks, starts, stops and idles; Mesh2Motion's sitting, standing up and
-   talking (CC0, glTF: a glTF animation importer).
-3. **Sitting down and standing up:** contact-driven sequences against a seat's position, matched
-   with the same features plus a target pose.
-4. **The browser host:** step characters from `BrowserHost`'s frame handler at a `FrameDemand`,
-   and load databases through its external operations.
+1. **Pass a game's limits at starts, stops and hand-overs** (above), then make the matched walk a
+   game's default.
+2. **Seats in the game:** the framework's sits land to the centimetre on any seat height; a game
+   with sliding chairs and hands to a table or lap needs its seat poses joined to the framework's.
+3. **Idles, looks and reactions in the game:** the look-at, reach and beats layers, and standing
+   idles from capture.
+4. **The browser host:** step characters from `BrowserHost`'s frame handler once it merges.
+5. **Linux and dolores** for round 2 (tests, `anim_build`, `motion_eval`, the browser cost).
 
 ## Gates
 

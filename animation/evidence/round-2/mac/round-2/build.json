@@ -1,0 +1,646 @@
+{
+  "admission_held_back": 0,
+  "blake3": "f0d718864133b40dc95134845d32f655f072aab35626dde2bac1bfdd1d76b0de",
+  "bones": [
+    "Hips",
+    "Spine",
+    "Spine1",
+    "Spine2",
+    "Neck",
+    "Head",
+    "LeftShoulder",
+    "LeftArm",
+    "LeftForeArm",
+    "LeftHand",
+    "RightShoulder",
+    "RightArm",
+    "RightForeArm",
+    "RightHand",
+    "LeftUpLeg",
+    "LeftLeg",
+    "LeftFoot",
+    "LeftToeBase",
+    "RightUpLeg",
+    "RightLeg",
+    "RightFoot",
+    "RightToeBase"
+  ],
+  "bytes": 19140391,
+  "bytes_read": 92044423,
+  "clips": 132,
+  "format_version": 2,
+  "fps": 60.0,
+  "frames": 90688,
+  "mirror": true,
+  "out": "r2-canonical-60.lmm",
+  "seconds": 0.310339958,
+  "smooth": 0.019999999552965164,
+  "sources": [
+    {
+      "leg_scale": 0.9889810085296631,
+      "map": "Style100",
+      "mapped_bones": 22,
+      "name": "100style-neutral-fw",
+      "scale": 0.009999999776482582,
+      "source_fps": 59.998802185058594,
+      "source_frames": 7896
+    },
+    {
+      "leg_scale": 0.9889810085296631,
+      "map": "Style100",
+      "mapped_bones": 22,
+      "name": "100style-neutral-id",
+      "scale": 0.009999999776482582,
+      "source_fps": 59.998802185058594,
+      "source_frames": 2103
+    },
+    {
+      "leg_scale": 0.9889810085296631,
+      "map": "Style100",
+      "mapped_bones": 22,
+      "name": "100style-neutral-tr1",
+      "scale": 0.009999999776482582,
+      "source_fps": 59.998802185058594,
+      "source_frames": 7119
+    },
+    {
+      "leg_scale": 1.0632623434066772,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-07-04-slow",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 449
+    },
+    {
+      "leg_scale": 1.0632623434066772,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-07-05-slow",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 517
+    },
+    {
+      "leg_scale": 1.0916794538497925,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-08-04-slow",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 484
+    },
+    {
+      "leg_scale": 1.0916794538497925,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-08-11-slow",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 375
+    },
+    {
+      "leg_scale": 1.0282988548278809,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-16-17",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 518
+    },
+    {
+      "leg_scale": 1.0282988548278809,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-16-18",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 520
+    },
+    {
+      "leg_scale": 1.0282988548278809,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-16-19",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 410
+    },
+    {
+      "leg_scale": 1.0282988548278809,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-16-20",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 503
+    },
+    {
+      "leg_scale": 1.0282988548278809,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-16-27",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 243
+    },
+    {
+      "leg_scale": 1.0282988548278809,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-16-28",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 271
+    },
+    {
+      "leg_scale": 1.0282988548278809,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-16-29",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 282
+    },
+    {
+      "leg_scale": 1.0282988548278809,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-16-30",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 266
+    },
+    {
+      "leg_scale": 1.0282988548278809,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-16-33-slow-stop",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 285
+    },
+    {
+      "leg_scale": 1.0282988548278809,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-16-34-slow-stop",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 347
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-13",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 4750
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-14",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 4918
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-15",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 4504
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-16-turn-in-place",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 1128
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-17-turn-in-place",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 999
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-18-turn-in-place",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 1054
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-19-turn-in-place",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 1119
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-20",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 548
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-21",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 608
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-24",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 427
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-25",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 463
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-28",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 464
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-29",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 391
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-31",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 372
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-32",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 387
+    },
+    {
+      "leg_scale": 1.143392562866211,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-91-10-slow",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 3175
+    },
+    {
+      "leg_scale": 1.143392562866211,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-91-27-slow",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 2894
+    },
+    {
+      "leg_scale": 1.0628070831298828,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-104-35-slow",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 1074
+    },
+    {
+      "leg_scale": 1.0628070831298828,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-104-36-slow",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 2315
+    },
+    {
+      "leg_scale": 1.0628070831298828,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-104-39-slow",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 3214
+    },
+    {
+      "leg_scale": 1.0956083536148071,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-77-02-standing",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 937
+    },
+    {
+      "leg_scale": 1.0956083536148071,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-77-01-looking-around",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 1090
+    },
+    {
+      "leg_scale": 1.0956083536148071,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-139-02-shifting-weight",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 937
+    },
+    {
+      "leg_scale": 1.0956083536148071,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-139-01-looking-around",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 1090
+    },
+    {
+      "leg_scale": 1.1508656740188599,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-141-20-waiting",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 763
+    },
+    {
+      "leg_scale": 1.0771615505218506,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-137-28-normal-wait",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 3722
+    },
+    {
+      "leg_scale": 1.0826846361160278,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-113-21-standing",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 1367
+    },
+    {
+      "leg_scale": 1.1492329835891724,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-111-28-standing",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 1907
+    },
+    {
+      "leg_scale": 1.0826846361160278,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-113-25-walk",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 689
+    },
+    {
+      "leg_scale": 1.1629832983016968,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-143-18-sit-a",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 752
+    },
+    {
+      "leg_scale": 1.1629832983016968,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-143-18-seated-a",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 752
+    },
+    {
+      "leg_scale": 1.1629832983016968,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-143-18-stand-a",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 752
+    },
+    {
+      "leg_scale": 1.1629832983016968,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-143-18-sit-b",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 752
+    },
+    {
+      "leg_scale": 1.1629832983016968,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-143-18-seated-b",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 752
+    },
+    {
+      "leg_scale": 1.1629832983016968,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-143-18-stand-b",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 752
+    },
+    {
+      "leg_scale": 1.0826846361160278,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-113-15-sit",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 953
+    },
+    {
+      "leg_scale": 1.0826846361160278,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-113-15-seated",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 953
+    },
+    {
+      "leg_scale": 1.0826846361160278,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-113-15-stand",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 953
+    },
+    {
+      "leg_scale": 1.0233708620071411,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-75-19-sit-a",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 768
+    },
+    {
+      "leg_scale": 1.0233708620071411,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-75-19-stand-a",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 768
+    },
+    {
+      "leg_scale": 0.955922544002533,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-86-15-sit",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 7092
+    },
+    {
+      "leg_scale": 0.955922544002533,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-86-15-seated-calm-a",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 7092
+    },
+    {
+      "leg_scale": 0.955922544002533,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-86-15-seated-talk",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 7092
+    },
+    {
+      "leg_scale": 0.955922544002533,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-86-15-seated-calm-b",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 7092
+    },
+    {
+      "leg_scale": 0.955922544002533,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-86-15-stand",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 7092
+    },
+    {
+      "leg_scale": 1.0789765119552612,
+      "map": "Mesh2Motion",
+      "mapped_bones": 22,
+      "name": "mesh2motion-turn-45-left",
+      "scale": 0.009999999776482582,
+      "source_fps": 59.998802185058594,
+      "source_frames": 366
+    },
+    {
+      "leg_scale": 1.0789765119552612,
+      "map": "Mesh2Motion",
+      "mapped_bones": 22,
+      "name": "mesh2motion-turn-45-right",
+      "scale": 0.009999999776482582,
+      "source_fps": 59.998802185058594,
+      "source_frames": 366
+    },
+    {
+      "leg_scale": 1.0789765119552612,
+      "map": "Mesh2Motion",
+      "mapped_bones": 22,
+      "name": "mesh2motion-turn-180-left",
+      "scale": 0.009999999776482582,
+      "source_fps": 59.998802185058594,
+      "source_frames": 549
+    },
+    {
+      "leg_scale": 1.0789765119552612,
+      "map": "Mesh2Motion",
+      "mapped_bones": 22,
+      "name": "mesh2motion-turn-180-right",
+      "scale": 0.009999999776482582,
+      "source_fps": 59.998802185058594,
+      "source_frames": 488
+    }
+  ],
+  "thermal_pressures_seen": [
+    "nominal"
+  ],
+  "tool": "anim_build",
+  "weights": [
+    1.5,
+    1.0,
+    1.0,
+    1.0,
+    1.5
+  ],
+  "workers": 6
+}

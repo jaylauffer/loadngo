@@ -30,20 +30,40 @@ Only datasets whose licences allow commercial use are used. Non-commercial datas
 - **Attribution to carry:** "Motion from the 100STYLE dataset by Ian Mason, Sebastian Starke and
   Taku Komura (CC BY 4.0), retargeted and adapted."
 
-## Checked for the next rounds (not used yet)
-
 ### CMU Graphics Lab Motion Capture Database
 
-- <http://mocap.cs.cmu.edu/>. Its FAQ (checked 2026-11-11): "The motion capture data may be
-  copied, modified, or redistributed without permission." The lab asks to be credited: "The data
-  used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding
-  from NSF EIA-0196217."
-- Wanted for: slow steady walking, more starts and stops, standing idles, sitting down and
-  standing up. The importer reads its BVH conversions (`anim_build --map cmu`).
+- **What:** optical motion capture of over a hundred subjects, ASF skeletons and AMC motion at
+  120 fps.
+- **Where:** <http://mocap.cs.cmu.edu/>, each trial fetched as its own `.asf` and `.amc`
+  (`subjects/<subject>/<subject>_<trial>.amc`), kept under `~/.loadngo/data/mocap/cmu/subjects/`.
+- **Licence:** the database's FAQ (checked 2026-11-11): "The motion capture data may be copied,
+  modified, or redistributed without permission." The lab asks to be credited as below.
+- **What we used** (`animation/data/round-2.json`, 47 trials, ranges and tags there): slow walks
+  07_04, 07_05, 08_04, 08_11, 91_10, 91_27, 104_35, 104_36, 104_39, 113_25; walks with turns
+  16_17-16_20, 16_27-16_30, 69_13-69_15, 69_20, 69_21, 69_24, 69_25, 69_28, 69_29, 69_31, 69_32;
+  slow stops 16_33, 16_34; turns in place 69_16-69_19; standing idles 77_01, 77_02, 111_28,
+  113_21, 137_28, 139_01, 139_02, 141_20; sitting down, seated and standing up 75_19, 86_15,
+  113_15, 143_18. `animation/data/walk-core.json` is a subset of these (29 clips).
+- **Changes:** as 100STYLE's, and cut into tagged stretches (walk, turn, sit-down, seated, ...).
+- **Attribution to carry:** "The data used in this project was obtained from mocap.cs.cmu.edu.
+  The database was created with funding from NSF EIA-0196217."
 
-### Mesh2Motion animation library
+### Mesh2Motion raw captures
 
-- <https://github.com/Mesh2Motion/mesh2motion-assets>: CC0 1.0 (the repository's licence, checked
-  2026-11-11).
-- Wanted for: sitting, standing up, idles and talking. Its animations are glTF; a glTF animation
-  importer is next-round work.
+- **What:** four turns in place (45 and 180 degrees, left and right), BVH at 60 fps.
+- **Where:** <https://github.com/Mesh2Motion/mesh2motion-assets>, `motion-capture/raw captures/`
+  (`turn-45-left`, `turn-45-right`, `turn-180-left`, `turn-180-right`).
+- **Licence:** CC0 1.0 (the repository's licence, checked 2026-11-11). Only the assets
+  repository is used; the Mesh2Motion application's own repository has another licence.
+- **Note:** raw, uncleaned capture: their turning steps keep a toe within 1-2 cm of the floor
+  (a database without them chose cleaner turns in two of three turning scenarios; see
+  `docs/ANIMATION.md`, "What is short").
+- **Attribution (not required):** "Turns in place from the Mesh2Motion assets (CC0)."
+
+## Checked for the next rounds (not used yet)
+
+### Mesh2Motion keyed animations
+
+- The same repository's `rigs/human/` animations (sitting down and up, seated idles and talking,
+  head nods), CC0 1.0. They are Blender files only: using them needs a headless Blender export
+  to glTF or BVH, not done.
