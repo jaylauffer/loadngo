@@ -1,15 +1,18 @@
 # Animation: motion matching and the character framework
 
-Status: round 5, 2026-11-11. A motion-matching runtime, a character framework over it, and their
+Status: round 7, 2026-11-12. A motion-matching runtime, a character framework over it, and their
 pipeline, in Rust, for every loadngo target and for the browser as WebAssembly. Walking, turning,
-starting, stopping and standing come from real capture (100STYLE's normal walking, CMU's slow walks,
-turns, stops and standing; Mesh2Motion's turns in place in the full set only); sitting down on a seat
-of any height, sitting and standing up from CMU's sits; looking, reaching and talking beats are
-layers over it. Everything is retargeted to a Mixamo-named humanoid. Round 1's and round 2's
-measurements are kept below; round 3's follow them. Round 3 takes a body over from other animation
-without a jump, stands calmly, measures posture against real walking and stores rotations in 32
-bits; round 4 takes over a body that is walking, so a game can start and stop a walk on its own
-animation and hand the steady middle to the matcher (see "In a browser game (round 4)").
+starting, stopping and standing come from real capture (100STYLE's normal walking and idle, CMU's
+slow walks, turns, stops and turns in place; Mesh2Motion's turns in place in the full set only);
+sitting down on a seat of any height, sitting and standing up from CMU's sits; looking, reaching and
+talking beats are layers over it. Everything is retargeted to a Mixamo-named humanoid. Round 1's and
+round 2's measurements are kept below; round 3's follow them. Round 3 takes a body over from other
+animation without a jump, stands calmly, measures posture against real walking and stores rotations
+in 32 bits; round 4 takes over a body that is walking, so a game can start and stop a walk on its
+own animation and hand the steady middle to the matcher (see "In a browser game (round 4)"); round
+7 measures posture by part of a walk and standing, keeps planted feet from sliding or turning on the
+floor, bounds the last unbounded search, and lets a game walk whole walks on the capture again (see
+"In a browser game (round 7)").
 
 | Where | What |
 | --- | --- |
@@ -583,11 +586,62 @@ matcher: a change of direction (turning to face a seat) eased at a rate began at
 critically damped spring), a foot set down from a swing was stopped in a frame while its clip still moved it (now it
 comes to rest over 0.1 s), and a lifted foot's turn unwound from the wrong moment (a 3-4 degree turn in a frame). The
 hand-back now waits for a mid-stance where the two walks agree (not turning, the planted foot along the way, the game's
-walk with a moment whose feet are within 12 cm of the matched body's). With the take-over through the bounding boxes, the
+walk with a moment whose feet are within 12 cm of the matched body's) [not so: see round 7's correction]. With the take-over through the bounding boxes, the
 game's motion layer costs at most 8-9 ms in a frame on a Raspberry Pi 5 (was 10-12 ms). Every run passes every limit in
 every repeat at the game's lowest tier; at its automatic tier one or two repeats in eighteen still fail, in the 0.6 s
 the matched body fades out over the game's walk (a foot the game's walk swings is held for a frame, then lifted off
 that hold while the blend moves it, and the knee jerks).
+
+### In a browser game (round 7)
+
+The game's sixth critic failed the hybrid walk: real only in its middle. Every start and stop was the game's own walk,
+crouched (the knee 34-38 degrees through the stance), its forearms held out and the head rising and falling 7.5-9 cm a
+stride, and a short walk (5.9 m) was never matched; the posture limits took a run's median, so the matched middle hid
+the ends. Standing was the game's crouched idle. So this round:
+
+- **Posture by part, and standing** (`eval::walk_parts`, `eval::standing`): each walk of 4 s or more in its first 2 s,
+  its last 2 s and the worst of its 2 s windows between (the knee at mid-stance, the elbow's least bend, the trunk's lean,
+  the wrist over the hip and the head's rise and fall), and still stretches of 2 s or more (the straighter knee's bend,
+  the ankles apart, the hands outside the shoulders). `motion_eval --capture` prints both for every clip played as
+  recorded (`animation/evidence/round-7/mac/posture-parts-capture.txt`). Real walking: the knee at mid-stance 7-30
+  degrees in a start, 6-23 in a window, 7-26 in a stop; the head's rise and fall 2.2-7.1 cm in a start, 2.2-5.1 in a
+  window, 1.3-6.6 in a stop. Real standing: the straighter knee 0-9.5 degrees, the hands -1 to 6.5 cm outside the
+  shoulders. The game's limits are set just over these.
+- **Planted feet that do not slide or turn on the floor.** A foot a take-over plants keeps how far it stood turned from
+  the capture while it stays down (the take-over's ease turned planted soles on the floor about the held point); the
+  capture's own turns of it still come through, a transition's jump does not. `Config::hold_until_lift` lets a planted
+  point go only once it has risen (by the ball while it is down): a turning start dragged a toe round the floor after the
+  capture's contact had ended. `Config::keep_turn_planted` keeps every held foot's heading until it lets go: a pivot on a
+  planted foot slid its sole round the held point. Both off by default.
+- **The stuck recovery** (the pose dropped, the trajectory searched) goes through the bounding boxes (`search_features`).
+- **Retargeting a head on a bent neck:** a head with no end site of its own to pair (an avatar's, eyes beside its top)
+  takes half of its neck's rest alignment. All of it tipped back the head of a rig whose neck stands bent forward at rest
+  by the neck's straightening (21 degrees bent: about 11 degrees back); none of it pitched every head forward by the
+  source's own head turn. Half put the head's top within 2 degrees of the game's own animation on its four bodies.
+- **The walk set** (`walk-core.json`) leaves out 100STYLE's TR1 (turning starts that pivot a planted foot on its ball
+  through up to 90 degrees; its windows take in other movement than walking) and CMU's standing 77_02, 113_21 and 137_28
+  (knees bent through the stance, 18.6-33.4 degrees against 100STYLE's idle's 6.4): standing about plays 100STYLE's idle.
+  3.3 MB a man's build, 2.6 MB a woman's (were 4.3 and 3.6).
+- **The game** walks every walk whole on the capture again (round 3's design, with rounds 4-7's fixes): the matcher
+  takes the body over as standing up ends, stands 0.3 s, sets off (turning as it goes), walks, stops facing the end's way
+  (a seat too), and stands about idle on the capture; the game keeps standing up, sitting down and activities. Its own
+  layer holds each matched foot by its shoe's lowest sole point while on the ground, settles the shoulders and neck
+  towards its garments' pose as it does its own clips', stops for someone in the way within the room it is given, and
+  plants the take-over's feet where its body has them (`plant_feet`), not where the database's body would.
+
+**Measured in the game** (its twelve runs, worst of three at two tiers): the posture limits pass in every part of every
+walk (the knee at mid-stance 12-26 degrees, the head's rise and fall at most 6.5 cm) and the standing limits pass
+(the straighter knee 9-11 degrees, the hands 4-5 cm outside the shoulders); two of the six moves pass every limit at
+both tiers, and the other four each break one to three of the game's older limits by small
+margins (a slide 3.45-3.64 cm against 3.25, a foot's turn 14.6 degrees against 14.5, a root's acceleration 1.13 cm
+against 1). On a Raspberry Pi 5 at the game's lowest tier its frame floor holds and the motion layer costs at most 3.2
+ms a frame in a walk (the hybrid's walking take-over cost 8-9 ms once). Not yet: a stop within a step for someone close
+in front (the capture needs most of a step), garments that fold on the women's bodies, the knee at heel strike (19-23
+degrees), and the game's own rises and sits.
+
+**Correction.** Round 5's paragraph above, and the game's round 5 notes, said the hand-back waited for "a mid-stance
+where the two walks agree (not turning, the planted foot along the way, ... within 12 cm)". The game's code never had that
+rule: it handed back at a one-foot stance of 0.1-0.3 s, or at the latest 3.9 m out. The game's sixth critic found it.
 
 ## What is short
 
@@ -595,15 +649,15 @@ that hold while the blend moves it, and the knee jerks).
   planted; the game then passes 35 of its 36 runs (the last a seated hand before any walk).
 - **A frame of 8-9 ms** of the game's motion layer, once a walk, on a Pi 5 (after the bounded take-over search; the
   cause of what remains is not yet traced).
-- **Turning starts from standing** are still not the capture's: played as a walking turn the root swings round with no
-  foot down (round 3); turning on the spot first chose walking turns over the in-place ones. A game starts them itself.
+- **Turning starts from standing** are the capture's again in round 7, with planted feet that keep their turn and are
+  held until they lift; a game's checks still find a sole slide of 3.5-3.6 cm in some of them (against its 3.25).
 - **Which frame wins a near tie** decides a run's worst contact, and it moves between databases
   (the tables above); judge a database by its 95th percentiles and gait, and by a game's checks.
 - **Seated idles** come from three captures (CMU 86_15, 113_15, 143_18); the clips' talking and
   gestures while seated (tagged) are not used as idles. Mesh2Motion's seated idles and talking need
   a Blender export (not done).
-- **Database size:** 3.6-4.3 MB per body build for a web game's walking with 32-bit rotations (2.6-3.1 MB
-  gzipped); every clip 19 MB at 48 bits.
+- **Database size:** 2.6-3.3 MB per body build for a web game's walking with 32-bit rotations (round 7's set); every clip
+  19 MB at 48 bits.
 - **Flat ground only:** contacts are held at the floor's height (a game lifts soles onto its own
   ground).
 - **One machine for the harness:** round 3's tables are this Mac's; dolores ran the tests and lints (Linux aarch64)
@@ -611,7 +665,8 @@ that hold while the blend moves it, and the knee jerks).
 
 ## Next
 
-1. **A game's critic** of the hybrid walk, then the matched walk a game's default for good.
+1. **A game's critic** of round 7's whole walk; then its last slides and turns, a stop within a step, and the rises and
+   sits on capture.
 2. **Seats in the game:** the framework's sits land to the centimetre on any seat height; a game
    with sliding chairs and hands to a table or lap needs its seat poses joined to the framework's.
 3. **Reactions while standing:** the look-at, reach and beats layers in a game whose people stand and talk.
