@@ -92,7 +92,7 @@ pub const RIGHT_BALL: u8 = 8;
 
 const MAGIC: &[u8; 8] = b"LDGOANIM";
 /// The binary format's version written. Readers take this and version 1.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 /// Features are stored as 16-bit fixed point: this many steps a unit (they are normalised,
 /// so ±16 spreads).
@@ -115,6 +115,9 @@ pub struct BuildConfig {
     pub contact_speed: f32,
     /// Add each clip's mirror image (left and right swapped).
     pub mirror: bool,
+    /// Store rotations in 32 bits (file version 3, at most 0.2 degree of error) rather than
+    /// 48 (version 2, 0.01 degree): a third smaller a database.
+    pub compact_rotations: bool,
 }
 
 impl Default for BuildConfig {
@@ -127,6 +130,7 @@ impl Default for BuildConfig {
             contact_height: 0.045,
             contact_speed: 0.3,
             mirror: true,
+            compact_rotations: false,
         }
     }
 }
@@ -220,6 +224,8 @@ pub struct Database {
     /// Rest heights over the floor of the ankle and of the toe joint.
     pub foot_heights: [f32; 2],
     pub(crate) bounds: Bounds,
+    /// Rotations kept in 32 bits (`BuildConfig::compact_rotations`; written as version 3).
+    pub compact: bool,
 }
 
 /// Gaussian smoothing with edge clamping.
@@ -424,6 +430,7 @@ impl Database {
             weights: config.weights,
             foot_heights,
             bounds: Bounds::default(),
+            compact: false,
         };
         let dt = 1.0 / config.fps;
         let mut raw: Vec<f32> = Vec::new();
@@ -624,9 +631,14 @@ impl Database {
                 *v = (n * FEATURE_STEPS).round().clamp(-32767.0, 32767.0) / FEATURE_STEPS;
             }
         }
-        // On the file's 48-bit grid, so a built database matches a loaded one.
+        // On the file's grid, so a built database matches a loaded one.
+        db.compact = config.compact_rotations;
         for q in &mut db.rotations {
-            *q = from_smallest_three(smallest_three(*q));
+            *q = if db.compact {
+                unpack_rotation(pack_rotation(*q))
+            } else {
+                from_smallest_three(smallest_three(*q))
+            };
         }
         db.build_bounds();
         Ok(db)
@@ -702,7 +714,7 @@ impl Database {
             self.frame_count() * (self.bone_count() * 8 + FEATURES * 4 + 32),
         ));
         w.0.extend_from_slice(MAGIC);
-        w.u32(FORMAT_VERSION);
+        w.u32(if self.compact { 3 } else { 2 });
         w.f32(self.fps);
         w.u32(self.bone_count() as u32);
         w.u32(self.frame_count() as u32);
@@ -739,8 +751,12 @@ impl Database {
             w.vec3(self.hips_pos[f]);
         }
         for q in &self.rotations {
-            for v in smallest_three(*q) {
-                w.0.extend_from_slice(&v.to_le_bytes());
+            if self.compact {
+                w.u32(pack_rotation(*q));
+            } else {
+                for v in smallest_three(*q) {
+                    w.0.extend_from_slice(&v.to_le_bytes());
+                }
             }
         }
         w.0.extend_from_slice(&self.contacts);
@@ -767,7 +783,7 @@ impl Database {
         }
         let mut r = Reader { b: body, at: 8 };
         let version = r.u32()?;
-        if version != FORMAT_VERSION && version != 1 {
+        if !(1..=FORMAT_VERSION).contains(&version) {
             return dberr(format!(
                 "format version {version}, this reader knows {FORMAT_VERSION}"
             ));
@@ -783,7 +799,7 @@ impl Database {
             return dberr("implausible header");
         }
         let need = frames
-            .checked_mul(bones * 6 + 1 + FEATURES * 2 + 24)
+            .checked_mul(bones * if version == 3 { 4 } else { 6 } + 1 + FEATURES * 2 + 24)
             .ok_or_else(|| DatabaseError("too large".into()))?;
         if need > body.len() {
             return dberr("shorter than its header says");
@@ -857,8 +873,10 @@ impl Database {
                     *v = f32::from(r.i16()?) / 32767.0;
                 }
                 rotations.push(Quat::new(c[0], c[1], c[2], c[3]).normalize());
-            } else {
+            } else if version == 2 {
                 rotations.push(from_smallest_three([r.i16()?, r.i16()?, r.i16()?]));
+            } else {
+                rotations.push(unpack_rotation(r.u32()?));
             }
         }
         let contacts = r.take(frames)?.to_vec();
@@ -890,6 +908,7 @@ impl Database {
             weights,
             foot_heights,
             bounds: Bounds::default(),
+            compact: version == 3,
         };
         db.build_bounds();
         Ok(db)
@@ -918,6 +937,50 @@ fn smallest_three(q: Quat) -> [i16; 3] {
     out[0] |= (big & 1) as i16;
     out[1] |= ((big >> 1) & 1) as i16;
     out
+}
+
+/// A rotation in 32 bits: the largest component's index (2 bits) and the other three, each
+/// times sqrt 2, in 10 signed bits (at most about 0.0014 of error each, 0.1 degree).
+fn pack_rotation(q: Quat) -> u32 {
+    let c = [q.x, q.y, q.z, q.w];
+    let big = (0..4)
+        .max_by(|&a, &b| c[a].abs().total_cmp(&c[b].abs()))
+        .unwrap_or(3);
+    let sign = if c[big] < 0.0 { -1.0 } else { 1.0 };
+    let mut out = big as u32;
+    let mut shift = 2;
+    for (i, v) in c.iter().enumerate() {
+        if i == big {
+            continue;
+        }
+        let x = (v * sign * std::f32::consts::SQRT_2).clamp(-1.0, 1.0);
+        let n = (x * 511.0).round() as i32;
+        out |= ((n as u32) & 0x3ff) << shift;
+        shift += 10;
+    }
+    out
+}
+
+fn unpack_rotation(v: u32) -> Quat {
+    let big = (v & 3) as usize;
+    let mut small = [0.0f32; 3];
+    for (k, s) in small.iter_mut().enumerate() {
+        let raw = ((v >> (2 + 10 * k)) & 0x3ff) as i32;
+        let n = if raw >= 512 { raw - 1024 } else { raw };
+        *s = n as f32 / 511.0 / std::f32::consts::SQRT_2;
+    }
+    let rest: f32 = small.iter().map(|x| x * x).sum();
+    let mut c = [0.0f32; 4];
+    let mut k = 0;
+    for (i, slot) in c.iter_mut().enumerate() {
+        if i == big {
+            *slot = (1.0 - rest).max(0.0).sqrt();
+        } else {
+            *slot = small[k];
+            k += 1;
+        }
+    }
+    Quat::new(c[0], c[1], c[2], c[3]).normalize()
 }
 
 fn from_smallest_three(v: [i16; 3]) -> Quat {
@@ -1029,6 +1092,21 @@ pub(crate) mod tests {
     use crate::testing::{humanoid_skeleton, synthetic_walk};
 
     #[test]
+    fn rotations_pack_in_32_bits_within_a_fifth_of_a_degree() {
+        let mut worst = 0.0f32;
+        for i in 0..2000 {
+            let t = i as f32 * 0.37;
+            let axis =
+                Vec3::new(t.sin(), (t * 1.7).cos(), (t * 0.3).sin() + 0.2).normalize_or_zero();
+            let q = Quat::from_axis_angle(axis, (t * 2.3).sin() * 3.1);
+            worst = worst.max(unpack_rotation(pack_rotation(q)).angle_to(q));
+            // Version 2's 48 bits still read.
+            assert!(from_smallest_three(smallest_three(q)).angle_to(q) < 2e-4);
+        }
+        assert!(worst < 0.21f32.to_radians(), "worst {worst} rad");
+    }
+
+    #[test]
     fn smoothing_keeps_constants_and_damps_wiggles() {
         let c = smooth(&[2.0; 50], 5.0);
         assert!(c.iter().all(|v| (v - 2.0).abs() < 1e-5));
@@ -1054,6 +1132,22 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_compact_database_round_trips_through_bytes_exactly() {
+        let target = humanoid_skeleton(1.0);
+        let clip = synthetic_walk(&target, 120, 1.0);
+        let cfg = BuildConfig {
+            compact_rotations: true,
+            ..BuildConfig::default()
+        };
+        let db = Database::build(&target, &[clip], &cfg).unwrap();
+        let bytes = db.to_bytes();
+        assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 3);
+        let back = Database::from_bytes(&bytes).unwrap();
+        assert!(back.compact);
+        assert_eq!(back.rotations, db.rotations);
+    }
+
+    #[test]
     fn a_built_database_round_trips_through_bytes() {
         let target = humanoid_skeleton(1.0);
         let clip = synthetic_walk(&target, 240, 1.0);
@@ -1067,7 +1161,7 @@ pub(crate) mod tests {
         assert_eq!(back.contacts, db.contacts);
         assert_eq!(back.features, db.features);
         for (a, b) in db.rotations.iter().zip(&back.rotations) {
-            assert!(a.angle_to(*b) < 2e-4);
+            assert!(a.angle_to(*b) < 1e-5);
         }
         let mut bad = bytes.clone();
         bad[100] ^= 1;

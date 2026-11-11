@@ -39,6 +39,7 @@ const USAGE: Usage = Usage {
         ArgDoc::optional("--fps", "<number>", "the database's frame rate (default 60)"),
         ArgDoc::optional("--workers", "<n>", "worker threads for parsing and building (default half the cores, at most 6)"),
         ArgDoc::switch("--no-mirror", "do not add each clip's mirror image"),
+        ArgDoc::switch("--compact", "rotations in 32 bits (file version 3, at most 0.2 degree of error): a database a fifth smaller"),
         ArgDoc::optional("--smooth", "<seconds>", "Gaussian smoothing of every bone's rotation and the hips' travel, against marker jitter (default 0.02; 0 keeps the capture)"),
         ArgDoc::optional("--weights", "<fp,fv,hv,tp,td>", "feature weights: foot positions, foot velocities, hip velocity, trajectory positions, trajectory directions (default 1.5,1,1,1,1.5)"),
         ArgDoc::optional("--report", "<report.json>", "also write what was built, how, and what admission did"),
@@ -70,6 +71,7 @@ struct Args {
     fps: f32,
     workers: usize,
     mirror: bool,
+    compact: bool,
     smooth: f32,
     weights: [f32; 5],
     report: Option<PathBuf>,
@@ -100,6 +102,7 @@ fn parse_args() -> Args {
         fps: 60.0,
         workers: (cores / 2).clamp(1, 6),
         mirror: true,
+        compact: false,
         smooth: 0.02,
         weights: BuildConfig::default().weights,
         report: None,
@@ -167,6 +170,7 @@ fn parse_args() -> Args {
                     .unwrap_or_else(|| fail("--workers needs 1 to 64"))
             }
             "--no-mirror" => a.mirror = false,
+            "--compact" => a.compact = true,
             "--smooth" => {
                 a.smooth = value()
                     .parse()
@@ -511,6 +515,7 @@ fn main() {
                 fps: args.fps,
                 mirror: args.mirror,
                 weights: args.weights,
+                compact_rotations: args.compact,
                 ..BuildConfig::default()
             };
             let t = Arc::clone(&target);
