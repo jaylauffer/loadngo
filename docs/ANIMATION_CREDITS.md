@@ -43,7 +43,9 @@ Only datasets whose licences allow commercial use are used. Non-commercial datas
   16_17-16_20, 16_27-16_30, 69_13-69_15, 69_20, 69_21, 69_24, 69_25, 69_28, 69_29, 69_31, 69_32;
   slow stops 16_33, 16_34; turns in place 69_16-69_19; standing idles 77_01, 77_02, 111_28,
   113_21, 137_28, 139_01, 139_02, 141_20; sitting down, seated and standing up 75_19, 86_15,
-  113_15, 143_18. `animation/data/walk-core.json` is a subset of these (29 clips).
+  113_15, 143_18. `animation/data/walk-core.json` is a subset of these with 100STYLE's (26 clips
+  since round 3: no Mesh2Motion turns; standing 77_02, 113_21 and 137_28; 139_02 is the same file
+  as 77_02 and 139_01 as 77_01).
 - **Changes:** as 100STYLE's, and cut into tagged stretches (walk, turn, sit-down, seated, ...).
 - **Attribution to carry:** "The data used in this project was obtained from mocap.cs.cmu.edu.
   The database was created with funding from NSF EIA-0196217."
@@ -55,9 +57,11 @@ Only datasets whose licences allow commercial use are used. Non-commercial datas
   (`turn-45-left`, `turn-45-right`, `turn-180-left`, `turn-180-right`).
 - **Licence:** CC0 1.0 (the repository's licence, checked 2026-11-11). Only the assets
   repository is used; the Mesh2Motion application's own repository has another licence.
-- **Note:** raw, uncleaned capture: their turning steps keep a toe within 1-2 cm of the floor
-  (a database without them chose cleaner turns in two of three turning scenarios; see
-  `docs/ANIMATION.md`, "What is short").
+- **Note:** raw, uncleaned capture: their turning steps keep a toe within 1-2 cm of the floor and
+  swing an arm out (a database without them chose cleaner turns in two of three turning scenarios;
+  see `docs/ANIMATION.md`, "What is short"). In `round-2.json` only; `walk-core.json`, the set a
+  web game ships, has left them out since round 3, so a database built from it carries no
+  Mesh2Motion motion.
 - **Attribution (not required):** "Turns in place from the Mesh2Motion assets (CC0)."
 
 ## Checked for the next rounds (not used yet)

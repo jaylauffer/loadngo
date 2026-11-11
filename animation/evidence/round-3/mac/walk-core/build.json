@@ -1,0 +1,268 @@
+{
+  "admission_held_back": 0,
+  "blake3": "5b0fd2869e0faa09b6abfbc9ef535462c1c156570c827a42a4faac8743beb45d",
+  "bones": [
+    "Hips",
+    "Spine",
+    "Spine1",
+    "Spine2",
+    "Neck",
+    "Head",
+    "LeftShoulder",
+    "LeftArm",
+    "LeftForeArm",
+    "LeftHand",
+    "RightShoulder",
+    "RightArm",
+    "RightForeArm",
+    "RightHand",
+    "LeftUpLeg",
+    "LeftLeg",
+    "LeftFoot",
+    "LeftToeBase",
+    "RightUpLeg",
+    "RightLeg",
+    "RightFoot",
+    "RightToeBase"
+  ],
+  "bytes": 4319377,
+  "bytes_read": 34580777,
+  "clips": 47,
+  "format_version": 3,
+  "fps": 60.0,
+  "frames": 25849,
+  "mirror": true,
+  "out": "walk-core-r3-canonical.lmm",
+  "seconds": 0.095087083,
+  "smooth": 0.019999999552965164,
+  "sources": [
+    {
+      "leg_scale": 0.9889810085296631,
+      "map": "Style100",
+      "mapped_bones": 22,
+      "name": "100style-neutral-fw",
+      "scale": 0.009999999776482582,
+      "source_fps": 59.998802185058594,
+      "source_frames": 7896
+    },
+    {
+      "leg_scale": 0.9889810085296631,
+      "map": "Style100",
+      "mapped_bones": 22,
+      "name": "100style-neutral-id",
+      "scale": 0.009999999776482582,
+      "source_fps": 59.998802185058594,
+      "source_frames": 2103
+    },
+    {
+      "leg_scale": 0.9889810085296631,
+      "map": "Style100",
+      "mapped_bones": 22,
+      "name": "100style-neutral-tr1",
+      "scale": 0.009999999776482582,
+      "source_fps": 59.998802185058594,
+      "source_frames": 7119
+    },
+    {
+      "leg_scale": 1.0282988548278809,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-16-33-slow-stop",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 285
+    },
+    {
+      "leg_scale": 1.0282988548278809,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-16-34-slow-stop",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 347
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-13",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 4750
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-14",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 4918
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-16-turn-in-place",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 1128
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-18-turn-in-place",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 1054
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-20",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 548
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-24",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 427
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-28",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 464
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-31",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 372
+    },
+    {
+      "leg_scale": 1.143392562866211,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-91-27-slow",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 2894
+    },
+    {
+      "leg_scale": 1.0771615505218506,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-137-28-normal-wait",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 3722
+    },
+    {
+      "leg_scale": 1.0632623434066772,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-07-04-slow",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 449
+    },
+    {
+      "leg_scale": 1.0916794538497925,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-08-04-slow",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 484
+    },
+    {
+      "leg_scale": 1.0628070831298828,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-104-35-slow",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 1074
+    },
+    {
+      "leg_scale": 1.0628070831298828,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-104-36-slow",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 2315
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-21",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 608
+    },
+    {
+      "leg_scale": 1.0097146034240723,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-69-25",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 463
+    },
+    {
+      "leg_scale": 1.0282988548278809,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-16-17",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 518
+    },
+    {
+      "leg_scale": 1.0282988548278809,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-16-18",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 520
+    },
+    {
+      "leg_scale": 1.0956083536148071,
+      "map": "CmuAsf",
+      "mapped_bones": 22,
+      "name": "cmu-77-02-standing",
+      "scale": 0.0564444437623024,
+      "source_fps": 120.0,
+      "source_frames": 937
+    }
+  ],
+  "thermal_pressures_seen": [
+    "nominal"
+  ],
+  "tool": "anim_build",
+  "weights": [
+    1.5,
+    1.0,
+    1.0,
+    1.0,
+    1.5
+  ],
+  "workers": 6
+}
