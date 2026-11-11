@@ -238,7 +238,9 @@ walks at 60 Hz and measures the output's joint positions, never the database's o
 - **Cost** of each step, and allocations inside it.
 
 `--capture` measures the capture itself, played as recorded: the floor any runtime on this data
-can reach.
+can reach. `--path` runs a scenario along any polyline, and `--tracks` judges recorded joint
+tracks (another system's walk, Mixamo-named) with the same measures and draws them the same way,
+so two walks on one body and route compare like for like.
 
 Round 1, this Mac (M4 Pro, macOS, release build; `animation/evidence/round-1/mac/`):
 
@@ -268,15 +270,15 @@ Against a real stroll (about 88 steps a minute of 0.55 m at 0.83 m/s; a man's hi
   stretches of turnarounds with full strides (113 × 0.35 m): the Neutral data holds no steady slow
   walk. See "What is short".
 
-**Cost per step** (all scenarios, `motion_eval --repeat 3`, 60 Hz): p50 2.6 µs, p99 33 µs; steps
-that searched p50 5.6 µs, p99 50 µs; 0 allocations. In Chrome 157 on the same Mac
+**Cost per step** (all scenarios, `motion_eval --repeat 3`, 60 Hz): p50 2.7 µs, p99 34 µs; steps
+that searched p50 5.5 µs, p99 57 µs; 0 allocations. In Chrome 157 on the same Mac
 (`animation/evidence/round-1/wasm/`, cross-origin isolated so timing resolves 5 µs): p50 5 µs,
 p99 50 µs; 16 characters a frame p50 40 µs, p99 270 µs; loading the 9 MB database with its hash
 check 28 ms. dolores: `animation/evidence/round-1/dolores/` and the table below.
 
 | Cost of a step (60 Hz) | p50 | p99 | Steps that searched, p99 | 16 characters a frame, p50 / p99 | Database load |
 | --- | --- | --- | --- | --- | --- |
-| Mac, native (M4 Pro) | 2.6 µs | 33 µs | 50 µs | | 21 ms |
+| Mac, native (M4 Pro) | 2.7 µs | 34 µs | 57 µs | | 21 ms |
 | Mac, Chrome 157, wasm | 5 µs | 50 µs | | 40 / 270 µs | 28 ms |
 | dolores, native (Pi 5, Cortex-A76) | 9.6 µs | 131 µs | 153 µs | | |
 | dolores, Chromium 156, wasm | 15 µs | 250 µs | | 155 µs / 1.0 ms | 130 ms |

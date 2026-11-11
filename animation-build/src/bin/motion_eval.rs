@@ -57,12 +57,17 @@ const USAGE: Usage = Usage {
         ArgDoc::switch("--no-strips", "skip the PNG strips"),
         ArgDoc::switch("--no-foot-lock", "turn the foot IK off, to see what it does"),
         ArgDoc::repeated("--set", "<name=value>", "override a runtime setting (controller::Config field names, e.g. transition_cost=0.5)"),
+        ArgDoc::repeated("--path", "<path.json>", "also run a scenario along a path: {name, about, points: [[x, z], ...], speed, facing, wait_before, wait_after, steady: [from_s, to_s]}"),
+        ArgDoc::repeated("--tracks", "<tracks.json>", "also judge and draw recorded joint tracks with the same measures: {name, about, hz, names, parents, positions: [[x, y, z] per joint per frame], root: [[x, z, facing] per frame], steady: [from_s, to_s]}; Mixamo joint names"),
         ArgDoc::switch("--capture", "also measure each original clip played as recorded (no matching, no IK): the floor the data sets"),
         ArgDoc::switch("--dump-feet", "also write <scenario>-feet.csv: each frame's ankle and toe heights and ground speeds, and the contacts the runtime held"),
     ],
-    examples: &["cargo run --release -p loadngo-animation-build --bin motion_eval -- --db /tmp/walk.lmm --out-dir /tmp/walk-eval"],
+    examples: &[
+        "cargo run --release -p loadngo-animation-build --bin motion_eval -- --db /tmp/walk.lmm --out-dir /tmp/walk-eval",
+        "cargo run --release -p loadngo-animation-build --bin motion_eval -- --db body.lmm --out-dir out --path route.json --tracks recorded.json",
+    ],
     notes: &[
-        "Contacts for the slide measure come from the output's joint heights (2 cm over rest), never from the database's labels.",
+        "Foot slide is measured from the output's joints, never from the database's labels: per contact, how far the point on the floor (the ball while within 1 cm of its floor height, else the heel) moved since it touched down.",
         "Per-frame figures are per 1/60 s frame whatever --hz is, as a 60 Hz check states them.",
         "Allocations are counted only inside MotionMatcher::step; anything but 0 is a defect.",
     ],
@@ -79,6 +84,8 @@ struct Args {
     dump_feet: bool,
     settings: Vec<(String, String)>,
     capture: bool,
+    paths: Vec<PathBuf>,
+    tracks: Vec<PathBuf>,
 }
 
 fn fail(m: &str) -> ! {
@@ -100,6 +107,8 @@ fn parse() -> Args {
         dump_feet: false,
         settings: Vec::new(),
         capture: false,
+        paths: Vec::new(),
+        tracks: Vec::new(),
     };
     let mut it = argv.into_iter();
     while let Some(f) = it.next() {
@@ -129,6 +138,8 @@ fn parse() -> Args {
             "--no-foot-lock" => a.foot_lock = false,
             "--dump-feet" => a.dump_feet = true,
             "--capture" => a.capture = true,
+            "--path" => a.paths.push(v().into()),
+            "--tracks" => a.tracks.push(v().into()),
             "--set" => {
                 let kv = v();
                 let (k, val) = kv
@@ -175,7 +186,7 @@ fn run(
     for (k, v) in settings {
         cfg.set(k, v).unwrap_or_else(|e| fail(&e));
     }
-    let mut m = MotionMatcher::new(Arc::clone(db), cfg, Vec3::ZERO, 0.0);
+    let mut m = MotionMatcher::new(Arc::clone(db), cfg, s.start, s.facing);
     let mut script = Script::new(s);
     let frames = (s.seconds * hz) as usize;
     let mut rec = Recording::new(hz, db.bone_count());
@@ -349,9 +360,9 @@ fn strips(
         }
         found
     };
-    let (from, step, count): (f32, f32, usize) = match s.name {
-        "straight" | "alongside-slow" | "curve" => (s.steady.map_or(4.0, |w| w.0) + 1.0, 0.1, 14),
-        "start-stop" => (walk_start - 0.2, 0.3, 30),
+    let (from, step, count): (f32, f32, usize) = match (s.name.as_str(), s.steady) {
+        ("start-stop", _) => (walk_start - 0.2, 0.3, 30),
+        (_, Some((t0, _))) => (t0 + 1.0, 0.1, 14),
         _ => {
             // Around the turn: when the facing changes fastest.
             let mut best = (0.0f32, 0usize);
@@ -372,7 +383,7 @@ fn strips(
     let px = 130.0;
     let per_row = 15usize;
     let rows_result = count.div_ceil(per_row);
-    let compare = matches!(s.name, "straight" | "alongside-slow");
+    let compare = s.steady.is_some();
     let rows = rows_result + usize::from(compare);
     let top_h = 420.0;
     let width = panel_w * per_row as f32 + 40.0;
@@ -501,6 +512,219 @@ fn strips(
     io::write_file(proactor, &out.join(format!("{}.png", s.name)), &png).map_err(|e| e.to_string())
 }
 
+/// Recorded joint tracks, judged by the same measures and drawn the same way.
+fn judge_tracks(
+    proactor: &Proactor<PlatformPort>,
+    path: &Path,
+    out: &Path,
+    draw: bool,
+) -> Result<(String, serde_json::Value), String> {
+    use loadngo_animation::skeleton::Skeleton;
+    let bytes = io::read_file(proactor, path).map_err(|e| e.to_string())?;
+    let v: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("tracks JSON: {e}"))?;
+    let strs = |k: &str| -> Vec<String> {
+        v.get(k)
+            .and_then(serde_json::Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let name = v
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("tracks")
+        .to_string();
+    let about = v
+        .get("about")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("recorded tracks")
+        .to_string();
+    let hz = v
+        .get("hz")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(60.0) as f32;
+    let names = strs("names");
+    let parents: Vec<Option<usize>> = v
+        .get("parents")
+        .and_then(serde_json::Value::as_array)
+        .map(|a| {
+            a.iter()
+                .map(|x| x.as_i64().filter(|p| *p >= 0).map(|p| p as usize))
+                .collect()
+        })
+        .unwrap_or_default();
+    let skeleton = Skeleton::new(
+        names.clone(),
+        parents.clone(),
+        vec![loadngo_animation::math::Transform::IDENTITY; names.len()],
+    )
+    .map_err(|e| format!("tracks: {e}"))?;
+    let humanoid = loadngo_animation::humanoid::Humanoid::find(&skeleton)
+        .map_err(|e| format!("tracks: {e}"))?;
+    let triple = |x: &serde_json::Value| -> Option<[f32; 3]> {
+        let a = x.as_array()?;
+        Some([
+            a.first()?.as_f64()? as f32,
+            a.get(1)?.as_f64()? as f32,
+            a.get(2)?.as_f64()? as f32,
+        ])
+    };
+    let pos: Vec<[f32; 3]> = v
+        .get("positions")
+        .and_then(serde_json::Value::as_array)
+        .map(|a| a.iter().filter_map(triple).collect())
+        .unwrap_or_default();
+    let root: Vec<[f32; 3]> = v
+        .get("root")
+        .and_then(serde_json::Value::as_array)
+        .map(|a| a.iter().filter_map(triple).collect())
+        .unwrap_or_default();
+    let n = names.len();
+    if n == 0 || pos.len() != root.len() * n || root.is_empty() {
+        return Err(format!(
+            "{} positions for {} joints and {} frames",
+            pos.len(),
+            n,
+            root.len()
+        ));
+    }
+    let mut rec = Recording::new(hz, n);
+    let mut frame = vec![Vec3::ZERO; n];
+    for (f, r) in root.iter().enumerate() {
+        for (j, p) in frame.iter_mut().enumerate() {
+            let q = pos[f * n + j];
+            *p = Vec3::new(q[0], q[1], q[2]);
+        }
+        rec.push(&frame, Vec3::new(r[0], 0.0, r[1]), r[2], 0);
+    }
+    let steady = v
+        .get("steady")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|a| Some((a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32)));
+    let (s0, s1) = steady.map_or((0, rec.frames()), |(a, b)| {
+        ((a * hz) as usize, (b * hz) as usize)
+    });
+    let torso: Vec<usize> = ["Hips", "Spine2", "Neck", "Head"]
+        .iter()
+        .filter_map(|t| skeleton.find(t))
+        .collect();
+    let m = eval::measure(&rec, &humanoid, &torso, (s0, s1));
+    eprintln!(
+        "tracks {:<12} slide {:.2}/{:.2} cm, acc {:.2}/{:.2}, jog {:.2}, cadence {:.1} x {:.3} m at {:.2} m/s, sway {:.1} cm, knee {:.1}/{:.1}",
+        name, m.slide_worst_cm, m.slide_p95_cm, m.torso_acc_cm, m.limb_acc_cm, m.jog_cm, m.cadence, m.step_length, m.speed, m.hip_sway_cm, m.knee_at_strike_deg, m.knee_swing_deg
+    );
+    if draw {
+        let side = strip::sides(&names);
+        let feet = [humanoid.legs[0].ankle, humanoid.legs[1].ankle];
+        let panel_w = 120.0;
+        let mut c = Canvas::new((panel_w * 15.0 + 40.0) as u32, 60 + 326 + 470);
+        c.text(20.0, 14.0, &format!("{name}: {about}"), 2, strip::INK);
+        let floors: Vec<f32> = humanoid
+            .legs
+            .iter()
+            .flat_map(|l| {
+                [
+                    eval::floor_height(&rec, l.ankle),
+                    eval::floor_height(&rec, l.toe),
+                ]
+            })
+            .collect();
+        let owned: Vec<Owned> = (0..14)
+            .filter_map(|i| {
+                let t = s0 as f32 / hz + 1.0 + 0.1 * i as f32;
+                let f = (t * hz).round() as usize;
+                (f < rec.frames()).then(|| {
+                    let p: Vec<Vec3> = (0..n).map(|b| rec.at(f, b)).collect();
+                    let low = |k: usize| {
+                        let l = humanoid.legs[k];
+                        p[l.ankle].y - floors[2 * k] < eval::FLOOR_BAND
+                            || p[l.toe].y - floors[2 * k + 1] < eval::FLOOR_BAND
+                    };
+                    let on_floor = [low(0), low(1)];
+                    Owned {
+                        pos: p,
+                        root: rec.root[f].0,
+                        facing: rec.root[f].1,
+                        label: format!("{t:.1}s"),
+                        on_floor,
+                    }
+                })
+            })
+            .collect();
+        c.text(
+            20.0,
+            50.0,
+            "recorded tracks, side-on from the right; blue = left, orange = right",
+            1,
+            strip::INK,
+        );
+        strip::side_row(
+            &mut c,
+            20.0,
+            60.0,
+            panel_w,
+            300.0,
+            130.0,
+            &parents,
+            &side,
+            feet,
+            &panels(&owned),
+        );
+        let rootp: Vec<Vec3> = rec.root.iter().map(|x| x.0).collect();
+        let mut prints = Vec::new();
+        for (k, leg) in humanoid.legs.iter().enumerate() {
+            for ct in eval::contacts(
+                &rec,
+                leg.ankle,
+                floors[2 * k],
+                eval::FLOOR_BAND,
+                k == 0,
+                false,
+            ) {
+                prints.push((
+                    k == 0,
+                    rec.at(ct.start, leg.ankle),
+                    rec.at(ct.start, leg.toe),
+                ));
+            }
+        }
+        c.text(
+            20.0,
+            388.0,
+            "from above: root (black), footprints at touch-down; 1 m grid",
+            1,
+            strip::INK,
+        );
+        strip::top_view(
+            &mut c,
+            20.0,
+            400.0,
+            panel_w * 15.0,
+            440.0,
+            &TopView {
+                planned: &[],
+                simulation: &[],
+                root: &rootp,
+                prints: &prints,
+            },
+        );
+        io::write_file(proactor, &out.join(format!("{name}.png")), &c.png()?)
+            .map_err(|e| e.to_string())?;
+    }
+    let row = format!(
+        "| {} (recorded) | {:.2} / {:.2} | {:.2} / {:.2} | {:.2} | {:.1} | {:.3} | {:.2} | {:.1} | {:.1} / {:.1} | - | - | - |\n",
+        name, m.slide_worst_cm, m.slide_p95_cm, m.torso_acc_cm, m.limb_acc_cm, m.jog_cm, m.cadence, m.step_length, m.speed, m.hip_sway_cm, m.knee_at_strike_deg, m.knee_swing_deg
+    );
+    Ok((
+        row,
+        serde_json::json!({ "tracks": name, "about": about, "metrics": metrics_json(&m) }),
+    ))
+}
+
 fn metrics_json(m: &Metrics) -> serde_json::Value {
     serde_json::json!({
         "slide_worst_cm": m.slide_worst_cm, "slide_p95_cm": m.slide_p95_cm, "contacts": m.contacts,
@@ -555,16 +779,30 @@ fn main() {
             }
         }
     }
-    let all = scenarios::standard();
+    // The standard scenarios, or with --path only the paths given (and any --scenario named).
+    let mut all = if a.paths.is_empty() || !a.only.is_empty() {
+        scenarios::standard()
+    } else {
+        Vec::new()
+    };
+    let mut path_names = Vec::new();
+    for p in &a.paths {
+        let bytes =
+            io::read_file(&proactor, p).unwrap_or_else(|e| fail(&format!("{}: {e}", p.display())));
+        let sc =
+            Scenario::from_json(&bytes).unwrap_or_else(|e| fail(&format!("{}: {e}", p.display())));
+        path_names.push(sc.name.clone());
+        all.push(sc);
+    }
     let chosen: Vec<&Scenario> = all
         .iter()
-        .filter(|s| a.only.is_empty() || a.only.iter().any(|o| o == s.name))
+        .filter(|s| a.only.is_empty() || a.only.contains(&s.name) || path_names.contains(&s.name))
         .collect();
-    if chosen.is_empty() {
+    if chosen.is_empty() && a.tracks.is_empty() {
         fail("no scenario matched --scenario");
     }
     let torso = torso_of(&db);
-    let mut report = Vec::new();
+    let mut report: Vec<serde_json::Value> = Vec::new();
     let mut md = String::new();
     md.push_str(&format!(
         "# motion_eval\n\nDatabase `{}`: {} frames ({:.1} min) at {} fps, {} clips, {} bones; read in {:.1} ms. Steps at {} Hz; foot lock {}.\n\n",
@@ -582,6 +820,12 @@ fn main() {
     let mut all_ns: Vec<u64> = Vec::new();
     let mut search_ns: Vec<u64> = Vec::new();
     let mut plain_ns: Vec<u64> = Vec::new();
+    for t in &a.tracks {
+        let (row, json) = judge_tracks(&proactor, t, &a.out, a.strips)
+            .unwrap_or_else(|e| fail(&format!("{}: {e}", t.display())));
+        md.push_str(&row);
+        report.push(json);
+    }
     for s in chosen {
         let mut r = run(&db, s, a.hz, a.foot_lock, &a.settings);
         for _ in 1..a.repeat {

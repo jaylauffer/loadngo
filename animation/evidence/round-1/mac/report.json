@@ -3,7 +3,7 @@
   "foot_lock": true,
   "frames": 28978,
   "hz": 60.0,
-  "load_ms": 28.132250000000003,
+  "load_ms": 26.44225,
   "scenarios": [
     {
       "about": "12 m straight at a stroll (0.83 m/s), from standing to standing",
@@ -30,9 +30,9 @@
       "scenario": "straight",
       "searches": 178,
       "step_us": {
-        "max": 81.833,
-        "p50": 3.25,
-        "p99": 40.125
+        "max": 94.625,
+        "p50": 3.583,
+        "p99": 49.5
       },
       "unlocks_by_radius": 0,
       "worst_contacts": [
@@ -98,9 +98,9 @@
       "scenario": "start-stop",
       "searches": 168,
       "step_us": {
-        "max": 56.125,
-        "p50": 2.542,
-        "p99": 35.75
+        "max": 61.75,
+        "p50": 2.708,
+        "p99": 39.792
       },
       "unlocks_by_radius": 0,
       "worst_contacts": [
@@ -166,9 +166,9 @@
       "scenario": "turn-left-90",
       "searches": 166,
       "step_us": {
-        "max": 52.208,
+        "max": 73.375,
         "p50": 2.5,
-        "p99": 31.875
+        "p99": 32.083
       },
       "unlocks_by_radius": 0,
       "worst_contacts": [
@@ -234,9 +234,9 @@
       "scenario": "turn-right-90",
       "searches": 166,
       "step_us": {
-        "max": 50.5,
-        "p50": 2.542,
-        "p99": 27.583
+        "max": 59.0,
+        "p50": 2.5,
+        "p99": 28.166
       },
       "unlocks_by_radius": 0,
       "worst_contacts": [
@@ -302,9 +302,9 @@
       "scenario": "curve",
       "searches": 159,
       "step_us": {
-        "max": 55.0,
-        "p50": 4.583,
-        "p99": 32.958
+        "max": 48.375,
+        "p50": 4.209,
+        "p99": 31.041
       },
       "unlocks_by_radius": 0,
       "worst_contacts": [
@@ -370,9 +370,9 @@
       "scenario": "alongside-slow",
       "searches": 215,
       "step_us": {
-        "max": 54.333,
-        "p50": 2.292,
-        "p99": 34.292
+        "max": 55.25,
+        "p50": 2.333,
+        "p99": 34.291
       },
       "unlocks_by_radius": 9,
       "worst_contacts": [
@@ -415,12 +415,12 @@
     }
   ],
   "step_us": {
-    "p50": 2.583,
-    "p99": 33.125,
-    "plain_p50": 2.5,
-    "plain_p99": 5.166,
-    "search_p50": 5.667,
-    "search_p99": 52.042
+    "p50": 2.666,
+    "p99": 33.708,
+    "plain_p50": 2.542,
+    "plain_p99": 4.875,
+    "search_p50": 5.458,
+    "search_p99": 56.875
   },
   "tool": "motion_eval"
 }

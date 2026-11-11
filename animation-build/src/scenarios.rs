@@ -18,8 +18,8 @@ pub enum Leg {
 /// A named script.
 #[derive(Debug, Clone)]
 pub struct Scenario {
-    pub name: &'static str,
-    pub about: &'static str,
+    pub name: String,
+    pub about: String,
     pub legs: Vec<Leg>,
     /// Seconds of steady walking to measure the gait over: `(from, to)`; `None` for no
     /// gait measure.
@@ -28,6 +28,77 @@ pub struct Scenario {
     pub seconds: f32,
     /// The pace the gait is judged against.
     pub pace: f32,
+    /// Where the character starts, and its facing (radians about +Y, 0 = +Z).
+    pub start: Vec3,
+    pub facing: f32,
+}
+
+impl Scenario {
+    /// A scenario from JSON: `{"name", "about", "points": [[x, z], ...], "speed", "facing",
+    /// "wait_before", "wait_after", "steady": [from_s, to_s]}` (`facing`, the waits and
+    /// `steady` optional). It starts standing at the first point.
+    ///
+    /// # Errors
+    /// Malformed JSON or fewer than two points.
+    pub fn from_json(bytes: &[u8]) -> Result<Self, String> {
+        let v: serde_json::Value =
+            serde_json::from_slice(bytes).map_err(|e| format!("path JSON: {e}"))?;
+        let f = |k: &str, d: f32| {
+            v.get(k)
+                .and_then(serde_json::Value::as_f64)
+                .map_or(d, |x| x as f32)
+        };
+        let points: Vec<Vec3> = v
+            .get("points")
+            .and_then(serde_json::Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|p| {
+                        let p = p.as_array()?;
+                        Some(Vec3::new(
+                            p.first()?.as_f64()? as f32,
+                            0.0,
+                            p.get(1)?.as_f64()? as f32,
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if points.len() < 2 {
+            return Err("a path needs at least two [x, z] points".into());
+        }
+        let speed = f("speed", STROLL);
+        let before = f("wait_before", 1.0);
+        let after = f("wait_after", 2.0);
+        let length: f32 = points.windows(2).map(|w| (w[1] - w[0]).length()).sum();
+        let d = points[1] - points[0];
+        let steady = v
+            .get("steady")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|a| Some((a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32)));
+        Ok(Self {
+            name: v
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("path")
+                .to_string(),
+            about: v
+                .get("about")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("a path from JSON")
+                .to_string(),
+            start: points[0],
+            facing: f("facing", d.x.atan2(d.z)),
+            seconds: before + length / speed.max(0.1) + 3.0 + after,
+            legs: vec![
+                Leg::Wait(before),
+                Leg::Walk(points, speed),
+                Leg::Wait(after),
+            ],
+            steady,
+            pace: speed,
+        })
+    }
 }
 
 fn arc(center: Vec3, radius: f32, from: f32, to: f32, n: usize) -> Vec<Vec3> {
@@ -46,8 +117,8 @@ pub fn standard() -> Vec<Scenario> {
     let z = |d: f32| Vec3::new(0.0, 0.0, d);
     vec![
         Scenario {
-            name: "straight",
-            about: "12 m straight at a stroll (0.83 m/s), from standing to standing",
+            name: "straight".into(),
+            about: "12 m straight at a stroll (0.83 m/s), from standing to standing".into(),
             legs: vec![
                 Leg::Wait(1.0),
                 Leg::Walk(vec![z(0.0), z(12.0)], STROLL),
@@ -56,10 +127,12 @@ pub fn standard() -> Vec<Scenario> {
             steady: Some((4.0, 13.0)),
             seconds: 20.0,
             pace: STROLL,
+            start: Vec3::ZERO,
+            facing: 0.0,
         },
         Scenario {
-            name: "start-stop",
-            about: "stand, walk 4 m, stop and stand 2 s, walk 4 m, stop",
+            name: "start-stop".into(),
+            about: "stand, walk 4 m, stop and stand 2 s, walk 4 m, stop".into(),
             legs: vec![
                 Leg::Wait(1.5),
                 Leg::Walk(vec![z(0.0), z(4.0)], STROLL),
@@ -70,10 +143,12 @@ pub fn standard() -> Vec<Scenario> {
             steady: None,
             seconds: 19.0,
             pace: STROLL,
+            start: Vec3::ZERO,
+            facing: 0.0,
         },
         Scenario {
-            name: "turn-left-90",
-            about: "6 m, a 90° turn to the left at a corner, 6 m",
+            name: "turn-left-90".into(),
+            about: "6 m, a 90° turn to the left at a corner, 6 m".into(),
             legs: vec![
                 Leg::Wait(1.0),
                 Leg::Walk(vec![z(0.0), z(6.0), Vec3::new(6.0, 0.0, 6.0)], STROLL),
@@ -82,10 +157,12 @@ pub fn standard() -> Vec<Scenario> {
             steady: None,
             seconds: 19.0,
             pace: STROLL,
+            start: Vec3::ZERO,
+            facing: 0.0,
         },
         Scenario {
-            name: "turn-right-90",
-            about: "6 m, a 90° turn to the right at a corner, 6 m",
+            name: "turn-right-90".into(),
+            about: "6 m, a 90° turn to the right at a corner, 6 m".into(),
             legs: vec![
                 Leg::Wait(1.0),
                 Leg::Walk(vec![z(0.0), z(6.0), Vec3::new(-6.0, 0.0, 6.0)], STROLL),
@@ -94,10 +171,12 @@ pub fn standard() -> Vec<Scenario> {
             steady: None,
             seconds: 19.0,
             pace: STROLL,
+            start: Vec3::ZERO,
+            facing: 0.0,
         },
         Scenario {
-            name: "curve",
-            about: "a gentle curve: a quarter circle of 5 m radius after 2 m straight",
+            name: "curve".into(),
+            about: "a gentle curve: a quarter circle of 5 m radius after 2 m straight".into(),
             legs: vec![
                 Leg::Wait(1.0),
                 Leg::Walk(
@@ -123,10 +202,12 @@ pub fn standard() -> Vec<Scenario> {
             steady: Some((4.0, 11.0)),
             seconds: 18.0,
             pace: STROLL,
+            start: Vec3::ZERO,
+            facing: 0.0,
         },
         Scenario {
-            name: "alongside-slow",
-            about: "12 m straight at 0.6 m/s, keeping pace with someone slower",
+            name: "alongside-slow".into(),
+            about: "12 m straight at 0.6 m/s, keeping pace with someone slower".into(),
             legs: vec![
                 Leg::Wait(1.0),
                 Leg::Walk(vec![z(0.0), z(12.0)], 0.6),
@@ -135,6 +216,8 @@ pub fn standard() -> Vec<Scenario> {
             steady: Some((5.0, 18.0)),
             seconds: 25.0,
             pace: 0.6,
+            start: Vec3::ZERO,
+            facing: 0.0,
         },
     ]
 }
