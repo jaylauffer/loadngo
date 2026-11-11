@@ -734,6 +734,8 @@ canonical humanoid and on a man's and a woman's body from a browser game (as `an
   21-24 cm on its own).
 - **Not done this round:** Mesh2Motion's sits and rises (their export's UE-style names need a bone map) and the knee at
   heel strike (loadngo's share of 19-23 degrees).
+- **Linux** (dolores, Raspberry Pi 5, aarch64; run after the round, on `55932122`): `cargo fmt --check`, clippy of both
+  animation crates with all targets and features under `-D warnings`, and their tests (55, 1 and 8) pass.
 
 ## What is short
 
