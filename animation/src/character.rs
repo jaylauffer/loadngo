@@ -276,6 +276,7 @@ impl Character {
     pub fn go_to(&mut self, points: &[Vec3], speed: f32, end_facing: Option<f32>) {
         let mut p = PathSteering::new(&points[..points.len().min(MAX_PATH_POINTS)], speed);
         p.end_facing = end_facing;
+        p.face_from = self.m.config().face_from;
         self.standing_or_queue(Steer::Path(Box::new(p)));
     }
 

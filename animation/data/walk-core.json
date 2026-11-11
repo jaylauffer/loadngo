@@ -1,5 +1,5 @@
 {
- "about": "A small locomotion set for a web game: strolling, starting and stopping, turning on the way and on the spot, a little standing. A subset of round-2.json (same sources and licences: 100STYLE Neutral CC BY 4.0, CMU Graphics Lab, Mesh2Motion raw captures CC0); build one per body with --skip-tags man or woman. See docs/ANIMATION.md, \"Sizes\".",
+ "about": "A small locomotion set for a web game: strolling, starting and stopping, turning on the way and on the spot, standing about (idles). A subset of round-2.json (same sources and licences: 100STYLE Neutral CC BY 4.0, CMU Graphics Lab, Mesh2Motion raw captures CC0, not used here: their turns swing an arm and sweep a toe); build one per body with --skip-tags man or woman. See docs/ANIMATION.md, \"Sizes\".",
  "root": "~/.loadngo/data/mocap",
  "clips": [
   {
@@ -20,11 +20,10 @@
    "motion": "100style/extracted/100STYLE/Neutral/Neutral_ID.bvh",
    "map": "100style",
    "from": 10.92,
-   "to": 18.0,
+   "to": 25.92,
    "tags": [
     "idle"
-   ],
-   "mirror": false
+   ]
   },
   {
    "name": "100style-neutral-tr1",
@@ -198,20 +197,6 @@
    "to": 10.0
   },
   {
-   "name": "cmu-111-28-standing",
-   "skeleton": "cmu/subjects/111/111.asf",
-   "motion": "cmu/subjects/111/111_28.amc",
-   "fps": 120,
-   "map": "cmu-asf",
-   "tags": [
-    "idle",
-    "woman"
-   ],
-   "mirror": true,
-   "from": 0,
-   "to": 10.0
-  },
-  {
    "name": "cmu-113-25-walk",
    "skeleton": "cmu/subjects/113/113.asf",
    "motion": "cmu/subjects/113/113_25.amc",
@@ -220,50 +205,6 @@
    "tags": [
     "walk",
     "woman"
-   ],
-   "mirror": true
-  },
-  {
-   "name": "mesh2motion-turn-45-left",
-   "motion": "mesh2motion/raw/turn-45-left.bvh",
-   "map": "mesh2motion",
-   "from": 0.5,
-   "tags": [
-    "turn",
-    "idle"
-   ],
-   "mirror": true
-  },
-  {
-   "name": "mesh2motion-turn-45-right",
-   "motion": "mesh2motion/raw/turn-45-right.bvh",
-   "map": "mesh2motion",
-   "from": 0.5,
-   "tags": [
-    "turn",
-    "idle"
-   ],
-   "mirror": true
-  },
-  {
-   "name": "mesh2motion-turn-180-left",
-   "motion": "mesh2motion/raw/turn-180-left.bvh",
-   "map": "mesh2motion",
-   "from": 0.5,
-   "tags": [
-    "turn",
-    "idle"
-   ],
-   "mirror": true
-  },
-  {
-   "name": "mesh2motion-turn-180-right",
-   "motion": "mesh2motion/raw/turn-180-right.bvh",
-   "map": "mesh2motion",
-   "from": 0.5,
-   "tags": [
-    "turn",
-    "idle"
    ],
    "mirror": true
   },
@@ -374,6 +315,29 @@
     "walk",
     "turn",
     "man"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-77-02-standing",
+   "skeleton": "cmu/subjects/77/77.asf",
+   "motion": "cmu/subjects/77/77_02.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "idle"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-113-21-standing",
+   "skeleton": "cmu/subjects/113/113.asf",
+   "motion": "cmu/subjects/113/113_21.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "idle",
+    "woman"
    ],
    "mirror": true
   }

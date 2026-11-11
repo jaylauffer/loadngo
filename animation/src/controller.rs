@@ -103,6 +103,20 @@ pub struct Config {
     /// root is pulled towards it at `arrive_ratio` of its own speed, and standing, at most
     /// `arrive_creep` m/s. 0: off (a stop lands where its capture takes it).
     pub arrive_exact: f32,
+    /// While nobody wants the character to move, search only frames with these tags (for
+    /// example idle and start-stop: a walk clip's standing ends, played as an idle, carry
+    /// whatever its performer did with their arms there). 0: no limit.
+    pub rest_tags: u32,
+    /// ...and never frames with these (for example turn: turning on the spot reads as
+    /// fidgeting). Both apply only once the character also faces about the way wanted.
+    pub rest_exclude: u32,
+    /// Standing calmly, the inertialization half-life (s) is at least this: the pose features
+    /// hold the feet and hips but not the arms, so a transition between two idles can turn an
+    /// arm a long way, and at 0.1 s it whips. 0: the usual half-life.
+    pub rest_halflife: f32,
+    /// Paths walked by a `Character` take their end's facing within this distance of the end
+    /// (`PathSteering::face_from`). 0: only once stopped.
+    pub face_from: f32,
     pub arrive_ratio: f32,
     pub arrive_creep: f32,
 }
@@ -158,6 +172,10 @@ impl Config {
             "time_warp" => self.time_warp = f()?,
             "stuck_after" => self.stuck_after = f()?,
             "arrive_exact" => self.arrive_exact = f()?,
+            "rest_tags" => self.rest_tags = f()? as u32,
+            "rest_exclude" => self.rest_exclude = f()? as u32,
+            "rest_halflife" => self.rest_halflife = f()?,
+            "face_from" => self.face_from = f()?,
             "arrive_ratio" => self.arrive_ratio = f()?,
             "arrive_creep" => self.arrive_creep = f()?,
             _ => return Err(format!("no setting named {name:?}")),
@@ -198,6 +216,10 @@ impl Default for Config {
             time_warp: 0.0,
             stuck_after: 0.4,
             arrive_exact: 0.0,
+            rest_tags: 0,
+            rest_exclude: 0,
+            rest_halflife: 0.0,
+            face_from: 0.0,
             arrive_ratio: 0.8,
             arrive_creep: 0.06,
         }
@@ -842,7 +864,8 @@ impl MotionMatcher {
         // Standing, and already facing about the way wanted: keep the facing, rather than
         // shuffle round the last few degrees.
         let root_yaw = self.root.rotation.yaw();
-        if resting && wrap_angle(desired_f - root_yaw).abs() < cfg.settle_facing {
+        let calm = resting && wrap_angle(desired_f - root_yaw).abs() < cfg.settle_facing;
+        if calm {
             desired_f = root_yaw;
         }
         self.sim_pos
@@ -950,8 +973,16 @@ impl MotionMatcher {
             let ex = Exclusions {
                 end_margin: self.frames(cfg.end_margin),
                 skip: if end_of_clip { (0, 0) } else { skip },
-                tags: cfg.search_tags,
-                exclude: cfg.exclude_tags,
+                tags: if calm && cfg.rest_tags != 0 {
+                    cfg.search_tags & cfg.rest_tags
+                } else {
+                    cfg.search_tags
+                },
+                exclude: if calm {
+                    cfg.exclude_tags | cfg.rest_exclude
+                } else {
+                    cfg.exclude_tags
+                },
             };
             let mut st = SearchStats::default();
             let found = search(&self.db, &self.query, current, ex, &mut st);
@@ -1010,11 +1041,14 @@ impl MotionMatcher {
         // 4. Pose with inertialization.
         self.sample(self.frame, self.frac);
         let b = self.db.bone_count();
-        let pose_halflife = if self.taken_over > 0.0 {
+        let mut pose_halflife = if self.taken_over > 0.0 {
             cfg.takeover_halflife.max(cfg.blend_halflife)
         } else {
             cfg.blend_halflife
         };
+        if calm {
+            pose_halflife = pose_halflife.max(cfg.rest_halflife);
+        }
         self.taken_over = (self.taken_over - dt).max(0.0);
         for i in 0..b {
             self.out_rot[i] = self.bone_blend[i].update(self.anim_rot[i], pose_halflife, dt);

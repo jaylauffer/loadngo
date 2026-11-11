@@ -47,6 +47,10 @@ pub struct PathSteering {
     pub braking: f32,
     /// Facing once stopped (radians); `None` keeps the last segment's direction.
     pub end_facing: Option<f32>,
+    /// Within this distance of the end (m), face `end_facing` already while still walking:
+    /// the turn goes with the last steps rather than on the spot (a pivot on a planted foot
+    /// slides its sole). 0: only once stopped.
+    pub face_from: f32,
     /// Within this distance of the end (m), or past it, the path is done: stand still.
     /// A person a few centimetres off their mark stands; they do not shuffle onto it.
     pub arrive_radius: f32,
@@ -68,6 +72,7 @@ impl PathSteering {
             look_ahead: 0.6,
             braking: 0.9,
             end_facing: None,
+            face_from: 0.0,
             arrive_radius: 0.12,
         }
     }
@@ -171,7 +176,7 @@ impl Steering for PathSteering {
         let dir = (target - position.flat()).normalize_or_zero();
         // Brake so as to stop at the end: v² = 2 a d, never faster than cruising.
         let speed = self.speed.min((2.0 * self.braking * remaining).sqrt());
-        let facing = if speed > 0.05 {
+        let facing = if speed > 0.05 && !(self.end_facing.is_some() && remaining < self.face_from) {
             dir.x.atan2(dir.z)
         } else {
             stop_facing

@@ -379,3 +379,165 @@ pub fn measure(
     m.transitions_per_s = m.transitions as f32 / (n as f32 / rec.hz);
     m
 }
+
+/// The bones a posture is measured on, found by their Mixamo-style names.
+#[derive(Debug, Clone, Copy)]
+pub struct PostureBones {
+    pub hips: usize,
+    pub neck: usize,
+    /// Per side (left, right): the thigh's root (hip joint), shoulder, elbow and wrist.
+    pub up_leg: [usize; 2],
+    pub arm: [usize; 2],
+    pub fore_arm: [usize; 2],
+    pub hand: [usize; 2],
+}
+
+impl PostureBones {
+    /// Found in `names`, or `None` if any is missing.
+    #[must_use]
+    pub fn find(names: &[String]) -> Option<Self> {
+        let f = |n: &str| {
+            names
+                .iter()
+                .position(|x| crate::humanoid::base_name(x) == n)
+        };
+        Some(Self {
+            hips: f("Hips")?,
+            neck: f("Neck")?,
+            up_leg: [f("LeftUpLeg")?, f("RightUpLeg")?],
+            arm: [f("LeftArm")?, f("RightArm")?],
+            fore_arm: [f("LeftForeArm")?, f("RightForeArm")?],
+            hand: [f("LeftHand")?, f("RightHand")?],
+        })
+    }
+}
+
+/// How a walker carries themselves over the steady part of a walk: the measures a person
+/// sees as "walking like a robot" when they are off (forearms held out, a crouch).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Posture {
+    /// The forearm's angle from hanging straight down (elbow to wrist against the vertical,
+    /// degrees), median and 90th percentile over both arms and every steady frame.
+    pub forearm_p50_deg: f32,
+    pub forearm_p90_deg: f32,
+    /// The wrist's height below the hip joint (m, positive below), median over both sides.
+    pub wrist_below_hip_m: f32,
+    /// The trunk's lean from the vertical (hips to neck, degrees, positive forward along the
+    /// walker's facing), median.
+    pub trunk_lean_deg: f32,
+    /// The knee's bend through mid-stance (degrees): at the middle frame of each foot
+    /// contact, median over contacts.
+    pub knee_midstance_deg: f32,
+}
+
+/// Measures the posture of `rec` over `[steady.0, steady.1)`, mid-stance from the feet's
+/// contacts (as [`foot_contacts`] finds them).
+#[must_use]
+pub fn posture(
+    rec: &Recording,
+    humanoid: &Humanoid,
+    b: &PostureBones,
+    steady: (usize, usize),
+) -> Posture {
+    let (a, z) = (steady.0, steady.1.min(rec.frames()));
+    if z <= a {
+        return Posture::default();
+    }
+    let mut fore = Vec::with_capacity(2 * (z - a));
+    let mut wrist = Vec::with_capacity(2 * (z - a));
+    let mut lean = Vec::with_capacity(z - a);
+    for f in a..z {
+        for s in 0..2 {
+            let e = rec.at(f, b.fore_arm[s]);
+            let w = rec.at(f, b.hand[s]);
+            let d = (w - e).normalize_or_zero();
+            fore.push((-d.y).clamp(-1.0, 1.0).acos().to_degrees());
+            wrist.push(rec.at(f, b.up_leg[s]).y - w.y);
+        }
+        let (_, facing) = rec.root[f];
+        let fwd = Vec3::new(facing.sin(), 0.0, facing.cos());
+        let t = (rec.at(f, b.neck) - rec.at(f, b.hips)).normalize_or_zero();
+        lean.push(t.dot(fwd).atan2(t.y).to_degrees());
+    }
+    let mut knees = Vec::new();
+    for side in 0..2 {
+        for c in foot_contacts(rec, humanoid, side) {
+            let mid = c.start + c.frames / 2;
+            if mid >= a && mid < z {
+                knees.push(knee_bend(rec, mid, humanoid, side));
+            }
+        }
+    }
+    Posture {
+        forearm_p50_deg: percentile(&mut fore.clone(), 0.5),
+        forearm_p90_deg: percentile(&mut fore, 0.9),
+        wrist_below_hip_m: percentile(&mut wrist, 0.5),
+        trunk_lean_deg: percentile(&mut lean, 0.5),
+        knee_midstance_deg: percentile(&mut knees, 0.5),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::humanoid::Leg;
+
+    /// A figure standing still for 2 s, its forearms at `fore` degrees from hanging down,
+    /// leaning `lean` degrees forward (+Z), the knees straight.
+    fn figure(fore: f32, lean: f32) -> (Recording, Humanoid, PostureBones) {
+        let (f, l) = (fore.to_radians(), lean.to_radians());
+        let mut p = vec![Vec3::ZERO; 16];
+        p[0] = Vec3::new(0.0, 1.0, 0.0); // hips
+        p[1] = p[0] + Vec3::new(0.0, l.cos(), l.sin()) * 0.5; // neck
+        for s in 0..2 {
+            let x = if s == 0 { 0.1 } else { -0.1 };
+            p[2 + s] = Vec3::new(x, 0.95, 0.0); // hip joint
+            p[4 + s] = p[1] + Vec3::new(x * 1.8, 0.0, 0.0); // shoulder
+            p[6 + s] = p[4 + s] - Vec3::new(0.0, 0.3, 0.0); // elbow
+            p[8 + s] = p[6 + s] + Vec3::new(0.0, -f.cos(), f.sin()) * 0.25; // wrist
+            p[10 + 3 * s] = Vec3::new(x, 0.5, 0.0); // knee
+            p[11 + 3 * s] = Vec3::new(x, 0.08, 0.0); // ankle
+            p[12 + 3 * s] = Vec3::new(x, 0.02, 0.14); // toe
+        }
+        let mut rec = Recording::new(60.0, 16);
+        for _ in 0..120 {
+            rec.push(&p, Vec3::ZERO, 0.0, 0);
+        }
+        let leg = |s: usize| Leg {
+            up: 2 + s,
+            knee: 10 + 3 * s,
+            ankle: 11 + 3 * s,
+            toe: 12 + 3 * s,
+        };
+        let h = Humanoid {
+            hips: 0,
+            legs: [leg(0), leg(1)],
+            arms: [4, 5],
+        };
+        let b = PostureBones {
+            hips: 0,
+            neck: 1,
+            up_leg: [2, 3],
+            arm: [4, 5],
+            fore_arm: [6, 7],
+            hand: [8, 9],
+        };
+        (rec, h, b)
+    }
+
+    #[test]
+    fn posture_reads_forearms_lean_and_knees() {
+        let (rec, h, b) = figure(0.0, 0.0);
+        let p = posture(&rec, &h, &b, (0, 120));
+        assert!(p.forearm_p50_deg < 0.5, "{p:?}");
+        assert!(p.trunk_lean_deg.abs() < 0.5);
+        assert!(p.knee_midstance_deg < 0.5);
+        let (rec, h, b) = figure(60.0, 12.0);
+        let p = posture(&rec, &h, &b, (0, 120));
+        assert!((p.forearm_p50_deg - 60.0).abs() < 0.5, "{p:?}");
+        assert!((p.trunk_lean_deg - 12.0).abs() < 0.5);
+        // The wrist 0.3 + 0.25 cos 60 below the shoulder, the shoulder 0.5 cos 12 over the hips.
+        let wrist = 1.0 + 0.5 * 12f32.to_radians().cos() - 0.3 - 0.125;
+        assert!((p.wrist_below_hip_m - (0.95 - wrist)).abs() < 1e-3);
+    }
+}

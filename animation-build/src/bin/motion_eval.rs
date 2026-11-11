@@ -351,6 +351,13 @@ fn run_character(
     }
 }
 
+fn print_posture(what: &str, p: &eval::Posture) {
+    eprintln!(
+        "  posture {what}: forearm from vertical {:.1} / {:.1} deg (p50 / p90), wrist {:.3} m below the hip, trunk lean {:.1} deg, knee at mid-stance {:.1} deg",
+        p.forearm_p50_deg, p.forearm_p90_deg, p.wrist_below_hip_m, p.trunk_lean_deg, p.knee_midstance_deg
+    );
+}
+
 fn speed_of(m: &MotionMatcher) -> f32 {
     // The simulation's speed: how far the next predicted point is over its horizon.
     let t = m.trajectory();
@@ -730,6 +737,12 @@ fn judge_tracks(
         .filter_map(|t| skeleton.find(t))
         .collect();
     let m = eval::measure(&rec, &humanoid, &torso, (s0, s1));
+    if let Some(pb) = eval::PostureBones::find(&names) {
+        print_posture(
+            &format!("tracks {name}"),
+            &eval::posture(&rec, &humanoid, &pb, (s0, s1)),
+        );
+    }
     eprintln!(
         "tracks {:<12} slide {:.2}/{:.2} cm, acc {:.2}/{:.2}, jog {:.2}, cadence {:.1} x {:.3} m at {:.2} m/s, sway {:.1} cm, knee {:.1}/{:.1}",
         name, m.slide_worst_cm, m.slide_p95_cm, m.torso_acc_cm, m.limb_acc_cm, m.jog_cm, m.cadence, m.step_length, m.speed, m.hip_sway_cm, m.knee_at_strike_deg, m.knee_swing_deg
@@ -872,6 +885,14 @@ fn main() {
                 rec.push(&buf, root, facing, 0);
             }
             let m = eval::measure(&rec, &db.humanoid, &torso_of(&db), (0, rec.frames()));
+            if let Some(pb) = eval::PostureBones::find(&db.skeleton.names) {
+                let n = rec.frames();
+                let edge = (db.fps as usize).min(n / 4);
+                print_posture(
+                    &format!("capture {}", c.name),
+                    &eval::posture(&rec, &db.humanoid, &pb, (edge, n - edge)),
+                );
+            }
             let mut worst: Vec<eval::Contact> = Vec::new();
             for side_i in 0..2 {
                 worst.extend(eval::foot_contacts(&rec, &db.humanoid, side_i));
@@ -956,6 +977,11 @@ fn main() {
             ((t0 * a.hz) as usize, (t1 * a.hz) as usize)
         });
         let m = eval::measure(&r.rec, &db.humanoid, &torso, steady);
+        let pose = eval::PostureBones::find(&db.skeleton.names)
+            .map(|pb| eval::posture(&r.rec, &db.humanoid, &pb, steady));
+        if let (Some(p), true) = (pose, s.steady.is_some()) {
+            print_posture(&s.name, &p);
+        }
         for (ns, sr) in r.step_ns.iter().zip(&r.searched) {
             if *sr {
                 search_ns.push(*ns);
@@ -1008,6 +1034,23 @@ fn main() {
                 "  worst contacts: {}",
                 serde_json::to_string(&worst_json).unwrap_or_default()
             );
+            // What played, and for how long.
+            let mut played: Vec<(String, usize)> = Vec::new();
+            for (f, _) in &r.db_frame {
+                let name = db.clip_of(*f).map_or("?".to_string(), |c| {
+                    format!("{}{}", c.name, if c.mirrored { "-m" } else { "" })
+                });
+                match played.iter_mut().find(|(n, _)| *n == name) {
+                    Some(e) => e.1 += 1,
+                    None => played.push((name, 1)),
+                }
+            }
+            played.sort_by_key(|p| std::cmp::Reverse(p.1));
+            let list: Vec<String> = played
+                .iter()
+                .map(|(n, k)| format!("{n} {:.1}s", *k as f32 / a.hz))
+                .collect();
+            eprintln!("  played: {}", list.join(", "));
         }
         let mut ns = r.step_ns.clone();
         let (p50, p99, max) = (
@@ -1059,6 +1102,10 @@ fn main() {
             "end_offset_m": (end - goal).flat().length(), "searches": r.searches, "unlocks_by_radius": r.unlocks,
             "step_us": { "p50": p50 as f64 / 1e3, "p99": p99 as f64 / 1e3, "max": max as f64 / 1e3 }, "allocations_in_step": r.allocs,
             "worst_contacts": worst_json,
+            "posture": pose.filter(|_| s.steady.is_some()).map(|p| serde_json::json!({
+                "forearm_from_vertical_p50_deg": p.forearm_p50_deg, "forearm_from_vertical_p90_deg": p.forearm_p90_deg,
+                "wrist_below_hip_m": p.wrist_below_hip_m, "trunk_lean_deg": p.trunk_lean_deg, "knee_midstance_deg": p.knee_midstance_deg,
+            })),
         }));
         if a.dump_feet {
             let mut csv = String::from("frame,l_ankle_y,l_toe_y,r_ankle_y,r_toe_y,l_ankle_v,l_toe_v,r_ankle_v,r_toe_v,held,db_frame,contacts,root_v,trans\n");

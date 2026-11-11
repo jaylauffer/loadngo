@@ -151,6 +151,25 @@ pub unsafe extern "C" fn anim_database_bone_name(db: *const DatabaseHandle, i: u
     }
 }
 
+/// Leaves the name of the clip holding database frame `frame` (with `-m` for a mirror image) in
+/// the text buffer, for a host's checks. 0 on success.
+///
+/// # Safety
+/// `db` must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn anim_database_clip_name(db: *const DatabaseHandle, frame: u32) -> u32 {
+    match unsafe { db.as_ref() }.and_then(|d| d.db.clip_of(frame as usize)) {
+        Some(c) => {
+            fail(format!("{}{}", c.name, if c.mirrored { "-m" } else { "" }));
+            0
+        }
+        None => {
+            fail("no such frame");
+            1
+        }
+    }
+}
+
 /// One character.
 pub struct CharacterHandle {
     c: Character,

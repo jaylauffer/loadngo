@@ -70,6 +70,10 @@ export class MotionDatabase {
     }
     this.frameCount = x.anim_database_frame_count(handle);
   }
+  /** The name of the clip holding database frame `frame` (`-m`: its mirror image), for checks. */
+  clipName(frame) {
+    return this.motion.x.anim_database_clip_name(this.h, frame) === 0 ? this.motion.text() : null;
+  }
   createCharacter(x = 0, z = 0, facing = 0) {
     const h = this.motion.x.anim_character_create(this.h, x, z, facing);
     if (!h) throw new Error(`motion: ${this.motion.text()}`);
