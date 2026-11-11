@@ -112,6 +112,11 @@ const MAX_BEATS: usize = 64;
 /// clip's warp taking up the rest.
 const APPROACH_SLACK: f32 = 0.35;
 
+/// How far (m) the simulation leads a step back before it sets off on the trajectory alone: on a
+/// game's bodies 0.12 landed a 0.3 m step 0.29 m back, its feet sliding at most 1.4 cm (sooner,
+/// at 0.04 m, 0.26 m back).
+const BACK_LEAD: f32 = 0.12;
+
 /// How far (m) a half turn in place carries a character forward, in the capture: the walk
 /// to a seat stops this much short (scaled by the turn) so that turning round lands on it.
 const TURN_LEAD: f32 = 0.3;
@@ -130,6 +135,11 @@ pub struct Character {
     db: Arc<Database>,
     steer: Steer,
     after_standing: Option<Steer>,
+    /// The walk under way is a step back (`step_back`): frames tagged `back` are searched, it lands
+    /// on its end within this distance (m) of it; and whether it has set off.
+    backing: bool,
+    backing_arrive: f32,
+    backing_off: bool,
     state: State,
     seat: Option<Seat>,
     sit: Option<Action>,
@@ -199,6 +209,9 @@ impl Character {
                 facing,
             }),
             after_standing: None,
+            backing: false,
+            backing_arrive: 0.0,
+            backing_off: false,
             state: State::Standing,
             seat: None,
             sit: None,
@@ -251,7 +264,9 @@ impl Character {
     }
 
     fn standing_or_queue(&mut self, steer: Steer) {
-        // Any command but a sit forgets a sit not yet begun, and a seat being left.
+        // Any command but a sit forgets a sit not yet begun, and a seat being left; any but a
+        // step back, a step back.
+        self.backing = false;
         self.sit = None;
         if matches!(self.state, State::SittingDown | State::Seated) {
             self.seat = None;
@@ -278,6 +293,27 @@ impl Character {
         p.end_facing = end_facing;
         p.face_from = self.m.config().face_from;
         self.standing_or_queue(Steer::Path(Box::new(p)));
+    }
+
+    /// Steps straight back `distance` metres from where it stands, at most `speed` m/s, still
+    /// facing the way it faces, and lands there: a half step back to give someone room. The
+    /// database's frames tagged `back` are searched for this walk (whatever `Config::step_back`
+    /// says) until another command is given, it sets off on the trajectory alone once its
+    /// simulation leads by `BACK_LEAD`, and it lands on its end as `Config::arrive_exact` would.
+    /// Without frames tagged `back` it steps back on what it has.
+    pub fn step_back(&mut self, distance: f32, speed: f32) {
+        let r = self.m.root();
+        let facing = r.rotation.yaw();
+        let distance = distance.max(0.0);
+        let to = r.translation - r.rotation.rotate(Vec3::Z) * distance;
+        let mut p = PathSteering::new(&[r.translation, to], speed);
+        p.end_facing = Some(facing);
+        // Facing the end's way from the start: the path's own way is behind.
+        p.face_from = distance + 1.0;
+        self.standing_or_queue(Steer::Path(Box::new(p)));
+        self.backing = true;
+        self.backing_arrive = distance + 0.5;
+        self.backing_off = false;
     }
 
     /// Stands and turns to face `facing`.
@@ -309,6 +345,7 @@ impl Character {
     pub fn teleport(&mut self, position: Vec3, facing: f32) {
         self.m.stop_action();
         self.m.teleport(position, facing);
+        self.backing = false;
         self.state = State::Standing;
         self.sit = None;
         self.seat = None;
@@ -331,6 +368,7 @@ impl Character {
     /// them. The character is then standing there; the layers start from rest.
     pub fn take_over(&mut self, root: Transform, hips: Vec3, rotations: &[Quat]) {
         self.m.take_over(root, hips, rotations);
+        self.backing = false;
         self.state = State::Standing;
         self.sit = None;
         self.seat = None;
@@ -377,6 +415,7 @@ impl Character {
         moving: Moving,
     ) {
         self.m.take_over_moving(root, hips, rotations, moving);
+        self.backing = false;
         self.state = State::Walking;
         self.sit = None;
         self.seat = None;
@@ -441,6 +480,7 @@ impl Character {
             hips_height_target: Some(seat.hips.y),
         });
         self.seat = Some(seat);
+        self.backing = false;
         // Stop short of the spot along the way in, by about what turning round there will
         // carry the character on (the capture's turns in place step forward as they turn).
         let here = self.m.root().translation;
@@ -557,6 +597,28 @@ impl Character {
             _ => {}
         }
         self.last_root = self.m.root().translation;
+        // (Wanted until another command: let go once there, a game's bodies left the captured
+        // backward stop for clips that drifted 0.35-0.45 m aside.)
+        self.m.want_back(self.backing);
+        // It lands where it was asked to (on its own a captured stop carried a 0.3 m step 0.2-0.6 m
+        // back, and once the steering had stopped the simulation followed it there).
+        self.m.want_arrival(if self.backing {
+            self.backing_arrive
+        } else {
+            0.0
+        });
+        // A step back sets off on the trajectory alone once the simulation has led it by
+        // BACK_LEAD (no standing pose leads into a step back; waiting for the stuck recovery kept
+        // a body standing a second first).
+        if self.backing && !self.backing_off && self.state == State::Walking {
+            let lead = (self.m.simulation().translation - self.m.root().translation)
+                .flat()
+                .length();
+            if lead > BACK_LEAD {
+                self.m.search_on_trajectory();
+                self.backing_off = true;
+            }
+        }
         self.m.step(dt, &self.steer);
         if self.m.action_finished() {
             match self.state {
@@ -994,6 +1056,76 @@ mod tests {
             moved < 0.05,
             "the free foot moved {moved} m in the frame after the take-over"
         );
+    }
+
+    #[test]
+    fn steps_back_keeping_its_facing_and_only_when_asked() {
+        // A half step back (0.3 m straight back, facing kept) on a database with a backward stop
+        // tagged `back`: asked by step_back (which lands on its end: 0.300 m), or by a path with
+        // Config::step_back on (0.342 m), it plays that stop and ends 0.25-0.35 m back, turned less
+        // than 0.15 rad; the same path without step_back never plays a frame of it.
+        let target = humanoid_skeleton(1.0);
+        // Backwards: a stop that slows from 0.5 m/s over 1.8 s and stands, as 100STYLE's backward
+        // walk's stop in walk-core.json does. (With a steady synthetic backward walk beside it, the
+        // search left the stop for the walk, whose sway its pose matches better, and walked on.
+        // On a game's bodies the captured walk and stop together stepped 0.29 m back for 0.3.)
+        let mut stop = crate::testing::synthetic_walk_to_stop(&target, 180, -0.5, 0.0, 1.8);
+        stop.tags = tags::BACK;
+        // (A turn on the spot among them: with every clip facing straight ahead the facing features'
+        // spread is so small that a walk's own sway outweighs any trajectory, and only the idle,
+        // dead still, is ever chosen to set off from.)
+        let clips = vec![
+            synthetic_walk(&target, 600, 1.0),
+            synthetic_walk(&target, 600, 0.7),
+            synthetic_idle(&target, 300),
+            crate::testing::synthetic_turn(&target, 600, 1.0),
+            stop,
+        ];
+        let db = Arc::new(Database::build(&target, &clips, &BuildConfig::default()).unwrap());
+        let dt = 1.0 / 60.0;
+        let facing = 0.6f32;
+        let run = |how: usize| {
+            let config = Config {
+                step_back: how == 2,
+                face_from: 1.3,
+                ..Config::default()
+            };
+            let mut c = Character::new(Arc::clone(&db), config, Vec3::new(1.0, 0.0, 2.0), facing);
+            for _ in 0..60 {
+                c.step(dt);
+            }
+            let start = c.root();
+            let ahead = start.rotation.rotate(Vec3::Z);
+            if how == 0 {
+                c.step_back(0.3, 0.4);
+            } else {
+                c.go_to(
+                    &[start.translation, start.translation - ahead * 0.3],
+                    0.4,
+                    Some(start.rotation.yaw()),
+                );
+            }
+            let (mut turned, mut played) = (0.0f32, false);
+            for _ in 0..(60 * 5) {
+                c.step(dt);
+                turned = turned.max(wrap_angle(c.root().rotation.yaw() - facing).abs());
+                played |= db.bounds.frame_tags[c.matcher().frame()] & tags::BACK != 0;
+            }
+            let moved = (start.translation - c.root().translation).dot(ahead);
+            (moved, turned, played, c.state())
+        };
+        for how in [0, 2] {
+            let (moved, turned, played, state) = run(how);
+            assert!(played, "case {how}: no frame tagged back was played");
+            assert!(
+                (0.25..=0.35).contains(&moved),
+                "case {how}: stepped {moved} m back"
+            );
+            assert!(turned < 0.15, "case {how}: turned {turned} rad");
+            assert_eq!(state, State::Standing, "case {how}");
+        }
+        let (_, _, played, _) = run(1);
+        assert!(!played, "without step_back a frame tagged back was played");
     }
 
     #[test]

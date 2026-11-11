@@ -44,13 +44,17 @@ pub mod tags {
     pub const SEATED: u32 = 1 << 6;
     pub const TALK: u32 = 1 << 7;
     pub const GESTURE: u32 = 1 << 8;
+    /// Walking or stepping backwards. Never searched unless asked for (`Config::step_back`,
+    /// `Character::step_back`), and left out of the features' normalisation, so a database that
+    /// holds such clips matches every other frame as one without them does.
+    pub const BACK: u32 = 1 << 9;
     /// Who performed it, where known.
     pub const MAN: u32 = 1 << 16;
     pub const WOMAN: u32 = 1 << 17;
     /// What the matcher searches by default.
     pub const LOCOMOTION: u32 = WALK | IDLE | TURN | START_STOP;
 
-    const NAMES: [(&str, u32); 11] = [
+    const NAMES: [(&str, u32); 12] = [
         ("walk", WALK),
         ("idle", IDLE),
         ("turn", TURN),
@@ -60,6 +64,7 @@ pub mod tags {
         ("seated", SEATED),
         ("talk", TALK),
         ("gesture", GESTURE),
+        ("back", BACK),
         ("man", MAN),
         ("woman", WOMAN),
     ];
@@ -593,27 +598,46 @@ impl Database {
         if total == 0 {
             return dberr("no frames");
         }
-        // Normalise.
+        // Normalise, over every frame but those of clips tagged `back` (unless that is all of
+        // them): clips searched only when asked for do not move how every other frame matches.
+        let counted: Vec<(usize, usize)> = {
+            let kept: Vec<(usize, usize)> = db
+                .clips
+                .iter()
+                .filter(|c| c.tags & tags::BACK == 0)
+                .map(|c| (c.start, c.end))
+                .collect();
+            if kept.is_empty() {
+                vec![(0, total)]
+            } else {
+                kept
+            }
+        };
+        let count: usize = counted.iter().map(|(a, b)| b - a).sum();
         let mut mean = [0.0f64; FEATURES];
-        for f in 0..total {
-            for (k, m) in mean.iter_mut().enumerate() {
-                *m += f64::from(raw[f * FEATURES + k]);
+        for &(a, b) in &counted {
+            for f in a..b {
+                for (k, m) in mean.iter_mut().enumerate() {
+                    *m += f64::from(raw[f * FEATURES + k]);
+                }
             }
         }
         for m in &mut mean {
-            *m /= total as f64;
+            *m /= count as f64;
         }
         let mut var = [0.0f64; FEATURES];
-        for f in 0..total {
-            for (k, v) in var.iter_mut().enumerate() {
-                let d = f64::from(raw[f * FEATURES + k]) - mean[k];
-                *v += d * d;
+        for &(a, b) in &counted {
+            for f in a..b {
+                for (k, v) in var.iter_mut().enumerate() {
+                    let d = f64::from(raw[f * FEATURES + k]) - mean[k];
+                    *v += d * d;
+                }
             }
         }
         for (g, &(a, b)) in GROUPS.iter().enumerate() {
             let mut std = 0.0f64;
             for v in &var[a..b] {
-                std += (v / total as f64).sqrt();
+                std += (v / count as f64).sqrt();
             }
             std /= (b - a) as f64;
             let scale = (std.max(1e-6) / f64::from(config.weights[g].max(1e-6))) as f32;

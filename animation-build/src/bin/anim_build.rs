@@ -31,7 +31,7 @@ const USAGE: Usage = Usage {
         ArgDoc::required("--out", "<database.lmm>", "where to write the database (written to <out>.partial, then renamed)"),
         ArgDoc::repeated("--include", "<text>", "keep only source files whose path contains one of these (e.g. Neutral_FW)"),
         ArgDoc::repeated("--exclude", "<text>", "drop source files whose path contains any of these"),
-        ArgDoc::optional("--tags", "<tag,tag,...>", "with --manifest: keep only clips with any of these tags (walk, idle, turn, start-stop, sit-down, stand-up, seated, talk, gesture, man, woman)"),
+        ArgDoc::optional("--tags", "<tag,tag,...>", "with --manifest: keep only clips with any of these tags (walk, idle, turn, start-stop, sit-down, stand-up, seated, talk, gesture, back, man, woman)"),
         ArgDoc::optional("--skip-tags", "<tag,tag,...>", "with --manifest: drop clips with any of these tags (e.g. woman, for a man's body)"),
         ArgDoc::optional("--map", "<auto|100style|cmu|name>", "how source bones map to the target's (default auto, from the joint names)"),
         ArgDoc::optional("--scale", "<auto|number>", "source units to metres (default auto: from the leg length, cm and mm recognised)"),

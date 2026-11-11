@@ -84,6 +84,10 @@ pub struct Config {
     /// man, `WOMAN`; for a woman, `MAN`).
     pub search_tags: u32,
     pub exclude_tags: u32,
+    /// Also search frames tagged `back` (walking or stepping backwards; `tags::BACK`). Off, they
+    /// are never searched: a game turns it on only while a step back is wanted
+    /// (`Character::step_back` asks for them itself, for its own walk).
+    pub step_back: bool,
     /// A change of desired velocity bigger than this (m/s) searches at once.
     pub force_search_velocity: f32,
     /// A change of desired facing bigger than this (rad) searches at once.
@@ -175,6 +179,7 @@ impl Config {
             "end_margin" => self.end_margin = f()?,
             "search_tags" => self.search_tags = u()? as u32,
             "exclude_tags" => self.exclude_tags = u()? as u32,
+            "step_back" => self.step_back = b()?,
             "force_search_velocity" => self.force_search_velocity = f()?,
             "force_search_facing" => self.force_search_facing = f()?,
             "transition_cost" => self.transition_cost = f()?,
@@ -221,6 +226,7 @@ impl Default for Config {
             end_margin: 1.0 / 3.0,
             search_tags: tags::LOCOMOTION,
             exclude_tags: 0,
+            step_back: false,
             force_search_velocity: 0.25,
             force_search_facing: 0.35,
             transition_cost: 0.5,
@@ -488,6 +494,13 @@ pub struct MotionMatcher {
     taken_over: f32,
     /// The goal being landed on this step (`Config::arrive_exact`).
     arriving: Option<Vec3>,
+    /// Frames tagged `back` are wanted now, whatever `Config::step_back` says ([`Self::want_back`]).
+    back_wanted: bool,
+    /// The next step searches on the trajectory alone ([`Self::search_on_trajectory`]).
+    trajectory_search: bool,
+    /// Within this distance (m) of the steering's goal, land on it, whatever
+    /// `Config::arrive_exact` says ([`Self::want_arrival`]).
+    arrive_wanted: f32,
 }
 
 impl MotionMatcher {
@@ -546,16 +559,20 @@ impl MotionMatcher {
             hips_lift: 0.0,
             taken_over: 0.0,
             arriving: None,
+            back_wanted: false,
+            trajectory_search: false,
+            arrive_wanted: 0.0,
             db,
         };
         // Start on the frame whose trajectory best matches standing still here (there is
         // no pose yet to match, so the pose features are left out).
         m.build_query();
         let mut best = (f32::INFINITY, 0usize);
+        let (want, exclude) = m.tag_limits();
         for f in 0..m.db.frame_count() {
             if f + m.frames(m.config.end_margin) >= m.clip_end(f)
-                || m.db.bounds.frame_tags[f] & m.config.search_tags == 0
-                || m.db.bounds.frame_tags[f] & m.config.exclude_tags != 0
+                || m.db.bounds.frame_tags[f] & want == 0
+                || m.db.bounds.frame_tags[f] & exclude != 0
             {
                 continue;
             }
@@ -583,6 +600,42 @@ impl MotionMatcher {
     /// Changes the settings; takes effect from the next step.
     pub fn set_config(&mut self, config: Config) {
         self.config = config;
+    }
+
+    /// Wants frames tagged `back` searched too (`true`) or leaves it to `Config::step_back`
+    /// (`false`): for a command that steps back, without changing the settings a game made.
+    pub fn want_back(&mut self, on: bool) {
+        self.back_wanted = on;
+    }
+
+    /// Lands on the steering's goal within `distance` (m) of it, as `Config::arrive_exact` does, or
+    /// leaves it to that setting (0): for a command that must end where it was asked to, as a step
+    /// back, without changing the settings a game made.
+    pub fn want_arrival(&mut self, distance: f32) {
+        self.arrive_wanted = distance.max(0.0);
+    }
+
+    /// The next step searches on the trajectory alone (the pose dropped), as a start that will not
+    /// set off does after `Config::stuck_after`: for a command that no frame like the pose held
+    /// leads into, as a step back from standing (it waited a second standing first).
+    pub fn search_on_trajectory(&mut self) {
+        self.trajectory_search = true;
+    }
+
+    /// The tags a search may draw from and those it never uses: the settings', with `back`
+    /// added to the first while it is wanted and to the second while it is not.
+    fn tag_limits(&self) -> (u32, u32) {
+        if self.config.step_back || self.back_wanted {
+            (
+                self.config.search_tags | tags::BACK,
+                self.config.exclude_tags,
+            )
+        } else {
+            (
+                self.config.search_tags,
+                self.config.exclude_tags | tags::BACK,
+            )
+        }
     }
 
     /// Starts `action` at once, blended in from the pose now. While it plays there is no
@@ -858,11 +911,12 @@ impl MotionMatcher {
         };
         // Through the search's bounding boxes, as any search (a frame by frame scan of every frame
         // took 10-12 ms once on a Raspberry Pi 5, in the frame a walk was taken over).
+        let (search_tags, exclude) = self.tag_limits();
         let ex = Exclusions {
             end_margin: self.frames(self.config.end_margin),
             skip: (0, 0),
-            tags: wanted & self.config.search_tags,
-            exclude: self.config.exclude_tags,
+            tags: wanted & search_tags,
+            exclude,
         };
         let mut st = SearchStats::default();
         let to = search(&db, &self.query, None, ex, &mut st).map_or(self.frame, |m| m.frame);
@@ -1126,8 +1180,9 @@ impl MotionMatcher {
         // Near the goal it is to land on (arrive_exact), the simulation stays on it.
         let goal = steering.goal().filter(|g| {
             self.action.is_none()
-                && cfg.arrive_exact > 0.0
-                && (*g - self.root.translation).flat().length() < cfg.arrive_exact
+                && cfg.arrive_exact.max(self.arrive_wanted) > 0.0
+                && (*g - self.root.translation).flat().length()
+                    < cfg.arrive_exact.max(self.arrive_wanted)
         });
         self.arriving = goal;
         if let (true, Some(g)) = (resting, goal) {
@@ -1176,17 +1231,20 @@ impl MotionMatcher {
         } else {
             self.stuck = 0.0;
         }
-        if self.stuck > cfg.stuck_after {
+        if self.stuck > cfg.stuck_after
+            || (std::mem::take(&mut self.trajectory_search) && self.action.is_none())
+        {
             self.stuck = 0.0;
             self.build_query();
             // The trajectory's features only (the pose dropped), through the search's bounding
             // boxes: a scan of every frame here was the kind that cost 10-12 ms once on a
             // Raspberry Pi 5 in a take-over's frame.
+            let (search_tags, exclude) = self.tag_limits();
             let ex = Exclusions {
                 end_margin: self.frames(cfg.end_margin),
                 skip: (0, 0),
-                tags: cfg.search_tags,
-                exclude: cfg.exclude_tags,
+                tags: search_tags,
+                exclude,
             };
             let mut st = SearchStats::default();
             let db = Arc::clone(&self.db);
@@ -1207,11 +1265,14 @@ impl MotionMatcher {
             // a walk or a turn (outside `rest_tags`, or in `rest_exclude`), it went on walking
             // (a transitions clip carried a body asked to stand at 0.4-0.6 m/s for seconds, its
             // cost less the transition cost below every idle frame's).
+            // Nor is it for a frame the search never uses (a step back's, once a step back is not
+            // wanted: it walked on backwards).
             let tags_now = self.db.bounds.frame_tags[self.frame];
             let resting_off = calm
                 && ((cfg.rest_tags != 0 && tags_now & cfg.rest_tags == 0)
                     || tags_now & cfg.rest_exclude != 0);
-            let current = if end_of_clip || resting_off {
+            let excluded = tags_now & self.tag_limits().1 != 0;
+            let current = if end_of_clip || resting_off || excluded {
                 None
             } else {
                 Some(Match {
@@ -1226,18 +1287,19 @@ impl MotionMatcher {
                     .max(clip_start),
                 (self.frame + self.frames(cfg.skip_surrounding)).min(self.clip_end(self.frame)),
             );
+            let (search_tags, exclude) = self.tag_limits();
             let ex = Exclusions {
                 end_margin: self.frames(cfg.end_margin),
                 skip: if end_of_clip { (0, 0) } else { skip },
                 tags: if calm && cfg.rest_tags != 0 {
-                    cfg.search_tags & cfg.rest_tags
+                    search_tags & cfg.rest_tags
                 } else {
-                    cfg.search_tags
+                    search_tags
                 },
                 exclude: if calm {
-                    cfg.exclude_tags | cfg.rest_exclude
+                    exclude | cfg.rest_exclude
                 } else {
-                    cfg.exclude_tags
+                    exclude
                 },
             };
             let mut st = SearchStats::default();
@@ -1783,11 +1845,12 @@ mod tests {
             } else {
                 tags::IDLE | tags::START_STOP | tags::WALK | tags::TURN
             };
+            let (search_tags, exclude) = m.tag_limits();
             let ex = Exclusions {
                 end_margin: m.frames(m.config.end_margin),
                 skip: (0, 0),
-                tags: wanted & m.config.search_tags,
-                exclude: m.config.exclude_tags,
+                tags: wanted & search_tags,
+                exclude,
             };
             let full = crate::search::search_brute_force(&db, &m.query, ex).map(|x| x.frame);
             assert_eq!(Some(m.frame()), full, "taken over from frame {f}");

@@ -33,7 +33,10 @@ itself is never here: `root` names where it was downloaded (see `docs/ANIMATION_
 - `fps`: the source's rate where its file does not say (AMC); `from`, `to`: seconds of it to keep.
 - `map`: `100style`, `cmu`, `cmu-asf`, `mesh2motion` or `name`; without it, from the joint names.
 - `tags` (at least one): `walk`, `idle`, `turn`, `start-stop`, `sit-down`, `stand-up`, `seated`,
-  `talk`, `gesture`, `man`, `woman` (`database::tags`). The runtime searches and plays by them.
+  `talk`, `gesture`, `back`, `man`, `woman` (`database::tags`). The runtime searches and plays by them.
+  Clips tagged `back` (walking backwards) are searched only when asked for (`Character::step_back`,
+  `Config::step_back`) and left out of the features' normalisation: list them last, and every other
+  frame keeps its index and is matched as in a database without them.
 - `mirror`: add the clip's mirror image (default: `anim_build`'s `--no-mirror` decides).
 - `level_head` (on the manifest, or a clip to override it; default false): the neck's and head's average turn from
   their parents over the clip is taken back to the target's rest, their motion about it kept (`clips::level_head`).

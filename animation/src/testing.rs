@@ -81,7 +81,8 @@ pub fn humanoid_skeleton(scale: f32) -> Skeleton {
     Skeleton::new(names, parents, rest).expect("the fixture skeleton is valid")
 }
 
-/// A straight walk along +Z at `speed` m/s for `frames` frames at 60 fps on `target`
+/// A straight walk along +Z at `speed` m/s (below 0: backwards, still facing +Z) for `frames`
+/// frames at 60 fps on `target`
 /// (from [`humanoid_skeleton`]): stance feet planted (two-bone IK), swing feet lifted, the
 /// hips bobbing and swaying, arms down and swinging. A stride (two steps) lasts 1.2 s.
 #[must_use]
@@ -126,7 +127,9 @@ pub fn synthetic_walk(target: &Skeleton, frames: usize, speed: f32) -> SourceCli
             let cycle = u_total.floor();
             let u = u_total - cycle;
             let x = world[up].translation.x;
-            let z0 = 0.3 - stride * offset;
+            // (A walk backwards, `speed` below 0, sets its feet down behind as a walk forwards does
+            // in front.)
+            let z0 = 0.3f32.copysign(speed) - stride * offset;
             let (z, lift) = if u < 0.6 {
                 (cycle * stride + z0, 0.0)
             } else {
@@ -162,6 +165,114 @@ pub fn synthetic_walk(target: &Skeleton, frames: usize, speed: f32) -> SourceCli
         tags: crate::database::tags::WALK,
         mirror: true,
         name: format!("synthetic-walk-{speed:.2}"),
+        local: out,
+    }
+}
+
+/// A straight walk along +Z at `speed` m/s (below 0: backwards, still facing +Z) that comes to a
+/// stop: steady for `steady` seconds, slowing to a standstill over `slowing` seconds, its steps
+/// shortening and their feet set down under the body, then standing to the end of its `frames`.
+/// Otherwise as [`synthetic_walk`].
+#[must_use]
+pub fn synthetic_walk_to_stop(
+    target: &Skeleton,
+    frames: usize,
+    speed: f32,
+    steady: f32,
+    slowing: f32,
+) -> SourceClip {
+    let n = target.len();
+    let f = |name: &str| find_bone(target, name).expect("fixture bone");
+    let hips = f("Hips");
+    let legs = [
+        (f("LeftUpLeg"), f("LeftLeg"), f("LeftFoot")),
+        (f("RightUpLeg"), f("RightLeg"), f("RightFoot")),
+    ];
+    let arms = [f("LeftArm"), f("RightArm")];
+    let rest_world = target.rest_world();
+    let hips_h = rest_world[hips].translation.y;
+    let ankle_h = rest_world[legs[0].2].translation.y;
+    let period = 1.2f32;
+    let still = steady + slowing.max(1e-3);
+    // How much of the walk is left at time t (1 walking, 0 standing).
+    let share = |t: f32| ((still - t) / (still - steady)).clamp(0.0, 1.0);
+    // The hips' travel, frame by frame, and on past the end for the feet's next landings.
+    let mut travel = vec![0.0f32; frames + 2 * 72];
+    for i in 1..travel.len() {
+        travel[i] = travel[i - 1] + speed * share(i as f32 / 60.0) / 60.0;
+    }
+    let hips_at = |t: f32| travel[((t * 60.0).round().max(0.0) as usize).min(travel.len() - 1)];
+    // Where foot `k` comes down for its `cycle`th step: ahead of the hips (behind, walking
+    // backwards) by as much as the walk is left.
+    let landing = |k: usize, cycle: f32| {
+        let offset = if k == 0 { 0.0 } else { 0.5 };
+        let t = ((cycle - offset) * period).max(0.0);
+        hips_at(t) + 0.3f32.copysign(speed) * share(t)
+    };
+    let mut out = Vec::with_capacity(frames * n);
+    let mut local = target.rest.clone();
+    let mut world = vec![Transform::IDENTITY; n];
+    for i in 0..frames {
+        let t = i as f32 / 60.0;
+        let phase = t / period * std::f32::consts::TAU;
+        let w = share(t);
+        local.clone_from(&target.rest);
+        local[hips].translation = Vec3::new(
+            0.02 * w * phase.sin(),
+            hips_h - 0.03 * w + 0.015 * w * (2.0 * phase).cos(),
+            hips_at(t),
+        );
+        local[hips].rotation = Quat::from_yaw(0.05 * w * phase.sin());
+        for (k, &arm) in arms.iter().enumerate() {
+            let side = if k == 0 { 1.0 } else { -1.0 };
+            let swing = 0.3 * w * (phase + if k == 0 { std::f32::consts::PI } else { 0.0 }).sin();
+            local[arm].rotation = Quat::from_axis_angle(Vec3::Z, -1.3 * side)
+                * Quat::from_axis_angle(Vec3::Y, swing * side);
+        }
+        forward_kinematics(&target.parents, &local, Transform::IDENTITY, &mut world);
+        for (k, &(up, knee, ankle)) in legs.iter().enumerate() {
+            let offset = if k == 0 { 0.0 } else { 0.5 };
+            let u_total = t / period + offset;
+            let cycle = u_total.floor();
+            let u = u_total - cycle;
+            let x = world[up].translation.x;
+            let from = landing(k, cycle);
+            let (z, lift) = if u < 0.6 {
+                (from, 0.0)
+            } else {
+                let s = (u - 0.6) / 0.4;
+                let e = s * s * (3.0 - 2.0 * s);
+                let to = landing(k, cycle + 1.0);
+                // A foot that does not move stays down.
+                let height = 0.07 * ((to - from).abs() / 0.1).min(1.0);
+                (
+                    from + (to - from) * e,
+                    height * (std::f32::consts::PI * s).sin(),
+                )
+            };
+            let target_p = Vec3::new(x, ankle_h + lift, z);
+            let sol = two_bone(
+                world[up].translation,
+                world[knee].translation,
+                world[ankle].translation,
+                target_p,
+                Vec3::Z,
+                0.02,
+                world[up].rotation,
+                world[knee].rotation,
+            );
+            let parent = target.parents[up].map_or(Quat::IDENTITY, |p| world[p].rotation);
+            local[up].rotation = (parent.inverse() * sol.root).normalize();
+            local[knee].rotation = (sol.root.inverse() * sol.mid).normalize();
+            local[ankle].rotation = sol.mid.inverse();
+            forward_kinematics(&target.parents, &local, Transform::IDENTITY, &mut world);
+        }
+        out.extend_from_slice(&local);
+    }
+    SourceClip {
+        tags: crate::database::tags::WALK | crate::database::tags::START_STOP,
+        mirror: true,
+        name: format!("synthetic-walk-to-stop-{speed:.2}"),
         local: out,
     }
 }

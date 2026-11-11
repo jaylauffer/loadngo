@@ -8,6 +8,7 @@
 //   // each frame the host asks for:
 //   const pose = who.step(dt);                          // a Float32Array view, rewritten in place
 //   who.sit(hx, hy, hz, facing); who.stand();           // seats: the seated hips, the way they face
+//   who.stepBack(0.3);                                  // a half step back, facing kept (clips tagged back)
 //   who.lookAt([x, y, z]); who.gesture([0.2, 0.7], 0.6); // layers over the matched motion
 //
 // The module has no imports and allocates nothing in step(). Its memory grows only when a
@@ -125,6 +126,13 @@ export class MotionCharacter {
     this.motion.x.anim_free(p, n);
     this.view();
     this.check(r);
+  }
+  /**
+   * Step straight back `distance` metres (at most `speed` m/s), keeping the facing, and land there:
+   * the database's clips tagged `back` are used for it (none: it steps back on what it has).
+   */
+  stepBack(distance, speed = 0.4) {
+    this.check(this.motion.x.anim_character_step_back(this.h, distance, speed));
   }
   /** Turn to face `facing` (radians), standing. */
   face(facing) {

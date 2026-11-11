@@ -358,6 +358,27 @@ pub unsafe extern "C" fn anim_character_set_path(
     0
 }
 
+/// Steps straight back `distance` metres at most `speed` m/s, keeping the facing, and lands there
+/// (`Character::step_back`): the database's frames tagged `back` are searched for it. 0 on
+/// success.
+///
+/// # Safety
+/// `c` must be live.
+#[no_mangle]
+pub unsafe extern "C" fn anim_character_step_back(
+    c: *mut CharacterHandle,
+    distance: f32,
+    speed: f32,
+) -> u32 {
+    let Some(c) = live(c) else { return 1 };
+    if !finite(&[distance, speed]) || distance < 0.0 || speed <= 0.0 {
+        fail("a step back needs a distance of 0 or more and a speed over 0");
+        return 1;
+    }
+    c.c.step_back(distance, speed);
+    0
+}
+
 /// Turns to face `facing`, standing. 0 on success.
 ///
 /// # Safety
