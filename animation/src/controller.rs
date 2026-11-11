@@ -252,6 +252,30 @@ pub struct Moving {
     pub planted: [bool; 2],
 }
 
+/// The body a take-over is handed, as shown a frame before (`MotionMatcher::take_over_from`): its
+/// root, hips and rotations as `take_over` takes them, and how long that frame was (s).
+#[derive(Debug, Clone, Copy)]
+pub struct Shown<'a> {
+    pub root: Transform,
+    pub hips: Vec3,
+    pub rotations: &'a [Quat],
+    pub dt: f32,
+}
+
+/// The most of the shown body's own motion a take-over carries on: the hips' speed (m/s) and a
+/// bone's turn (rad/s), beyond the capture's. (A shown pose that jumps a frame is not motion.)
+const TAKE_OVER_MOST_SPEED: f32 = 3.0;
+const TAKE_OVER_MOST_TURN: f32 = 15.0;
+
+fn at_most(v: Vec3, most: f32) -> Vec3 {
+    let l = v.length();
+    if l > most {
+        v * (most / l)
+    } else {
+        v
+    }
+}
+
 /// A clip played as it is instead of matched: sitting down, a seated loop, standing up.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Action {
@@ -734,7 +758,22 @@ impl MotionMatcher {
     /// is eased away by inertialization (`Config::takeover_halflife` for the first half second),
     /// the feet planted where they stand and the simulation at rest under the root.
     pub fn take_over(&mut self, root: Transform, hips: Vec3, rotations: &[Quat]) {
-        self.take_over_with(root, hips, rotations, None);
+        self.take_over_with(root, hips, rotations, None, None);
+    }
+
+    /// Takes a body over as [`take_over`](Self::take_over) does, and keeps its motion: `before`
+    /// is the same body as shown a frame earlier. The hips' velocity (upwards too) and each bone's
+    /// turn go on across the take-over and ease into the capture's by inertialization, as a
+    /// transition's do, rather than stop in a frame (a body rising from a chair, its head at 1.1
+    /// m/s, stood still in one: a game's round 9).
+    pub fn take_over_from(
+        &mut self,
+        root: Transform,
+        hips: Vec3,
+        rotations: &[Quat],
+        before: Shown<'_>,
+    ) {
+        self.take_over_with(root, hips, rotations, None, Some(before));
     }
 
     /// Takes over a body that is walking: as [`take_over`](Self::take_over), with the body's
@@ -750,7 +789,7 @@ impl MotionMatcher {
         rotations: &[Quat],
         moving: Moving,
     ) {
-        self.take_over_with(root, hips, rotations, Some(moving));
+        self.take_over_with(root, hips, rotations, Some(moving), None);
     }
 
     fn take_over_with(
@@ -759,6 +798,7 @@ impl MotionMatcher {
         hips: Vec3,
         rotations: &[Quat],
         moving: Option<Moving>,
+        before: Option<Shown<'_>>,
     ) {
         let db = Arc::clone(&self.db);
         let b = db.bone_count();
@@ -843,6 +883,32 @@ impl MotionMatcher {
             offset: hips - db.hips_pos[to],
             offset_vel: Vec3::ZERO,
         };
+        // The shown body's own motion goes on: each rate's offset is the shown body's less the
+        // capture frame's, as a transition's is (at most TAKE_OVER_MOST_*).
+        if let Some(s) = before.filter(|s| s.dt.is_finite() && s.dt > 1e-4) {
+            let t1 = (to + 1).min(self.clip_end(to) - 1);
+            let frame = 1.0 / db.fps;
+            for i in 0..b {
+                let now = rotations
+                    .get(i)
+                    .copied()
+                    .unwrap_or(db.rotations[to * b + i]);
+                let mut was = s.rotations.get(i).copied().unwrap_or(now);
+                if i == 0 {
+                    // The hips' turn on the root as it now stands (it stands still from here).
+                    was = (root.rotation.inverse() * s.root.rotation * was).normalize();
+                }
+                let shown = angular_velocity(was, now, s.dt);
+                let capture =
+                    angular_velocity(db.rotations[to * b + i], db.rotations[t1 * b + i], frame);
+                self.bone_blend[i].offset_vel = at_most(shown - capture, TAKE_OVER_MOST_TURN);
+            }
+            // The hips' velocity on the root as it now stands, less the root's own from here.
+            let was = root.inverse_apply(s.root.apply(s.hips));
+            let shown = (hips - was) / s.dt - root.rotation.inverse_rotate(velocity);
+            let capture = (db.hips_pos[t1] - db.hips_pos[to]) * db.fps;
+            self.hips_blend.offset_vel = at_most(shown - capture, TAKE_OVER_MOST_SPEED);
+        }
         self.root_vel_blend = InertialVec3::default();
         self.yaw_rate_blend = InertialVec3::default();
         self.root_velocity = velocity;
@@ -2107,6 +2173,54 @@ mod tests {
         let p = m.root().translation;
         assert!((p - Vec3::new(0.0, 0.0, 6.0)).length() < 0.5, "{p:?}");
         assert!(m.stats().searches > 10);
+    }
+
+    #[test]
+    fn a_take_over_from_the_frame_before_keeps_the_bodys_motion() {
+        // A body still rising (its hips going up at 0.6 m/s and forward at 0.15) is taken over.
+        // Given the frame before too, its hips' velocity goes on across the take-over; given its
+        // pose alone, it stops in a frame (a game's rise from a chair: rise, stand, go; round 9).
+        let db = db();
+        let b = db.bone_count();
+        let f = db.clips[2].start + 60;
+        let rot: Vec<Quat> = (0..b).map(|i| db.rotations[f * b + i]).collect();
+        let dt = 1.0 / 60.0;
+        let root = Transform::new(Vec3::new(1.0, 0.0, 2.0), Quat::from_yaw(0.4));
+        let hips = db.hips_pos[f] - Vec3::new(0.0, 0.12, 0.0);
+        let before = hips - Vec3::new(0.0, 0.6, 0.15) * dt;
+        let s = ConstantSteering {
+            velocity: Vec3::ZERO,
+            facing: 0.4,
+        };
+        let change = |keep: bool| {
+            let mut m = MotionMatcher::new(Arc::clone(&db), Config::default(), Vec3::ZERO, 0.0);
+            if keep {
+                let shown = Shown {
+                    root,
+                    hips: before,
+                    rotations: &rot,
+                    dt,
+                };
+                m.take_over_from(root, hips, &rot, shown);
+            } else {
+                m.take_over(root, hips, &rot);
+            }
+            let w0 = m.world_positions()[0];
+            assert!((w0 - root.apply(hips)).length() < 1e-4);
+            let shown = (w0 - root.apply(before)) / dt;
+            m.step(dt, &s);
+            let v = (m.world_positions()[0] - w0) / dt;
+            (v - shown).length()
+        };
+        let (kept, dropped) = (change(true), change(false));
+        assert!(
+            kept < 0.15,
+            "the hips' velocity changed {kept} m/s in the frame after the take-over"
+        );
+        assert!(
+            dropped > 0.4,
+            "from the pose alone it changed only {dropped} m/s"
+        );
     }
 
     #[test]

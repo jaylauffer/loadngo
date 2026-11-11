@@ -21,7 +21,7 @@
 
 use std::sync::Arc;
 
-use crate::controller::{Action, Config, MotionMatcher, Moving};
+use crate::controller::{Action, Config, MotionMatcher, Moving, Shown};
 use crate::database::{tags, Database};
 use crate::humanoid::find_bone;
 use crate::ik::two_bone;
@@ -331,6 +331,29 @@ impl Character {
     /// them. The character is then standing there; the layers start from rest.
     pub fn take_over(&mut self, root: Transform, hips: Vec3, rotations: &[Quat]) {
         self.m.take_over(root, hips, rotations);
+        self.state = State::Standing;
+        self.sit = None;
+        self.seat = None;
+        self.hold = None;
+        self.after_standing = None;
+        self.steer = Steer::Constant(ConstantSteering {
+            velocity: Vec3::ZERO,
+            facing: root.rotation.yaw(),
+        });
+        self.rot.copy_from_slice(self.m.local_rotations());
+        self.world_pos.copy_from_slice(self.m.world_positions());
+    }
+
+    /// Takes a body over keeping its motion (`MotionMatcher::take_over_from`): `before` is the
+    /// same body as shown a frame earlier. The character is then standing there.
+    pub fn take_over_from(
+        &mut self,
+        root: Transform,
+        hips: Vec3,
+        rotations: &[Quat],
+        before: Shown<'_>,
+    ) {
+        self.m.take_over_from(root, hips, rotations, before);
         self.state = State::Standing;
         self.sit = None;
         self.seat = None;

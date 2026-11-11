@@ -20,7 +20,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use crate::character::{Character, Follow, Seat, State};
-use crate::controller::{Config, Moving};
+use crate::controller::{Config, Moving, Shown};
 use crate::database::Database;
 use crate::math::{Quat, Transform, Vec3};
 use crate::path::MAX_PATH_POINTS;
@@ -174,8 +174,10 @@ pub unsafe extern "C" fn anim_database_clip_name(db: *const DatabaseHandle, fram
 pub struct CharacterHandle {
     c: Character,
     pose: Vec<f32>,
-    /// Rotations read in by `anim_character_take_over`, kept to be reused.
+    /// Rotations read in by `anim_character_take_over`, kept to be reused; and those of the frame
+    /// before (`anim_character_take_over_from`).
     scratch: Vec<Quat>,
+    scratch_before: Vec<Quat>,
 }
 
 impl CharacterHandle {
@@ -247,6 +249,7 @@ pub unsafe extern "C" fn anim_character_create(
     let mut h = CharacterHandle {
         pose: vec![0.0; 7 + 4 * d.db.bone_count()],
         scratch: Vec::with_capacity(d.db.bone_count()),
+        scratch_before: Vec::with_capacity(d.db.bone_count()),
         c,
     };
     h.write_pose();
@@ -560,7 +563,47 @@ pub unsafe extern "C" fn anim_character_take_over(
     count: usize,
 ) -> u32 {
     let Some(c) = live(c) else { return 1 };
-    take_over(c, x, z, facing, ptr, count, None)
+    take_over(c, x, z, facing, ptr, count, None, None)
+}
+
+/// As `anim_character_take_over`, keeping the body's motion: `before_ptr` holds the same body's
+/// pose a frame earlier (`count` numbers, laid out as the pose), its root on the ground
+/// `(bx, bz, bfacing)` then, and `dt` the seconds between the two. The hips' velocity and each
+/// bone's turn go on across the take-over and ease into the capture's. 0 on success.
+///
+/// # Safety
+/// `c` must be live; `ptr` and `before_ptr` must each point at `count` readable `f32`s.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn anim_character_take_over_from(
+    c: *mut CharacterHandle,
+    x: f32,
+    z: f32,
+    facing: f32,
+    ptr: *const f32,
+    count: usize,
+    bx: f32,
+    bz: f32,
+    bfacing: f32,
+    before_ptr: *const f32,
+    dt: f32,
+) -> u32 {
+    let Some(c) = live(c) else { return 1 };
+    if before_ptr.is_null() || !finite(&[bx, bz, bfacing, dt]) || dt <= 0.0 {
+        fail("the frame before needs a pose, a root and a dt over 0");
+        return 1;
+    }
+    let before = unsafe { std::slice::from_raw_parts(before_ptr, count) };
+    take_over(
+        c,
+        x,
+        z,
+        facing,
+        ptr,
+        count,
+        None,
+        Some((bx, bz, bfacing, before, dt)),
+    )
 }
 
 /// As `anim_character_take_over`, for a body that is walking: its ground velocity `(vx, vz)`,
@@ -596,9 +639,19 @@ pub unsafe extern "C" fn anim_character_take_over_moving(
         ankle_velocities: [Vec3::new(lvx, 0.0, lvz), Vec3::new(rvx, 0.0, rvz)],
         planted: [planted & 1 != 0, planted & 2 != 0],
     };
-    take_over(c, x, z, facing, ptr, count, Some(moving))
+    take_over(c, x, z, facing, ptr, count, Some(moving), None)
 }
 
+/// The rotations of a pose laid out as `anim_character_pose` gives it, into `out`.
+fn read_rotations(p: &[f32], out: &mut Vec<Quat>) {
+    out.clear();
+    for i in 0..(p.len() - 7) / 4 {
+        let o = 7 + 4 * i;
+        out.push(Quat::new(p[o], p[o + 1], p[o + 2], p[o + 3]).normalize());
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn take_over(
     c: &mut CharacterHandle,
     x: f32,
@@ -607,6 +660,7 @@ fn take_over(
     ptr: *const f32,
     count: usize,
     moving: Option<Moving>,
+    before: Option<(f32, f32, f32, &[f32], f32)>,
 ) -> u32 {
     let n = c.pose.len();
     if ptr.is_null() || count != n || !finite(&[x, z, facing]) {
@@ -614,23 +668,30 @@ fn take_over(
         return 1;
     }
     let p = unsafe { std::slice::from_raw_parts(ptr, count) };
-    if !finite(p) {
+    if !finite(p) || before.is_some_and(|b| !finite(b.3)) {
         return 1;
     }
-    let bones = (n - 7) / 4;
     let mut rot = std::mem::take(&mut c.scratch);
-    rot.clear();
-    for i in 0..bones {
-        let o = 7 + 4 * i;
-        rot.push(Quat::new(p[o], p[o + 1], p[o + 2], p[o + 3]).normalize());
-    }
+    read_rotations(p, &mut rot);
     let root = Transform::new(Vec3::new(x, 0.0, z), Quat::from_yaw(facing));
     let hips = Vec3::new(p[4], p[5], p[6]);
-    match moving {
-        Some(m) => c.c.take_over_moving(root, hips, &rot, m),
-        None => c.c.take_over(root, hips, &rot),
+    let mut was = std::mem::take(&mut c.scratch_before);
+    match (moving, before) {
+        (Some(m), _) => c.c.take_over_moving(root, hips, &rot, m),
+        (None, Some((bx, bz, bfacing, b, dt))) => {
+            read_rotations(b, &mut was);
+            let before = Shown {
+                root: Transform::new(Vec3::new(bx, 0.0, bz), Quat::from_yaw(bfacing)),
+                hips: Vec3::new(b[4], b[5], b[6]),
+                rotations: &was,
+                dt,
+            };
+            c.c.take_over_from(root, hips, &rot, before);
+        }
+        (None, None) => c.c.take_over(root, hips, &rot),
     }
     c.scratch = rot;
+    c.scratch_before = was;
     c.write_pose();
     0
 }

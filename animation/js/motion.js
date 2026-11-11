@@ -174,9 +174,25 @@ export class MotionCharacter {
   /**
    * Take a body over from other animation without a jump: the root at x, z facing `facing`, and
    * `pose` (a Float32Array laid out as step() returns: its first four numbers ignored, then the
-   * hips relative to the root and each bone's rotation) as the body is shown now.
+   * hips relative to the root and each bone's rotation) as the body is shown now. With
+   * `prevPose` (the same body as shown a frame earlier, laid out as `pose`), `dt` (the seconds
+   * between them, over 0) and `prevRoot` ([x, z, facing] then; default where it stands now), the
+   * body's motion goes on too: the hips' velocity and each bone's turn ease into the capture's
+   * instead of stopping in a frame (a body still rising from a chair).
    */
-  takeOver(x, z, facing, pose) {
+  takeOver(x, z, facing, pose, prevPose = null, dt = 0, prevRoot = null) {
+    if (prevPose) {
+      const [bx, bz, bf] = prevRoot || [x, z, facing];
+      const both = new Float32Array(2 * pose.length);
+      both.set(pose, 0);
+      both.set(prevPose, pose.length);
+      const [p, n] = this.motion.stage(new Uint8Array(both.buffer));
+      const r = this.motion.x.anim_character_take_over_from(this.h, x, z, facing, p, pose.length, bx, bz, bf, p + 4 * pose.length, dt);
+      this.motion.x.anim_free(p, n);
+      this.view();
+      this.check(r);
+      return;
+    }
     const [p, n] = this.motion.stage(new Uint8Array(pose.buffer, pose.byteOffset, pose.byteLength));
     const r = this.motion.x.anim_character_take_over(this.h, x, z, facing, p, pose.length);
     this.motion.x.anim_free(p, n);
