@@ -713,22 +713,16 @@ impl MotionMatcher {
         } else {
             tags::IDLE | tags::START_STOP | tags::WALK | tags::TURN
         };
-        let mut best = (f32::INFINITY, self.frame);
-        for f in 0..db.frame_count() {
-            let t = db.bounds.frame_tags[f];
-            if f + self.frames(self.config.end_margin) >= self.clip_end(f)
-                || t & wanted == 0
-                || t & self.config.search_tags == 0
-                || t & self.config.exclude_tags != 0
-            {
-                continue;
-            }
-            let cost = self.cost_of(f);
-            if cost < best.0 {
-                best = (cost, f);
-            }
-        }
-        let to = best.1;
+        // Through the search's bounding boxes, as any search (a frame by frame scan of every frame
+        // took 10-12 ms once on a Raspberry Pi 5, in the frame a walk was taken over).
+        let ex = Exclusions {
+            end_margin: self.frames(self.config.end_margin),
+            skip: (0, 0),
+            tags: wanted & self.config.search_tags,
+            exclude: self.config.exclude_tags,
+        };
+        let mut st = SearchStats::default();
+        let to = search(&db, &self.query, None, ex, &mut st).map_or(self.frame, |m| m.frame);
         // Shown as given; the capture's frame underneath.
         for i in 0..b {
             let shown = rotations
@@ -1432,6 +1426,46 @@ mod tests {
             synthetic_idle(&target, 300),
         ];
         Arc::new(Database::build(&target, &clips, &BuildConfig::default()).unwrap())
+    }
+
+    #[test]
+    fn a_take_over_finds_the_frame_a_full_scan_would() {
+        // Through the bounding boxes, the same frame as testing every frame (moving and standing).
+        let db = db();
+        let b = db.bone_count();
+        for (f, moving) in [(100usize, true), (700, true), (1300, false), (450, false)] {
+            let mut m = MotionMatcher::new(Arc::clone(&db), Config::default(), Vec3::ZERO, 0.0);
+            let rot: Vec<Quat> = (0..b).map(|i| db.rotations[f * b + i]).collect();
+            let root = Transform::new(Vec3::new(1.0, 0.0, 2.0), Quat::from_yaw(0.3));
+            if moving {
+                let v = root.rotation.rotate(Vec3::new(0.0, 0.0, 0.9));
+                m.take_over_moving(
+                    root,
+                    db.hips_pos[f],
+                    &rot,
+                    Moving {
+                        velocity: v,
+                        ankle_velocities: [Vec3::ZERO, v * 2.0],
+                        planted: [true, false],
+                    },
+                );
+            } else {
+                m.take_over(root, db.hips_pos[f], &rot);
+            }
+            let wanted = if moving {
+                tags::START_STOP | tags::WALK | tags::TURN
+            } else {
+                tags::IDLE | tags::START_STOP | tags::WALK | tags::TURN
+            };
+            let ex = Exclusions {
+                end_margin: m.frames(m.config.end_margin),
+                skip: (0, 0),
+                tags: wanted & m.config.search_tags,
+                exclude: m.config.exclude_tags,
+            };
+            let full = crate::search::search_brute_force(&db, &m.query, ex).map(|x| x.frame);
+            assert_eq!(Some(m.frame()), full, "taken over from frame {f}");
+        }
     }
 
     #[test]
