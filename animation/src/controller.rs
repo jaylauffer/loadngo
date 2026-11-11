@@ -63,6 +63,17 @@ pub struct Config {
     pub unlock_radius: f32,
     /// Half-life of the blend back after letting go (s).
     pub unlock_halflife: f32,
+    /// Keep holding a planted point after the capture's contact ends while the animated point
+    /// is still within this height (m) of where it stands on the floor: a foot lets go only
+    /// once it lifts. A capture's turning start drags a toe round on the floor before it lifts
+    /// (its contact ends at 0.3 m/s); held until it lifts, it pivots in the air instead. 0: off
+    /// (the capture's contacts alone).
+    pub hold_until_lift: f32,
+    /// Every held foot keeps the heading (ankle to toe on the floor) it came down with until it
+    /// lets go, then eases to the capture's in the air: a sole never turns on the floor (a
+    /// capture's pivot as it turns on a planted foot slides its sole round the held point). Off:
+    /// only a foot a take-over planted keeps how far it stood turned from the capture.
+    pub keep_turn_planted: bool,
     /// The legs' soft reach: the last fraction of a leg's length approached slowly.
     pub soft_reach: f32,
     /// Seconds either side of the current frame the search skips.
@@ -157,6 +168,8 @@ impl Config {
             "foot_lock" => self.foot_lock = b()?,
             "unlock_radius" => self.unlock_radius = f()?,
             "unlock_halflife" => self.unlock_halflife = f()?,
+            "hold_until_lift" => self.hold_until_lift = f()?,
+            "keep_turn_planted" => self.keep_turn_planted = b()?,
             "soft_reach" => self.soft_reach = f()?,
             "skip_surrounding" => self.skip_surrounding = f()?,
             "end_margin" => self.end_margin = f()?,
@@ -200,6 +213,8 @@ impl Default for Config {
             synchronize: true,
             foot_lock: true,
             unlock_radius: 0.2,
+            hold_until_lift: 0.0,
+            keep_turn_planted: false,
             unlock_halflife: 0.1,
             soft_reach: 0.03,
             skip_surrounding: 1.0 / 3.0,
@@ -296,6 +311,15 @@ struct FootLock {
     plant: Option<Vec3>,
     /// How far above the floor the held point still is (m), easing to 0 since it was taken.
     settle: f32,
+    /// The heading on the floor (ankle to toe, radians) of a foot a take-over planted, while it
+    /// stays down: as it stood, turned on since only as the capture itself turns that foot (a
+    /// pivot as it sets off turning), never by the take-over's ease or a transition's.
+    turn: Option<f32>,
+    /// The capture's own heading of that foot last step (radians).
+    capture_was: f32,
+    /// The turn added to the capture's foot (radians): the kept turn's difference while held,
+    /// eased away once the foot lifts.
+    twist: f32,
 }
 
 /// The half-life (s) over which a newly held foot comes down onto the floor.
@@ -311,6 +335,9 @@ impl Default for FootLock {
             release: InertialVec3::default(),
             plant: None,
             settle: 0.0,
+            turn: None,
+            capture_was: 0.0,
+            twist: 0.0,
         }
     }
 }
@@ -357,6 +384,9 @@ pub struct MotionMatcher {
     action_finished: bool,
     /// How long the simulation has led a character that does not move (s).
     stuck: f32,
+    /// Transitions counted as of the last foot lock (lock_feet: a transition's step is not the
+    /// capture turning a foot).
+    transitions_seen: u64,
     /// Added to the hips' height (m): an action's warp, kept after it ends (seated).
     hips_lift: f32,
     /// Seconds left of the slower inertialization after `take_over`.
@@ -416,6 +446,7 @@ impl MotionMatcher {
             action: None,
             action_finished: false,
             stuck: 0.0,
+            transitions_seen: 0,
             hips_lift: 0.0,
             taken_over: 0.0,
             arriving: None,
@@ -1256,6 +1287,31 @@ impl MotionMatcher {
         }
     }
 
+    /// The heading on the floor of `side`'s ankle to its toe as the capture alone has it (its
+    /// sampled rotations, without the transitions' ease), radians.
+    fn capture_turn(&self, side: usize) -> f32 {
+        let db = &self.db;
+        let leg = db.humanoid.legs[side];
+        let mut chain = [0usize; 32];
+        let (mut n, mut i) = (0, leg.ankle);
+        loop {
+            if n < chain.len() {
+                chain[n] = i;
+                n += 1;
+            }
+            match db.skeleton.parents[i] {
+                Some(p) => i = p,
+                None => break,
+            }
+        }
+        let mut r = self.root.rotation;
+        for k in (0..n).rev() {
+            r = r * self.anim_rot[chain[k]];
+        }
+        let d = r.rotate(self.local_pos[leg.toe]).flat();
+        d.x.atan2(d.z)
+    }
+
     fn refresh_leg(&mut self, up: usize) {
         // Recompute world transforms below the hip joint after its rotations changed.
         let db = &self.db;
@@ -1284,9 +1340,10 @@ impl MotionMatcher {
 
     fn lock_feet(&mut self, dt: f32) {
         let cfg = self.config;
+        let raw_turn = [self.capture_turn(0), self.capture_turn(1)];
         let contacts = self.db.contacts[self.frame];
         let heights = self.db.foot_heights;
-        for side in 0..2 {
+        for (side, &capture_turn) in raw_turn.iter().enumerate() {
             let leg = self.db.humanoid.legs[side];
             let (heel_bit, ball_bit) = if side == 0 {
                 (LEFT_HEEL, LEFT_BALL)
@@ -1294,7 +1351,36 @@ impl MotionMatcher {
                 (RIGHT_HEEL, RIGHT_BALL)
             };
             let ankle_in = self.world_pos[leg.ankle];
-            let toe_in = self.world_pos[leg.toe];
+            let toe_raw = self.world_pos[leg.toe];
+            let foot = &mut self.feet[side];
+            // A foot a take-over planted keeps how far it stood turned from the capture while it
+            // stays down (eased from the shown pose to the capture's, a planted foot turned on the
+            // floor about its held point and its sole slid: 3-5 cm in a game's rise from a chair);
+            // once it lifts, the difference eases away in the air.
+            let along = (toe_raw - ankle_in).flat();
+            let anim_turn = along.x.atan2(along.z);
+            // The capture's own turn of the foot this step: none across a transition (its sampled
+            // pose jumps there, and the ease hides it), nor more than a pivot can (6 degrees a step).
+            let mut own = wrap_angle(capture_turn - foot.capture_was);
+            if self.stats.transitions != self.transitions_seen || own.abs() > 0.1 {
+                own = 0.0;
+            }
+            foot.capture_was = capture_turn;
+            foot.twist = match (foot.held, foot.turn.as_mut()) {
+                (Some(_), Some(turn)) => {
+                    if !cfg.keep_turn_planted {
+                        *turn = wrap_angle(*turn + own);
+                    }
+                    wrap_angle(*turn - anim_turn)
+                }
+                _ => {
+                    foot.turn = None;
+                    foot.twist * (-std::f32::consts::LN_2 * dt / cfg.unlock_halflife).exp()
+                }
+            };
+            let twist = Quat::from_yaw(foot.twist);
+            // The toe as the foot is shown, turned about the ankle.
+            let toe_in = ankle_in + twist.rotate(toe_raw - ankle_in);
             // The hips' lift (a seat lower or higher than the capture's) moves the whole body;
             // a foot the capture had on or near the floor goes back down (or up) to it.
             let captured = ankle_in.y - self.hips_lift - heights[0];
@@ -1307,12 +1393,29 @@ impl MotionMatcher {
             } else {
                 None
             };
-            let foot = &mut self.feet[side];
             if foot.released.is_some() && foot.released != want {
                 foot.released = None;
             }
             let want = if foot.released.is_some() { None } else { want };
             let point_in = |p: Point| if p == Point::Heel { ankle_in } else { toe_in };
+            // Held on until the foot lifts (hold_until_lift), the capture's contact over or not:
+            // by the ball while it is still down (a heel up, the foot pivoting on its ball), else
+            // the heel while it is.
+            let want = match (want, foot.held) {
+                (None, Some(_)) if cfg.hold_until_lift > 0.0 => {
+                    let low = |p: Point, floor: f32| {
+                        point_in(p).y - self.hips_lift * near_floor - floor < cfg.hold_until_lift
+                    };
+                    if low(Point::Ball, heights[1]) {
+                        Some(Point::Ball)
+                    } else if low(Point::Heel, heights[0]) {
+                        Some(Point::Heel)
+                    } else {
+                        None
+                    }
+                }
+                (w, _) => w,
+            };
             if let Some(p) = foot.plant.take() {
                 // Taken up where it was planted: held there if the pose has it down, else let go
                 // from there.
@@ -1329,6 +1432,7 @@ impl MotionMatcher {
                             heights[1]
                         };
                         foot.held = Some((w, at));
+                        foot.turn = Some(wrap_angle(anim_turn + foot.twist));
                     }
                     None => {
                         foot.held = None;
@@ -1345,6 +1449,9 @@ impl MotionMatcher {
             if changed {
                 match want {
                     Some(w) => {
+                        if cfg.keep_turn_planted && foot.held.is_none() {
+                            foot.turn = Some(wrap_angle(anim_turn + foot.twist));
+                        }
                         let mut at = point_in(w) + foot.correction;
                         let shown = at.y;
                         at.y = if w == Point::Heel {
@@ -1383,13 +1490,14 @@ impl MotionMatcher {
             };
             foot.previous_correction = foot.correction;
             foot.correction = correction;
-            if correction.length_squared() < 1e-10 {
+            if correction.length_squared() < 1e-10 && foot.twist.abs() < 1e-5 {
                 continue;
             }
-            // Two-bone IK puts the ankle at its corrected place; the foot keeps its turn.
+            // Two-bone IK puts the ankle at its corrected place; the foot keeps its turn (and a
+            // take-over's planted foot the turn it stood with: twist, about the vertical).
             let target = ankle_in + correction;
-            let ankle_world_rot = self.world_rot[leg.ankle];
-            let toe_world_rot = self.world_rot[leg.toe];
+            let ankle_world_rot = (twist * self.world_rot[leg.ankle]).normalize();
+            let toe_world_rot = (twist * self.world_rot[leg.toe]).normalize();
             let pole = self.root.rotation.rotate(Vec3::Z);
             let sol = two_bone(
                 self.world_pos[leg.up],
@@ -1408,6 +1516,7 @@ impl MotionMatcher {
             self.out_rot[leg.toe] = (ankle_world_rot.inverse() * toe_world_rot).normalize();
             self.refresh_leg(leg.up);
         }
+        self.transitions_seen = self.stats.transitions;
     }
 }
 
@@ -1564,6 +1673,163 @@ mod tests {
             .map(|i| m.bone_blend[i].offset.angle_to(Quat::IDENTITY))
             .fold(0.0f32, f32::max);
         assert!(left < 0.05, "offset left {left}");
+    }
+
+    #[test]
+    fn a_take_overs_planted_foot_keeps_the_turn_it_stood_with() {
+        let db = db();
+        let b = db.bone_count();
+        // A standing frame of the synthetic idle, its left foot shown turned 0.35 rad about the
+        // vertical (another animation's stance): the foot's world turn by forward kinematics.
+        let f = db.clips[2].start + 60;
+        let legs = db.humanoid.legs;
+        let mut world = vec![Quat::IDENTITY; b];
+        for i in 0..b {
+            let r = db.rotations[f * b + i];
+            world[i] = match db.skeleton.parents[i] {
+                Some(p) => world[p] * r,
+                None => r,
+            };
+        }
+        let foot = legs[0].ankle;
+        let parent = db.skeleton.parents[foot].unwrap();
+        let turned = (world[parent].inverse() * Quat::from_yaw(0.35) * world[foot]).normalize();
+        let shown: Vec<Quat> = (0..b)
+            .map(|i| {
+                if i == foot {
+                    turned
+                } else {
+                    db.rotations[f * b + i]
+                }
+            })
+            .collect();
+        let heading = |m: &MotionMatcher| {
+            let w = m.world_positions();
+            let d = (w[legs[0].toe] - w[legs[0].ankle]).flat();
+            d.x.atan2(d.z)
+        };
+        let mut m = MotionMatcher::new(Arc::clone(&db), Config::default(), Vec3::ZERO, 0.0);
+        m.take_over(
+            Transform::new(Vec3::ZERO, Quat::IDENTITY),
+            db.hips_pos[f],
+            &shown,
+        );
+        let shown_heading = heading(&m);
+        let toe0 = m.world_positions()[legs[0].toe];
+        let s = ConstantSteering {
+            velocity: Vec3::ZERO,
+            facing: 0.0,
+        };
+        // Held through the take-over's ease: its heading and its toe stay where they stood.
+        for _ in 0..30 {
+            m.step(1.0 / 60.0, &s);
+            if !m.feet_held()[0] {
+                break;
+            }
+            assert!(
+                wrap_angle(heading(&m) - shown_heading).abs() < 0.02,
+                "turned {} rad on the floor",
+                wrap_angle(heading(&m) - shown_heading)
+            );
+            assert!((m.world_positions()[legs[0].toe] - toe0).flat().length() < 0.005);
+        }
+    }
+
+    /// The heading on the floor (ankle to toe) of `side`'s foot as the matcher poses it.
+    fn foot_heading(m: &MotionMatcher, side: usize) -> f32 {
+        let leg = m.db.humanoid.legs[side];
+        let w = m.world_positions();
+        let d = (w[leg.toe] - w[leg.ankle]).flat();
+        d.x.atan2(d.z)
+    }
+
+    #[test]
+    fn a_planted_foot_keeps_its_heading_when_asked() {
+        // Walking round a circle, the body turns over each planted foot. With keep_turn_planted
+        // a held foot's heading never changes on the floor; without it, it turns with the body.
+        let turned = |keep: bool| {
+            let cfg = Config {
+                keep_turn_planted: keep,
+                ..Config::default()
+            };
+            let mut m = MotionMatcher::new(db(), cfg, Vec3::ZERO, 0.0);
+            let mut most = 0.0f32;
+            let mut was = [None::<f32>; 2];
+            for i in 0..600 {
+                let a = i as f32 / 60.0 * 0.6;
+                let s = ConstantSteering {
+                    velocity: Vec3::new(a.sin(), 0.0, a.cos()) * 0.9,
+                    facing: a,
+                };
+                m.step(1.0 / 60.0, &s);
+                for (side, w) in was.iter_mut().enumerate() {
+                    let h = foot_heading(&m, side);
+                    if m.feet_held()[side] {
+                        if let Some(h0) = *w {
+                            most = most.max(wrap_angle(h - h0).abs());
+                        }
+                        *w = Some(h);
+                    } else {
+                        *w = None;
+                    }
+                }
+            }
+            most
+        };
+        let (kept, free) = (turned(true), turned(false));
+        assert!(kept < 0.002, "a held foot turned {kept} rad in a step");
+        assert!(
+            free > 3.0 * kept.max(0.002),
+            "without it the feet turned only {free} rad"
+        );
+    }
+
+    #[test]
+    fn a_foot_held_until_it_lifts_is_held_longer_and_stays_put() {
+        // With hold_until_lift a planted point is let go only once it has risen: held on frames the
+        // capture's contact has ended, and not moving over the floor on any of them.
+        let run = |lift: f32| {
+            let cfg = Config {
+                hold_until_lift: lift,
+                ..Config::default()
+            };
+            let mut m = MotionMatcher::new(db(), cfg, Vec3::ZERO, 0.0);
+            let s = ConstantSteering {
+                velocity: Vec3::new(0.0, 0.0, 1.0),
+                facing: 0.0,
+            };
+            let legs = m.db.humanoid.legs;
+            let (mut held, mut moved) = (0, 0.0f32);
+            let mut was: [Option<(Vec3, Vec3)>; 2] = [None, None];
+            for _ in 0..600 {
+                m.step(1.0 / 60.0, &s);
+                for side in 0..2 {
+                    let w = m.world_positions();
+                    let now = (w[legs[side].ankle], w[legs[side].toe]);
+                    if m.feet_held()[side] {
+                        held += 1;
+                        if let Some((a, t)) = was[side] {
+                            // The held point is the ankle or the toe: one of them stays put.
+                            moved = moved.max(
+                                ((now.0 - a).flat().length()).min((now.1 - t).flat().length()),
+                            );
+                        }
+                        was[side] = Some(now);
+                    } else {
+                        was[side] = None;
+                    }
+                }
+            }
+            (held, moved)
+        };
+        let (off, moved_off) = run(0.0);
+        let (on, moved) = run(0.02);
+        assert!(on > off, "held {on} frames with it, {off} without");
+        // (No more than a held point moves without it: the soft reach of a leg near straight.)
+        assert!(
+            moved <= moved_off + 1e-4,
+            "a held point moved {moved} m in a step ({moved_off} without)"
+        );
     }
 
     #[test]
