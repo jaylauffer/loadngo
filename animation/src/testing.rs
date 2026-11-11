@@ -159,6 +159,8 @@ pub fn synthetic_walk(target: &Skeleton, frames: usize, speed: f32) -> SourceCli
         out.extend_from_slice(&local);
     }
     SourceClip {
+        tags: crate::database::tags::WALK,
+        mirror: true,
         name: format!("synthetic-walk-{speed:.2}"),
         local: out,
     }
@@ -183,7 +185,86 @@ pub fn synthetic_idle(target: &Skeleton, frames: usize) -> SourceClip {
         out.extend_from_slice(&local);
     }
     SourceClip {
+        tags: crate::database::tags::IDLE,
+        mirror: true,
         name: "synthetic-idle".into(),
         local: out,
     }
+}
+
+/// Sitting down (1.5 s), seated (2 s) and standing up (1.5 s) on `target`: the hips ease down
+/// 0.25 m back onto a 0.5 m seat with a forward lean, the feet held by IK where they stand.
+#[must_use]
+pub fn synthetic_sit(target: &Skeleton) -> Vec<SourceClip> {
+    let n = target.len();
+    let f = |name: &str| find_bone(target, name).expect("fixture bone");
+    let hips = f("Hips");
+    let legs = [
+        (f("LeftUpLeg"), f("LeftLeg"), f("LeftFoot")),
+        (f("RightUpLeg"), f("RightLeg"), f("RightFoot")),
+    ];
+    let arms = [f("LeftArm"), f("RightArm")];
+    let rest_world = target.rest_world();
+    let stand_h = rest_world[hips].translation.y - 0.02;
+    let ankle_h = rest_world[legs[0].2].translation.y;
+    let pose = |s: f32, lean: f32| -> Vec<Transform> {
+        let mut local = target.rest.clone();
+        local[hips].translation = Vec3::new(0.0, stand_h + (0.5 - stand_h) * s, -0.25 * s);
+        local[hips].rotation = Quat::from_axis_angle(Vec3::X, lean);
+        local[arms[0]].rotation = Quat::from_axis_angle(Vec3::Z, -1.3);
+        local[arms[1]].rotation = Quat::from_axis_angle(Vec3::Z, 1.3);
+        let mut world = vec![Transform::IDENTITY; n];
+        forward_kinematics(&target.parents, &local, Transform::IDENTITY, &mut world);
+        for &(up, knee, ankle) in &legs {
+            let x = world[up].translation.x;
+            let sol = two_bone(
+                world[up].translation,
+                world[knee].translation + Vec3::new(0.0, 0.0, 0.02),
+                world[ankle].translation,
+                Vec3::new(x, ankle_h, 0.05),
+                Vec3::Z,
+                0.02,
+                world[up].rotation,
+                world[knee].rotation,
+            );
+            let parent = target.parents[up].map_or(Quat::IDENTITY, |p| world[p].rotation);
+            local[up].rotation = (parent.inverse() * sol.root).normalize();
+            local[knee].rotation = (sol.root.inverse() * sol.mid).normalize();
+            local[ankle].rotation = sol.mid.inverse();
+            forward_kinematics(&target.parents, &local, Transform::IDENTITY, &mut world);
+        }
+        local
+    };
+    let ease = |u: f32| u * u * (3.0 - 2.0 * u);
+    let mut down = Vec::with_capacity(90 * n);
+    let mut seated = Vec::with_capacity(120 * n);
+    let mut up = Vec::with_capacity(90 * n);
+    for i in 0..90 {
+        let u = i as f32 / 89.0;
+        down.extend(pose(ease(u), 0.4 * (std::f32::consts::PI * u).sin()));
+        up.extend(pose(ease(1.0 - u), 0.45 * (std::f32::consts::PI * u).sin()));
+    }
+    for i in 0..120 {
+        seated.extend(pose(1.0, 0.02 * (i as f32 * 0.05).sin()));
+    }
+    vec![
+        SourceClip {
+            name: "synthetic-sit".into(),
+            tags: crate::database::tags::SIT_DOWN,
+            mirror: true,
+            local: down,
+        },
+        SourceClip {
+            name: "synthetic-seated".into(),
+            tags: crate::database::tags::SEATED,
+            mirror: true,
+            local: seated,
+        },
+        SourceClip {
+            name: "synthetic-stand".into(),
+            tags: crate::database::tags::STAND_UP,
+            mirror: true,
+            local: up,
+        },
+    ]
 }

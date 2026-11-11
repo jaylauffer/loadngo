@@ -23,8 +23,63 @@ use crate::skeleton::{forward_kinematics, Skeleton};
 
 /// Numbers in a frame's feature vector.
 pub const FEATURES: usize = 27;
-/// Frames ahead of each trajectory sample.
-pub const HORIZONS: [usize; 3] = [20, 40, 60];
+/// Seconds ahead of each trajectory sample.
+pub const HORIZON_SECONDS: [f32; 3] = [1.0 / 3.0, 2.0 / 3.0, 1.0];
+
+/// [`HORIZON_SECONDS`] in frames at `fps`.
+#[must_use]
+pub fn horizon_frames(fps: f32) -> [usize; 3] {
+    HORIZON_SECONDS.map(|s| (s * fps).round().max(1.0) as usize)
+}
+
+/// What a clip holds, as bits: the matcher searches the locomotion set; layers and seat
+/// transitions draw from the others by name and kind.
+pub mod tags {
+    pub const WALK: u32 = 1;
+    pub const IDLE: u32 = 1 << 1;
+    pub const TURN: u32 = 1 << 2;
+    pub const START_STOP: u32 = 1 << 3;
+    pub const SIT_DOWN: u32 = 1 << 4;
+    pub const STAND_UP: u32 = 1 << 5;
+    pub const SEATED: u32 = 1 << 6;
+    pub const TALK: u32 = 1 << 7;
+    pub const GESTURE: u32 = 1 << 8;
+    /// Who performed it, where known.
+    pub const MAN: u32 = 1 << 16;
+    pub const WOMAN: u32 = 1 << 17;
+    /// What the matcher searches by default.
+    pub const LOCOMOTION: u32 = WALK | IDLE | TURN | START_STOP;
+
+    const NAMES: [(&str, u32); 11] = [
+        ("walk", WALK),
+        ("idle", IDLE),
+        ("turn", TURN),
+        ("start-stop", START_STOP),
+        ("sit-down", SIT_DOWN),
+        ("stand-up", STAND_UP),
+        ("seated", SEATED),
+        ("talk", TALK),
+        ("gesture", GESTURE),
+        ("man", MAN),
+        ("woman", WOMAN),
+    ];
+
+    /// The bit named `name`.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<u32> {
+        NAMES.iter().find(|(n, _)| *n == name).map(|(_, b)| *b)
+    }
+
+    /// The names of the bits set in `bits`.
+    #[must_use]
+    pub fn names(bits: u32) -> Vec<&'static str> {
+        NAMES
+            .iter()
+            .filter(|(_, b)| bits & b != 0)
+            .map(|(n, _)| *n)
+            .collect()
+    }
+}
 
 /// Feature groups: `(first, end)` index ranges.
 pub const GROUPS: [(usize, usize); 5] = [(0, 6), (6, 12), (12, 15), (15, 21), (21, 27)];
@@ -36,8 +91,12 @@ pub const RIGHT_HEEL: u8 = 4;
 pub const RIGHT_BALL: u8 = 8;
 
 const MAGIC: &[u8; 8] = b"LDGOANIM";
-/// The binary format's version. Readers refuse any other.
-pub const FORMAT_VERSION: u32 = 1;
+/// The binary format's version written. Readers take this and version 1.
+pub const FORMAT_VERSION: u32 = 2;
+
+/// Features are stored as 16-bit fixed point: this many steps a unit (they are normalised,
+/// so ±16 spreads).
+const FEATURE_STEPS: f32 = 2048.0;
 
 /// How a database is built.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -77,6 +136,10 @@ impl Default for BuildConfig {
 #[derive(Debug, Clone)]
 pub struct SourceClip {
     pub name: String,
+    /// [`tags`] bits.
+    pub tags: u32,
+    /// Add its mirror image too (when [`BuildConfig::mirror`] is on).
+    pub mirror: bool,
     /// `frame_count * target.len()` local transforms.
     pub local: Vec<Transform>,
 }
@@ -88,6 +151,8 @@ pub struct ClipRange {
     pub start: usize,
     pub end: usize,
     pub mirrored: bool,
+    /// [`tags`] bits.
+    pub tags: u32,
 }
 
 /// Why a database could not be built or read.
@@ -115,6 +180,10 @@ pub(crate) struct Bounds {
     pub large_max: Vec<f32>,
     /// Per frame: the end of its clip.
     pub clip_end: Vec<u32>,
+    /// Per frame, per small box and per large box: the clip tags there (a union for boxes).
+    pub frame_tags: Vec<u32>,
+    pub small_tags: Vec<u32>,
+    pub large_tags: Vec<u32>,
 }
 
 pub(crate) const SMALL_BOX: usize = 16;
@@ -318,20 +387,22 @@ impl Database {
             rest_world[target_humanoid.legs[0].toe].translation.y,
         ];
 
-        let mut all: Vec<(String, bool, &[Transform])> = Vec::new();
+        let mut all: Vec<(String, bool, u32, &[Transform])> = Vec::new();
         let mut mirrored_store: Vec<Vec<Transform>> = Vec::new();
         for c in clips {
             if c.local.len() % n != 0 || c.local.is_empty() {
                 return dberr(format!("clip {:?} is not a whole number of frames", c.name));
             }
-            if config.mirror {
+            if config.mirror && c.mirror {
                 mirrored_store.push(mirror_clip(target, &c.local)?);
+            } else {
+                mirrored_store.push(Vec::new());
             }
         }
         for (i, c) in clips.iter().enumerate() {
-            all.push((c.name.clone(), false, &c.local));
-            if config.mirror {
-                all.push((c.name.clone(), true, &mirrored_store[i]));
+            all.push((c.name.clone(), false, c.tags, &c.local));
+            if config.mirror && c.mirror {
+                all.push((c.name.clone(), true, c.tags, &mirrored_store[i]));
             }
         }
 
@@ -357,7 +428,8 @@ impl Database {
         let dt = 1.0 / config.fps;
         let mut raw: Vec<f32> = Vec::new();
         let mut world = vec![Transform::IDENTITY; n];
-        for (name, mirrored, local) in all {
+        let horizons = horizon_frames(config.fps);
+        for (name, mirrored, clip_tags, local) in all {
             let frames = local.len() / n;
             let start = db.root_pos.len();
             // World transforms of the joints we need, per frame.
@@ -491,12 +563,12 @@ impl Database {
                 raw.extend_from_slice(&[lp.x, lp.y, lp.z, rp.x, rp.y, rp.z]);
                 raw.extend_from_slice(&[lv.x, lv.y, lv.z, rv.x, rv.y, rv.z]);
                 raw.extend_from_slice(&[hv.x, hv.y, hv.z]);
-                for h in HORIZONS {
+                for h in horizons {
                     let t = roots[(f + h).min(frames - 1)];
                     let p = to_root(t.translation);
                     raw.extend_from_slice(&[p.x, p.z]);
                 }
-                for h in HORIZONS {
+                for h in horizons {
                     let t = roots[(f + h).min(frames - 1)];
                     let d = root.rotation.inverse_rotate(t.rotation.rotate(Vec3::Z));
                     raw.extend_from_slice(&[d.x, d.z]);
@@ -507,6 +579,7 @@ impl Database {
                 start,
                 end: start + frames,
                 mirrored,
+                tags: clip_tags,
             });
         }
         let total = db.root_pos.len();
@@ -546,8 +619,14 @@ impl Database {
         for f in 0..total {
             for k in 0..FEATURES {
                 let v = &mut db.features[f * FEATURES + k];
-                *v = (*v - db.feature_mean[k]) / db.feature_scale[k];
+                // On the file's 16-bit grid, so a built database matches a loaded one.
+                let n = (*v - db.feature_mean[k]) / db.feature_scale[k];
+                *v = (n * FEATURE_STEPS).round().clamp(-32767.0, 32767.0) / FEATURE_STEPS;
             }
+        }
+        // On the file's 48-bit grid, so a built database matches a loaded one.
+        for q in &mut db.rotations {
+            *q = from_smallest_three(smallest_three(*q));
         }
         db.build_bounds();
         Ok(db)
@@ -589,9 +668,17 @@ impl Database {
             large_min: vec![f32::INFINITY; nl * FEATURES],
             large_max: vec![f32::NEG_INFINITY; nl * FEATURES],
             clip_end: vec![0; total],
+            frame_tags: vec![0; total],
+            small_tags: vec![0; ns],
+            large_tags: vec![0; nl],
         };
         for c in &self.clips {
             b.clip_end[c.start..c.end].fill(c.end as u32);
+            b.frame_tags[c.start..c.end].fill(c.tags);
+        }
+        for f in 0..total {
+            b.small_tags[f / SMALL_BOX] |= b.frame_tags[f];
+            b.large_tags[f / LARGE_BOX] |= b.frame_tags[f];
         }
         for f in 0..total {
             let s = f / SMALL_BOX;
@@ -633,7 +720,7 @@ impl Database {
         for c in &self.clips {
             w.u32(c.start as u32);
             w.u32(c.end as u32);
-            w.u32(u32::from(c.mirrored));
+            w.u32(u32::from(c.mirrored) | (c.tags << 1));
             w.str(&c.name);
         }
         for v in self
@@ -652,16 +739,14 @@ impl Database {
             w.vec3(self.hips_pos[f]);
         }
         for q in &self.rotations {
-            let q = q.abs();
-            for c in [q.x, q.y, q.z, q.w] {
-                w.0.extend_from_slice(
-                    &((c.clamp(-1.0, 1.0) * 32767.0).round() as i16).to_le_bytes(),
-                );
+            for v in smallest_three(*q) {
+                w.0.extend_from_slice(&v.to_le_bytes());
             }
         }
         w.0.extend_from_slice(&self.contacts);
         for v in &self.features {
-            w.f32(*v);
+            let q = (v * FEATURE_STEPS).round().clamp(-32767.0, 32767.0) as i16;
+            w.0.extend_from_slice(&q.to_le_bytes());
         }
         let hash = blake3::hash(&w.0);
         w.0.extend_from_slice(hash.as_bytes());
@@ -682,7 +767,7 @@ impl Database {
         }
         let mut r = Reader { b: body, at: 8 };
         let version = r.u32()?;
-        if version != FORMAT_VERSION {
+        if version != FORMAT_VERSION && version != 1 {
             return dberr(format!(
                 "format version {version}, this reader knows {FORMAT_VERSION}"
             ));
@@ -698,7 +783,7 @@ impl Database {
             return dberr("implausible header");
         }
         let need = frames
-            .checked_mul(bones * 8 + 1 + FEATURES * 4 + 24)
+            .checked_mul(bones * 6 + 1 + FEATURES * 2 + 24)
             .ok_or_else(|| DatabaseError("too large".into()))?;
         if need > body.len() {
             return dberr("shorter than its header says");
@@ -724,12 +809,19 @@ impl Database {
         for _ in 0..nclips {
             let start = r.u32()? as usize;
             let end = r.u32()? as usize;
-            let mirrored = r.u32()? != 0;
+            let flags = r.u32()?;
+            let mirrored = flags & 1 != 0;
+            let tags = if version == 1 {
+                tags::LOCOMOTION
+            } else {
+                flags >> 1
+            };
             let name = r.str()?;
             if start >= end || end > frames {
                 return dberr("a clip lies outside the frames");
             }
             clips.push(ClipRange {
+                tags,
                 name,
                 start,
                 end,
@@ -759,16 +851,24 @@ impl Database {
         }
         let mut rotations = Vec::with_capacity(frames * bones);
         for _ in 0..frames * bones {
-            let mut c = [0.0f32; 4];
-            for v in &mut c {
-                *v = f32::from(r.i16()?) / 32767.0;
+            if version == 1 {
+                let mut c = [0.0f32; 4];
+                for v in &mut c {
+                    *v = f32::from(r.i16()?) / 32767.0;
+                }
+                rotations.push(Quat::new(c[0], c[1], c[2], c[3]).normalize());
+            } else {
+                rotations.push(from_smallest_three([r.i16()?, r.i16()?, r.i16()?]));
             }
-            rotations.push(Quat::new(c[0], c[1], c[2], c[3]).normalize());
         }
         let contacts = r.take(frames)?.to_vec();
         let mut features = Vec::with_capacity(frames * FEATURES);
         for _ in 0..frames * FEATURES {
-            features.push(r.f32()?);
+            features.push(if version == 1 {
+                r.f32()?
+            } else {
+                f32::from(r.i16()?) / FEATURE_STEPS
+            });
         }
         if r.at != body.len() {
             return dberr("trailing bytes before the hash");
@@ -794,6 +894,47 @@ impl Database {
         db.build_bounds();
         Ok(db)
     }
+}
+
+/// A unit quaternion in 48 bits: the three smallest components, each scaled from ±1/√2 to
+/// 15 bits, and the largest's index in the low bits of the first two (the largest is made
+/// positive, so it follows from the rest). Error under 0.0001 rad.
+fn smallest_three(q: Quat) -> [i16; 3] {
+    let c = [q.x, q.y, q.z, q.w];
+    let big = (0..4)
+        .max_by(|&a, &b| c[a].abs().total_cmp(&c[b].abs()))
+        .unwrap_or(3);
+    let sign = if c[big] < 0.0 { -1.0 } else { 1.0 };
+    let mut out = [0i16; 3];
+    let mut k = 0;
+    for (i, v) in c.iter().enumerate() {
+        if i == big {
+            continue;
+        }
+        let x = (v * sign * std::f32::consts::SQRT_2).clamp(-1.0, 1.0);
+        out[k] = ((x * 16383.0).round() as i16) << 1;
+        k += 1;
+    }
+    out[0] |= (big & 1) as i16;
+    out[1] |= ((big >> 1) & 1) as i16;
+    out
+}
+
+fn from_smallest_three(v: [i16; 3]) -> Quat {
+    let big = ((v[0] & 1) | ((v[1] & 1) << 1)) as usize;
+    let small = v.map(|x| f32::from(x >> 1) / 16383.0 / std::f32::consts::SQRT_2);
+    let rest: f32 = small.iter().map(|x| x * x).sum();
+    let mut c = [0.0f32; 4];
+    let mut k = 0;
+    for (i, slot) in c.iter_mut().enumerate() {
+        if i == big {
+            *slot = (1.0 - rest).max(0.0).sqrt();
+        } else {
+            *slot = small[k];
+            k += 1;
+        }
+    }
+    Quat::new(c[0], c[1], c[2], c[3]).normalize()
 }
 
 struct Writer(Vec<u8>);

@@ -857,6 +857,30 @@ fn main() {
             .map(|c| serde_json::json!({ "side": if c.left { "left" } else { "right" }, "joint": if c.ball { "toe" } else { "ankle" }, "at_s": c.start as f32 / a.hz, "frames": c.frames, "slide_cm": c.slide * 100.0 }))
             .collect();
         if std::env::var_os("MOTION_EVAL_VERBOSE").is_some() {
+            // The largest accelerations, and the clip playing there.
+            let mut accs: Vec<(f32, usize, usize)> = Vec::new();
+            for bone in 0..r.rec.bones {
+                for f in 1..r.rec.frames() - 1 {
+                    let acc = (r.rec.at(f + 1, bone) - r.rec.at(f, bone) * 2.0
+                        + r.rec.at(f - 1, bone))
+                    .length()
+                        * 100.0;
+                    accs.push((acc, f, bone));
+                }
+            }
+            accs.sort_by(|x, y| y.0.total_cmp(&x.0));
+            for (acc, f, bone) in accs.iter().take(4) {
+                let clip = db.clip_of(r.db_frame[*f].0).map_or("?".to_string(), |c| {
+                    format!("{}{}", c.name, if c.mirrored { "-m" } else { "" })
+                });
+                eprintln!(
+                    "  acc {acc:.2} cm at {:.2}s {} playing {clip} (transitions {}->{})",
+                    *f as f32 / a.hz,
+                    db.skeleton.names[*bone],
+                    r.rec.transitions[f - 1],
+                    r.rec.transitions[f + 1]
+                );
+            }
             eprintln!(
                 "  worst contacts: {}",
                 serde_json::to_string(&worst_json).unwrap_or_default()

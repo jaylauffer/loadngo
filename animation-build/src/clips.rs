@@ -1,10 +1,11 @@
 //! Turning one capture file into a retargeted clip: parse, trim, resample, retarget. Runs
 //! on a worker of the lane.
 
+use loadngo_animation::asf;
 use loadngo_animation::bvh;
 use loadngo_animation::database::SourceClip;
 use loadngo_animation::humanoid::find_bone;
-use loadngo_animation::math::{Quat, Transform};
+use loadngo_animation::math::{Quat, Transform, Vec3};
 use loadngo_animation::retarget::{BoneMap, Retargeter};
 use loadngo_animation::skeleton::Skeleton;
 
@@ -60,11 +61,65 @@ pub const MAP_CMU: [(&str, &str); 22] = [
     ("RightToeBase", "RightToeBase"),
 ];
 
+/// The CMU database's own ASF skeleton (`asf::parse_asf` joints) to Mixamo names.
+pub const MAP_CMU_ASF: [(&str, &str); 22] = [
+    ("Hips", "root"),
+    ("Spine", "lowerback"),
+    ("Spine1", "upperback"),
+    ("Spine2", "thorax"),
+    ("Neck", "lowerneck"),
+    ("Head", "head"),
+    ("LeftShoulder", "lclavicle"),
+    ("LeftArm", "lhumerus"),
+    ("LeftForeArm", "lradius"),
+    ("LeftHand", "lwrist"),
+    ("RightShoulder", "rclavicle"),
+    ("RightArm", "rhumerus"),
+    ("RightForeArm", "rradius"),
+    ("RightHand", "rwrist"),
+    ("LeftUpLeg", "lfemur"),
+    ("LeftLeg", "ltibia"),
+    ("LeftFoot", "lfoot"),
+    ("LeftToeBase", "ltoes"),
+    ("RightUpLeg", "rfemur"),
+    ("RightLeg", "rtibia"),
+    ("RightFoot", "rfoot"),
+    ("RightToeBase", "rtoes"),
+];
+
+/// Mesh2Motion's motion-capture skeleton (its raw BVH captures) to Mixamo names.
+pub const MAP_MESH2MOTION: [(&str, &str); 22] = [
+    ("Hips", "root"),
+    ("Spine", "torso_2"),
+    ("Spine1", "torso_4"),
+    ("Spine2", "torso_7"),
+    ("Neck", "neck_1"),
+    ("Head", "head"),
+    ("LeftShoulder", "l_shoulder"),
+    ("LeftArm", "l_up_arm"),
+    ("LeftForeArm", "l_low_arm"),
+    ("LeftHand", "l_hand"),
+    ("RightShoulder", "r_shoulder"),
+    ("RightArm", "r_up_arm"),
+    ("RightForeArm", "r_low_arm"),
+    ("RightHand", "r_hand"),
+    ("LeftUpLeg", "l_up_leg"),
+    ("LeftLeg", "l_low_leg"),
+    ("LeftFoot", "l_foot"),
+    ("LeftToeBase", "l_toes"),
+    ("RightUpLeg", "r_up_leg"),
+    ("RightLeg", "r_low_leg"),
+    ("RightFoot", "r_foot"),
+    ("RightToeBase", "r_toes"),
+];
+
 /// Which bone map a source skeleton needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapKind {
     Style100,
     Cmu,
+    CmuAsf,
+    Mesh2Motion,
     ByName,
 }
 
@@ -76,6 +131,8 @@ impl MapKind {
             "auto" => Some(None),
             "100style" => Some(Some(Self::Style100)),
             "cmu" => Some(Some(Self::Cmu)),
+            "cmu-asf" => Some(Some(Self::CmuAsf)),
+            "mesh2motion" => Some(Some(Self::Mesh2Motion)),
             "name" => Some(Some(Self::ByName)),
             _ => None,
         }
@@ -88,6 +145,10 @@ impl MapKind {
             Self::Style100
         } else if source.find("LowerBack").is_some() && source.find("LHipJoint").is_some() {
             Self::Cmu
+        } else if source.find("lowerback").is_some() && source.find("lfemur").is_some() {
+            Self::CmuAsf
+        } else if source.find("torso_1").is_some() && source.find("l_up_leg").is_some() {
+            Self::Mesh2Motion
         } else {
             Self::ByName
         }
@@ -99,6 +160,8 @@ impl MapKind {
         let pairs: &[(&str, &str)] = match self {
             Self::Style100 => &MAP_100STYLE,
             Self::Cmu => &MAP_CMU,
+            Self::CmuAsf => &MAP_CMU_ASF,
+            Self::Mesh2Motion => &MAP_MESH2MOTION,
             Self::ByName => return BoneMap::by_name(source, target),
         };
         let kept: Vec<(&str, &str)> = pairs
@@ -114,7 +177,21 @@ impl MapKind {
 #[derive(Debug, Clone)]
 pub struct ClipJob {
     pub name: String,
+    /// The motion: BVH text, or AMC text with `skeleton`.
     pub text: Vec<u8>,
+    /// An ASF skeleton, for AMC motion.
+    pub skeleton: Option<Vec<u8>>,
+    /// The motion's frame rate where the file does not say (AMC; CMU's is 120).
+    pub source_fps: Option<f32>,
+    /// Seconds of the motion to keep, after `cut`.
+    pub range: Option<(f32, f32)>,
+    /// `database::tags` bits for the clip.
+    pub tags: u32,
+    /// Add the clip's mirror image.
+    pub mirror: bool,
+    /// Gaussian smoothing of every bone's rotation and the hips' travel (seconds; 0 keeps
+    /// the capture as it is): takes out marker jitter a capture carries.
+    pub smooth: f32,
     /// Source units to metres; `None` guesses from the leg length.
     pub scale: Option<f32>,
     pub map: Option<MapKind>,
@@ -139,18 +216,18 @@ pub struct ClipOut {
 /// Guesses source units from the rest leg length: over 10 units for a leg means
 /// centimetres; over 100, millimetres.
 fn guess_scale(s: &Skeleton) -> f32 {
+    // The rest pose's height span: under 2.5 units for a person in metres, about 170 in
+    // centimetres, about 1,700 in millimetres.
     let w = s.rest_world();
-    let leg = ["LeftHip", "LeftUpLeg"]
+    let (lo, hi) = w
         .iter()
-        .find_map(|n| s.find(n))
-        .and_then(|up| {
-            let ankle = ["LeftAnkle", "LeftFoot"].iter().find_map(|n| s.find(n))?;
-            Some(w[up].translation.distance(w[ankle].translation))
-        })
-        .unwrap_or(1.0);
-    if leg > 100.0 {
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), t| {
+            (lo.min(t.translation.y), hi.max(t.translation.y))
+        });
+    let span = hi - lo;
+    if span > 250.0 {
         0.001
-    } else if leg > 10.0 {
+    } else if span > 2.5 {
         0.01
     } else {
         1.0
@@ -164,20 +241,72 @@ fn guess_scale(s: &Skeleton) -> f32 {
 pub fn run(job: ClipJob) -> Result<ClipOut, String> {
     let text =
         std::str::from_utf8(&job.text).map_err(|_| format!("{}: not UTF-8 text", job.name))?;
-    let probe = bvh::parse(text, 1.0).map_err(|e| format!("{}: {e}", job.name))?;
-    let scale = job.scale.unwrap_or_else(|| guess_scale(&probe.skeleton));
-    let clip = if (scale - 1.0).abs() > f32::EPSILON {
-        bvh::parse(text, scale).map_err(|e| format!("{}: {e}", job.name))?
-    } else {
-        probe
+    let source = match &job.skeleton {
+        Some(sk) => {
+            let sk = std::str::from_utf8(sk)
+                .map_err(|_| format!("{}: the ASF is not UTF-8", job.name))?;
+            let a = asf::parse_asf(sk).map_err(|e| format!("{}: {e}", job.name))?;
+            let local = asf::parse_amc(text, &a).map_err(|e| format!("{}: {e}", job.name))?;
+            let frame_count = local.len() / a.skeleton.len();
+            Source {
+                skeleton: a.skeleton,
+                local,
+                frame_count,
+                fps: job.source_fps.unwrap_or(120.0),
+                scale: a.scale,
+            }
+        }
+        None => {
+            let probe = bvh::parse(text, 1.0).map_err(|e| format!("{}: {e}", job.name))?;
+            let scale = job.scale.unwrap_or_else(|| guess_scale(&probe.skeleton));
+            let clip = if (scale - 1.0).abs() > f32::EPSILON {
+                bvh::parse(text, scale).map_err(|e| format!("{}: {e}", job.name))?
+            } else {
+                probe
+            };
+            let n = clip.skeleton.len();
+            let mut local = vec![Transform::IDENTITY; clip.frame_count * n];
+            for f in 0..clip.frame_count {
+                clip.frame_local(f, &mut local[f * n..(f + 1) * n]);
+            }
+            Source {
+                fps: clip.fps(),
+                frame_count: clip.frame_count,
+                skeleton: clip.skeleton,
+                local,
+                scale,
+            }
+        }
     };
+    run_source(&job, source)
+}
+
+/// A parsed capture: the source skeleton's local transforms frame after frame.
+struct Source {
+    skeleton: Skeleton,
+    local: Vec<Transform>,
+    frame_count: usize,
+    fps: f32,
+    scale: f32,
+}
+
+fn run_source(job: &ClipJob, clip: Source) -> Result<ClipOut, String> {
+    let scale = clip.scale;
     let map = job.map.unwrap_or_else(|| MapKind::detect(&clip.skeleton));
     let target = &job.target;
     let bone_map = map.bone_map(&clip.skeleton, target);
     let retarget = Retargeter::new(&clip.skeleton, target, &bone_map)
         .map_err(|e| format!("{}: {e}", job.name))?;
     let (c0, c1) = job.cut.unwrap_or((0, clip.frame_count));
-    let (c0, c1) = (c0.min(clip.frame_count), c1.min(clip.frame_count));
+    let (mut c0, mut c1) = (c0.min(clip.frame_count), c1.min(clip.frame_count));
+    if let Some((a, b)) = job.range {
+        let (a, b) = (
+            (a * clip.fps).round() as usize,
+            (b * clip.fps).round() as usize,
+        );
+        c1 = (c0 + b).min(c1);
+        c0 = (c0 + a).min(c1);
+    }
     if c1 <= c0 + 2 {
         return Err(format!("{}: nothing left after the cut", job.name));
     }
@@ -189,7 +318,7 @@ pub fn run(job: ClipJob) -> Result<ClipOut, String> {
     let mut frames: Vec<Vec<Transform>> = Vec::with_capacity(c1 - c0);
     for f in c0..c1 {
         let mut out = vec![Transform::IDENTITY; tgt_n];
-        clip.frame_local(f, &mut src_local);
+        src_local.copy_from_slice(&clip.local[f * src_n..(f + 1) * src_n]);
         retarget.frame(
             &clip.skeleton,
             &src_local,
@@ -199,8 +328,11 @@ pub fn run(job: ClipJob) -> Result<ClipOut, String> {
         );
         frames.push(out);
     }
+    if job.smooth > 0.0 {
+        smooth_frames(&mut frames, job.smooth * clip.fps);
+    }
     // Resample to the database's rate.
-    let src_fps = clip.fps();
+    let src_fps = clip.fps;
     let duration = (frames.len() - 1) as f32 / src_fps;
     let out_n = (duration * job.fps).floor() as usize + 1;
     let mut local = Vec::with_capacity(out_n * tgt_n);
@@ -218,7 +350,9 @@ pub fn run(job: ClipJob) -> Result<ClipOut, String> {
     }
     Ok(ClipOut {
         clip: SourceClip {
-            name: job.name,
+            name: job.name.clone(),
+            tags: job.tags,
+            mirror: job.mirror,
             local,
         },
         source_frames: clip.frame_count,
@@ -228,6 +362,39 @@ pub fn run(job: ClipJob) -> Result<ClipOut, String> {
         mapped: bone_map.pairs.len(),
         position_scale: retarget.position_scale(),
     })
+}
+
+/// Gaussian smoothing over frames of each bone's local rotation (sign-aligned, normalised)
+/// and translation, with edges clamped.
+fn smooth_frames(frames: &mut [Vec<Transform>], sigma: f32) {
+    if frames.len() < 3 || sigma < 0.3 {
+        return;
+    }
+    let radius = (sigma * 3.0).ceil() as isize;
+    let w: Vec<f32> = (-radius..=radius)
+        .map(|k| (-(k * k) as f32 / (2.0 * sigma * sigma)).exp())
+        .collect();
+    let n = frames.len() as isize;
+    let bones = frames[0].len();
+    let src: Vec<Vec<Transform>> = frames.to_vec();
+    for f in 0..n {
+        for b in 0..bones {
+            let centre = src[f as usize][b].rotation;
+            let (mut q, mut t, mut total) = ([0.0f32; 4], Vec3::ZERO, 0.0f32);
+            for (j, wj) in w.iter().enumerate() {
+                let k = (f + j as isize - radius).clamp(0, n - 1) as usize;
+                let r = src[k][b].rotation.nearest(centre);
+                q[0] += r.x * wj;
+                q[1] += r.y * wj;
+                q[2] += r.z * wj;
+                q[3] += r.w * wj;
+                t += src[k][b].translation * *wj;
+                total += wj;
+            }
+            frames[f as usize][b] =
+                Transform::new(t / total, Quat::new(q[0], q[1], q[2], q[3]).normalize());
+        }
+    }
 }
 
 /// Frame cuts from a 100STYLE-style `Frame_Cuts.csv`: `STYLE_NAME,BR_START,BR_STOP,...`.

@@ -18,7 +18,9 @@
 //! writes through loadngo-proactor) and call [`controller::MotionMatcher::step`] only when
 //! a frame asks. See `docs/ANIMATION.md`.
 
+pub mod asf;
 pub mod bvh;
+pub mod character;
 pub mod controller;
 pub mod database;
 pub mod eval;

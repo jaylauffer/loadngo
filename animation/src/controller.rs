@@ -24,7 +24,9 @@
 
 use std::sync::Arc;
 
-use crate::database::{Database, FEATURES, HORIZONS, LEFT_BALL, LEFT_HEEL, RIGHT_BALL, RIGHT_HEEL};
+use crate::database::{
+    tags, Database, FEATURES, HORIZON_SECONDS, LEFT_BALL, LEFT_HEEL, RIGHT_BALL, RIGHT_HEEL,
+};
 use crate::ik::two_bone;
 use crate::math::{wrap_angle, Quat, Transform, Vec3};
 use crate::path::Steering;
@@ -60,10 +62,14 @@ pub struct Config {
     pub unlock_halflife: f32,
     /// The legs' soft reach: the last fraction of a leg's length approached slowly.
     pub soft_reach: f32,
-    /// Frames either side of the current one the search skips.
-    pub skip_surrounding: usize,
-    /// Frames before a clip's end the search never lands on.
-    pub end_margin: usize,
+    /// Seconds either side of the current frame the search skips.
+    pub skip_surrounding: f32,
+    /// Seconds before a clip's end the search never lands on.
+    pub end_margin: f32,
+    /// The clips the search draws from (`database::tags`), and those it never uses (for a
+    /// man, `WOMAN`; for a woman, `MAN`).
+    pub search_tags: u32,
+    pub exclude_tags: u32,
     /// A change of desired velocity bigger than this (m/s) searches at once.
     pub force_search_velocity: f32,
     /// A change of desired facing bigger than this (rad) searches at once.
@@ -87,6 +93,8 @@ pub struct Config {
     /// Play a walking clip up to this fraction faster or slower to match the speed
     /// wanted (0 plays everything as captured). Contacts stay planted; cadence changes.
     pub time_warp: f32,
+    /// Seconds a still character may lag its simulation before the search drops the pose.
+    pub stuck_after: f32,
 }
 
 impl Config {
@@ -125,8 +133,10 @@ impl Config {
             "unlock_radius" => self.unlock_radius = f()?,
             "unlock_halflife" => self.unlock_halflife = f()?,
             "soft_reach" => self.soft_reach = f()?,
-            "skip_surrounding" => self.skip_surrounding = u()?,
-            "end_margin" => self.end_margin = u()?,
+            "skip_surrounding" => self.skip_surrounding = f()?,
+            "end_margin" => self.end_margin = f()?,
+            "search_tags" => self.search_tags = u()? as u32,
+            "exclude_tags" => self.exclude_tags = u()? as u32,
             "force_search_velocity" => self.force_search_velocity = f()?,
             "force_search_facing" => self.force_search_facing = f()?,
             "transition_cost" => self.transition_cost = f()?,
@@ -135,6 +145,7 @@ impl Config {
             "settle_facing" => self.settle_facing = f()?,
             "simulate_from_character" => self.simulate_from_character = b()?,
             "time_warp" => self.time_warp = f()?,
+            "stuck_after" => self.stuck_after = f()?,
             _ => return Err(format!("no setting named {name:?}")),
         }
         Ok(())
@@ -158,8 +169,10 @@ impl Default for Config {
             unlock_radius: 0.2,
             unlock_halflife: 0.1,
             soft_reach: 0.03,
-            skip_surrounding: 20,
-            end_margin: 20,
+            skip_surrounding: 1.0 / 3.0,
+            end_margin: 1.0 / 3.0,
+            search_tags: tags::LOCOMOTION,
+            exclude_tags: 0,
             force_search_velocity: 0.25,
             force_search_facing: 0.35,
             transition_cost: 0.5,
@@ -168,8 +181,35 @@ impl Default for Config {
             settle_facing: 0.45,
             simulate_from_character: true,
             time_warp: 0.0,
+            stuck_after: 0.4,
         }
     }
+}
+
+/// A clip played as it is instead of matched: sitting down, a seated loop, standing up.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Action {
+    /// Database frames `[start, end)`, within one clip.
+    pub start: usize,
+    pub end: usize,
+    /// Start again at `start` on reaching `end` (blended), until another action or a stop.
+    pub looping: bool,
+    /// Keep the root still (seated): the clip's own root motion is dropped.
+    pub pin_root: bool,
+    /// Where the root should be when the action ends, warped in over the action's length.
+    pub root_target: Option<Transform>,
+    /// The hips' height over the floor the action should end at (m), warped in likewise.
+    pub hips_height_target: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ActionState {
+    action: Action,
+    eased: f32,
+    warp_pos: Vec3,
+    warp_yaw: f32,
+    lift_from: f32,
+    lift_to: f32,
 }
 
 /// Counters of what the matcher has done.
@@ -184,6 +224,8 @@ pub struct Stats {
     pub last_cost: f32,
     /// Feet let go because the animation moved too far from the held point.
     pub unlocks_by_radius: u64,
+    /// Searches on the trajectory alone after the character would not set off.
+    pub unstuck: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -252,6 +294,13 @@ pub struct MotionMatcher {
     feet: [FootLock; 2],
     query: [f32; FEATURES],
     stats: Stats,
+    action: Option<ActionState>,
+    /// Set on the step an action without looping ends.
+    action_finished: bool,
+    /// How long the simulation has led a character that does not move (s).
+    stuck: f32,
+    /// Added to the hips' height (m): an action's warp, kept after it ends (seated).
+    hips_lift: f32,
 }
 
 impl MotionMatcher {
@@ -302,6 +351,10 @@ impl MotionMatcher {
             feet: [FootLock::default(); 2],
             query: [0.0; FEATURES],
             stats: Stats::default(),
+            action: None,
+            action_finished: false,
+            stuck: 0.0,
+            hips_lift: 0.0,
             db,
         };
         // Start on the frame whose trajectory best matches standing still here (there is
@@ -309,7 +362,10 @@ impl MotionMatcher {
         m.build_query();
         let mut best = (f32::INFINITY, 0usize);
         for f in 0..m.db.frame_count() {
-            if f + m.config.end_margin >= m.clip_end(f) {
+            if f + m.frames(m.config.end_margin) >= m.clip_end(f)
+                || m.db.bounds.frame_tags[f] & m.config.search_tags == 0
+                || m.db.bounds.frame_tags[f] & m.config.exclude_tags != 0
+            {
                 continue;
             }
             let feat = m.db.feature(f);
@@ -336,6 +392,69 @@ impl MotionMatcher {
     /// Changes the settings; takes effect from the next step.
     pub fn set_config(&mut self, config: Config) {
         self.config = config;
+    }
+
+    /// Starts `action` at once, blended in from the pose now. While it plays there is no
+    /// search; the steering is ignored.
+    pub fn play(&mut self, action: Action) {
+        let db = Arc::clone(&self.db);
+        let end = action
+            .end
+            .min(self.clip_end(action.start))
+            .max(action.start + 2);
+        let action = Action { end, ..action };
+        self.transition(action.start);
+        let last = end - 1;
+        let predicted = self.anchor.compose(self.db_root(last, 0.0));
+        let (warp_pos, warp_yaw) = match action.root_target {
+            Some(t) => (
+                (t.translation - predicted.translation).flat(),
+                wrap_angle(t.rotation.yaw() - predicted.rotation.yaw()),
+            ),
+            None => (Vec3::ZERO, 0.0),
+        };
+        let lift_to = action
+            .hips_height_target
+            .map_or(0.0, |h| h - db.hips_pos[last].y);
+        self.action = Some(ActionState {
+            action,
+            eased: 0.0,
+            warp_pos,
+            warp_yaw,
+            lift_from: self.hips_lift,
+            lift_to,
+        });
+        self.action_finished = false;
+        self.search_timer = self.config.search_interval;
+    }
+
+    /// Stops a looping action: matching resumes from the pose now.
+    pub fn stop_action(&mut self) {
+        self.action = None;
+    }
+
+    /// The action playing, if any, and how far through it is (0 to 1).
+    #[must_use]
+    pub fn action(&self) -> Option<(Action, f32)> {
+        self.action.map(|a| {
+            let span = (a.action.end - a.action.start).max(2) - 1;
+            (
+                a.action,
+                ((self.frame - a.action.start) as f32 + self.frac) / span as f32,
+            )
+        })
+    }
+
+    /// Whether an action without looping ended on the last step.
+    #[must_use]
+    pub fn action_finished(&self) -> bool {
+        self.action_finished
+    }
+
+    /// The hips' height added by actions (m).
+    #[must_use]
+    pub fn hips_lift(&self) -> f32 {
+        self.hips_lift
     }
 
     /// The database this matcher plays.
@@ -430,6 +549,11 @@ impl MotionMatcher {
         }
     }
 
+    /// `seconds` in database frames.
+    fn frames(&self, seconds: f32) -> usize {
+        (seconds * self.db.fps).round() as usize
+    }
+
     fn db_root(&self, frame: usize, frac: f32) -> Transform {
         let db = &self.db;
         let next = (frame + 1).min(db.frame_count() - 1);
@@ -461,8 +585,8 @@ impl MotionMatcher {
         let mut r = self.sim_rot;
         let step: f32 = 1.0 / 20.0;
         let mut t = 0.0f32;
-        for (k, h) in HORIZONS.iter().enumerate() {
-            let until = *h as f32 / self.db.fps;
+        for (k, h) in HORIZON_SECONDS.iter().enumerate() {
+            let until = *h;
             while t < until - 1e-6 {
                 let dt = step.min(until - t);
                 let (v, f) = steering.desired(p.position);
@@ -558,7 +682,22 @@ impl MotionMatcher {
                 }
             }
         }
-        let (desired_v, mut desired_f) = steering.desired(self.sim_pos.position);
+        self.action_finished = false;
+        if self.action.is_some() {
+            self.sim_pos = VelocitySpring {
+                position: self.root.translation.flat(),
+                ..VelocitySpring::default()
+            };
+            self.sim_rot = RotationSpring {
+                rotation: self.root.rotation,
+                angular_velocity: Vec3::ZERO,
+            };
+        }
+        let (desired_v, mut desired_f) = if self.action.is_some() {
+            (Vec3::ZERO, self.root.rotation.yaw())
+        } else {
+            steering.desired(self.sim_pos.position)
+        };
         let resting = desired_v.flat().length() < 0.05 && self.sim_pos.velocity.length() < 0.05;
         // Standing, and already facing about the way wanted: keep the facing, rather than
         // shuffle round the last few degrees.
@@ -583,7 +722,62 @@ impl MotionMatcher {
         // 2. Search, on the frame playing now (and at once if it reached its clip's end).
         self.search_timer -= dt;
         let end_of_clip = std::mem::take(&mut self.at_clip_end);
-        if self.search_timer <= 0.0 || force || end_of_clip {
+        if let Some(st) = self.action {
+            if end_of_clip || self.frame + 1 >= st.action.end {
+                if st.action.looping {
+                    self.transition(st.action.start);
+                    // The warp is done; later loops only hold it.
+                    self.action = Some(ActionState {
+                        eased: 0.0,
+                        warp_pos: Vec3::ZERO,
+                        warp_yaw: 0.0,
+                        lift_from: st.lift_to,
+                        ..st
+                    });
+                } else {
+                    self.action = None;
+                    self.action_finished = true;
+                    self.hips_lift = st.lift_to;
+                }
+            }
+        }
+        // Led for a while and still not going: the pose holds it to standing frames (no data
+        // to set off from this pose), so search on the trajectory alone and blend the jump.
+        let lead = (self.sim_pos.position - self.root.translation)
+            .flat()
+            .length();
+        if self.action.is_none() && lead > 0.12 && self.root_velocity.length() < 0.1 {
+            self.stuck += dt;
+        } else {
+            self.stuck = 0.0;
+        }
+        if self.stuck > cfg.stuck_after {
+            self.stuck = 0.0;
+            self.build_query();
+            let mut best = (f32::INFINITY, self.frame);
+            for f in 0..self.db.frame_count() {
+                let t = self.db.bounds.frame_tags[f];
+                if f + self.frames(cfg.end_margin) >= self.clip_end(f)
+                    || t & cfg.search_tags == 0
+                    || t & cfg.exclude_tags != 0
+                {
+                    continue;
+                }
+                let feat = self.db.feature(f);
+                let cost: f32 = (15..FEATURES)
+                    .map(|k| (self.query[k] - feat[k]).powi(2))
+                    .sum();
+                if cost < best.0 {
+                    best = (cost, f);
+                }
+            }
+            if best.1 != self.frame {
+                self.transition(best.1);
+                self.stats.unstuck += 1;
+            }
+            self.search_timer = cfg.search_interval;
+        }
+        if self.action.is_none() && (self.search_timer <= 0.0 || force || end_of_clip) {
             self.search_timer = cfg.search_interval;
             if force {
                 self.last_desired = (desired_v, desired_f);
@@ -600,13 +794,15 @@ impl MotionMatcher {
             let clip_start = self.db.clip_of(self.frame).map_or(0, |c| c.start);
             let skip = (
                 self.frame
-                    .saturating_sub(cfg.skip_surrounding)
+                    .saturating_sub(self.frames(cfg.skip_surrounding))
                     .max(clip_start),
-                (self.frame + cfg.skip_surrounding).min(self.clip_end(self.frame)),
+                (self.frame + self.frames(cfg.skip_surrounding)).min(self.clip_end(self.frame)),
             );
             let ex = Exclusions {
-                end_margin: cfg.end_margin,
+                end_margin: self.frames(cfg.end_margin),
                 skip: if end_of_clip { (0, 0) } else { skip },
+                tags: cfg.search_tags,
+                exclude: cfg.exclude_tags,
             };
             let mut st = SearchStats::default();
             let found = search(&self.db, &self.query, current, ex, &mut st);
@@ -671,6 +867,7 @@ impl MotionMatcher {
         let next = (self.frame + 1).min(self.clip_end(self.frame) - 1);
         let hips_anim = self.db.hips_pos[self.frame].lerp(self.db.hips_pos[next], self.frac);
         self.out_hips = self.hips_blend.update(hips_anim, cfg.blend_halflife, dt);
+        self.out_hips.y += self.hips_lift;
 
         // 5. Root: animation root motion, blended velocity, nudged towards the simulation.
         let anim_vel = delta_pos / dt;
@@ -681,40 +878,59 @@ impl MotionMatcher {
             .x;
         let mut pos = self.root.translation + vel * dt;
         let mut yaw = self.root.rotation.yaw() + yaw_rate * dt;
-        // Adjustment, limited by the root's own speed.
-        let to_sim = (self.sim_pos.position - pos).flat();
-        let pull =
-            to_sim * (1.0 - (-std::f32::consts::LN_2 * dt / cfg.adjust_position_halflife).exp());
-        let max_pull = cfg.adjust_velocity_ratio * vel.length() * dt;
-        pos += if pull.length() > max_pull {
-            pull.normalize_or_zero() * max_pull
-        } else {
-            pull
-        };
-        let sim_yaw = self.sim_rot.rotation.yaw();
-        let yaw_err = wrap_angle(sim_yaw - yaw);
-        let turn =
-            yaw_err * (1.0 - (-std::f32::consts::LN_2 * dt / cfg.adjust_facing_halflife).exp());
-        let max_turn = cfg.adjust_velocity_ratio * yaw_rate.abs().max(vel.length() * 0.5) * dt;
-        yaw += turn.clamp(-max_turn, max_turn);
-        // Keep the two within reach of each other. Synchronised, the simulation waits for
-        // the character (it is pulled back, keeping its velocity), so the body is never
-        // dragged over planted feet; otherwise the character is pulled to the simulation.
-        let off = (pos - self.sim_pos.position).flat();
-        if off.length() > cfg.clamp_distance {
-            if cfg.synchronize {
-                self.sim_pos.position = pos.flat() - off.normalize_or_zero() * cfg.clamp_distance;
-            } else {
-                pos = self.sim_pos.position + off.normalize_or_zero() * cfg.clamp_distance;
+        if let Some(mut st) = self.action {
+            // An action: its own root motion (none when pinned), warped onto its target, and
+            // the hips' height eased from where it was to where the action ends.
+            if st.action.pin_root {
+                pos = self.root.translation;
+                yaw = self.root.rotation.yaw();
             }
-        }
-        let yaw_off_sim = wrap_angle(yaw - sim_yaw);
-        if yaw_off_sim.abs() > cfg.clamp_angle {
-            if cfg.synchronize {
-                self.sim_rot.rotation =
-                    Quat::from_yaw(yaw - yaw_off_sim.signum() * cfg.clamp_angle);
+            let span = ((st.action.end - st.action.start).max(2) - 1) as f32;
+            let u = (((self.frame - st.action.start) as f32 + self.frac) / span).clamp(0.0, 1.0);
+            let eased = u * u * (3.0 - 2.0 * u);
+            let d = eased - st.eased;
+            pos += st.warp_pos * d;
+            yaw += st.warp_yaw * d;
+            st.eased = eased;
+            self.hips_lift = st.lift_from + (st.lift_to - st.lift_from) * eased;
+            self.action = Some(st);
+        } else {
+            // Adjustment, limited by the root's own speed.
+            let to_sim = (self.sim_pos.position - pos).flat();
+            let pull = to_sim
+                * (1.0 - (-std::f32::consts::LN_2 * dt / cfg.adjust_position_halflife).exp());
+            let max_pull = cfg.adjust_velocity_ratio * vel.length() * dt;
+            pos += if pull.length() > max_pull {
+                pull.normalize_or_zero() * max_pull
             } else {
-                yaw = sim_yaw + yaw_off_sim.signum() * cfg.clamp_angle;
+                pull
+            };
+            let sim_yaw = self.sim_rot.rotation.yaw();
+            let yaw_err = wrap_angle(sim_yaw - yaw);
+            let turn =
+                yaw_err * (1.0 - (-std::f32::consts::LN_2 * dt / cfg.adjust_facing_halflife).exp());
+            let max_turn = cfg.adjust_velocity_ratio * yaw_rate.abs().max(vel.length() * 0.5) * dt;
+            yaw += turn.clamp(-max_turn, max_turn);
+            // Keep the two within reach of each other. Synchronised, the simulation waits for
+            // the character (it is pulled back, keeping its velocity), so the body is never
+            // dragged over planted feet; otherwise the character is pulled to the simulation.
+            let off = (pos - self.sim_pos.position).flat();
+            if off.length() > cfg.clamp_distance {
+                if cfg.synchronize {
+                    self.sim_pos.position =
+                        pos.flat() - off.normalize_or_zero() * cfg.clamp_distance;
+                } else {
+                    pos = self.sim_pos.position + off.normalize_or_zero() * cfg.clamp_distance;
+                }
+            }
+            let yaw_off_sim = wrap_angle(yaw - sim_yaw);
+            if yaw_off_sim.abs() > cfg.clamp_angle {
+                if cfg.synchronize {
+                    self.sim_rot.rotation =
+                        Quat::from_yaw(yaw - yaw_off_sim.signum() * cfg.clamp_angle);
+                } else {
+                    yaw = sim_yaw + yaw_off_sim.signum() * cfg.clamp_angle;
+                }
             }
         }
         let new_root = Transform::new(pos.flat(), Quat::from_yaw(yaw));

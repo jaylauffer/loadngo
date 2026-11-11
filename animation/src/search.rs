@@ -14,6 +14,10 @@ pub struct Exclusions {
     pub end_margin: usize,
     /// A range of frames to skip, `[start, end)`, such as those around the current one.
     pub skip: (usize, usize),
+    /// Only frames of clips with one of these tags (`database::tags`) ...
+    pub tags: u32,
+    /// ... and none of these.
+    pub exclude: u32,
 }
 
 /// The best frame and its squared feature distance.
@@ -61,6 +65,10 @@ pub fn search(
     while large * LARGE_BOX < total {
         stats.large_boxes_tested += 1;
         let lo = large * FEATURES;
+        if b.large_tags[large] & exclusions.tags == 0 {
+            large += 1;
+            continue;
+        }
         if box_distance(
             query,
             &b.large_min[lo..lo + FEATURES],
@@ -76,6 +84,9 @@ pub fn search(
             let start = small * SMALL_BOX;
             if start >= total {
                 break;
+            }
+            if b.small_tags[small] & exclusions.tags == 0 {
+                continue;
             }
             stats.small_boxes_tested += 1;
             let so = small * FEATURES;
@@ -93,7 +104,10 @@ pub fn search(
                 if f >= exclusions.skip.0 && f < exclusions.skip.1 {
                     continue;
                 }
-                if f + exclusions.end_margin >= b.clip_end[f] as usize {
+                if f + exclusions.end_margin >= b.clip_end[f] as usize
+                    || b.frame_tags[f] & exclusions.tags == 0
+                    || b.frame_tags[f] & exclusions.exclude != 0
+                {
                     continue;
                 }
                 stats.frames_tested += 1;
@@ -129,7 +143,10 @@ pub fn search_brute_force(
         if f >= exclusions.skip.0 && f < exclusions.skip.1 {
             continue;
         }
-        if f + exclusions.end_margin >= db.bounds.clip_end[f] as usize {
+        if f + exclusions.end_margin >= db.bounds.clip_end[f] as usize
+            || db.bounds.frame_tags[f] & exclusions.tags == 0
+            || db.bounds.frame_tags[f] & exclusions.exclude != 0
+        {
             continue;
         }
         let feat = db.feature(f);
@@ -159,6 +176,8 @@ mod tests {
         let ex = Exclusions {
             end_margin: 20,
             skip: (0, 0),
+            tags: crate::database::tags::LOCOMOTION,
+            exclude: 0,
         };
         let mut tested = 0;
         for probe in (0..db.frame_count()).step_by(37) {

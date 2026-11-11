@@ -1,0 +1,776 @@
+{
+ "about": "Round 2 locomotion, idles and sitting: 100STYLE Neutral (CC BY 4.0), CMU Graphics Lab (free to use), Mesh2Motion raw captures (CC0). Paths under root; see docs/ANIMATION_CREDITS.md.",
+ "root": "~/.loadngo/data/mocap",
+ "clips": [
+  {
+   "name": "100style-neutral-fw",
+   "motion": "100style/extracted/100STYLE/Neutral/Neutral_FW.bvh",
+   "map": "100style",
+   "from": 5.45,
+   "to": 124.08,
+   "tags": [
+    "walk",
+    "turn",
+    "start-stop"
+   ]
+  },
+  {
+   "name": "100style-neutral-id",
+   "motion": "100style/extracted/100STYLE/Neutral/Neutral_ID.bvh",
+   "map": "100style",
+   "from": 10.92,
+   "to": 25.92,
+   "tags": [
+    "idle"
+   ]
+  },
+  {
+   "name": "100style-neutral-tr1",
+   "motion": "100style/extracted/100STYLE/Neutral/Neutral_TR1.bvh",
+   "map": "100style",
+   "from": 5.07,
+   "to": 112.9,
+   "tags": [
+    "walk",
+    "turn",
+    "start-stop"
+   ]
+  },
+  {
+   "name": "cmu-07-04-slow",
+   "skeleton": "cmu/subjects/07/07.asf",
+   "motion": "cmu/subjects/07/07_04.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "man"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-07-05-slow",
+   "skeleton": "cmu/subjects/07/07.asf",
+   "motion": "cmu/subjects/07/07_05.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "man"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-08-04-slow",
+   "skeleton": "cmu/subjects/08/08.asf",
+   "motion": "cmu/subjects/08/08_04.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "man"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-08-11-slow",
+   "skeleton": "cmu/subjects/08/08.asf",
+   "motion": "cmu/subjects/08/08_11.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "man"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-16-17",
+   "skeleton": "cmu/subjects/16/16.asf",
+   "motion": "cmu/subjects/16/16_17.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "man"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-16-18",
+   "skeleton": "cmu/subjects/16/16.asf",
+   "motion": "cmu/subjects/16/16_18.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "man"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-16-19",
+   "skeleton": "cmu/subjects/16/16.asf",
+   "motion": "cmu/subjects/16/16_19.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "man"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-16-20",
+   "skeleton": "cmu/subjects/16/16.asf",
+   "motion": "cmu/subjects/16/16_20.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "man"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-16-27",
+   "skeleton": "cmu/subjects/16/16.asf",
+   "motion": "cmu/subjects/16/16_27.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "man"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-16-28",
+   "skeleton": "cmu/subjects/16/16.asf",
+   "motion": "cmu/subjects/16/16_28.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "man"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-16-29",
+   "skeleton": "cmu/subjects/16/16.asf",
+   "motion": "cmu/subjects/16/16_29.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "man"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-16-30",
+   "skeleton": "cmu/subjects/16/16.asf",
+   "motion": "cmu/subjects/16/16_30.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "man"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-16-33-slow-stop",
+   "skeleton": "cmu/subjects/16/16.asf",
+   "motion": "cmu/subjects/16/16_33.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "start-stop",
+    "man"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-16-34-slow-stop",
+   "skeleton": "cmu/subjects/16/16.asf",
+   "motion": "cmu/subjects/16/16_34.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "start-stop",
+    "man"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-69-13",
+   "skeleton": "cmu/subjects/69/69.asf",
+   "motion": "cmu/subjects/69/69_13.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "start-stop"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-69-14",
+   "skeleton": "cmu/subjects/69/69.asf",
+   "motion": "cmu/subjects/69/69_14.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "start-stop"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-69-15",
+   "skeleton": "cmu/subjects/69/69.asf",
+   "motion": "cmu/subjects/69/69_15.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "start-stop"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-69-16-turn-in-place",
+   "skeleton": "cmu/subjects/69/69.asf",
+   "motion": "cmu/subjects/69/69_16.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "turn",
+    "idle"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-69-17-turn-in-place",
+   "skeleton": "cmu/subjects/69/69.asf",
+   "motion": "cmu/subjects/69/69_17.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "turn",
+    "idle"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-69-18-turn-in-place",
+   "skeleton": "cmu/subjects/69/69.asf",
+   "motion": "cmu/subjects/69/69_18.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "turn",
+    "idle"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-69-19-turn-in-place",
+   "skeleton": "cmu/subjects/69/69.asf",
+   "motion": "cmu/subjects/69/69_19.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "turn",
+    "idle"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-69-20",
+   "skeleton": "cmu/subjects/69/69.asf",
+   "motion": "cmu/subjects/69/69_20.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "start-stop"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-69-21",
+   "skeleton": "cmu/subjects/69/69.asf",
+   "motion": "cmu/subjects/69/69_21.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "start-stop"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-69-24",
+   "skeleton": "cmu/subjects/69/69.asf",
+   "motion": "cmu/subjects/69/69_24.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "start-stop"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-69-25",
+   "skeleton": "cmu/subjects/69/69.asf",
+   "motion": "cmu/subjects/69/69_25.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "start-stop"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-69-28",
+   "skeleton": "cmu/subjects/69/69.asf",
+   "motion": "cmu/subjects/69/69_28.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "start-stop"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-69-29",
+   "skeleton": "cmu/subjects/69/69.asf",
+   "motion": "cmu/subjects/69/69_29.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "start-stop"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-69-31",
+   "skeleton": "cmu/subjects/69/69.asf",
+   "motion": "cmu/subjects/69/69_31.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "start-stop"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-69-32",
+   "skeleton": "cmu/subjects/69/69.asf",
+   "motion": "cmu/subjects/69/69_32.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "start-stop"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-91-10-slow",
+   "skeleton": "cmu/subjects/91/91.asf",
+   "motion": "cmu/subjects/91/91_10.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-91-27-slow",
+   "skeleton": "cmu/subjects/91/91.asf",
+   "motion": "cmu/subjects/91/91_27.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-104-35-slow",
+   "skeleton": "cmu/subjects/104/104.asf",
+   "motion": "cmu/subjects/104/104_35.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "man"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-104-36-slow",
+   "skeleton": "cmu/subjects/104/104.asf",
+   "motion": "cmu/subjects/104/104_36.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "man"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-104-39-slow",
+   "skeleton": "cmu/subjects/104/104.asf",
+   "motion": "cmu/subjects/104/104_39.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "turn",
+    "man"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-77-02-standing",
+   "skeleton": "cmu/subjects/77/77.asf",
+   "motion": "cmu/subjects/77/77_02.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "idle"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-77-01-looking-around",
+   "skeleton": "cmu/subjects/77/77.asf",
+   "motion": "cmu/subjects/77/77_01.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "idle"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-139-02-shifting-weight",
+   "skeleton": "cmu/subjects/139/139.asf",
+   "motion": "cmu/subjects/139/139_02.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "idle"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-139-01-looking-around",
+   "skeleton": "cmu/subjects/139/139.asf",
+   "motion": "cmu/subjects/139/139_01.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "idle"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-141-20-waiting",
+   "skeleton": "cmu/subjects/141/141.asf",
+   "motion": "cmu/subjects/141/141_20.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "idle"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-137-28-normal-wait",
+   "skeleton": "cmu/subjects/137/137.asf",
+   "motion": "cmu/subjects/137/137_28.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "idle",
+    "man"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-113-21-standing",
+   "skeleton": "cmu/subjects/113/113.asf",
+   "motion": "cmu/subjects/113/113_21.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "idle",
+    "woman"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-111-28-standing",
+   "skeleton": "cmu/subjects/111/111.asf",
+   "motion": "cmu/subjects/111/111_28.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "idle",
+    "woman"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-113-25-walk",
+   "skeleton": "cmu/subjects/113/113.asf",
+   "motion": "cmu/subjects/113/113_25.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "walk",
+    "woman"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "cmu-143-18-sit-a",
+   "skeleton": "cmu/subjects/143/143.asf",
+   "motion": "cmu/subjects/143/143_18.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "sit-down"
+   ],
+   "mirror": true,
+   "from": 0.3,
+   "to": 2.0
+  },
+  {
+   "name": "cmu-143-18-seated-a",
+   "skeleton": "cmu/subjects/143/143.asf",
+   "motion": "cmu/subjects/143/143_18.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "seated"
+   ],
+   "mirror": true,
+   "from": 1.7,
+   "to": 2.6
+  },
+  {
+   "name": "cmu-143-18-stand-a",
+   "skeleton": "cmu/subjects/143/143.asf",
+   "motion": "cmu/subjects/143/143_18.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "stand-up"
+   ],
+   "mirror": true,
+   "from": 2.3,
+   "to": 3.5
+  },
+  {
+   "name": "cmu-143-18-sit-b",
+   "skeleton": "cmu/subjects/143/143.asf",
+   "motion": "cmu/subjects/143/143_18.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "sit-down"
+   ],
+   "mirror": true,
+   "from": 3.2,
+   "to": 4.6
+  },
+  {
+   "name": "cmu-143-18-seated-b",
+   "skeleton": "cmu/subjects/143/143.asf",
+   "motion": "cmu/subjects/143/143_18.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "seated"
+   ],
+   "mirror": true,
+   "from": 4.3,
+   "to": 5.1
+  },
+  {
+   "name": "cmu-143-18-stand-b",
+   "skeleton": "cmu/subjects/143/143.asf",
+   "motion": "cmu/subjects/143/143_18.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "stand-up"
+   ],
+   "mirror": true,
+   "from": 4.8,
+   "to": 6.2
+  },
+  {
+   "name": "cmu-113-15-sit",
+   "skeleton": "cmu/subjects/113/113.asf",
+   "motion": "cmu/subjects/113/113_15.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "sit-down",
+    "woman"
+   ],
+   "mirror": true,
+   "from": 1.0,
+   "to": 3.0
+  },
+  {
+   "name": "cmu-113-15-seated",
+   "skeleton": "cmu/subjects/113/113.asf",
+   "motion": "cmu/subjects/113/113_15.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "seated",
+    "woman"
+   ],
+   "mirror": true,
+   "from": 2.7,
+   "to": 4.9
+  },
+  {
+   "name": "cmu-113-15-stand",
+   "skeleton": "cmu/subjects/113/113.asf",
+   "motion": "cmu/subjects/113/113_15.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "stand-up",
+    "woman"
+   ],
+   "mirror": true,
+   "from": 4.7,
+   "to": 6.7
+  },
+  {
+   "name": "cmu-75-19-sit-a",
+   "skeleton": "cmu/subjects/75/75.asf",
+   "motion": "cmu/subjects/75/75_19.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "sit-down"
+   ],
+   "mirror": true,
+   "from": 0.3,
+   "to": 1.9
+  },
+  {
+   "name": "cmu-75-19-stand-a",
+   "skeleton": "cmu/subjects/75/75.asf",
+   "motion": "cmu/subjects/75/75_19.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "stand-up"
+   ],
+   "mirror": true,
+   "from": 2.0,
+   "to": 3.5
+  },
+  {
+   "name": "cmu-86-15-seated",
+   "skeleton": "cmu/subjects/86/86.asf",
+   "motion": "cmu/subjects/86/86_15.amc",
+   "fps": 120,
+   "map": "cmu-asf",
+   "tags": [
+    "seated"
+   ],
+   "mirror": true,
+   "from": 13.0,
+   "to": 40.0
+  },
+  {
+   "name": "mesh2motion-turn-45-left",
+   "motion": "mesh2motion/raw/turn-45-left.bvh",
+   "map": "mesh2motion",
+   "from": 0.5,
+   "tags": [
+    "turn",
+    "idle"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "mesh2motion-turn-45-right",
+   "motion": "mesh2motion/raw/turn-45-right.bvh",
+   "map": "mesh2motion",
+   "from": 0.5,
+   "tags": [
+    "turn",
+    "idle"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "mesh2motion-turn-180-left",
+   "motion": "mesh2motion/raw/turn-180-left.bvh",
+   "map": "mesh2motion",
+   "from": 0.5,
+   "tags": [
+    "turn",
+    "idle"
+   ],
+   "mirror": true
+  },
+  {
+   "name": "mesh2motion-turn-180-right",
+   "motion": "mesh2motion/raw/turn-180-right.bvh",
+   "map": "mesh2motion",
+   "from": 0.5,
+   "tags": [
+    "turn",
+    "idle"
+   ],
+   "mirror": true
+  }
+ ]
+}

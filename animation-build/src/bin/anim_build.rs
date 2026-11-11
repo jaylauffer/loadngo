@@ -11,7 +11,7 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use data::cli::{read_args, ArgDoc, Usage};
-use loadngo_animation::database::{BuildConfig, Database, SourceClip};
+use loadngo_animation::database::{tags, BuildConfig, Database, SourceClip};
 use loadngo_animation::skeleton::Skeleton;
 use loadngo_animation_build::clips::{self, ClipJob, ClipOut, MapKind};
 use loadngo_animation_build::gltf;
@@ -26,7 +26,8 @@ const USAGE: Usage = Usage {
             target skeleton, labels foot contacts, computes matching features and writes the compact database file.",
     args: &[
         ArgDoc::required("--target", "<skeleton.glb|skeleton.gltf|skeleton.json|canonical[:height]>", "the skeleton to retarget to: a glTF skin with Mixamo-style bone names, a skeleton description (see docs/ANIMATION.md), or the built-in humanoid with its hips at <height> m (default 1.0)"),
-        ArgDoc::repeated("--source", "<file.bvh|directory>", "capture to import; a directory is searched for .bvh files (at least one --source is required)"),
+        ArgDoc::repeated("--source", "<file.bvh|directory>", "capture to import; a directory is searched for .bvh files (a --source or a --manifest is required)"),
+        ArgDoc::optional("--manifest", "<clips.json>", "clips to import with their tags, time ranges, skeletons (ASF for AMC motion) and maps; see animation/data/README.md"),
         ArgDoc::required("--out", "<database.lmm>", "where to write the database (written to <out>.partial, then renamed)"),
         ArgDoc::repeated("--include", "<text>", "keep only source files whose path contains one of these (e.g. Neutral_FW)"),
         ArgDoc::repeated("--exclude", "<text>", "drop source files whose path contains any of these"),
@@ -36,6 +37,7 @@ const USAGE: Usage = Usage {
         ArgDoc::optional("--fps", "<number>", "the database's frame rate (default 60)"),
         ArgDoc::optional("--workers", "<n>", "worker threads for parsing and building (default half the cores, at most 6)"),
         ArgDoc::switch("--no-mirror", "do not add each clip's mirror image"),
+        ArgDoc::optional("--smooth", "<seconds>", "Gaussian smoothing of every bone's rotation and the hips' travel, against marker jitter (default 0.02; 0 keeps the capture)"),
         ArgDoc::optional("--weights", "<fp,fv,hv,tp,td>", "feature weights: foot positions, foot velocities, hip velocity, trajectory positions, trajectory directions (default 1.5,1,1,1,1.5)"),
         ArgDoc::optional("--report", "<report.json>", "also write what was built, how, and what admission did"),
         ArgDoc::optional("--dump-target", "<skeleton.json>", "also write the target skeleton as a description"),
@@ -54,6 +56,7 @@ const USAGE: Usage = Usage {
 struct Args {
     target: String,
     sources: Vec<PathBuf>,
+    manifest: Option<PathBuf>,
     out: PathBuf,
     include: Vec<String>,
     exclude: Vec<String>,
@@ -63,6 +66,7 @@ struct Args {
     fps: f32,
     workers: usize,
     mirror: bool,
+    smooth: f32,
     weights: [f32; 5],
     report: Option<PathBuf>,
     dump_target: Option<PathBuf>,
@@ -80,6 +84,7 @@ fn parse_args() -> Args {
     let mut a = Args {
         target: String::new(),
         sources: Vec::new(),
+        manifest: None,
         out: PathBuf::new(),
         include: Vec::new(),
         exclude: Vec::new(),
@@ -89,6 +94,7 @@ fn parse_args() -> Args {
         fps: 60.0,
         workers: (cores / 2).clamp(1, 6),
         mirror: true,
+        smooth: 0.02,
         weights: BuildConfig::default().weights,
         report: None,
         dump_target: None,
@@ -102,6 +108,7 @@ fn parse_args() -> Args {
         match flag.as_str() {
             "--target" => a.target = value(),
             "--source" => a.sources.push(PathBuf::from(value())),
+            "--manifest" => a.manifest = Some(PathBuf::from(value())),
             "--out" => a.out = PathBuf::from(value()),
             "--include" => a.include.push(value()),
             "--exclude" => a.exclude.push(value()),
@@ -142,6 +149,13 @@ fn parse_args() -> Args {
                     .unwrap_or_else(|| fail("--workers needs 1 to 64"))
             }
             "--no-mirror" => a.mirror = false,
+            "--smooth" => {
+                a.smooth = value()
+                    .parse()
+                    .ok()
+                    .filter(|v: &f32| (0.0..=0.2).contains(v))
+                    .unwrap_or_else(|| fail("--smooth needs 0 to 0.2 seconds"))
+            }
             "--weights" => {
                 let v = value();
                 let w: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
@@ -158,8 +172,8 @@ fn parse_args() -> Args {
     if a.target.is_empty() {
         fail("--target is required");
     }
-    if a.sources.is_empty() {
-        fail("at least one --source is required");
+    if a.sources.is_empty() && a.manifest.is_none() {
+        fail("at least one --source, or a --manifest, is required");
     }
     if a.out.as_os_str().is_empty() {
         fail("--out is required");
@@ -214,6 +228,91 @@ fn style_kind(path: &Path) -> Option<(String, String)> {
     Some((s.to_string(), k.to_string()))
 }
 
+/// One clip to import.
+struct Entry {
+    name: String,
+    motion: PathBuf,
+    skeleton: Option<PathBuf>,
+    source_fps: Option<f32>,
+    range: Option<(f32, f32)>,
+    tags: u32,
+    mirror: bool,
+    map: Option<MapKind>,
+    cut: Option<(usize, usize)>,
+}
+
+/// A manifest: `{"root": "~/.loadngo/data/mocap", "clips": [{"name", "motion", "skeleton",
+/// "fps", "from", "to", "tags": [...], "mirror", "map"}]}`. Paths are relative to `root`
+/// (`~` is the home directory), or to the manifest's folder without one.
+fn read_manifest(bytes: &[u8], path: &Path) -> Result<Vec<Entry>, String> {
+    let v: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|e| format!("manifest JSON: {e}"))?;
+    let root = match v.get("root").and_then(serde_json::Value::as_str) {
+        Some(r) => match r.strip_prefix("~/") {
+            Some(rest) => std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default()
+                .join(rest),
+            None => PathBuf::from(r),
+        },
+        None => path.parent().map(Path::to_path_buf).unwrap_or_default(),
+    };
+    let clips = v
+        .get("clips")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("no \"clips\" array")?;
+    let mut out = Vec::with_capacity(clips.len());
+    for c in clips {
+        let st = |k: &str| c.get(k).and_then(serde_json::Value::as_str);
+        let num = |k: &str| {
+            c.get(k)
+                .and_then(serde_json::Value::as_f64)
+                .map(|x| x as f32)
+        };
+        let motion = st("motion").ok_or("a clip without \"motion\"")?;
+        let name = st("name").map_or_else(
+            || motion.rsplit('/').next().unwrap_or(motion).to_string(),
+            str::to_string,
+        );
+        let mut bits = 0u32;
+        for t in c
+            .get("tags")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let t = t.as_str().unwrap_or("");
+            bits |= tags::parse(t).ok_or_else(|| format!("{name}: unknown tag {t:?}"))?;
+        }
+        if bits == 0 {
+            return Err(format!("{name}: no tags"));
+        }
+        let map = match st("map") {
+            Some(m) => MapKind::parse(m).ok_or_else(|| format!("{name}: unknown map {m:?}"))?,
+            None => None,
+        };
+        let range = match (num("from"), num("to")) {
+            (None, None) => None,
+            (a, b) => Some((a.unwrap_or(0.0), b.unwrap_or(f32::MAX))),
+        };
+        out.push(Entry {
+            name,
+            motion: root.join(motion),
+            skeleton: st("skeleton").map(|k| root.join(k)),
+            source_fps: num("fps"),
+            range,
+            tags: bits,
+            mirror: c
+                .get("mirror")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true),
+            map,
+            cut: None,
+        });
+    }
+    Ok(out)
+}
+
 enum Job {
     Clip(Box<Result<ClipOut, String>>),
     Built(Box<Result<(Database, Vec<u8>), String>>),
@@ -232,6 +331,11 @@ fn main() {
     }
 
     let mut files = Vec::new();
+    let manifest_entries = args.manifest.as_ref().map(|m| {
+        let bytes =
+            io::read_file(&proactor, m).unwrap_or_else(|e| fail(&format!("{}: {e}", m.display())));
+        read_manifest(&bytes, m).unwrap_or_else(|e| fail(&format!("{}: {e}", m.display())))
+    });
     for s in &args.sources {
         if !s.exists() {
             fail(&format!("{} does not exist", s.display()));
@@ -243,7 +347,7 @@ fn main() {
         (args.include.is_empty() || args.include.iter().any(|i| p.contains(i.as_str())))
             && !args.exclude.iter().any(|x| p.contains(x.as_str()))
     });
-    if files.is_empty() {
+    if files.is_empty() && manifest_entries.is_none() {
         fail("no .bvh files matched");
     }
 
@@ -271,6 +375,37 @@ fn main() {
             cuts.extend(clips::frame_cuts(&String::from_utf8_lossy(&bytes)));
         }
     }
+
+    let mut entries: Vec<Entry> = files
+        .iter()
+        .map(|f| {
+            let name = f
+                .file_stem()
+                .map_or_else(|| "clip".to_string(), |s| s.to_string_lossy().into_owned());
+            let cut =
+                style_kind(f).and_then(|k| cuts.iter().find(|(key, _)| *key == k).map(|(_, c)| *c));
+            let tags = if name.ends_with("_ID") {
+                tags::IDLE
+            } else {
+                tags::WALK | tags::TURN | tags::START_STOP
+            };
+            Entry {
+                name,
+                motion: f.clone(),
+                skeleton: None,
+                source_fps: None,
+                range: None,
+                tags,
+                mirror: true,
+                map: args.map,
+                cut,
+            }
+        })
+        .collect();
+    entries.extend(manifest_entries.unwrap_or_default());
+    let files: Vec<PathBuf> = entries.iter().map(|e| e.motion.clone()).collect();
+    let mut skeletons: std::collections::HashMap<PathBuf, Vec<u8>> =
+        std::collections::HashMap::new();
 
     eprintln!(
         "anim_build: {} files, target {} bones, {} workers",
@@ -308,18 +443,29 @@ fn main() {
         }
         // Submit parsed work as admission allows.
         while !ready.is_empty() && lane.can_submit() {
-            let (id, path, text) = ready.pop_front().expect("ready is not empty");
-            let name = path
-                .file_stem()
-                .map_or_else(|| format!("clip{id}"), |s| s.to_string_lossy().into_owned());
-            let cut = style_kind(&path)
-                .and_then(|k| cuts.iter().find(|(key, _)| *key == k).map(|(_, c)| *c));
+            let (id, _path, text) = ready.pop_front().expect("ready is not empty");
+            let e = &entries[id];
+            let skeleton = e.skeleton.as_ref().map(|sk| {
+                skeletons
+                    .entry(sk.clone())
+                    .or_insert_with(|| {
+                        io::read_file(&proactor, sk)
+                            .unwrap_or_else(|err| fail(&format!("{}: {err}", sk.display())))
+                    })
+                    .clone()
+            });
             let job = ClipJob {
-                name,
+                name: e.name.clone(),
                 text,
+                skeleton,
+                source_fps: e.source_fps,
+                range: e.range,
+                tags: e.tags,
+                mirror: e.mirror,
+                smooth: args.smooth,
                 scale: args.scale,
-                map: args.map,
-                cut,
+                map: e.map,
+                cut: e.cut,
                 fps: args.fps,
                 target: Arc::clone(&target),
             };
@@ -330,6 +476,8 @@ fn main() {
             for c in &mut clips_out {
                 if let Some(c) = c.as_mut() {
                     list.push(SourceClip {
+                        tags: c.clip.tags,
+                        mirror: c.clip.mirror,
                         name: c.clip.name.clone(),
                         local: std::mem::take(&mut c.clip.local),
                     });
@@ -455,7 +603,7 @@ fn main() {
             "tool": "anim_build", "format_version": loadngo_animation::database::FORMAT_VERSION,
             "out": args.out.file_name().map_or(String::new(), |f| f.to_string_lossy().into_owned()), "bytes": back.len(), "blake3": hash.to_hex().to_string(),
             "frames": check.frame_count(), "fps": check.fps, "clips": check.clips.len(), "bones": check.skeleton.names,
-            "mirror": args.mirror, "weights": args.weights, "workers": args.workers, "seconds": secs, "bytes_read": bytes_read,
+            "mirror": args.mirror, "smooth": args.smooth, "weights": args.weights, "workers": args.workers, "seconds": secs, "bytes_read": bytes_read,
             "thermal_pressures_seen": lane.pressure_seen.iter().map(ToString::to_string).collect::<Vec<_>>(),
             "admission_held_back": lane.held_back, "sources": clips_json,
         });

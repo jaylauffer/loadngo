@@ -206,6 +206,30 @@ pub fn standard() -> Vec<Scenario> {
             facing: 0.0,
         },
         Scenario {
+            name: "turn-off-80".into(),
+            about: "standing facing +Z, then off along a path 80 degrees to the left: the turn from standing as one rises and goes".into(),
+            legs: vec![
+                Leg::Wait(1.0),
+                Leg::Walk(vec![Vec3::ZERO, Vec3::new(5.0 * 80f32.to_radians().sin(), 0.0, 5.0 * 80f32.to_radians().cos())], STROLL),
+                Leg::Wait(2.0),
+            ],
+            steady: None,
+            seconds: 12.0,
+            pace: STROLL,
+            start: Vec3::ZERO,
+            facing: 0.0,
+        },
+        Scenario {
+            name: "turn-off-180".into(),
+            about: "standing facing +Z, then off the way they came: a turn about from standing".into(),
+            legs: vec![Leg::Wait(1.0), Leg::Walk(vec![Vec3::ZERO, Vec3::new(0.0, 0.0, -5.0)], STROLL), Leg::Wait(2.0)],
+            steady: None,
+            seconds: 12.0,
+            pace: STROLL,
+            start: Vec3::ZERO,
+            facing: 0.0,
+        },
+        Scenario {
             name: "alongside-slow".into(),
             about: "12 m straight at 0.6 m/s, keeping pace with someone slower".into(),
             legs: vec![
