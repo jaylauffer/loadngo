@@ -937,25 +937,31 @@ impl MotionMatcher {
             offset: hips - db.hips_pos[to],
             offset_vel: Vec3::ZERO,
         };
-        // The shown body's own motion goes on: each rate's offset is the shown body's less the
-        // capture frame's, as a transition's is (at most TAKE_OVER_MOST_*).
+        // The shown body's own motion goes on: each offset's rate is how fast it changes between
+        // the shown frame before (against the capture frame as it was then, stepped back by its
+        // own turn) and now, as the rotation vector the offset decays as (at most
+        // TAKE_OVER_MOST_*). (Taken as the shown turn less the capture's, the rate was right only
+        // for a small offset: added to an offset of a large turn, a forward bend's rate became
+        // partly a sideways one.)
         if let Some(s) = before.filter(|s| s.dt.is_finite() && s.dt > 1e-4) {
             let t1 = (to + 1).min(self.clip_end(to) - 1);
             let frame = 1.0 / db.fps;
             for i in 0..b {
-                let now = rotations
-                    .get(i)
-                    .copied()
-                    .unwrap_or(db.rotations[to * b + i]);
+                let capture = db.rotations[to * b + i];
+                let now = rotations.get(i).copied().unwrap_or(capture);
                 let mut was = s.rotations.get(i).copied().unwrap_or(now);
                 if i == 0 {
                     // The hips' turn on the root as it now stands (it stands still from here).
                     was = (root.rotation.inverse() * s.root.rotation * was).normalize();
                 }
-                let shown = angular_velocity(was, now, s.dt);
-                let capture =
-                    angular_velocity(db.rotations[to * b + i], db.rotations[t1 * b + i], frame);
-                self.bone_blend[i].offset_vel = at_most(shown - capture, TAKE_OVER_MOST_TURN);
+                let turn = angular_velocity(capture, db.rotations[t1 * b + i], frame);
+                let capture_was =
+                    (Quat::from_scaled_angle_axis(-turn * s.dt) * capture).normalize();
+                let offset_now = (now * capture.inverse()).abs().normalize();
+                let offset_was = (was * capture_was.inverse()).abs().normalize();
+                let rate =
+                    (offset_now.to_scaled_angle_axis() - offset_was.to_scaled_angle_axis()) / s.dt;
+                self.bone_blend[i].offset_vel = at_most(rate, TAKE_OVER_MOST_TURN);
             }
             // The hips' velocity on the root as it now stands, less the root's own from here.
             let was = root.inverse_apply(s.root.apply(s.hips));
@@ -2284,6 +2290,79 @@ mod tests {
             dropped > 0.4,
             "from the pose alone it changed only {dropped} m/s"
         );
+    }
+
+    #[test]
+    fn a_take_over_keeps_a_bend_going_the_way_the_body_faces() {
+        // A body bending its spine forward at 1.5 rad/s, taken over from the frame before facing
+        // +Z, +X, -X and -Z: the neck goes on forward, along the facing, never sideways.
+        let db = db();
+        let b = db.bone_count();
+        let f = db
+            .clips
+            .iter()
+            .find(|c| c.tags & tags::IDLE != 0 && !c.mirrored)
+            .unwrap()
+            .start
+            + 60;
+        let spine = crate::humanoid::find_bone(&db.skeleton, "Spine").unwrap();
+        let neck = crate::humanoid::find_bone(&db.skeleton, "Neck").unwrap();
+        let dt = 1.0 / 60.0;
+        let bent = |a: f32| -> Vec<Quat> {
+            (0..b)
+                .map(|i| {
+                    let q = db.rotations[f * b + i];
+                    if i == spine {
+                        (Quat::from_axis_angle(Vec3::X, a) * q).normalize()
+                    } else {
+                        q
+                    }
+                })
+                .collect()
+        };
+        let (now, before) = (bent(0.4), bent(0.4 - 1.5 * dt));
+        let hips = db.hips_pos[f];
+        for facing in [
+            0.0,
+            std::f32::consts::FRAC_PI_2,
+            -std::f32::consts::FRAC_PI_2,
+            std::f32::consts::PI,
+        ] {
+            let root = Transform::new(Vec3::new(1.0, 0.0, 2.0), Quat::from_yaw(facing));
+            let mut was = MotionMatcher::new(Arc::clone(&db), Config::default(), Vec3::ZERO, 0.0);
+            was.take_over(root, hips, &before);
+            let w_before = was.world_positions()[neck];
+            let mut m = MotionMatcher::new(Arc::clone(&db), Config::default(), Vec3::ZERO, 0.0);
+            let shown = Shown {
+                root,
+                hips,
+                rotations: &before,
+                dt,
+            };
+            m.take_over_from(root, hips, &now, shown);
+            let w0 = m.world_positions()[neck];
+            m.step(
+                dt,
+                &ConstantSteering {
+                    velocity: Vec3::ZERO,
+                    facing,
+                },
+            );
+            let v = (m.world_positions()[neck] - w0) / dt;
+            let shown_v = (w0 - w_before) / dt;
+            let (ahead, side) = (root.rotation.rotate(Vec3::Z), root.rotation.rotate(Vec3::X));
+            assert!(
+                v.dot(side).abs() < 0.05,
+                "facing {facing}: the neck went {} m/s sideways",
+                v.dot(side)
+            );
+            assert!(
+                v.dot(ahead) > 0.7 * shown_v.dot(ahead),
+                "facing {facing}: the neck went {} m/s forward, shown {}",
+                v.dot(ahead),
+                shown_v.dot(ahead)
+            );
+        }
     }
 
     #[test]
