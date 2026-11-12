@@ -340,7 +340,8 @@ enum Point {
 #[derive(Debug, Clone, Copy)]
 struct FootLock {
     held: Option<(Point, Vec3)>,
-    /// Let go at the unlock radius: not held again until this contact ends.
+    /// Let go at the unlock radius: not held again until this contact ends, or the release has
+    /// eased away.
     released: Option<Point>,
     /// The correction applied to the ankle last step, and the step before.
     correction: Vec3,
@@ -1774,6 +1775,17 @@ impl MotionMatcher {
             if foot.released.is_some() && foot.released != want {
                 foot.released = None;
             }
+            // ...or until the foot has come to rest where the capture has it (its release eased
+            // away): a body that stopped on an idle, whose contact never ends, stood for good on
+            // one held foot (a game raises a body by its held feet's shoes: one let go as it
+            // turned on the spot to a bench, it waited there 2 cm low with both knees bent 15
+            // degrees; round 11).
+            if foot.released.is_some()
+                && foot.release.offset.length() < 1e-3
+                && foot.release.offset_vel.length() < 1e-2
+            {
+                foot.released = None;
+            }
             let want = if foot.released.is_some() { None } else { want };
             let point_in = |p: Point| if p == Point::Heel { ankle_in } else { toe_in };
             // Held on until the foot lifts (hold_until_lift), the capture's contact over or not:
@@ -2283,6 +2295,41 @@ mod tests {
             moved <= moved_off + 1e-4,
             "a held point moved {moved} m in a step ({moved_off} without)"
         );
+    }
+
+    #[test]
+    fn a_foot_let_go_at_the_unlock_radius_is_held_again_once_it_rests() {
+        // Standing on an idle, whose contacts never end: a foot planted farther off than the
+        // unlock radius is let go, eases to where the capture has it, and is held again there.
+        // (Until round 11 it stayed let go for as long as the body stood.)
+        let mut m = MotionMatcher::new(db(), Config::default(), Vec3::ZERO, 0.0);
+        let s = ConstantSteering {
+            velocity: Vec3::ZERO,
+            facing: 0.0,
+        };
+        for _ in 0..120 {
+            m.step(1.0 / 60.0, &s);
+        }
+        assert_eq!(m.feet_held(), [true, true]);
+        let legs = m.db.humanoid.legs;
+        let far = m.world_positions()[legs[0].ankle] + Vec3::new(0.3, 0.0, 0.0);
+        m.plant_feet([Some(far), None]);
+        m.step(1.0 / 60.0, &s);
+        m.step(1.0 / 60.0, &s);
+        assert_eq!(m.stats().unlocks_by_radius, 1);
+        assert_eq!(m.feet_held(), [false, true]);
+        let mut most = 0.0f32;
+        let mut was = m.world_positions()[legs[0].ankle];
+        for _ in 0..180 {
+            m.step(1.0 / 60.0, &s);
+            let at = m.world_positions()[legs[0].ankle];
+            most = most.max((at - was).length());
+            was = at;
+        }
+        assert_eq!(m.feet_held(), [true, true]);
+        assert_eq!(m.stats().unlocks_by_radius, 1);
+        // Eased there, never in a jump (0.3 m at a half-life of 0.1 s: at most 3.5 cm a step).
+        assert!(most < 0.04, "the foot moved {most} m in a step");
     }
 
     #[test]
