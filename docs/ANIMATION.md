@@ -789,6 +789,16 @@ game's settings; they predate the finishing changes and were not measured again.
   and on wasm32; tests 55 + 1 (`no_allocation`) + 3 + 8; `cargo check --target aarch64-apple-ios`;
   `animation/build.sh` (wasm 195,179 bytes, sha256 `6ae37020...`). Not done: `motion_eval` before and after on the
   standard paths; the three databases' figures above after the stand exemption.
+- **A foot let go at the unlock radius is held again** (`716e5c6a`) once its release has eased away: until then it
+  stayed let go until its contact ended, which on an idle is never (a game that raises a body by its held feet's shoes
+  had a man waiting 2 cm low with both knees bent 15 degrees). Test
+  `a_foot_let_go_at_the_unlock_radius_is_held_again_once_it_rests`, failing without the change. In that game (Gosu's
+  board, round 11 closed out): no dead stop at a path's end, the head's acceleration 0.66-0.83 cm a frame squared
+  against 1.28; 30 of its 42 runs pass against 36 on `68f97037`'s module (a sole 1.22 cm under the ground just before
+  the lock lets a standing foot go at its radius and it slides 17 cm; not traced further).
+- **Linux** (dolores, aarch64, `ee628a12`): `cargo fmt --check`, CI's clippy command with its Linux excludes, the
+  animation crates' tests (55 + 1 + 3 + 8). `716e5c6a` was gated on the Mac only (fmt, clippy both crates and wasm32,
+  tests 56 + 1 + 3 + 8, `build.sh`: wasm sha256 `7789edad...`).
 - **Seen in passing:** the foot lock taking hold of a landing foot still moving 1-2 cm a frame jolts the knee 7-10 cm a
   frame squared with no transition near, on CMU 104's slow walks above all; not traced.
 
