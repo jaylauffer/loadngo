@@ -39,6 +39,7 @@ members = [
     "bitmap-editor",
     "animation",
     "animation-build",
+    "launcher",
 ]
 default-members = [
     "task",
@@ -74,6 +75,7 @@ default-members = [
     "bitmap-editor",
     "animation",
     "animation-build",
+    "launcher",
 ]
 resolver = "2"
 

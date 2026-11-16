@@ -23,8 +23,10 @@ pub use text_overflow::{fit_text_to_width, ELLIPSIS};
 mod audio_mixer;
 pub use audio_mixer::*;
 mod offload;
+mod open;
 mod trash;
 pub use offload::{Completer, FrameWaker, OffloadResult, Offloaded};
+pub use open::open_in_system;
 pub use trash::move_to_trash;
 
 #[cfg(target_os = "android")]
