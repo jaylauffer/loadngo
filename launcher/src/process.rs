@@ -1013,9 +1013,49 @@ mod tests {
             }
         }
 
+        /// Whether the process is running. One that has exited but has not
+        /// been collected yet (an orphan waits for the system to do that)
+        /// still answers signal 0, so on Linux its state is read as well.
         fn alive(pid: i32) -> bool {
             // SAFETY: signal 0 only asks whether the process exists.
-            unsafe { libc::kill(pid, 0) == 0 }
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                return false;
+            }
+            !exited_uncollected(pid)
+        }
+
+        #[cfg(target_os = "linux")]
+        fn exited_uncollected(pid: i32) -> bool {
+            match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+                // "pid (name) state ...": the state follows the last ')'.
+                Ok(stat) => matches!(
+                    stat.rsplit(')')
+                        .next()
+                        .and_then(|rest| rest.trim_start().chars().next()),
+                    Some('Z' | 'X')
+                ),
+                // Gone between the two looks.
+                Err(_) => true,
+            }
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        fn exited_uncollected(_pid: i32) -> bool {
+            false
+        }
+
+        /// Waits for a process to have ended. The end of a group's output
+        /// says its processes have let go of it, which is a moment before
+        /// the system has them down as ended.
+        fn ended(pid: i32) -> bool {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while alive(pid) {
+                if Instant::now() >= deadline {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            true
         }
 
         #[test]
@@ -1124,7 +1164,7 @@ mod tests {
             rig.supervisor.stop(3);
             assert_eq!(rig.ending(), Ending::Stopped);
             // The pipe closed, so the child the shell started has gone too.
-            assert!(!alive(child));
+            assert!(ended(child));
             // Stopping what has ended does nothing.
             rig.supervisor.stop(3);
         }
@@ -1183,7 +1223,7 @@ mod tests {
                 .unwrap();
             rig.supervisor.stop(9);
             assert_eq!(rig.ending(), Ending::Stopped);
-            assert!(!alive(shell));
+            assert!(ended(shell));
         }
 
         #[test]
