@@ -260,7 +260,7 @@ mod tests {
     use super::*;
 
     fn home() -> PathBuf {
-        PathBuf::from("/home/jay")
+        PathBuf::from("/home/someone")
     }
 
     #[test]
@@ -284,10 +284,15 @@ mod tests {
         assert_eq!(editor.kind(), Kind::Program);
         assert_eq!(editor.group, "loadngo");
         let build = editor.build.as_ref().unwrap();
-        assert_eq!(build.dir, Some(PathBuf::from("/home/jay/loadngo")));
+        // Joined as this system joins paths (a backslash on Windows).
+        let under_home = |rest: &str| home().join(rest).to_string_lossy().into_owned();
+        assert_eq!(build.dir, Some(home().join("loadngo")));
         let run = editor.run.as_ref().unwrap();
-        assert_eq!(run.program, "/home/jay/loadngo/target/release/code_editor");
-        assert_eq!(run.args, ["/home/jay/loadngo"]);
+        assert_eq!(
+            run.program,
+            under_home("loadngo/target/release/code_editor")
+        );
+        assert_eq!(run.args, [under_home("loadngo")]);
         assert_eq!(site.kind(), Kind::Service);
         assert_eq!(site.ready.as_deref(), Some("Local:"));
         assert_eq!(
@@ -295,7 +300,7 @@ mod tests {
             [("PORT".to_string(), "5173".to_string())]
         );
         assert_eq!(notes.kind(), Kind::Link);
-        assert_eq!(notes.open.as_deref(), Some("/home/jay/notes.md"));
+        assert_eq!(notes.open, Some(under_home("notes.md")));
     }
 
     #[test]
