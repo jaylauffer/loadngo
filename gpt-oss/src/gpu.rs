@@ -945,8 +945,8 @@ impl GpuModel {
         if n == 1 && self.gpu_routing {
             let encoding = Instant::now();
             let mut batch = self.gpu.batch(buffers, Dispatch::Serial)?;
-            for l in 0..self.layers.len() {
-                self.encode_attention(&mut batch, l, 1, start, session.slots[l])?;
+            for (l, &slots) in session.slots.iter().enumerate().take(self.layers.len()) {
+                self.encode_attention(&mut batch, l, 1, start, slots)?;
                 self.encode_routed_experts(&mut batch, l)?;
             }
             if which.is_some() {
@@ -957,10 +957,10 @@ impl GpuModel {
                 out.push(buffers[LOGITS].as_f32()[..vocab].to_vec());
             }
         } else {
-            for l in 0..self.layers.len() {
+            for (l, &slots) in session.slots.iter().enumerate().take(self.layers.len()) {
                 let encoding = Instant::now();
                 let mut batch = self.gpu.batch(buffers, Dispatch::Serial)?;
-                self.encode_attention(&mut batch, l, n, start, session.slots[l])?;
+                self.encode_attention(&mut batch, l, n, start, slots)?;
                 buffers = self.run(batch, Phase::Attention, encoding)?;
                 let plan = self.route_and_gather(&mut buffers, l, n);
                 let encoding = Instant::now();
