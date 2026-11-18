@@ -252,11 +252,40 @@ leaves programs). Three of them were checked against the code broken on
 purpose (no second request; quitting stops everything; a stopped build
 going on to its program): each failed.
 
+2026-11-18, the release and Linux. The "Launcher release" workflow (run
+44298516455, on `main` at `624027c5`) built the four systems and published
+`launcher-v0.1.0`. On dolores (Raspberry Pi 5) and agnes (Raspberry Pi 4),
+both Debian 13 with a labwc desktop, the install script was fetched from
+GitHub and run with `--release`:
+
+- It took the aarch64 build from the release, the checksum matched, and the
+  binary ran with no library missing (`ldd`); `desktop-file-validate`
+  accepted the menu entry.
+- Started on each desktop, the window opened with that machine's list, and
+  the panel showed it under its own icon.
+- Idle over 30 s, on both: 0.00% of a core and no context switch
+  (`/proc/<pid>/stat` and `status`, read 30 s apart), 5 threads, 96 to
+  100 MB resident.
+- On agnes an entry was started through the launcher (`--start`, a program
+  that fetches the release and installs it again): it ran to its end and its
+  lines were in `output/`.
+- `--pin` (script from `main` at `73200995`): on both, the entry on the
+  desktop and its icon on the top bar beside the system's three launchers,
+  seen in a picture of dolores's screen.
+
+Before that the Linux half of the script, and `--pin` against four shapes of
+the panel's settings file, were run on dolores in throwaway home folders
+with a stand-in binary.
+
 ## Not done
 
 - Windows has no install script: there the binary is run as it is, and it
   has not been run by hand; its stop (`taskkill`) and `ShellExecuteW` are
   type-checked only.
+- On Linux no program with its own window has been started through the
+  launcher and watched (the one attempt, on dolores, ended when the window
+  was closed from the desktop). The x86-64 Linux build and the macOS build
+  from the release have not been run.
 - A release is checked by its SHA-256 only, which guards the download, not
   who published it: the signed-release question is open in
   `docs/RELEASE_VERSIONING_AND_INTEGRITY.md`.
