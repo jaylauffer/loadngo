@@ -269,6 +269,10 @@ GitHub and run with `--release`:
 - On agnes an entry was started through the launcher (`--start`, a program
   that fetches the release and installs it again): it ran to its end and its
   lines were in `output/`.
+- On agnes a program with its own window (a game, already built there) was
+  started through the launcher: its window opened, it was the launcher's
+  child, it was still running after the launcher was sent `SIGTERM`, and
+  was then closed by hand.
 - `--pin` (script from `main` at `73200995`): on both, the entry on the
   desktop and its icon on the top bar beside the system's three launchers,
   seen in a picture of dolores's screen.
@@ -282,10 +286,9 @@ with a stand-in binary.
 - Windows has no install script: there the binary is run as it is, and it
   has not been run by hand; its stop (`taskkill`) and `ShellExecuteW` are
   type-checked only.
-- On Linux no program with its own window has been started through the
-  launcher and watched (the one attempt, on dolores, ended when the window
-  was closed from the desktop). The x86-64 Linux build and the macOS build
-  from the release have not been run.
+- The x86-64 Linux build and the macOS build from the release have not been
+  run. On the Pis nothing with a build step has been started through the
+  launcher (dolores's entries have them; agnes's do not).
 - A release is checked by its SHA-256 only, which guards the download, not
   who published it: the signed-release question is open in
   `docs/RELEASE_VERSIONING_AND_INTEGRITY.md`.
