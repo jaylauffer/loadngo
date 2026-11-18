@@ -10,7 +10,8 @@ Linux and Windows.
 ```
 cargo run -p loadngo-launcher --release
 launcher --start "Code Editor"
-scripts/install-launcher.sh --open        # macOS: "loadngo Launcher" in Applications
+scripts/install-launcher.sh --open        # from a checkout: build it and install it
+scripts/install-launcher.sh --release     # install the newest published build
 ```
 
 `launcher --help` lists every option.
@@ -138,10 +139,58 @@ costs one wake, and the window asks for no frame of its own
 `LAUNCHER_STATE_DIR` puts the catalog and `output/` in another folder, for
 test runs.
 
-## As a Mac app
+## Installing it
 
-`scripts/install-launcher.sh` builds the release binary and makes
-`/Applications/loadngo Launcher.app` (`~/Applications` if that cannot be
+`scripts/install-launcher.sh` installs the launcher for the current user, on
+macOS as an app and on Linux as an entry in the desktop's menu. What it
+installs is one of three things: a published build (`--release`, below), a
+binary it is given (`--binary PATH`), or, with neither, the release binary it
+builds in its own checkout. The catalog is not part of what is installed and
+is never touched. `--help` lists the options and how to undo an install.
+
+### Releases: how a machine gets the launcher
+
+A machine does not need a checkout or Rust, and nothing is copied to it by
+hand. The launcher reaches it the way the code does:
+
+```
+dev -> CI -> main -> "Launcher release" workflow -> the release -> install-launcher.sh --release
+```
+
+- `.github/workflows/launcher-release.yml` is run by hand on `main`, the
+  commit CI passed. It builds the launcher for Linux (aarch64 and x86-64),
+  macOS (arm64) and Windows (x86-64), and publishes them together as the
+  release `launcher-v<version>`, the version being `launcher/Cargo.toml`'s. A
+  version that is already out is refused, so a change is released by raising
+  the version first.
+- Each release holds a `.tar.gz` per system (a `.zip` for Windows: unpack it
+  and run `launcher.exe`), `install-launcher.sh` itself, and `SHA256SUMS`.
+- On the machine, `install-launcher.sh --release` finds the newest release
+  whose tag begins `launcher-v` (or takes a tag), fetches the build for that
+  system and processor, checks it against the release's `SHA256SUMS`, and
+  installs it. The same command updates an installed launcher. With no
+  checkout, the script comes from the release:
+
+```
+curl -fsSL https://github.com/jaylauffer/loadngo/releases/download/launcher-v0.1.0/install-launcher.sh | sh -s -- --release launcher-v0.1.0
+```
+
+The Linux builds are made on Ubuntu 24.04 and need glibc 2.39 or newer
+(Debian 13, Raspberry Pi OS of that base).
+
+### On a Linux desktop
+
+The binary goes to `~/.local/bin/loadngo-launcher`, its icon to
+`~/.local/share/icons/hicolor/<size>/apps/loadngo-launcher.png` (48 to 256,
+made from `launcher/assets/icon-1024.png`), and
+`~/.local/share/applications/loadngo-launcher.desktop` puts "loadngo
+Launcher" in the desktop's menu. The entry is named for the window's app id
+(`loadngo-launcher`), which is how a Wayland desktop gives the open window
+the same icon.
+
+### As a Mac app
+
+The script makes `/Applications/loadngo Launcher.app` (`~/Applications` if that cannot be
 written): the binary, `launcher/assets/icon-1024.png` as its icon (drawn by
 `launcher/assets/draw-icon.py`), bundle id `com.loadngo.launcher`, signed ad
 hoc. Spotlight, Launchpad and the Dock then find it as "loadngo Launcher".
@@ -196,9 +245,12 @@ going on to its program): each failed.
 
 ## Not done
 
-- Linux and Windows have no install script: there the binary is run as it
-  is. Neither has been run by hand; Windows' stop (`taskkill`) and
-  `ShellExecuteW` are type-checked only.
+- Windows has no install script: there the binary is run as it is, and it
+  has not been run by hand; its stop (`taskkill`) and `ShellExecuteW` are
+  type-checked only.
+- A release is checked by its SHA-256 only, which guards the download, not
+  who published it: the signed-release question is open in
+  `docs/RELEASE_VERSIONING_AND_INTEGRITY.md`.
 - The Dock's Quit (the `exit` hook) was not exercised, only the signal path
   that shares its code.
 - After the launcher is killed outright, a service it started is not found

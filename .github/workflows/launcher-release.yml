@@ -1,0 +1,180 @@
+name: Launcher release
+
+# Publishes loadngo-launcher (docs/LAUNCHER.md) as a GitHub release, so a
+# machine installs the launcher GitHub built, not one copied to it by hand:
+#
+#   dev -> CI -> main (promote-main.yml) -> this workflow -> the release
+#       -> scripts/install-launcher.sh --release on each machine
+#
+# Run by hand, on main only. Starting it is the decision to release: there is
+# no second confirmation (Jay, 2026-08-31, on the games' deploy step). It
+# publishes launcher-v<version>, <version> being launcher/Cargo.toml's, and
+# refuses a version that is already out: a release is never replaced, so a
+# change to the launcher is released by raising its version first.
+#
+# Every platform CI covers is built and published together, or none is: one
+# failing build stops the release. The published files are the ones the build
+# jobs made (nothing is built twice), each listed in SHA256SUMS, which the
+# install script checks before it installs.
+#
+# The Linux builds run where glibc is 2.39 (Ubuntu 24.04), so they need that
+# or newer: Debian 13 and Raspberry Pi OS of that base have 2.41.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: launcher-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - name: Only from main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Launcher releases are made from main, the commit CI passed; this run is on $GITHUB_REF."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - name: Read the version, and refuse one that is already released
+        id: read
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' launcher/Cargo.toml | head -1)
+          [ -n "$version" ] || { echo "::error::no version in launcher/Cargo.toml"; exit 1; }
+          if gh release view "launcher-v$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::launcher-v$version is already released; raise the version in launcher/Cargo.toml first."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build (${{ matrix.name }})
+    needs: version
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      # All or none: a release with a platform missing is not published.
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-24.04-arm
+            name: linux-aarch64
+          - os: ubuntu-latest
+            name: linux-x86_64
+          - os: macos-latest
+            name: macos-arm64
+          - os: windows-latest
+            name: windows-x86_64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Allow long paths in git
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
+
+      - name: System libraries
+        # As ci.yml: alsa-sys and wayland-sys find their libraries with
+        # pkg-config at build time; host-desktop links EGL and GLESv2.
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libwayland-dev libegl-dev libgles-dev
+
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+
+      - name: Build
+        run: cargo build --locked --release -p loadngo-launcher
+
+      - name: Package
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          NAME: ${{ matrix.name }}
+        run: |
+          set -euo pipefail
+          dir="loadngo-launcher-$VERSION-$NAME"
+          mkdir -p "dist/$dir/assets"
+          cp launcher/assets/icon-*.png "dist/$dir/assets/"
+          cp scripts/install-launcher.sh LICENSE "dist/$dir/"
+          printf '%s\n%s\n' "$VERSION" "$GITHUB_SHA" > "dist/$dir/VERSION"
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp target/release/launcher.exe "dist/$dir/"
+            (cd dist && 7z a -tzip "$dir.zip" "$dir" >/dev/null)
+          else
+            cp target/release/launcher "dist/$dir/"
+            tar -C dist -czf "dist/$dir.tar.gz" "$dir"
+          fi
+          rm -rf "dist/$dir"
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: launcher-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: launcher-*
+          merge-multiple: true
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="launcher-v$VERSION"
+          # The install script is a release file too: a machine with no
+          # checkout fetches it from here and runs it with --release.
+          cp scripts/install-launcher.sh dist/
+          (cd dist && sha256sum loadngo-launcher-* install-launcher.sh > SHA256SUMS && cat SHA256SUMS)
+          {
+            echo "The launcher: one window that lists what a machine can start, and starts it (docs/LAUNCHER.md)."
+            echo
+            echo "Built by this repository's Launcher release workflow from commit $GITHUB_SHA."
+            echo
+            echo "**Install or update**, macOS or Linux (the script fetches the build for the machine, checks it against SHA256SUMS and installs it for the current user):"
+            echo
+            echo '```'
+            echo "curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/install-launcher.sh | sh -s -- --release $tag"
+            echo '```'
+            echo
+            echo "Linux builds need glibc 2.39 or newer (Debian 13, Ubuntu 24.04). Windows: unpack the zip and run launcher.exe."
+          } > notes.md
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "loadngo Launcher $VERSION" --notes-file notes.md dist/*
