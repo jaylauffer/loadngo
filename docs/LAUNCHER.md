@@ -188,6 +188,15 @@ Launcher" in the desktop's menu. The entry is named for the window's app id
 (`loadngo-launcher`), which is how a Wayland desktop gives the open window
 the same icon.
 
+`--pin` keeps it in sight once its window is closed (Jay on dolores,
+2026-11-18, having closed it: "Now I have nothing that can be seen?"): the
+entry is also put on the desktop, and on a Raspberry Pi desktop its name is
+added to the top bar's launchers (`launchers=` in
+`~/.config/wf-panel-pi/wf-panel-pi.ini`, started from the system's list when
+the user has none; the file as it was is kept beside it as
+`wf-panel-pi.ini.before-loadngo-launcher`). Without `--pin` the menu entry
+(under Accessories there) is the only way in.
+
 ### As a Mac app
 
 The script makes `/Applications/loadngo Launcher.app` (`~/Applications` if that cannot be

@@ -6,7 +6,7 @@
 #   Linux  "loadngo Launcher" in the desktop's menu (a .desktop entry with
 #          its icon), the binary as ~/.local/bin/loadngo-launcher.
 #
-#   install-launcher.sh [--release [TAG] | --binary PATH] [--to FOLDER] [--open]
+#   install-launcher.sh [--release [TAG] | --binary PATH] [--to FOLDER] [--pin] [--open]
 #
 #   --release [TAG]  optional  Install a published build: fetch it from
 #                              loadngo's releases on GitHub (the newest
@@ -22,6 +22,14 @@
 #   --to FOLDER      optional  macOS: where the app goes. Default
 #                              /Applications, or ~/Applications when that
 #                              cannot be written. Not used on Linux.
+#   --pin            optional  Linux: keep it in sight. Puts its icon on the
+#                              desktop (if there is a Desktop folder) and, on
+#                              a Raspberry Pi desktop, on the top bar beside
+#                              the other launchers (wf-panel-pi; the panel's
+#                              settings file is copied first, as
+#                              wf-panel-pi.ini.before-loadngo-launcher).
+#                              macOS: keep it in the Dock from its Dock icon
+#                              (Options, Keep in Dock); the script does not.
 #   --open           optional  Start the launcher once it is installed.
 #   -h, --help       optional  Print this help.
 #
@@ -37,6 +45,8 @@
 # Undo, Linux: rm ~/.local/bin/loadngo-launcher
 #   ~/.local/share/applications/loadngo-launcher.desktop
 #   ~/.local/share/icons/hicolor/*/apps/loadngo-launcher.png
+#   and, after --pin: ~/Desktop/loadngo-launcher.desktop, and take
+#   loadngo-launcher out of "launchers=" in ~/.config/wf-panel-pi/wf-panel-pi.ini
 #
 # Examples:
 #   scripts/install-launcher.sh --open
@@ -52,9 +62,9 @@ usage() {
     # Run from a file, the help is this file's own heading; piped in, it is
     # the one line that fits.
     if [ -f "$0" ]; then
-        sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,54p' "$0" | sed 's/^# \{0,1\}//'
     else
-        echo "install-launcher.sh [--release [TAG] | --binary PATH] [--to FOLDER] [--open]; see docs/LAUNCHER.md"
+        echo "install-launcher.sh [--release [TAG] | --binary PATH] [--to FOLDER] [--pin] [--open]; see docs/LAUNCHER.md"
     fi
 }
 fail() {
@@ -66,6 +76,7 @@ binary=
 release=no
 tag=
 to=
+pin=no
 open_after=no
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -92,6 +103,10 @@ while [ $# -gt 0 ]; do
         [ $# -ge 2 ] || fail "--to needs a folder"
         to=$2
         shift 2
+        ;;
+    --pin)
+        pin=yes
+        shift
         ;;
     --open)
         open_after=yes
@@ -235,6 +250,44 @@ EOF
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$data/applications" >/dev/null 2>&1 || true
     command -v gtk-update-icon-cache >/dev/null 2>&1 && [ -f "$data/icons/hicolor/index.theme" ] && gtk-update-icon-cache -q "$data/icons/hicolor" >/dev/null 2>&1 || true
     echo "installed $installed (version $version${commit:+, commit $(printf %.8s "$commit")}); \"$name\" is in the desktop's menu"
+    if [ "$pin" = yes ]; then
+        desktop_dir=$(xdg-user-dir DESKTOP 2>/dev/null || true)
+        [ -n "$desktop_dir" ] || desktop_dir="$HOME/Desktop"
+        # xdg-user-dir answers the home folder itself where no Desktop is set up.
+        if [ -d "$desktop_dir" ] && [ "$desktop_dir" != "$HOME" ]; then
+            install -m 755 "$entry" "$desktop_dir/loadngo-launcher.desktop"
+            echo "its icon is on the desktop"
+        fi
+        # Raspberry Pi OS's top bar: its launchers are a list of menu entries
+        # by name, the user's own settings file over the system's.
+        system_panel=/etc/xdg/wf-panel-pi/wf-panel-pi.ini
+        if [ -f "$system_panel" ]; then
+            panel="${XDG_CONFIG_HOME:-$HOME/.config}/wf-panel-pi/wf-panel-pi.ini"
+            mkdir -p "$(dirname "$panel")"
+            [ -f "$panel" ] || : >"$panel"
+            current=$(sed -n 's/^launchers=//p' "$panel" | head -1)
+            [ -n "$current" ] || current=$(sed -n 's/^launchers=//p' "$system_panel" | head -1)
+            case " $current " in
+            *" loadngo-launcher "*) echo "it is already on the top bar" ;;
+            *)
+                cp "$panel" "$panel.before-loadngo-launcher"
+                new="${current:+$current }loadngo-launcher"
+                if grep -q '^launchers=' "$panel"; then
+                    sed "s/^launchers=.*/launchers=$new/" "$panel" >"$panel.new"
+                elif grep -q '^\[panel\]' "$panel"; then
+                    awk -v line="launchers=$new" '{ print } /^\[panel\]/ && !done { print line; done = 1 }' "$panel" >"$panel.new"
+                else
+                    {
+                        cat "$panel"
+                        printf '[panel]\nlaunchers=%s\n' "$new"
+                    } >"$panel.new"
+                fi
+                mv -f "$panel.new" "$panel"
+                echo "it is on the top bar, beside the other launchers"
+                ;;
+            esac
+        fi
+    fi
     if [ "$open_after" = yes ]; then
         if [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]; then
             nohup "$installed" >/dev/null 2>&1 &
@@ -246,6 +299,7 @@ EOF
 fi
 
 # macOS: the app.
+[ "$pin" = no ] || echo "macOS: to keep it in the Dock, use its Dock icon's menu (Options, Keep in Dock)"
 if [ -z "$to" ]; then
     if [ -w /Applications ]; then
         to=/Applications
