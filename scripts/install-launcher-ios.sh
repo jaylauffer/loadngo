@@ -34,7 +34,8 @@ attached iPhone that profile names, sends the list, and starts it.
                              `security find-identity -v -p codesigning` lists
                              it. Default: the certificate the profile names
                              that this Mac's keychain holds.
-  --bundle-id ID   optional  Default: com.loadngo.launcher.
+  --bundle-id ID   optional  Default: com.jarraya.games.loadngo, the id Jay's
+                             profiles are made for.
   --catalog FILE   optional  The list to send, a catalog.json. Default:
                              iphone-catalog.json in
                              ~/Library/Application Support/loadngo-launcher,
@@ -55,6 +56,12 @@ iOS App project with the bundle id above, the phone as its run destination,
 and Xcode's automatic signing writes one. When there is none, or it has
 expired, this script says so and stops.
 
+The first time, and again whenever the phone has dropped its trust in the
+developer, iOS will not start the launcher until that is given on the phone:
+Settings, General, VPN & Device Management, the entry under Developer App,
+Trust. The script says so when that is what stopped it (exit 4); the
+launcher and its list are on the phone by then.
+
 Examples:
   scripts/install-launcher-ios.sh
   scripts/install-launcher-ios.sh --catalog ~/phone-list.json
@@ -69,7 +76,7 @@ fail() {
 }
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUNDLE_ID="com.loadngo.launcher"
+BUNDLE_ID="com.jarraya.games.loadngo"
 APP_NAME="loadngo Launcher"
 HOME_SCREEN_NAME="loadngo"
 BIN_NAME="launcher"
@@ -164,9 +171,16 @@ start_launcher() {
   [[ "$start" == 1 ]] || return 0
   if [[ "$simulator" == 1 ]]; then
     xcrun simctl launch --terminate-running-process "$device" "$BUNDLE_ID" >/dev/null
-  else
-    xcrun devicectl device process launch --device "$device" --terminate-existing \
-      "$BUNDLE_ID" --quiet
+  elif ! xcrun devicectl device process launch --device "$device" --terminate-existing \
+      "$BUNDLE_ID" >"$work/launch.log" 2>&1; then
+    if grep -q "has not been explicitly trusted" "$work/launch.log"; then
+      echo "It is on the phone, but iOS will not start it until the developer is trusted there:
+  Settings, General, VPN & Device Management, the entry under Developer App, Trust.
+Then tap \"$HOME_SCREEN_NAME\" on the phone, or run this again with --catalog-only." >&2
+      exit 4
+    fi
+    cat "$work/launch.log" >&2
+    fail "the phone would not start the launcher"
   fi
   echo "Started the launcher."
 }
@@ -215,7 +229,7 @@ profile it writes lasts seven days on a free Apple team. Then run this again." 3
     *) fail "the profile is for ${app_id#*.}, not $BUNDLE_ID (see --bundle-id): $profile" 2 ;;
   esac
   /usr/libexec/PlistBuddy -x -c "Print :Entitlements" "$work/chosen.plist" >"$work/entitlements.plist"
-  if grep -q '<string>[A-Z0-9]*\.\*</string>' "$work/entitlements.plist"; then
+  if [[ "${app_id#*.}" == "*" ]]; then
     # A wildcard profile: the app is signed as itself.
     plutil -replace application-identifier -string "${app_id%%.*}.$BUNDLE_ID" "$work/entitlements.plist"
   fi

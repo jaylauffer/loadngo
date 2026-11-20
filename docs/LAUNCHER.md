@@ -243,13 +243,20 @@ of links:
   of its row. A failure shows as two lines: what, and why.
 
 Signing. The script takes the newest unexpired provisioning profile for the
-bundle id `com.loadngo.launcher`, the certificate that profile names (two
+bundle id `com.jarraya.games.loadngo` (the id Jay made the first profile
+for; `--bundle-id` for another), the certificate that profile names (two
 certificates on Jay's Mac share one display name, so a name cannot pick),
 and the one attached phone the profile names. A profile comes from Xcode's
 automatic signing (a new iOS App project with that bundle id and the phone
 as its run destination) and lasts seven days on a free Apple team; after
 that the launcher on the phone will not open until the script has been run
 with a new one. With no profile the script says so and builds nothing.
+
+Trust. iOS will not start an app signed this way until its developer is
+trusted on the phone (Settings, General, VPN & Device Management, the entry
+under Developer App, Trust). When that is what stops the start, the script
+says so and exits 4; the launcher and its list are on the phone by then,
+and `--catalog-only` starts it once trust is given.
 
 The iPhone build is made on a Mac from a checkout. It is not one of the
 files of the launcher's GitHub release, because it has to be signed for the
@@ -347,9 +354,24 @@ Before that the Linux half of the script, and `--pin` against four shapes of
 the panel's settings file, were run on dolores in throwaway home folders
 with a stand-in binary.
 
+2026-11-20, on the phone (Zheonus VI, iPhone 13 Pro Max, iOS 27.2.1), once
+Jay had made a profile for `com.jarraya.games.loadngo`:
+
+- The script found the profile, the certificate (`ED54F607…`, the first of
+  the two the profile names) and the phone, built and signed the app, and
+  installed it; the phone listed it as "loadngo" 0.1.1.
+- The list was sent: `catalog.json`, 543 bytes, in the launcher's container
+  (`devicectl device info files`).
+- The first start was refused: "its profile has not been explicitly trusted
+  by the user". After the developer was trusted on the phone, the next run
+  (`--catalog-only`) started it, and `launcher` was among the phone's
+  processes.
+- Not seen from the Mac: the phone's screen. What it shows, a touch on it
+  and a link opened from it are Jay's to report.
+
 2026-11-20, the iPhone build, in the iOS Simulator (iPhone 16 Pro, iOS 18.5;
-Xcode 26.5) through `install-launcher-ios.sh --simulator`. **Not yet on a
-phone**: this Mac held no provisioning profile.
+Xcode 26.5) through `install-launcher-ios.sh --simulator`, before there was
+a profile.
 
 - The script built the app, installed it, sent a five-entry list and started
   it. The list showed with no touch, ten starts out of ten. Before the host
@@ -379,13 +401,15 @@ pointer, a phone starting programs, a pointer dragging, a finger left lit.
 
 ## Not done
 
-- The iPhone: not installed on a phone yet (above). No touch was made in the
-  Simulator, which a script cannot touch, so taps and drags are known from
-  the unit tests' made-up input only. iOS's question was not seen answered,
-  so a game coming up from the launcher has not been seen. The list cannot
-  be edited on the phone. A drag has no glide after the finger lifts. A free
-  Apple team allows three of its apps on a phone at a time (Apple's limit,
-  not tried here), the launcher among them.
+- The iPhone: it runs on the phone (above), but nothing done on its screen
+  has been recorded here. No touch was made in the Simulator, which a script
+  cannot touch, so taps and drags are known from the unit tests' made-up
+  input only. iOS's question was not seen answered, so a game coming up from
+  the launcher has not been seen; on the phone the games have not been
+  rebuilt with their schemes. The list cannot be edited on the phone. A drag
+  has no glide after the finger lifts. A free Apple team is said to allow
+  three of its apps on a phone at a time; the launcher went on as the third
+  (SNG Mahjong was no longer there), so a fourth was not tried.
 - Windows has no install script: there the binary is run as it is, and it
   has not been run by hand; its stop (`taskkill`) and `ShellExecuteW` are
   type-checked only.
