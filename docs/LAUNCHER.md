@@ -5,13 +5,15 @@ and starts it: loadngo's own tools, the games built on it, a page some
 program serves, a link (Jay, 2026-11-16: "The loadngo framework needs it's
 own launcher for all these things that can be installed as a mac app"). It is
 one binary, `launcher`, on `loadngo-host-desktop`, the same source on macOS,
-Linux and Windows.
+Linux and Windows, and on an iPhone, where it opens links and starts nothing
+(see "On an iPhone").
 
 ```
 cargo run -p loadngo-launcher --release
 launcher --start "Code Editor"
 scripts/install-launcher.sh --open        # from a checkout: build it and install it
 scripts/install-launcher.sh --release     # install the newest published build
+scripts/install-launcher-ios.sh           # build it for the attached iPhone and install it
 ```
 
 `launcher --help` lists every option.
@@ -26,6 +28,7 @@ folder:
 | macOS | `~/Library/Application Support/loadngo-launcher` |
 | Linux | `~/.local/share/loadngo-launcher` |
 | Windows | `%APPDATA%\loadngo-launcher` |
+| iPhone | `Library/Application Support/loadngo-launcher` in the launcher's own container; sent from a Mac (see "On an iPhone") |
 
 **Edit list** opens the file in the system's editor for it (and makes an
 empty one first if there is none). **Reload** (Cmd-R, Ctrl-R) reads it
@@ -210,6 +213,54 @@ What an entry starts runs as a child of the app, so the first time one of
 them reaches somewhere macOS guards (a removable drive, the camera), macOS
 asks on the launcher's behalf.
 
+### On an iPhone
+
+`scripts/install-launcher-ios.sh` builds the launcher for the phone, signs it,
+installs it on the attached iPhone, sends it its list and starts it (Jay,
+2026-11-20: "get the loadngo launcher on my lightning cable attached iPhone").
+`--simulator` does the same in the iOS Simulator and needs no signing.
+`--help` lists the options.
+
+An iPhone app cannot start another program, so there the launcher is a list
+of links:
+
+- **An entry with only `open` works as on a computer.** The address is a web
+  page, or another app by a scheme that app declares. The games declare
+  theirs in their iOS builds: `sng-mahjong://`, `sng-roguelite://` and
+  `sng-zhoenus://` (each game's `docs/IOS_BUILD.md`). The first time, iOS
+  asks whether "loadngo" may open the other app; the launcher waits for the
+  answer however long it takes.
+- **An entry with `run` is listed but has no button**, and its line reads
+  "Starts a program, which this device cannot do".
+- **The list is kept on the Mac and sent.** The phone has no editor for the
+  file, so there is no Edit list. The script sends `--catalog FILE`, or by
+  default `iphone-catalog.json` beside the Mac's own `catalog.json`, at every
+  install; `--catalog-only` sends it without building. Reload on the phone
+  reads it.
+- **The window fits a phone.** It keeps clear of the status bar, the camera
+  housing and the home indicator, upright or on its side. The list is
+  dragged with a finger, and a button answers a touch anywhere in the height
+  of its row. A failure shows as two lines: what, and why.
+
+Signing. The script takes the newest unexpired provisioning profile for the
+bundle id `com.loadngo.launcher`, the certificate that profile names (two
+certificates on Jay's Mac share one display name, so a name cannot pick),
+and the one attached phone the profile names. A profile comes from Xcode's
+automatic signing (a new iOS App project with that bundle id and the phone
+as its run destination) and lasts seven days on a free Apple team; after
+that the launcher on the phone will not open until the script has been run
+with a new one. With no profile the script says so and builds nothing.
+
+The iPhone build is made on a Mac from a checkout. It is not one of the
+files of the launcher's GitHub release, because it has to be signed for the
+phone it goes on.
+
+The launch screen is the empty `UILaunchScreen` of the app's `Info.plist`,
+so nothing is compiled with `ibtool` (which refuses to run while Xcode's iOS
+platform component is not installed, as on 2026-11-20). The icon is
+`launcher/assets/icon-ios-1024.png`, the Mac icon's tile grown to the whole
+square with no transparency (`draw-icon.py --full-bleed`).
+
 ## Opening things: `open_in_system`
 
 The launcher added one primitive to `loadngo-host-desktop`:
@@ -217,6 +268,21 @@ The launcher added one primitive to `loadngo-host-desktop`:
 double-click would (`/usr/bin/open`, `xdg-open`, `ShellExecuteW`). It blocks
 until the system has taken the request, so it is called from an offloaded
 job.
+
+On iOS it is `UIApplication`'s `openURL:options:completionHandler:`, called
+on the main thread, and it opens addresses only: a path is refused with the
+reason. iOS reports one thing, opened or not, so "not" reads "no app on this
+iPhone answers to it, or it was declined".
+
+The iPhone launcher also found a fault in the iOS host: an offloaded job's
+result, a `completion()` and a `frame_waker()` queued work on the host
+proactor but did not wake the event loop, so an app that asks for
+`FrameDemand::Idle` saw them only at its next touch. The launcher stayed on
+"Reading the list…". They wake the loop now (Linux and Windows have since
+`ce1675b9`), and once the queued work has been dispatched an app parked on
+an idle frame is given one. An app that paces its own frames is given none:
+it finds the result at its next frame, as before, so the games' frame timing
+is unchanged. The games never met the fault because they draw every frame.
 
 ## Checked
 
@@ -281,8 +347,45 @@ Before that the Linux half of the script, and `--pin` against four shapes of
 the panel's settings file, were run on dolores in throwaway home folders
 with a stand-in binary.
 
+2026-11-20, the iPhone build, in the iOS Simulator (iPhone 16 Pro, iOS 18.5;
+Xcode 26.5) through `install-launcher-ios.sh --simulator`. **Not yet on a
+phone**: this Mac held no provisioning profile.
+
+- The script built the app, installed it, sent a five-entry list and started
+  it. The list showed with no touch, ten starts out of ten. Before the host
+  fix above the window stayed on "Reading the list…".
+- The header sat below the status bar and the camera housing, and the pane
+  at the bottom above the home indicator (seen in pictures of the screen).
+- A `run` entry showed with no button and "Starts a program, which this
+  device cannot do".
+- `--start "Say What You Saw"` (a web address): Safari opened the page, with
+  iOS's "loadngo" link back.
+- `--start "SNG Mahjong"` with no app answering `sng-mahjong://`: the two
+  lines "Could not open sng-mahjong://" and why.
+- With SNG Mahjong built with its scheme and installed: iOS's question
+  "loadngo wants to open SNGMahjong". Left unanswered for 18 s, the launcher
+  showed no failure (a 10 s limit in the first version did, and was taken
+  out).
+- With no profile, the phone install stopped before building and said how
+  to get one.
+
+Unit tests (`cargo test -p loadngo-launcher`, 31): the five new ones cover a
+phone's list (links open, programs say why not, no Edit list), the edges
+the system keeps (upright and on its side), and a finger (a drag moves the
+list and presses nothing, a still touch presses, nothing stays lit; a
+pointer does none of it). Eight breaks made on purpose were each caught: a
+drag that presses, each edge ignored, a finger reaching no further than a
+pointer, a phone starting programs, a pointer dragging, a finger left lit.
+
 ## Not done
 
+- The iPhone: not installed on a phone yet (above). No touch was made in the
+  Simulator, which a script cannot touch, so taps and drags are known from
+  the unit tests' made-up input only. iOS's question was not seen answered,
+  so a game coming up from the launcher has not been seen. The list cannot
+  be edited on the phone. A drag has no glide after the finger lifts. A free
+  Apple team allows three of its apps on a phone at a time (Apple's limit,
+  not tried here), the launcher among them.
 - Windows has no install script: there the binary is run as it is, and it
   has not been run by hand; its stop (`taskkill`) and `ShellExecuteW` are
   type-checked only.

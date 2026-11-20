@@ -94,6 +94,7 @@ coreaudio-sys = { version = "0.2", default-features = false, features = [
     "audio_toolbox",
     "audio_unit",
 ] }
+block2 = "0.6"
 lewton = "0.10"
 loadngo-gfx-metal = { path = "../gfx-metal" }
 objc2 = "0.6.4"

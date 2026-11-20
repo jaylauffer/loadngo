@@ -1,5 +1,6 @@
 //! The loadngo launcher: `launcher::LauncherApp` on `loadngo-host-desktop`,
-//! the same source on macOS, Linux and Windows.
+//! the same source on macOS, Linux, Windows and iOS. On an iPhone it can
+//! open addresses and nothing else; see "On an iPhone" in `docs/LAUNCHER.md`.
 
 // A window, not a console program: Windows opens no console beside it.
 #![cfg_attr(windows, windows_subsystem = "windows")]
@@ -11,11 +12,17 @@ use std::time::Duration;
 
 use launcher::catalog::{self, Loaded};
 use launcher::process::{SearchPath, Supervisor};
-use launcher::{draw, Effect, LauncherApp};
-use loadngo_host_core::{FrameDemand, WindowDescriptor};
+use launcher::{draw, Abilities, Edges, Effect, LauncherApp};
+use loadngo_host_core::{FrameDemand, HostFrame, WindowDescriptor};
 use loadngo_host_desktop::Offloaded;
 
 const APP_ID: &str = "loadngo-launcher";
+/// What this machine lets the launcher do.
+const ABILITIES: Abilities = if cfg!(target_os = "ios") {
+    Abilities::PHONE
+} else {
+    Abilities::DESKTOP
+};
 /// How long builds and services get to stop when the launcher quits.
 const QUIT_PATIENCE: Duration = Duration::from_secs(3);
 
@@ -162,6 +169,30 @@ fn data_dir() -> PathBuf {
     }
 }
 
+/// The edges of the window the system keeps for itself.
+#[cfg(not(target_os = "ios"))]
+fn edges(frame: &HostFrame) -> Edges {
+    Edges {
+        left: frame.insets.left,
+        top: frame.insets.top,
+        right: frame.insets.right,
+        bottom: frame.insets.bottom,
+    }
+}
+
+/// The iOS host leaves `HostFrame::insets` at zero and reports the safe
+/// area, camera housing and home indicator included, on its own.
+#[cfg(target_os = "ios")]
+fn edges(_frame: &HostFrame) -> Edges {
+    let (left, top, right, bottom) = loadngo_host_desktop::safe_area_insets();
+    Edges {
+        left,
+        top,
+        right,
+        bottom,
+    }
+}
+
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -187,9 +218,15 @@ async fn run(shared: Rc<OnceCell<Supervisor>>, start: Vec<String>) {
     let logs = data.join("output");
     let home = home_dir();
     let waker = loadngo_host_desktop::frame_waker();
-    let supervisor = shared
-        .get_or_init(|| Supervisor::new(logs.clone(), SearchPath::UserShell, move || waker.wake()));
-    let mut app = LauncherApp::new(catalog_path.clone(), logs);
+    // Where programs cannot be started there is no shell to ask for a PATH.
+    let search = if ABILITIES.starts_programs {
+        SearchPath::UserShell
+    } else {
+        SearchPath::Inherited
+    };
+    let supervisor =
+        shared.get_or_init(|| Supervisor::new(logs.clone(), search, move || waker.wake()));
+    let mut app = LauncherApp::new(catalog_path.clone(), logs).with_abilities(ABILITIES);
     for name in start {
         app.start_when_loaded(name);
     }
@@ -216,6 +253,7 @@ async fn run(shared: Rc<OnceCell<Supervisor>>, start: Vec<String>) {
             app.apply_process(event);
         }
 
+        app.set_edges(edges(&frame));
         app.frame(&frame.input, (frame.surface.width, frame.surface.height));
 
         for effect in app.take_effects() {

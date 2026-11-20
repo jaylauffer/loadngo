@@ -139,13 +139,23 @@ pub(crate) fn completion_via<T: Send + 'static>(
     target_os = "android",
     target_os = "windows"
 ))]
-// macOS, Linux and Windows deliver through `offload_through_with_wake`.
+// macOS, iOS, Linux and Windows deliver through `offload_through_with_wake`.
 #[cfg_attr(
-    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "windows"
+    ),
     allow(unused_imports)
 )]
 pub(crate) use pool::offload_through;
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "windows"
+))]
 pub(crate) use pool::offload_through_with_wake;
 #[cfg(any(
     target_os = "macos",
@@ -261,7 +271,12 @@ mod pool {
 
     /// Runs `job` on the pool and delivers its result through `handle`.
     #[cfg_attr(
-        any(target_os = "macos", target_os = "linux", target_os = "windows"),
+        any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "linux",
+            target_os = "windows"
+        ),
         allow(dead_code)
     )]
     pub(crate) fn offload_through<P, T>(

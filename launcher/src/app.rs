@@ -19,6 +19,9 @@ use crate::process::{self, Ending, Event, What};
 const PAD: f32 = 16.0;
 const HEADER_HEIGHT: f32 = 56.0;
 const BANNER_HEIGHT: f32 = 28.0;
+/// On a phone a line holds half as much, so the banner has two: what went
+/// wrong, and why.
+const TALL_BANNER_HEIGHT: f32 = 48.0;
 const HEADING_HEIGHT: f32 = 34.0;
 const ROW_HEIGHT: f32 = 58.0;
 const ROW_GAP: f32 = 6.0;
@@ -32,6 +35,60 @@ const DETAIL_LINES: usize = 7;
 const LINE_HEIGHT: f32 = 17.0;
 /// Output lines kept per entry.
 const KEPT_LINES: usize = 200;
+/// How far a finger travels before its press on the list becomes a drag.
+const DRAG_SLOP: f32 = 8.0;
+
+/// What the machine the launcher is on lets it do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Abilities {
+    /// It can build and start programs. A phone cannot: an app there may
+    /// only ask the system to open an address.
+    pub starts_programs: bool,
+    /// The catalog file can be opened in an editor on this machine.
+    pub edits_catalog: bool,
+    /// It is worked with fingers: the list is dragged, a button answers a
+    /// touch anywhere in the height of its row, and nothing is under a
+    /// pointer between touches.
+    pub touch: bool,
+}
+
+impl Abilities {
+    /// A computer with a pointer and a keyboard.
+    pub const DESKTOP: Self = Self {
+        starts_programs: true,
+        edits_catalog: true,
+        touch: false,
+    };
+    /// A phone or a tablet.
+    pub const PHONE: Self = Self {
+        starts_programs: false,
+        edits_catalog: false,
+        touch: true,
+    };
+
+    /// Whether `entry` can be started or opened here.
+    fn offers(self, entry: &Entry) -> bool {
+        self.starts_programs || entry.kind() == Kind::Link
+    }
+}
+
+/// The edges of the window the system keeps for itself (a phone's status
+/// bar, camera housing and home indicator), in the window's own units.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Edges {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+/// A finger down on the list: where it landed and where the list was then.
+#[derive(Debug, Clone, Copy)]
+struct Drag {
+    from: f32,
+    scroll: f32,
+    moved: bool,
+}
 
 /// What an entry is doing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +152,8 @@ enum Target {
 
 struct Row {
     entry: Entry,
+    /// This machine can start or open it.
+    here: bool,
     state: State,
     /// The start it is on, while it has one.
     run: Option<u64>,
@@ -104,9 +163,10 @@ struct Row {
 }
 
 impl Row {
-    fn new(entry: Entry) -> Self {
+    fn new(entry: Entry, here: bool) -> Self {
         Self {
             entry,
+            here,
             state: State::Idle,
             run: None,
             lines: VecDeque::new(),
@@ -115,6 +175,9 @@ impl Row {
 
     /// Its buttons, left to right.
     fn actions(&self) -> &'static [Action] {
+        if !self.here {
+            return &[];
+        }
         match (self.entry.kind(), &self.state) {
             (Kind::Link, _) => &[Action::Open],
             (_, State::Idle | State::Failed(_)) => &[Action::Start],
@@ -158,8 +221,13 @@ pub struct LauncherApp {
     selected: usize,
     scroll: f32,
     size: (f32, f32),
+    abilities: Abilities,
+    edges: Edges,
     pointer: Point,
+    /// The pointer's button, or a finger, is down.
+    down: bool,
     pressed: Option<Target>,
+    drag: Option<Drag>,
     /// The running program whose Stop has been pressed once and waits for a
     /// second press.
     armed: Option<usize>,
@@ -185,13 +253,30 @@ impl LauncherApp {
             selected: 0,
             scroll: 0.0,
             size: (0.0, 0.0),
+            abilities: Abilities::DESKTOP,
+            edges: Edges::default(),
             pointer: Point::default(),
+            down: false,
             pressed: None,
+            drag: None,
             armed: None,
             next_run: 1,
             effects: vec![Effect::LoadCatalog],
             start_when_loaded: Vec::new(),
         }
+    }
+
+    /// The same launcher on another kind of machine (a computer unless
+    /// told). Say so before the catalog is read.
+    pub fn with_abilities(mut self, abilities: Abilities) -> Self {
+        self.abilities = abilities;
+        self
+    }
+
+    /// The edges of the window the system keeps for itself; nothing to read
+    /// or press is put under them.
+    pub fn set_edges(&mut self, edges: Edges) {
+        self.edges = edges;
     }
 
     /// Starts (or opens) the entry called `name` once the list has been
@@ -254,6 +339,9 @@ impl LauncherApp {
                     self.select(index);
                     self.perform(index, action);
                 }
+                (Some(index), None) if !self.rows[index].here => {
+                    self.banner = Some(format!("\"{name}\" cannot be started on this device."));
+                }
                 _ => {
                     self.banner = Some(format!("There is no entry called \"{name}\" to start."));
                 }
@@ -271,6 +359,7 @@ impl LauncherApp {
             .map(|row| row.entry.name.clone());
         let mut old = std::mem::take(&mut self.rows);
         for entry in catalog.entries {
+            let here = self.abilities.offers(&entry);
             let kept = old
                 .iter()
                 .position(|row| row.entry.name == entry.name)
@@ -278,9 +367,10 @@ impl LauncherApp {
             self.rows.push(match kept {
                 Some(mut row) => {
                     row.entry = entry;
+                    row.here = here;
                     row
                 }
-                None => Row::new(entry),
+                None => Row::new(entry, here),
             });
         }
         for gone in old {
@@ -294,6 +384,7 @@ impl LauncherApp {
             .unwrap_or(0);
         self.armed = None;
         self.pressed = None;
+        self.drag = None;
         self.place();
     }
 
@@ -383,26 +474,34 @@ impl LauncherApp {
 
     fn layout(&self) -> Layout {
         let (width, height) = self.size;
+        let edges = self.edges;
+        // The header's colour runs up under the status bar; what it holds
+        // starts below it.
         let header = Rect {
             x: 0.0,
             y: 0.0,
             width,
-            height: HEADER_HEIGHT,
+            height: edges.top + HEADER_HEIGHT,
         };
         let banner = Rect {
             x: 0.0,
-            y: HEADER_HEIGHT,
+            y: header.bottom(),
             width,
-            height: if self.banner.is_some() {
-                BANNER_HEIGHT
-            } else {
-                0.0
+            height: match (&self.banner, self.abilities.touch) {
+                (None, _) => 0.0,
+                (Some(_), false) => BANNER_HEIGHT,
+                (Some(_), true) => TALL_BANNER_HEIGHT,
             },
         };
-        let detail_height = self
-            .detail_wanted()
-            .min((height - banner.bottom()) * 0.5)
-            .max(0.0);
+        let wanted = self.detail_wanted();
+        // Likewise the pane's colour runs down under the home indicator.
+        let detail_height = if wanted > 0.0 {
+            (wanted + edges.bottom)
+                .min((height - banner.bottom()) * 0.5)
+                .max(0.0)
+        } else {
+            0.0
+        };
         let detail = Rect {
             x: 0.0,
             y: height - detail_height,
@@ -410,20 +509,28 @@ impl LauncherApp {
             height: detail_height,
         };
         let list = Rect {
-            x: 0.0,
+            x: edges.left,
             y: banner.bottom(),
-            width,
+            width: (width - edges.left - edges.right).max(0.0),
             height: (detail.y - banner.bottom()).max(0.0),
         };
-        let button_y = (HEADER_HEIGHT - BUTTON_HEIGHT) / 2.0;
+        let button_y = edges.top + (HEADER_HEIGHT - BUTTON_HEIGHT) / 2.0;
+        // Where the list cannot be edited there is no Edit button, and
+        // Reload sits where it would have been.
+        let edit_width = if self.abilities.edits_catalog {
+            BUTTON_WIDTH
+        } else {
+            -BUTTON_GAP
+        };
         let edit = Rect {
-            x: width - PAD - BUTTON_WIDTH,
+            x: width - edges.right - PAD - edit_width,
             y: button_y,
-            width: BUTTON_WIDTH,
+            width: edit_width.max(0.0),
             height: BUTTON_HEIGHT,
         };
         let reload = Rect {
             x: edit.x - BUTTON_GAP - BUTTON_WIDTH,
+            width: BUTTON_WIDTH,
             ..edit
         };
         Layout {
@@ -494,11 +601,30 @@ impl LauncherApp {
         })
     }
 
+    /// Where a button answers: its own rectangle, or under a finger the
+    /// whole height of the `band` it sits in.
+    fn reach(&self, button: Rect, band: Rect) -> Rect {
+        if self.abilities.touch && button.width > 0.0 {
+            Rect {
+                y: band.y,
+                height: band.height,
+                ..button
+            }
+        } else {
+            button
+        }
+    }
+
     fn hit(&self, layout: &Layout, point: Point) -> Option<Target> {
-        if layout.reload.contains(point) {
+        let bar = Rect {
+            y: self.edges.top,
+            height: HEADER_HEIGHT,
+            ..layout.header
+        };
+        if self.reach(layout.reload, bar).contains(point) {
             return Some(Target::Reload);
         }
-        if layout.edit.contains(point) {
+        if self.reach(layout.edit, bar).contains(point) {
             return Some(Target::Edit);
         }
         if !layout.list.contains(point) {
@@ -514,7 +640,7 @@ impl LauncherApp {
             }
             Some(
                 self.buttons(*index, row)
-                    .find(|(_, rect)| rect.contains(point))
+                    .find(|(_, rect)| self.reach(*rect, row).contains(point))
                     .map_or(Target::Row(*index), |(action, _)| {
                         Target::Act(*index, action)
                     }),
@@ -530,9 +656,16 @@ impl LauncherApp {
             x: input.mouse_x,
             y: input.mouse_y,
         };
+        self.down = input.mouse_down;
         let primary = input.mouse_button == PointerButton::Primary;
         if input.mouse_pressed && primary {
             self.pressed = self.hit(&layout, self.pointer);
+            self.drag =
+                (self.abilities.touch && layout.list.contains(self.pointer)).then_some(Drag {
+                    from: self.pointer.y,
+                    scroll: self.scroll,
+                    moved: false,
+                });
             // A press anywhere but the armed Stop takes the question back.
             if let Some(armed) = self.armed {
                 if self.pressed != Some(Target::Act(armed, Action::Stop)) {
@@ -540,7 +673,20 @@ impl LauncherApp {
                 }
             }
         }
+        if let Some(drag) = self.drag.as_mut() {
+            let travelled = self.pointer.y - drag.from;
+            if travelled.abs() > DRAG_SLOP {
+                drag.moved = true;
+            }
+            if drag.moved {
+                // The finger is moving the list, not pressing what it
+                // landed on.
+                self.pressed = None;
+                self.scroll = drag.scroll - travelled;
+            }
+        }
         if input.mouse_released && primary {
+            self.drag = None;
             let released_on = self.hit(&layout, self.pointer);
             if let Some(target) = self.pressed.take() {
                 if released_on == Some(target) {
@@ -577,6 +723,9 @@ impl LauncherApp {
                 }
                 _ => {}
             }
+        }
+        if !input.mouse_down {
+            self.drag = None;
         }
         let layout = self.layout();
         self.scroll = self.scroll.clamp(0.0, self.max_scroll(&layout));
@@ -626,7 +775,7 @@ impl LauncherApp {
         };
         match action {
             Action::Start => {
-                if row.state.busy() || row.entry.run.is_none() {
+                if row.state.busy() || row.entry.run.is_none() || !row.here {
                     return;
                 }
                 let run = self.next_run;
@@ -673,6 +822,10 @@ impl LauncherApp {
     fn status(row: &Row) -> (String, ui_core::Color) {
         let last = row.lines.back().map(String::as_str);
         match &row.state {
+            State::Idle if !row.here => (
+                "Starts a program, which this device cannot do".to_string(),
+                draw::DIM_TEXT,
+            ),
             State::Idle => (row.entry.about.clone(), draw::DIM_TEXT),
             State::Building => (
                 match last {
@@ -702,7 +855,14 @@ impl LauncherApp {
 
     pub fn paint(&self, scene: &mut Vec<PaintOp>) {
         let layout = self.layout();
-        let hot = self.hit(&layout, self.pointer);
+        // A finger is over something only while it is down and not dragging
+        // the list.
+        let dragging = self.drag.is_some_and(|drag| drag.moved);
+        let hot = if dragging || (self.abilities.touch && !self.down) {
+            None
+        } else {
+            self.hit(&layout, self.pointer)
+        };
         self.paint_list(scene, &layout, hot);
         // The header and the detail pane are painted over the list's edges,
         // which is what clips a row scrolled half out of view.
@@ -711,12 +871,13 @@ impl LauncherApp {
     }
 
     fn paint_header(&self, scene: &mut Vec<PaintOp>, layout: &Layout, hot: Option<Target>) {
+        let edges = self.edges;
         draw::fill(scene, layout.header, draw::HEADER);
         draw::text(
             scene,
             Rect {
-                x: PAD,
-                y: 0.0,
+                x: edges.left + PAD,
+                y: edges.top,
                 width: 110.0,
                 height: HEADER_HEIGHT,
             },
@@ -730,9 +891,9 @@ impl LauncherApp {
             draw::text(
                 scene,
                 Rect {
-                    x: PAD + 110.0,
-                    y: 2.0,
-                    width: (layout.reload.x - PAD * 2.0 - 110.0).max(0.0),
+                    x: edges.left + PAD + 110.0,
+                    y: edges.top + 2.0,
+                    width: (layout.reload.x - edges.left - PAD * 2.0 - 110.0).max(0.0),
                     height: HEADER_HEIGHT,
                 },
                 format!("{busy} running"),
@@ -748,39 +909,60 @@ impl LauncherApp {
             Tone::Plain,
             hot == Some(Target::Reload),
         );
-        draw::button(
-            scene,
-            layout.edit,
-            "Edit list",
-            Tone::Plain,
-            hot == Some(Target::Edit),
-        );
+        if self.abilities.edits_catalog {
+            draw::button(
+                scene,
+                layout.edit,
+                "Edit list",
+                Tone::Plain,
+                hot == Some(Target::Edit),
+            );
+        }
         draw::line(
             scene,
             Point {
                 x: 0.0,
-                y: HEADER_HEIGHT,
+                y: layout.header.bottom(),
             },
             Point {
                 x: layout.header.width,
-                y: HEADER_HEIGHT,
+                y: layout.header.bottom(),
             },
             draw::EDGE,
         );
         if let Some(banner) = &self.banner {
             draw::fill(scene, layout.banner, draw::PANEL);
-            draw::text(
-                scene,
-                Rect {
-                    x: PAD,
-                    width: (layout.banner.width - 2.0 * PAD).max(0.0),
-                    ..layout.banner
-                },
-                banner.as_str(),
-                draw::FONT,
-                draw::FAILED,
-                HorizontalAlign::Left,
-            );
+            let place = Rect {
+                x: edges.left + PAD,
+                width: (layout.banner.width - edges.left - edges.right - 2.0 * PAD).max(0.0),
+                ..layout.banner
+            };
+            let halves = banner.split_once(": ").filter(|_| self.abilities.touch);
+            if let Some((what, why)) = halves {
+                for (line, text) in [what, why].into_iter().enumerate() {
+                    draw::text(
+                        scene,
+                        Rect {
+                            y: place.y + 5.0 + line as f32 * 19.0,
+                            height: 19.0,
+                            ..place
+                        },
+                        text,
+                        draw::FONT,
+                        draw::FAILED,
+                        HorizontalAlign::Left,
+                    );
+                }
+            } else {
+                draw::text(
+                    scene,
+                    place,
+                    banner.as_str(),
+                    draw::FONT,
+                    draw::FAILED,
+                    HorizontalAlign::Left,
+                );
+            }
         }
     }
 
@@ -920,6 +1102,24 @@ impl LauncherApp {
     fn paint_empty(&self, scene: &mut Vec<PaintOp>, layout: &Layout) {
         let lines: Vec<(String, ui_core::Color, u16)> = if !self.loaded {
             vec![("Reading the list…".to_string(), draw::DIM_TEXT, draw::FONT)]
+        } else if !self.abilities.edits_catalog && (self.missing || self.banner.is_none()) {
+            vec![
+                (
+                    "Nothing to launch yet".to_string(),
+                    draw::TEXT,
+                    draw::NAME_FONT,
+                ),
+                (
+                    "The list is sent to this device from a computer.".to_string(),
+                    draw::DIM_TEXT,
+                    draw::FONT,
+                ),
+                (
+                    "How is in loadngo's docs/LAUNCHER.md.".to_string(),
+                    draw::DIM_TEXT,
+                    draw::FONT,
+                ),
+            ]
         } else if self.missing || self.banner.is_none() {
             vec![
                 (
@@ -956,7 +1156,7 @@ impl LauncherApp {
             draw::text(
                 scene,
                 Rect {
-                    x: PAD,
+                    x: layout.list.x + PAD,
                     y,
                     width: (layout.list.width - 2.0 * PAD).max(0.0),
                     height: line_height,
@@ -1008,8 +1208,9 @@ impl LauncherApp {
             (None, Some(dir)) => format!("In {}", dir.display()),
             (None, None) => String::new(),
         };
-        let x = PAD;
-        let width = (layout.detail.width - 2.0 * PAD).max(0.0);
+        let edges = self.edges;
+        let x = edges.left + PAD;
+        let width = (layout.detail.width - edges.left - edges.right - 2.0 * PAD).max(0.0);
         let mut y = layout.detail.y + 10.0;
         for (line, color) in [(does, draw::TEXT), (more, draw::DIM_TEXT)] {
             if line.is_empty() {
@@ -1031,7 +1232,7 @@ impl LauncherApp {
             y += 20.0;
         }
         y += 6.0;
-        let room = ((layout.detail.bottom() - 8.0 - y) / LINE_HEIGHT)
+        let room = ((layout.detail.bottom() - edges.bottom - 8.0 - y) / LINE_HEIGHT)
             .floor()
             .max(0.0) as usize;
         if row.lines.is_empty() {
@@ -1578,5 +1779,334 @@ mod tests {
             SIZE,
         );
         assert_eq!(app.selected, 1);
+    }
+
+    /// An iPhone held upright, in points, and what its system keeps.
+    const PHONE: (f32, f32) = (428.0, 926.0);
+    const PHONE_EDGES: Edges = Edges {
+        left: 0.0,
+        top: 47.0,
+        right: 0.0,
+        bottom: 34.0,
+    };
+
+    fn phone(text: &str) -> LauncherApp {
+        let mut app = LauncherApp::new("/data/catalog.json".into(), "/data/logs".into())
+            .with_abilities(Abilities::PHONE);
+        app.set_edges(PHONE_EDGES);
+        app.take_effects();
+        app.apply_catalog(Loaded::Catalog(catalog::parse(text, None).unwrap()));
+        app.frame(&InputSnapshot::default(), PHONE);
+        app
+    }
+
+    fn texts(app: &LauncherApp) -> Vec<(String, Rect)> {
+        let mut scene = Vec::new();
+        app.paint(&mut scene);
+        scene
+            .into_iter()
+            .filter_map(|op| match op {
+                PaintOp::Text { text, rect, .. } => Some((text, rect)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn touch(app: &mut LauncherApp, point: Point, pressed: bool, down: bool, released: bool) {
+        app.frame(
+            &InputSnapshot {
+                mouse_x: point.x,
+                mouse_y: point.y,
+                mouse_pressed: pressed,
+                mouse_down: down,
+                mouse_released: released,
+                ..Default::default()
+            },
+            PHONE,
+        );
+    }
+
+    fn entry_row(app: &LauncherApp, name: &str) -> (usize, Rect) {
+        let index = app
+            .rows
+            .iter()
+            .position(|row| row.entry.name == name)
+            .unwrap();
+        let y = app
+            .placed
+            .iter()
+            .find_map(|placed| match placed {
+                Placed::Entry { row, y } if *row == index => Some(*y),
+                _ => None,
+            })
+            .unwrap();
+        (index, app.row_rect(&app.layout(), y))
+    }
+
+    #[test]
+    fn a_phone_opens_links_and_says_a_program_cannot_be_started_there() {
+        let mut app = phone(CATALOG);
+        assert_eq!(app.rows[2].actions(), [Action::Open]);
+        assert!(app.rows[0].actions().is_empty() && app.rows[1].actions().is_empty());
+        let shown: Vec<String> = texts(&app).into_iter().map(|(text, _)| text).collect();
+        assert_eq!(
+            shown
+                .iter()
+                .filter(|text| *text == "Starts a program, which this device cannot do")
+                .count(),
+            2,
+            "{shown:?}"
+        );
+        assert!(!shown.iter().any(|text| text == "Start"), "{shown:?}");
+        // A phone has no editor for the list, so no button for one.
+        assert!(!shown.iter().any(|text| text == "Edit list"), "{shown:?}");
+        assert!(shown.iter().any(|text| text == "Reload"), "{shown:?}");
+        // Enter on a program starts nothing.
+        app.frame(
+            &InputSnapshot {
+                key_events: vec![HostKeyEvent {
+                    key: HostKey::Enter,
+                    modifiers: Default::default(),
+                }],
+                ..Default::default()
+            },
+            PHONE,
+        );
+        assert_eq!(app.take_effects(), []);
+
+        // Asked for by name at the start, a program says why not.
+        let mut app = LauncherApp::new("/data/catalog.json".into(), "/data/logs".into())
+            .with_abilities(Abilities::PHONE);
+        app.start_when_loaded("Editor".to_string());
+        app.take_effects();
+        app.apply_catalog(Loaded::Catalog(catalog::parse(CATALOG, None).unwrap()));
+        assert_eq!(app.take_effects(), []);
+        assert_eq!(
+            app.banner.as_deref(),
+            Some("\"Editor\" cannot be started on this device.")
+        );
+    }
+
+    #[test]
+    fn a_phone_with_no_list_says_where_one_comes_from() {
+        let mut app = LauncherApp::new("/data/catalog.json".into(), "/data/logs".into())
+            .with_abilities(Abilities::PHONE);
+        app.set_edges(PHONE_EDGES);
+        app.apply_catalog(Loaded::Missing);
+        app.frame(&InputSnapshot::default(), PHONE);
+        let shown: Vec<String> = texts(&app).into_iter().map(|(text, _)| text).collect();
+        assert!(
+            shown.contains(&"The list is sent to this device from a computer.".to_string()),
+            "{shown:?}"
+        );
+        assert!(
+            !shown.iter().any(|text| text.contains("Edit list")),
+            "{shown:?}"
+        );
+    }
+
+    #[test]
+    fn nothing_is_put_under_the_edges_the_system_keeps() {
+        let entries: Vec<String> = (0..3)
+            .map(|n| format!(r#"{{ "name": "Entry {n}", "open": "https://example.org/{n}" }}"#))
+            .collect();
+        let text = format!(r#"{{ "entries": [{}] }}"#, entries.join(","));
+        for (size, edges) in [
+            (PHONE, PHONE_EDGES),
+            // On its side: the camera housing to the left, the home
+            // indicator below.
+            (
+                (926.0, 428.0),
+                Edges {
+                    left: 47.0,
+                    top: 0.0,
+                    right: 47.0,
+                    bottom: 21.0,
+                },
+            ),
+        ] {
+            let mut app = phone(&text);
+            app.set_edges(edges);
+            app.banner = Some("Could not open something".to_string());
+            app.frame(&InputSnapshot::default(), size);
+            let shown = texts(&app);
+            assert!(shown.len() > 8, "{shown:?}");
+            for (text, rect) in shown {
+                assert!(
+                    rect.x >= edges.left
+                        && rect.right() <= size.0 - edges.right
+                        && rect.y >= edges.top
+                        && rect.bottom() <= size.1 - edges.bottom,
+                    "{text:?} at {rect:?} in {size:?} with {edges:?}"
+                );
+            }
+            // Nor is a row: its panel stops at the side edges.
+            let mut scene = Vec::new();
+            app.paint(&mut scene);
+            let panels: Vec<Rect> = scene
+                .iter()
+                .filter_map(|op| match op {
+                    PaintOp::FillRect { rect, color }
+                        if *color == draw::PANEL || *color == draw::PANEL_SELECTED =>
+                    {
+                        Some(*rect)
+                    }
+                    _ => None,
+                })
+                .filter(|rect| rect.height == ROW_HEIGHT)
+                .collect();
+            assert_eq!(panels.len(), 3, "{panels:?}");
+            for rect in panels {
+                assert!(
+                    rect.x >= edges.left && rect.right() <= size.0 - edges.right,
+                    "a row at {rect:?} in {size:?} with {edges:?}"
+                );
+            }
+            // The list begins below the header's bar and the banner, not
+            // under them.
+            assert_eq!(
+                app.layout().list.y,
+                edges.top + HEADER_HEIGHT + TALL_BANNER_HEIGHT
+            );
+            // With no edges kept, the same window puts its title at the top.
+            app.set_edges(Edges::default());
+            app.frame(&InputSnapshot::default(), size);
+            assert!(texts(&app).iter().any(|(_, rect)| rect.y == 0.0));
+        }
+
+        // The lines a failed program printed stop above the bottom edge too.
+        // Only a machine that starts programs has any to show.
+        let mut rig = Rig::new();
+        rig.app.set_edges(PHONE_EDGES);
+        let run = Rig::started(&rig.click("Editor", Action::Start));
+        for n in 0..12 {
+            rig.happen(run, What::Line(format!("line {n}")));
+        }
+        rig.happen(
+            run,
+            What::Ended(Ending::Failed {
+                why: "It ended with a failure".to_string(),
+                tail: Vec::new(),
+            }),
+        );
+        let shown = texts(&rig.app);
+        assert!(shown.iter().any(|(text, _)| text == "line 11"), "{shown:?}");
+        for (text, rect) in shown {
+            assert!(
+                rect.y >= PHONE_EDGES.top && rect.bottom() <= SIZE.1 - PHONE_EDGES.bottom,
+                "{text:?} at {rect:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_finger_drags_the_list_and_a_drag_presses_nothing() {
+        let entries: Vec<String> = (0..40)
+            .map(|n| format!(r#"{{ "name": "Entry {n}", "open": "https://example.org/{n}" }}"#))
+            .collect();
+        let text = format!(r#"{{ "entries": [{}] }}"#, entries.join(","));
+        let mut app = phone(&text);
+        let (index, row) = entry_row(&app, "Entry 3");
+        let (_, button) = app.buttons(index, row).next().unwrap();
+        let landed = Point {
+            x: button.x + button.width / 2.0,
+            y: button.y + button.height / 2.0,
+        };
+        // Down on a button, then up the screen by 100: the list follows the
+        // finger and the button is not pressed.
+        touch(&mut app, landed, true, true, false);
+        let moved = Point {
+            y: landed.y - 100.0,
+            ..landed
+        };
+        touch(&mut app, moved, false, true, false);
+        assert_eq!(app.scroll, 100.0);
+        touch(&mut app, moved, false, false, true);
+        assert_eq!(app.take_effects(), []);
+        assert_eq!(app.scroll, 100.0);
+        // Back down again, and past the top stops at the top.
+        touch(&mut app, moved, true, true, false);
+        let far = Point {
+            y: moved.y + 500.0,
+            ..moved
+        };
+        touch(&mut app, far, false, true, false);
+        touch(&mut app, far, false, false, true);
+        assert_eq!(app.scroll, 0.0);
+        assert_eq!(app.take_effects(), []);
+        // A touch that stays put is a press. It lands in the row above the
+        // button's own rectangle, where a finger still reaches it.
+        let (index, row) = entry_row(&app, "Entry 2");
+        let (_, button) = app.buttons(index, row).next().unwrap();
+        let above = Point {
+            x: button.x + button.width / 2.0,
+            y: row.y + 3.0,
+        };
+        assert!(!button.contains(above));
+        touch(&mut app, above, true, true, false);
+        touch(
+            &mut app,
+            Point {
+                y: above.y + 4.0,
+                ..above
+            },
+            false,
+            false,
+            true,
+        );
+        assert_eq!(
+            app.take_effects(),
+            [Effect::Open {
+                target: "https://example.org/2".to_string()
+            }]
+        );
+        // Nothing is lit once the finger has gone.
+        let mut scene = Vec::new();
+        app.paint(&mut scene);
+        assert!(!scene.iter().any(
+            |op| matches!(op, PaintOp::FillRect { color, .. } if *color == draw::ACCENT_HOT || *color == draw::PANEL_HOT)
+        ));
+    }
+
+    #[test]
+    fn a_pointer_does_not_drag_the_list_and_presses_only_the_button() {
+        let entries: Vec<String> = (0..40)
+            .map(|n| format!(r#"{{ "name": "Entry {n}", "open": "https://example.org/{n}" }}"#))
+            .collect();
+        let text = format!(r#"{{ "entries": [{}] }}"#, entries.join(","));
+        let mut app = LauncherApp::new("/data/catalog.json".into(), "/data/logs".into());
+        app.take_effects();
+        app.apply_catalog(Loaded::Catalog(catalog::parse(&text, None).unwrap()));
+        app.frame(&InputSnapshot::default(), SIZE);
+        let (index, row) = entry_row(&app, "Entry 3");
+        let (_, button) = app.buttons(index, row).next().unwrap();
+        let landed = Point {
+            x: button.x + button.width / 2.0,
+            y: button.y + button.height / 2.0,
+        };
+        for (y, pressed, down, released) in [
+            (landed.y, true, true, false),
+            (landed.y - 100.0, false, true, false),
+            (landed.y - 100.0, false, false, true),
+        ] {
+            app.frame(
+                &InputSnapshot {
+                    mouse_x: landed.x,
+                    mouse_y: y,
+                    mouse_pressed: pressed,
+                    mouse_down: down,
+                    mouse_released: released,
+                    ..Default::default()
+                },
+                SIZE,
+            );
+        }
+        assert_eq!(app.scroll, 0.0);
+        // Above the button, inside its row, is the row and not the button.
+        let above = Point {
+            x: landed.x,
+            y: row.y + 3.0,
+        };
+        assert_eq!(app.hit(&app.layout(), above), Some(Target::Row(index)));
     }
 }

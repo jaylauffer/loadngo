@@ -145,6 +145,9 @@ struct HostSharedState {
     /// runtime has no timer to advance the frame clock, so touch has to --
     /// but only then. See the `should_publish_frame` note on `Touch`.
     idle_frame_pending: bool,
+    /// An offloaded result, a completion or a frame waker asked for the app
+    /// to be woken; `about_to_wait` answers it.
+    wake_requested: bool,
     /// Cleared by winit's `suspended` (`applicationWillResignActive`) and
     /// set again by `resumed` (`applicationDidBecomeActive`).
     app_active: bool,
@@ -336,6 +339,7 @@ impl Default for HostSharedState {
             next_texture_id: 0,
             next_frame_wakers: Vec::new(),
             idle_frame_pending: false,
+            wake_requested: false,
             app_active: true,
             window_focused: true,
             last_backend_used: DesktopRenderBackendKind::Unavailable,
@@ -898,27 +902,49 @@ pub fn app_data_dir(app_id: &str) -> Result<String, String> {
         .map_err(|value| format!("app data path is not valid UTF-8: {value:?}"))
 }
 
+/// Wakes the event loop from any thread on behalf of work just queued on
+/// the proactor. The loop waits in winit, not on the proactor's port, so
+/// that work is dispatched only once something wakes the loop: without this
+/// an app that asked for `FrameDemand::Idle` saw an offloaded result at its
+/// next touch, and never if none came. `about_to_wait` does the rest.
+fn wake_host() {
+    let Some(shared) = HOST_SHARED.get() else {
+        return;
+    };
+    let mut state = shared.state.0.lock().expect("ios host state poisoned");
+    if !state.running {
+        return;
+    }
+    state.wake_requested = true;
+    let proxy = state.event_proxy.clone();
+    drop(state);
+    if let Some(proxy) = proxy {
+        let _ = proxy.send_event(IosUserEvent::Wake);
+    }
+}
+
 /// Runs `job` on the host's bounded worker pool; its result comes back as a
-/// completion on the host proactor. See [`crate::Offloaded`].
+/// completion on the host proactor, and the event loop is woken for it. See
+/// [`crate::Offloaded`].
 pub fn offload<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> crate::Offloaded<T> {
-    crate::offload::offload_through(proactor().handle.clone(), job)
+    crate::offload::offload_through_with_wake(proactor().handle.clone(), job, wake_host)
 }
 
 /// A result another thread will deliver: finish the [`crate::Completer`]
 /// from any thread and read the [`crate::Offloaded`] like an offloaded job's.
+/// Delivery wakes the event loop, as an offloaded job's does.
 pub fn completion<T: Send + 'static>() -> (crate::Completer<T>, crate::Offloaded<T>) {
     let handle = proactor().handle.clone();
     crate::offload::completion_via(move |store| {
-        let _ = handle.enqueue_work(move |_| store());
+        if handle.enqueue_work(move |_| store()).is_ok() {
+            wake_host();
+        }
     })
 }
 
 /// A [`crate::FrameWaker`] any thread can use to get the app a frame.
 pub fn frame_waker() -> crate::FrameWaker {
-    let handle = proactor().handle.clone();
-    crate::FrameWaker::new(move || {
-        let _ = handle.enqueue_work(|_| {});
-    })
+    crate::FrameWaker::new(wake_host)
 }
 
 pub async fn load_bytes(path: &str) -> Result<Vec<u8>, String> {
@@ -1622,7 +1648,21 @@ impl ApplicationHandler<IosUserEvent> for IosApp {
         // actually fires a `FrameDemand::After` timer and wakes the future
         // parked on it -- before giving the executor a chance to make
         // progress from that wake-up.
+        //
+        // The wake request is read before the drain: whoever set it had
+        // already queued its work, so the drain below is sure to carry that
+        // work, and a request that arrives after this line is answered on
+        // the turn its own wake event brings.
+        let wake_requested = std::mem::take(&mut lock_state().wake_requested);
         proactor().drain_ready();
+        // An app parked on an idle frame is given one, in which it finds
+        // what was just dispatched. An app that paces its own frames is
+        // not: it finds it at its next frame, as it always has, and its
+        // frame intervals stay what its timer makes them.
+        if wake_requested && lock_state().idle_frame_pending {
+            crate::frame_metrics::record_wake();
+            self.publish_frame();
+        }
         self.pool.run_until_stalled();
         {
             let state = lock_state();

@@ -3,6 +3,11 @@
 first of them lit and carrying a start mark.
 
     python3 launcher/assets/draw-icon.py launcher/assets/icon-1024.png
+    python3 launcher/assets/draw-icon.py --full-bleed launcher/assets/icon-ios-1024.png
+
+--full-bleed is the icon for an iPhone: the tile fills the whole square with
+no transparency (iOS rounds the corners itself and shows transparency as
+black), and what is on the tile grows with it.
 
 Standard library only. Edges are antialiased from each shape's distance
 function, so the picture is exact at 1024 pixels and is scaled down from
@@ -66,10 +71,23 @@ def over(base, colour, alpha):
     return (mix(colour[0], r), mix(colour[1], g), mix(colour[2], b), out_a)
 
 
-def pixel(x, y):
+# How much the tile grows to fill the square.
+ZOOM = SIZE / (TILE[2] - TILE[0])
+
+
+def pixel(x, y, full_bleed=False):
     px, py = x + 0.5, y + 0.5
     colour = (0.0, 0.0, 0.0, 0.0)
-    tile = coverage(rounded_box(px, py, *TILE))
+    zoom = 1.0
+    if full_bleed:
+        # Look up the point of the ordinary icon that lands on this pixel
+        # once the tile has grown about the centre; distances grow as much.
+        zoom = ZOOM
+        px = SIZE / 2 + (px - SIZE / 2) / zoom
+        py = SIZE / 2 + (py - SIZE / 2) / zoom
+        tile = 1.0
+    else:
+        tile = coverage(rounded_box(px, py, *TILE))
     if tile <= 0:
         return colour
     t = min(1.0, max(0.0, (py - TILE[1]) / (TILE[3] - TILE[1])))
@@ -80,7 +98,7 @@ def pixel(x, y):
             left = FIRST + column * (SQUARE + GAP)
             top = FIRST + row * (SQUARE + GAP)
             inside = coverage(
-                rounded_box(px, py, left, top, left + SQUARE, top + SQUARE, RADIUS)
+                rounded_box(px, py, left, top, left + SQUARE, top + SQUARE, RADIUS) * zoom
             )
             if inside > 0:
                 first = row == 0 and column == 0
@@ -89,25 +107,29 @@ def pixel(x, y):
     cx = FIRST + SQUARE / 2 + 8
     cy = FIRST + SQUARE / 2
     mark = [(cx - 44, cy - 60), (cx + 60, cy), (cx - 44, cy + 60)]
-    inside = coverage(convex(px, py, mark))
+    inside = coverage(convex(px, py, mark) * zoom)
     if inside > 0:
         colour = over(colour, MARK, inside)
     return colour
 
 
-def png(path):
+def png(path, full_bleed=False):
     rows = bytearray()
     for y in range(SIZE):
         rows.append(0)
         for x in range(SIZE):
-            r, g, b, a = pixel(x, y)
-            rows += bytes((round(r), round(g), round(b), round(a * 255)))
+            r, g, b, a = pixel(x, y, full_bleed)
+            if full_bleed:
+                rows += bytes((round(r), round(g), round(b)))
+            else:
+                rows += bytes((round(r), round(g), round(b), round(a * 255)))
 
     def chunk(kind, data):
         body = kind + data
         return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
 
-    header = struct.pack(">IIBBBBB", SIZE, SIZE, 8, 6, 0, 0, 0)
+    # Colour type 2 is RGB with no alpha channel; 6 is RGBA.
+    header = struct.pack(">IIBBBBB", SIZE, SIZE, 8, 2 if full_bleed else 6, 0, 0, 0)
     with open(path, "wb") as out:
         out.write(b"\x89PNG\r\n\x1a\n")
         out.write(chunk(b"IHDR", header))
@@ -116,7 +138,10 @@ def png(path):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or sys.argv[1] in ("-h", "--help"):
+    args = sys.argv[1:]
+    full_bleed = "--full-bleed" in args
+    args = [arg for arg in args if arg != "--full-bleed"]
+    if len(args) != 1 or args[0] in ("-h", "--help"):
         print(__doc__.strip())
-        sys.exit(0 if len(sys.argv) == 2 else 2)
-    png(sys.argv[1])
+        sys.exit(0 if args in (["-h"], ["--help"]) else 2)
+    png(args[0], full_bleed)
