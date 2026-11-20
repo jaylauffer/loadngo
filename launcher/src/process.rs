@@ -455,7 +455,11 @@ fn run_entry(inner: &Inner, id: u64, entry: &Entry, run: &Run) -> Ending {
             Some(entry.ready.as_deref()),
             &mut tail,
         ),
-        Kind::Program | Kind::Link => run_logged(inner, id, run, &entry.name, command, &mut tail),
+        // Only an entry with a `run` gets this far, so a link or a built-in
+        // never does; they share the plain program's arm to keep it total.
+        Kind::Program | Kind::Link | Kind::BuiltIn => {
+            run_logged(inner, id, run, &entry.name, command, &mut tail)
+        }
     };
     if run.cancelled() {
         return Ending::Stopped;
@@ -965,6 +969,7 @@ mod tests {
                 run: None,
                 open: None,
                 ready: None,
+                built_in: false,
             }
         }
 

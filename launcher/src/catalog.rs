@@ -46,6 +46,11 @@ pub enum Kind {
     /// `open` alone: a page, file or folder opened with the system's own
     /// opener.
     Link,
+    /// Built into the launcher itself and run in its window, which it has
+    /// to itself until it is left. The catalog file cannot say this: the
+    /// launcher's own build says what it holds
+    /// ([`Entry::built_in`]).
+    BuiltIn,
 }
 
 /// A program to start.
@@ -89,10 +94,30 @@ pub struct Entry {
     pub run: Option<Command>,
     pub open: Option<String>,
     pub ready: Option<String>,
+    /// It is part of the launcher's own build, not of the catalog file.
+    pub built_in: bool,
 }
 
 impl Entry {
+    /// An entry for something built into the launcher, listed under
+    /// `group`.
+    pub fn built_in(name: &str, group: &str, about: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            group: group.to_string(),
+            about: about.to_string(),
+            build: None,
+            run: None,
+            open: None,
+            ready: None,
+            built_in: true,
+        }
+    }
+
     pub fn kind(&self) -> Kind {
+        if self.built_in {
+            return Kind::BuiltIn;
+        }
         match (&self.run, &self.open) {
             (Some(_), Some(_)) => Kind::Service,
             (Some(_), None) => Kind::Program,
@@ -227,6 +252,7 @@ pub fn parse(text: &str, home: Option<&Path>) -> Result<Catalog, String> {
             run,
             open,
             ready,
+            built_in: false,
         });
     }
     Ok(Catalog { entries })

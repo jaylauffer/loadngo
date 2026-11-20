@@ -2,7 +2,7 @@
 //! and what the pointer and the keys do to it.
 //!
 //! The app owns no threads and does no blocking work. What it wants done
-//! leaves as [`Effect`]s for the host loop (`main.rs`) to carry out, and what
+//! leaves as [`Effect`]s for the host loop (`host.rs`) to carry out, and what
 //! happened comes back through [`LauncherApp::apply_catalog`],
 //! [`LauncherApp::apply_process`] and [`LauncherApp::opened`].
 
@@ -66,9 +66,10 @@ impl Abilities {
         touch: true,
     };
 
-    /// Whether `entry` can be started or opened here.
+    /// Whether `entry` can be started or opened here. What is built into
+    /// the launcher can be anywhere the launcher runs.
     fn offers(self, entry: &Entry) -> bool {
-        self.starts_programs || entry.kind() == Kind::Link
+        self.starts_programs || matches!(entry.kind(), Kind::Link | Kind::BuiltIn)
     }
 }
 
@@ -133,6 +134,11 @@ pub enum Effect {
     Open {
         target: String,
     },
+    /// Give the window to the built-in entry called `name` until it is
+    /// left.
+    Play {
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,6 +146,7 @@ enum Action {
     Start,
     Open,
     Stop,
+    Play,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,6 +186,7 @@ impl Row {
             return &[];
         }
         match (self.entry.kind(), &self.state) {
+            (Kind::BuiltIn, _) => &[Action::Play],
             (Kind::Link, _) => &[Action::Open],
             (_, State::Idle | State::Failed(_)) => &[Action::Start],
             (_, State::Building | State::Starting) => &[Action::Stop],
@@ -221,6 +229,8 @@ pub struct LauncherApp {
     selected: usize,
     scroll: f32,
     size: (f32, f32),
+    /// What this launcher has built into it, listed ahead of the catalog.
+    built_ins: Vec<Entry>,
     abilities: Abilities,
     edges: Edges,
     pointer: Point,
@@ -253,6 +263,7 @@ impl LauncherApp {
             selected: 0,
             scroll: 0.0,
             size: (0.0, 0.0),
+            built_ins: Vec::new(),
             abilities: Abilities::DESKTOP,
             edges: Edges::default(),
             pointer: Point::default(),
@@ -270,6 +281,14 @@ impl LauncherApp {
     /// told). Say so before the catalog is read.
     pub fn with_abilities(mut self, abilities: Abilities) -> Self {
         self.abilities = abilities;
+        self
+    }
+
+    /// What this launcher has built into it ([`Entry::built_in`]). They
+    /// head the list whatever the catalog holds, and a catalog entry with
+    /// the name of one is left out. Say so before the catalog is read.
+    pub fn with_built_ins(mut self, built_ins: Vec<Entry>) -> Self {
+        self.built_ins = built_ins;
         self
     }
 
@@ -358,7 +377,14 @@ impl LauncherApp {
             .get(self.selected)
             .map(|row| row.entry.name.clone());
         let mut old = std::mem::take(&mut self.rows);
-        for entry in catalog.entries {
+        // What is built in comes first, and stands for its name: a list
+        // made for a launcher without it may still link to the app.
+        let listed: Vec<Entry> = catalog
+            .entries
+            .into_iter()
+            .filter(|entry| self.built_ins.iter().all(|own| own.name != entry.name))
+            .collect();
+        for entry in self.built_ins.iter().cloned().chain(listed) {
             let here = self.abilities.offers(&entry);
             let kept = old
                 .iter()
@@ -427,7 +453,7 @@ impl LauncherApp {
                 if row.state != State::Stopping {
                     row.state = match row.entry.kind() {
                         Kind::Service => State::Starting,
-                        Kind::Program | Kind::Link => State::Running,
+                        Kind::Program | Kind::Link | Kind::BuiltIn => State::Running,
                     };
                 }
             }
@@ -801,6 +827,13 @@ impl LauncherApp {
                     self.effects.push(Effect::Open { target });
                 }
             }
+            Action::Play => {
+                self.armed = None;
+                self.banner = None;
+                self.effects.push(Effect::Play {
+                    name: row.entry.name.clone(),
+                });
+            }
             Action::Stop => {
                 // A program in its own window may hold unsaved work, so its
                 // Stop asks once more.
@@ -1085,6 +1118,7 @@ impl LauncherApp {
             let (label, tone) = match action {
                 Action::Start => ("Start", Tone::Main),
                 Action::Open => ("Open", Tone::Main),
+                Action::Play => ("Play", Tone::Main),
                 Action::Stop if armed => ("Stop it?", Tone::Warn),
                 Action::Stop => ("Stop", Tone::Plain),
             };
@@ -1193,6 +1227,7 @@ impl LauncherApp {
         );
         let entry = &row.entry;
         let does = match (entry.kind(), &entry.run, &entry.open) {
+            (Kind::BuiltIn, _, _) => "Plays in this window; leaving it comes back here".to_string(),
             (Kind::Service, Some(run), Some(open)) => {
                 format!("Runs {} and opens {open}", run.display())
             }
@@ -2108,5 +2143,116 @@ mod tests {
             y: row.y + 3.0,
         };
         assert_eq!(app.hit(&app.layout(), above), Some(Target::Row(index)));
+    }
+
+    /// A phone's launcher with one game built into it.
+    fn with_a_game(loaded: Loaded) -> LauncherApp {
+        let mut app = LauncherApp::new("/data/catalog.json".into(), "/data/logs".into())
+            .with_abilities(Abilities::PHONE)
+            .with_built_ins(vec![Entry::built_in("Tiles", "Games", "Match the pairs")]);
+        app.set_edges(PHONE_EDGES);
+        app.take_effects();
+        app.apply_catalog(loaded);
+        app.frame(&InputSnapshot::default(), PHONE);
+        app
+    }
+
+    fn names(app: &LauncherApp) -> Vec<&str> {
+        app.rows.iter().map(|row| row.entry.name.as_str()).collect()
+    }
+
+    #[test]
+    fn what_is_built_in_heads_the_list_and_its_play_asks_for_the_window() {
+        // The list was made for a launcher without the game: it links to
+        // the game as an app of its own, and to a page.
+        let listed = r#"{ "entries": [
+            { "name": "Tiles", "group": "Games", "open": "tiles://" },
+            { "name": "Demo", "group": "Pages", "open": "https://example.org/" }
+        ] }"#;
+        let mut app = with_a_game(Loaded::Catalog(catalog::parse(listed, None).unwrap()));
+        // Its own comes first, once: the link of the same name is left out.
+        assert_eq!(names(&app), ["Tiles", "Demo"]);
+        assert_eq!(app.rows[0].entry.kind(), Kind::BuiltIn);
+        assert_eq!(app.rows[0].actions(), [Action::Play]);
+        let shown: Vec<String> = texts(&app).into_iter().map(|(text, _)| text).collect();
+        assert!(shown.contains(&"Play".to_string()), "{shown:?}");
+        assert!(shown.contains(&"Match the pairs".to_string()), "{shown:?}");
+        assert!(
+            shown.contains(&"Plays in this window; leaving it comes back here".to_string()),
+            "{shown:?}"
+        );
+
+        let (index, row) = entry_row(&app, "Tiles");
+        let (action, button) = app.buttons(index, row).next().unwrap();
+        assert_eq!(action, Action::Play);
+        let on = Point {
+            x: button.x + button.width / 2.0,
+            y: button.y + button.height / 2.0,
+        };
+        touch(&mut app, on, true, true, false);
+        assert_eq!(app.take_effects(), [], "nothing until the finger lifts");
+        touch(&mut app, on, false, false, true);
+        assert_eq!(
+            app.take_effects(),
+            [Effect::Play {
+                name: "Tiles".to_string()
+            }]
+        );
+        // The launcher is not what runs it, so it has nothing to show as
+        // running, and it can be played again when it has been left.
+        assert_eq!(app.state_of("Tiles"), Some(&State::Idle));
+        touch(&mut app, on, true, true, false);
+        touch(&mut app, on, false, false, true);
+        assert_eq!(app.take_effects().len(), 1);
+
+        // Reading the list again keeps it, and keeps it first.
+        app.apply_catalog(Loaded::Catalog(catalog::parse(listed, None).unwrap()));
+        assert_eq!(names(&app), ["Tiles", "Demo"]);
+    }
+
+    #[test]
+    fn what_is_built_in_is_listed_with_no_catalog_at_all() {
+        let app = with_a_game(Loaded::Missing);
+        assert_eq!(names(&app), ["Tiles"]);
+        let shown: Vec<String> = texts(&app).into_iter().map(|(text, _)| text).collect();
+        assert!(shown.contains(&"Play".to_string()), "{shown:?}");
+        assert!(
+            !shown.contains(&"The list is sent to this device from a computer.".to_string()),
+            "{shown:?}"
+        );
+
+        // A catalog that cannot be read takes nothing away either.
+        let mut app = with_a_game(Loaded::Missing);
+        app.apply_catalog(Loaded::Wrong("line 3: no".to_string()));
+        assert_eq!(names(&app), ["Tiles"]);
+    }
+
+    #[test]
+    fn what_is_built_in_is_played_by_enter_and_by_name_at_the_start() {
+        let mut app = LauncherApp::new("/data/catalog.json".into(), "/data/logs".into())
+            .with_built_ins(vec![Entry::built_in("Tiles", "Games", "Match the pairs")]);
+        app.start_when_loaded("Tiles".to_string());
+        app.take_effects();
+        app.apply_catalog(Loaded::Catalog(catalog::parse(CATALOG, None).unwrap()));
+        let play = Effect::Play {
+            name: "Tiles".to_string(),
+        };
+        assert_eq!(app.take_effects(), std::slice::from_ref(&play));
+        assert_eq!(app.banner, None);
+        // A computer starts programs as before; the game is one more row.
+        assert_eq!(names(&app), ["Tiles", "Editor", "Site", "Demo"]);
+        assert_eq!(app.rows[1].actions(), [Action::Start]);
+
+        app.frame(
+            &InputSnapshot {
+                key_events: vec![HostKeyEvent {
+                    key: HostKey::Enter,
+                    modifiers: Default::default(),
+                }],
+                ..Default::default()
+            },
+            SIZE,
+        );
+        assert_eq!(app.take_effects(), [play]);
     }
 }

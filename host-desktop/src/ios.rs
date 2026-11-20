@@ -624,6 +624,19 @@ impl IosTouchBridge {
     }
 }
 
+/// The safe area as a frame carries it: UIKit gives it in points, the units
+/// of the surface, so an app keeps clear of the status bar, the camera
+/// housing and the home indicator with the same code it uses on Android.
+fn frame_insets(state: &HostSharedState) -> loadngo_host_core::SafeAreaInsets {
+    let (left, top, right, bottom) = state.safe_area_insets;
+    loadngo_host_core::SafeAreaInsets {
+        left,
+        top,
+        right,
+        bottom,
+    }
+}
+
 fn advance_frame_clock(state: &mut HostSharedState) {
     let now = Instant::now();
     let dt = now.saturating_duration_since(state.last_frame_instant);
@@ -637,7 +650,7 @@ fn advance_frame_clock(state: &mut HostSharedState) {
         input: state.pending_input.snapshot(),
         foreground: true,
         focused: state.app_active && state.window_focused,
-        insets: loadngo_host_core::SafeAreaInsets::default(),
+        insets: frame_insets(state),
     };
     state.frame_epoch = state.frame_epoch.saturating_add(1);
     state.pending_redraw = true;
@@ -775,7 +788,8 @@ pub fn capture_frame() -> HostFrame {
         input: state.pending_input.snapshot(),
         foreground: state.latest_frame.foreground,
         focused: state.app_active && state.window_focused,
-        insets: state.latest_frame.insets,
+        // As it is now: a turn of the phone changes it between frames.
+        insets: frame_insets(&state),
     };
     state.pending_input.clear_transient();
     frame

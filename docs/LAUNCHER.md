@@ -6,7 +6,8 @@ program serves, a link (Jay, 2026-11-16: "The loadngo framework needs it's
 own launcher for all these things that can be installed as a mac app"). It is
 one binary, `launcher`, on `loadngo-host-desktop`, the same source on macOS,
 Linux and Windows, and on an iPhone, where it opens links and starts nothing
-(see "On an iPhone").
+(see "On an iPhone"). A phone's games are built into a launcher of their own
+and played in its window (see "Games built in").
 
 ```
 cargo run -p loadngo-launcher --release
@@ -98,8 +99,10 @@ output.
   after three seconds. A program in its own window may hold unsaved work, so
   its Stop asks once more ("Stop it?"); a press anywhere else, or Escape,
   takes the question back.
-- Up and Down move the selection; Enter starts or opens the selected entry.
-  Enter never stops anything.
+- **Play**, on a game built into the launcher, gives the game the window
+  until it is left (see "Games built in").
+- Up and Down move the selection; Enter starts, opens or plays the selected
+  entry. Enter never stops anything.
 - `--start NAME` (more than once if wanted) starts entries as soon as the
   list has been read, as their buttons would.
 
@@ -221,8 +224,8 @@ installs it on the attached iPhone, sends it its list and starts it (Jay,
 `--simulator` does the same in the iOS Simulator and needs no signing.
 `--help` lists the options.
 
-An iPhone app cannot start another program, so there the launcher is a list
-of links:
+An iPhone app cannot start another program, so there the launcher lists the
+games built into it (the next section) and links:
 
 - **An entry with only `open` works as on a computer.** The address is a web
   page, or another app by a scheme that app declares. The games declare
@@ -241,6 +244,65 @@ of links:
   housing and the home indicator, upright or on its side. The list is
   dragged with a finger, and a button answers a touch anywhere in the height
   of its row. A failure shows as two lines: what, and why.
+
+### Games built in
+
+A list of links to other apps was half a launcher on a phone: each game
+stayed an app of its own, with its own seven-day profile to renew, and iOS
+asked before opening each one. So the games go inside: one app, one profile,
+one icon (Jay, 2026-11-20: "go, Mahjong first").
+
+`launcher::launch(built_ins)` is the whole launcher; loadngo's own binary
+calls it with none. A project that wants games inside calls it with a
+`BuiltIn` for each:
+
+```rust
+launcher::launch(vec![BuiltIn::new(
+    "sng-mahjong",              // its key: the folder its files are in
+    "SNG Mahjong",              // its name in the list
+    "Games",                    // the heading it is listed under
+    "Tile-matching solitaire",  // its one line
+    sng_mahjong::run_game,      // its loop, as it runs alone
+)]);
+```
+
+The project that does this for Jay's phone is `loadngo-games` (beside the
+games' checkouts; SNG Mahjong so far). It is not in this repository because
+the games depend on loadngo, not the other way round.
+
+- **They head the list, with no entry in the catalog.** A catalog entry with
+  the name of a built-in is left out, so a list written for the launcher
+  without the game (a link to it as an app) does not show it twice.
+- **Play runs the game's own loop in the launcher's window.** The list's
+  last frame is shown first, and the game gets a fresh one, so the press on
+  Play is not the game's first input. When the loop returns the list is back,
+  again on a fresh frame. The game can be played again; nothing is kept
+  between plays but what it saves itself.
+- **The game is a guest, and asks the host two things.** While it runs,
+  `loadngo_host_desktop::is_guest()` is true.
+  - `offers_quit()`: alone on a phone a game shows no Quit, because the
+    platform closes apps. As a guest it must, because Quit is the way back
+    to the list. A game asks this instead of deciding by platform.
+  - `assets_root()`: where the platform keeps an app's assets as files (a
+    phone), a guest's are in `assets/games/<key>` of the launcher's bundle,
+    laid out as the game's own `assets` folder. A game asks this instead of
+    reading `SNG_ASSETS_ROOT`. `install-launcher-ios.sh --game-assets
+    KEY=DIR` puts them there.
+- **A game needs a way from play back to its menu**, since on a phone there
+  is no Escape key. SNG Mahjong has a Menu button for it.
+- On a computer the same build works as the launcher does there, with the
+  games as extra rows; Escape in the game is its Quit.
+
+`install-launcher-ios.sh --project DIR` builds that project's `launcher`
+binary in place of loadngo's and packages it the same way, under the same
+bundle id, so it installs over the plain launcher and uses its profile.
+
+Not handled yet, and needed before a second game goes in: a game that opens
+its files by a path relative to the bundle (the host makes the bundle the
+working folder) will not find them as a guest; a game that wants the phone
+held one way only (the app allows upright and both sides, and the host has
+no way to change that while it runs); loadngo's own `assets` (the fonts) are
+not in the launcher's bundle, which SNG Mahjong does not need.
 
 Signing. The script takes the newest unexpired provisioning profile for the
 bundle id `com.jarraya.games.loadngo` (the id Jay made the first profile
@@ -280,6 +342,13 @@ On iOS it is `UIApplication`'s `openURL:options:completionHandler:`, called
 on the main thread, and it opens addresses only: a path is refused with the
 reason. iOS reports one thing, opened or not, so "not" reads "no app on this
 iPhone answers to it, or it was declined".
+
+Two more things in the iOS host came from the launcher. A frame's `insets`
+were always zero there, so an app had to ask `safe_area_insets()` apart; a
+game that lays itself out from `HostFrame::insets`, as SNG Mahjong does and
+as Android has always let it, ran under the status bar and the home
+indicator. A frame now carries the safe area on iOS too, in points like the
+surface, and the launcher reads it the same way on every platform.
 
 The iPhone launcher also found a fault in the iOS host: an offloaded job's
 result, a `completion()` and a `frame_waker()` queued work on the host
@@ -399,17 +468,51 @@ pointer does none of it). Eight breaks made on purpose were each caught: a
 drag that presses, each edge ignored, a finger reaching no further than a
 pointer, a phone starting programs, a pointer dragging, a finger left lit.
 
+2026-11-20, games built in (launcher 0.1.2, with `loadngo-games` 0.2.0 and
+SNG Mahjong inside it), on the Mac mini.
+
+- macOS, the desktop build, driven by key presses posted to its process and
+  pictures of its window: the list with SNG Mahjong and Play; Enter, and the
+  game's title menu was in the window; Enter, and the board with its Menu
+  button; Escape, and the list was back; Enter and Escape again, the same.
+  So the game ran twice in one process. `--start "SNG Mahjong"` went
+  straight to its title menu.
+- macOS, the sounds as a guest: with `SNG_ASSETS_ROOT` pointing at a folder
+  holding `games/sng-mahjong/audio/sfx`, the deal's sound loaded with no
+  complaint; pointing at an empty folder, the game named the missing file at
+  exactly that path.
+- iOS Simulator (iPhone 16 Pro, iOS 18.5) through `install-launcher-ios.sh
+  --simulator --project ../loadngo-games --game-assets
+  sng-mahjong=../sng-mahjong/assets`: SNG Mahjong headed the list with Play,
+  and the list's own link of that name was left out; the header and the
+  bottom pane kept clear of the status bar and the home indicator from the
+  frame's insets. `--start "SNG Mahjong"` showed the game's title menu with
+  Quit, which the game alone on a phone does not show. The eleven sound
+  files were in the app at `assets/games/sng-mahjong/audio/sfx`.
+- Unit tests: the launcher's 34 (three new: a built-in heads the list once,
+  Play asks for the window and can be asked again, a built-in is listed with
+  no catalog and played by Enter and by `--start`); the host's three for a
+  guest (who offers Quit, when an app is a guest, where a guest's files
+  are); SNG Mahjong's 48 (four new, for its Menu button). Thirteen breaks
+  made on purpose were each caught by one of them.
+
 ## Not done
 
+- Games built in: no touch has been made on them from a script. In the
+  Simulator the game was reached by `--start` only, so there its board, its
+  Menu button and its Quit are known from the Mac's window and the unit
+  tests, and no sound was heard anywhere. Turning the phone was not tried
+  with a game up. One game is inside so far; what a second needs first is
+  under "Games built in".
 - The iPhone: it runs on the phone (above), but nothing done on its screen
   has been recorded here. No touch was made in the Simulator, which a script
   cannot touch, so taps and drags are known from the unit tests' made-up
   input only. iOS's question was not seen answered, so a game coming up from
-  the launcher has not been seen; on the phone the games have not been
-  rebuilt with their schemes. The list cannot be edited on the phone. A drag
-  has no glide after the finger lifts. A free Apple team is said to allow
-  three of its apps on a phone at a time; the launcher went on as the third
-  (SNG Mahjong was no longer there), so a fourth was not tried.
+  the launcher by its link has not been seen. The list cannot be edited on
+  the phone. A drag has no glide after the finger lifts. A free Apple team
+  is said to allow three of its apps on a phone at a time; the launcher went
+  on as the third (SNG Mahjong was no longer there), so a fourth was not
+  tried.
 - Windows has no install script: there the binary is run as it is, and it
   has not been run by hand; its stop (`taskkill`) and `ShellExecuteW` are
   type-checked only.

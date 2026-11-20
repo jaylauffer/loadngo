@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Builds loadngo's launcher for an iPhone, signs it, installs it on the
 # attached phone (or in the iOS Simulator), sends it its list, and starts it.
-# Run on a Mac, from a loadngo checkout. What the launcher is and does on a
-# phone: docs/LAUNCHER.md, "On an iPhone".
+# With --project it builds another project's launcher instead: one with
+# games built into it. Run on a Mac, from a loadngo checkout. What the
+# launcher is and does on a phone: docs/LAUNCHER.md, "On an iPhone".
 
 set -euo pipefail
 
@@ -11,14 +12,27 @@ usage() {
 install-launcher-ios.sh - put loadngo's launcher on an iPhone
 
 Usage:
-  install-launcher-ios.sh [--simulator] [--device UDID] [--profile FILE]
+  install-launcher-ios.sh [--project DIR] [--game-assets KEY=DIR]...
+                          [--simulator] [--device UDID] [--profile FILE]
                           [--identity SHA1] [--bundle-id ID] [--catalog FILE]
-                          [--catalog-only] [--no-start]
+                          [--catalog-only] [--no-start] [--start NAME]
 
 With no options: builds the launcher for the iPhone, signs it with the
 provisioning profile it finds for its bundle id, installs it on the one
 attached iPhone that profile names, sends the list, and starts it.
 
+  --project DIR    optional  Build the launcher of the cargo project in DIR
+                             instead of loadngo's own: a project whose
+                             `launcher` binary is loadngo's launcher with
+                             games built into it (launcher::launch with a
+                             BuiltIn for each). Its version is the app's, and
+                             its assets/icon-ios-1024.png the icon if it has
+                             one.
+  --game-assets KEY=DIR
+                   optional  Put the files of DIR in the app as the assets of
+                             the built-in game KEY (assets/games/KEY, where
+                             the game is told to look). May be given more
+                             than once.
   --simulator      optional  Use the iOS Simulator instead of a phone: the
                              booted simulator, or the first iPhone one, which
                              is booted. Needs no profile and no signing
@@ -45,11 +59,14 @@ attached iPhone that profile names, sends the list, and starts it.
                              installed; build and install nothing. Press
                              Reload on the phone to read it.
   --no-start       optional  Do not start the launcher afterwards.
+  --start NAME     optional  Start the launcher straight into the entry
+                             called NAME (its own --start).
   -h, --help       optional  Print this help.
 
-A phone opens addresses only, so its list holds links: a web page, or an app
-by a scheme that app declares.
-  { "entries": [ { "name": "SNG Mahjong", "group": "Games", "open": "sng-mahjong://" } ] }
+A phone starts no programs, so the list sent to it holds links: a web page,
+or another app by a scheme that app declares. Games built into the launcher
+are listed by themselves, ahead of the list, and need no entry.
+  { "entries": [ { "name": "Project board", "group": "Pages", "open": "https://example.org/board" } ] }
 
 A profile comes from Xcode and lasts seven days on a free Apple team: a new
 iOS App project with the bundle id above, the phone as its run destination,
@@ -67,6 +84,8 @@ Examples:
   scripts/install-launcher-ios.sh --catalog ~/phone-list.json
   scripts/install-launcher-ios.sh --catalog-only
   scripts/install-launcher-ios.sh --simulator
+  scripts/install-launcher-ios.sh --project ../loadngo-games \
+      --game-assets sng-mahjong=../sng-mahjong/assets
 EOF
 }
 
@@ -92,6 +111,9 @@ identity=""
 catalog=""
 catalog_only=0
 start=1
+start_entry=""
+project=""
+game_assets=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -99,7 +121,7 @@ while [[ $# -gt 0 ]]; do
     --simulator) simulator=1 ;;
     --catalog-only) catalog_only=1 ;;
     --no-start) start=0 ;;
-    --device|--profile|--identity|--bundle-id|--catalog)
+    --device|--profile|--identity|--bundle-id|--catalog|--project|--game-assets|--start)
       [[ $# -ge 2 ]] || fail "$1 needs a value; see --help" 2
       case "$1" in
         --device) device="$2" ;;
@@ -107,6 +129,9 @@ while [[ $# -gt 0 ]]; do
         --identity) identity="$2" ;;
         --bundle-id) BUNDLE_ID="$2" ;;
         --catalog) catalog="$2" ;;
+        --project) project="$2" ;;
+        --game-assets) game_assets+=("$2") ;;
+        --start) start_entry="$2" ;;
       esac
       shift ;;
     *) fail "unknown argument $1; see --help" 2 ;;
@@ -117,6 +142,18 @@ done
 [[ "$(uname -s)" == "Darwin" ]] || fail "an iPhone build needs a Mac with Xcode"
 for tool in xcrun codesign security plutil python3; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is needed (install Xcode)"
+done
+
+if [[ -n "$project" ]]; then
+  [[ -f "$project/Cargo.toml" ]] || fail "no cargo project in $project (see --project)" 2
+  project="$(cd "$project" && pwd)"
+fi
+for pair in ${game_assets[@]+"${game_assets[@]}"}; do
+  key="${pair%%=*}"
+  dir="${pair#*=}"
+  [[ "$pair" == *=* && -n "$key" && "$key" != */* && "$key" != .* ]] \
+    || fail "--game-assets takes KEY=DIR, a game's key and its folder of assets: $pair" 2
+  [[ -d "$dir" ]] || fail "no such folder of assets for $key: $dir" 2
 done
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/loadngo-launcher-ios.XXXXXX")"
@@ -169,10 +206,14 @@ send_catalog() {
 
 start_launcher() {
   [[ "$start" == 1 ]] || return 0
+  # The launcher's own arguments, after the bundle id.
+  local args=()
+  [[ -z "$start_entry" ]] || args=(--start "$start_entry")
   if [[ "$simulator" == 1 ]]; then
-    xcrun simctl launch --terminate-running-process "$device" "$BUNDLE_ID" >/dev/null
+    xcrun simctl launch --terminate-running-process "$device" "$BUNDLE_ID" \
+      ${args[@]+"${args[@]}"} >/dev/null
   elif ! xcrun devicectl device process launch --device "$device" --terminate-existing \
-      "$BUNDLE_ID" >"$work/launch.log" 2>&1; then
+      "$BUNDLE_ID" ${args[@]+"${args[@]}"} >"$work/launch.log" 2>&1; then
     if grep -q "has not been explicitly trusted" "$work/launch.log"; then
       echo "It is on the phone, but iOS will not start it until the developer is trusted there:
   Settings, General, VPN & Device Management, the entry under Developer App, Trust.
@@ -297,23 +338,40 @@ command -v cargo >/dev/null 2>&1 || fail "cargo is needed to build the launcher"
 rustup target list --installed 2>/dev/null | grep -qx "$target" || rustup target add "$target"
 
 export IPHONEOS_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET"
-(cd "$ROOT" && cargo build --release --locked -p loadngo-launcher --bin "$BIN_NAME" --target "$target")
-binary="$ROOT/target/$target/release/$BIN_NAME"
+if [[ -n "$project" ]]; then
+  # Another project's launcher, with what it has built in.
+  built="$project"
+  (cd "$project" && cargo build --release --locked --bin "$BIN_NAME" --target "$target")
+  version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$project/Cargo.toml" | head -n 1)"
+  icon="$project/assets/icon-ios-1024.png"
+  [[ -f "$icon" ]] || icon="$ROOT/launcher/assets/icon-ios-1024.png"
+else
+  built="$ROOT"
+  (cd "$ROOT" && cargo build --release --locked -p loadngo-launcher --bin "$BIN_NAME" --target "$target")
+  version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/launcher/Cargo.toml" | head -n 1)"
+  icon="$ROOT/launcher/assets/icon-ios-1024.png"
+fi
+binary="$built/target/$target/release/$BIN_NAME"
 [[ -f "$binary" ]] || fail "the build left no $binary"
-version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/launcher/Cargo.toml" | head -n 1)"
 
 # ---- The app --------------------------------------------------------------
 
-app="$ROOT/target/ios-launcher/$target/$APP_NAME.app"
+app="$built/target/ios-launcher/$target/$APP_NAME.app"
 rm -rf "$app"
 mkdir -p "$app"
 cp "$binary" "$app/$BIN_NAME"
 
+# A built-in game finds its files in assets/games/<its key>, laid out as its
+# own assets folder is (loadngo_host_desktop::assets_root).
+for pair in ${game_assets[@]+"${game_assets[@]}"}; do
+  mkdir -p "$app/assets/games/${pair%%=*}"
+  cp -R "${pair#*=}/." "$app/assets/games/${pair%%=*}/"
+done
+
 icons=""
 for spec in "Icon-60@2x:120" "Icon-60@3x:180" "Icon-76@2x:152" "Icon-83.5@2x:167" "Icon-1024:1024"; do
   name="${spec%%:*}"
-  sips -z "${spec##*:}" "${spec##*:}" "$ROOT/launcher/assets/icon-ios-1024.png" \
-    --out "$app/$name.png" >/dev/null
+  sips -z "${spec##*:}" "${spec##*:}" "$icon" --out "$app/$name.png" >/dev/null
   icons="$icons<string>$name</string>"
 done
 
