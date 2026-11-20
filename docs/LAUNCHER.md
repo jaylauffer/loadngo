@@ -489,6 +489,18 @@ SNG Mahjong inside it), on the Mac mini.
   frame's insets. `--start "SNG Mahjong"` showed the game's title menu with
   Quit, which the game alone on a phone does not show. The eleven sound
   files were in the app at `assets/games/sng-mahjong/audio/sfx`.
+- The phone (Zheonus VI, iPhone 13 Pro Max, iOS 27.2.1), through
+  `loadngo-games/scripts/install-ios.sh`, built from the pushed commits
+  (loadngo `091e0353`, SNG Mahjong `394bec1`): signed with the launcher's
+  profile and installed over the plain launcher. The phone listed it as
+  "loadngo" 0.2.0, the list was sent (one link, 176 bytes), it started, and
+  its own log, fetched from the phone, showed a 428x926 surface and a frame
+  drawn. Not seen from the Mac: its screen, a touch, the game played.
+- CI on `091e0353` (run 44719504554): Linux x86-64 and aarch64, Windows
+  and macOS passed. SNG Mahjong's own CI on `394bec1` passed too.
+- SNG Mahjong alone in the Simulator (its own
+  `scripts/ios_simulator_build.sh`, on the same loadngo commit): its title
+  menu showed Start game and Sound and no Quit, as before.
 - Unit tests: the launcher's 34 (three new: a built-in heads the list once,
   Play asks for the window and can be asked again, a built-in is listed with
   no catalog and played by Enter and by `--start`); the host's three for a
