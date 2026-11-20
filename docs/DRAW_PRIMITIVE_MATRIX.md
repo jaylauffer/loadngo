@@ -1,6 +1,9 @@
 # loadngo Draw Primitive Matrix
 
-Date: 2026-03-26
+Date: 2026-03-26. Revised 2026-11-20 against the code at `dev` `fb2f59bb`:
+the matrix, the clipping section and the Metal section were out of date.
+What is still to build is listed in
+[RENDERER_ROADMAP.md](RENDERER_ROADMAP.md), "Remaining work".
 
 ## Purpose
 
@@ -86,6 +89,9 @@ Today, [renderer/src/lib.rs](../renderer/src/lib.rs) already carries these `Fram
 - `ParticleBatch`
 - `Text`
 - `Image`
+- `PushClip` / `PopClip`
+
+`Circle` is the filled circle. `Arc` is a native `FrameCommand`.
 
 Current limitation:
 
@@ -94,56 +100,47 @@ Current limitation:
 - `StrokeCircle`
 
 are still lowered into `Polyline` in the renderer, rather than preserved as native frame commands.
+No backend ever sees a curve: each receives the `Polyline` and draws that.
 
 That is acceptable for now, but it should be treated as an intermediate state rather than the permanent end model.
 
-`Arc` is now a native `FrameCommand`.
+### The two draw lists do not carry the same set
 
-## Known gap: no clip/scissor primitive in `RenderOp`
+`PaintOp` (`ui-core`) is the full set above except clipping: it has no
+`PushClip`/`PopClip`, and its `BlitImage` has no alpha.
 
-`loadngo_host_core::RenderOp` (the lighter, direct-execution contract games
-consume when they render `Vec<RenderOp>` themselves instead of going
-through the `ui-core`/`renderer` `PaintOp`→`FrameCommand` pipeline — see
-`host-desktop` in "Current gap summary" in
-[RENDERER_ROADMAP.md](RENDERER_ROADMAP.md)) has no clip/scissor variant at
-all: `Clear`/`FillRect`/`StrokeRect`/`Line`/`Circle`/`Text`/`BlitImage`,
-none of which carry or consult a clip region. Only `RenderOp::Text.style`'s
-`RenderTextOverflow` (`Clip`/`EllipsisEnd`/`EllipsisMiddle`) clips *that one
-text op* to its own declared rect — it cannot clip other ops, or clip
-content to some other rect (a scrollable panel's viewport, say).
+`RenderOp` (`host-core`, the list a game can write directly) has `Clear`,
+`FillRect`, `StrokeRect`, `Line`, `Circle`, `Text`, `BlitImage` (with
+alpha), `PushClip` and `PopClip`. It has no polyline, arc, curve or
+particle batch.
 
-This is a real, confirmed gap, not a theoretical one: `sng-roguelite`
-needed a scrollable achievements list inside a fixed panel
-(`crates/game-app/src/lib.rs` in that repo, `push_achievement_rows`) and
-had no way to clip overflow content to the panel's viewport. The workaround
-was to only ever emit a row `RenderOp::Text` when the *entire* row rect
-fits inside the viewport, skipping any row that would be even partially
-cut off — correct (nothing ever overflows), but it means a row pops into
-view once fully revealed rather than sliding in continuously the way a
-real clipped scroll view would. See that repo's
-`docs/decisions/0005-eab-achievement-persistence-and-viewing.md` and
-`docs/ACHIEVEMENTS.md`'s "Viewing achievements" section for the full story.
+Neither has a filled polygon, and an image draw is a rectangle and an
+alpha everywhere: no rotation, flip, source rectangle or tint.
 
-Note that `ui_core::PaintOp` already has a `clip_rect: Option<Rect>` field
-on `PaintOp::Text` (`ui-core/src/paint.rs`), and `ui_core::ScrollRegionModel`
-(`ui-core/src/scroll.rs`) already provides the scroll-offset/indicator math
-generally — so the *model* half of "scrollable panel" already exists and is
-reusable today. What's missing is purely the render-primitive half for
-games on the `RenderOp` path: a way to clip arbitrary drawn content
-(rects, other text, everything — not just one text op to its own bounds)
-to a rect, without requiring a game to adopt the full `PaintOp`/`gui`
-widget stack just to get a clipped scroll view.
+## Clipping
 
-**For a future agent to pursue:** add a clip/scissor primitive to
-`RenderOp` — most likely a paired `PushClip { rect: Rect }` /`PopClip`
-(or a scoped `ClipRect { rect: Rect, ops: Vec<RenderOp> }` wrapper) that
-every `host-desktop` backend (macOS, iOS, Android, Linux, Windows,
-fallback) honors for all op kinds, not just `Text`. Follow the "Primitive
-migration checklist" above: define the contract first, find every backend
-site, patch the whole slice in one pass, validate per-backend. This is
-scoped to the `host-core`/`host-desktop` `RenderOp` contract specifically —
-it does not require or block on the separate `PaintOp`/`renderer`
-primitive rollout tracked elsewhere in this document.
+Until 2026-09-07 no draw list could clip, and this section described that
+gap and the workaround it forced on `sng-roguelite`'s achievements list
+(a row was drawn only when the whole row fitted the viewport).
+
+Since then ([CLIP_AND_SCISSOR.md](CLIP_AND_SCISSOR.md)):
+
+- `RenderOp::PushClip { rect }` and `RenderOp::PopClip` exist; pushes nest
+  and intersect.
+- The renderer resolves the clip stack while encoding. A filled rectangle
+  is intersected with the clip. Text and images carry the clip as
+  `clip_rect` and every backend trims them: Metal and GLES trim the quad
+  and its texture coordinates, DX12 sets a scissor rectangle for that
+  draw. A stroked rectangle, a line or a circle that is not wholly inside
+  the clip is dropped.
+- `FrameCommand::PushClip`/`PopClip` are in the enum, but the encoder
+  consumes the clip operations and never emits them, and every backend
+  treats one as a no-op.
+- The achievements list now lives in `game-menu/src/achievements.rs` and
+  clips its rows with `RenderOp::PushClip`.
+
+Still open: `PaintOp` has no clip operations, and no backend uses a
+scissor for geometry, so a stroke cannot be partly clipped.
 
 ## Precision rule
 
@@ -231,14 +228,24 @@ Status meanings:
 | `StrokeRect` | native | native | native | native | native | future |
 | `Line` | native | native | native | native | native | future |
 | `FillCircle` | native as `Circle` | native | native | native | native | future |
-| `StrokeCircle` | approx via `Polyline` | approx via `Polyline` | approx via `Polyline` | approx via polyline/host logic | approx via `Polyline` | future |
+| `StrokeCircle` | approx via `Polyline` | approx via `Polyline` | approx via `Polyline` | approx via `Polyline` | approx via `Polyline` | future |
 | `Polyline` | native | native | native | native | native | future |
 | `Arc` | native | native | native | approx via `software::arc_points` | native | future |
-| `QuadraticBezier` | approx via `Polyline` | rasterized | approx via `Polyline`, then native `Polyline` only where supported | approx via host draw path | unsupported | future |
-| `CubicBezier` | approx via `Polyline` | rasterized | approx via `Polyline`, then native `Polyline` only where supported | approx via host draw path | unsupported | future |
-| `ParticleBatch` | native | native (circle geometry) | native (shared solid batch) | native circles | native (one draw item) | future |
-| `Text` | native request | rasterized text image | rasterized text image | native software text path | unsupported | future |
+| `QuadraticBezier` | approx via `Polyline` | approx via `Polyline` | approx via `Polyline` | approx via `Polyline` | approx via `Polyline` | future |
+| `CubicBezier` | approx via `Polyline` | approx via `Polyline` | approx via `Polyline` | approx via `Polyline` | approx via `Polyline` | future |
+| `ParticleBatch` | native | native (circle geometry, one draw per particle) | native (shared solid batch) | native circles | native (one draw item) | future |
+| `Text` | native request | rasterized by CoreText inside the backend, drawn as a texture | rasterized: the host rewrites it into an `Image` (`fontdue` and `loadngo-text-shaping`) | drawn by the host's text closure | rasterized: the host rewrites it into an `Image`, as for GLES | future |
 | `Image` | native | native | native | native | native | future |
+| `PushClip` / `PopClip` | resolved while encoding, never emitted | no-op | no-op | no-op | no-op | future |
+
+Rows corrected 2026-11-20. The curve rows used to say `rasterized` for
+Metal and `unsupported` for DX12, and the `Text` row `unsupported` for
+DX12. Neither backend ever receives a curve (the renderer hands every
+backend a `Polyline`), and on Windows `prepare_dx12_frame` rewrites each
+`Text` into an `Image`, exactly as `prepare_gles_frame` does
+([TEXT_TEXTURE_LIFECYCLE.md](TEXT_TEXTURE_LIFECYCLE.md)). `supports_commands`
+in `gfx-gles` and `gfx-dx12` refuses only a `Text` that reaches the backend
+unrewritten, and that frame goes to the software renderer.
 
 "Software host" is one rasterizer, `loadngo_renderer::software::RgbaCanvas`,
 shared by the Linux, Windows and Android software present paths since
@@ -273,9 +280,12 @@ each fit (`vertex_byte_chunks`), which needs no per-frame buffer
 allocation. The other backends take geometry through buffers and were not
 affected.
 
-## What changed in the current pass
+## The native geometry pass (March 2026)
 
-The current backend-native geometry steps are now:
+Kept as history. Particle batches joined this list on 2026-09-25 (next
+section).
+
+The backend-native geometry steps are:
 
 - GLES:
   - `Line`
@@ -304,26 +314,17 @@ before those commands reach GLES.
 
 This is a real move away from the old flatten-and-blit pattern for dynamic geometry.
 
-## Why Metal must be included
+## Metal and particle batches (done 2026-09-25)
 
-Metal should not remain a rasterized exception.
+This section used to argue that Metal must stop drawing `ParticleBatch` as
+generated images. It has: since `371d1006`, `gfx-metal` turns each particle
+into circle geometry, as GLES and DX12 do.
 
-Right now [gfx-metal/src/lib.rs](../gfx-metal/src/lib.rs) still treats:
-
-- `ParticleBatch`
-
-primarily as generated images rather than backend-native geometry.
-
-That contributes directly to:
-
-- the coarse visual feel
-- extra dynamic raster work
-- backend divergence from Linux/Android
-
-So yes:
-
-- Metal must be updated too
-- not later as a vague wish, but as part of the primitive matrix rollout
+One difference remains. Metal issues one draw call per particle, and per
+rectangle and polyline (`present_scene_ordered`). GLES puts a whole batch
+into its shared solid-geometry buffer and DX12 draws it as one item, so an
+effect is one draw there. See [RENDERER_ROADMAP.md](RENDERER_ROADMAP.md),
+"Remaining work", item 10.
 
 ## Vulkan
 
@@ -360,6 +361,8 @@ Reason:
 
 - these immediately improve traces, outlines, simple motion language, and button/scene effects
 
+Status (2026-11-20): done on Metal, GLES and DX12.
+
 ### Phase 2
 
 - `StrokeCircle`
@@ -368,6 +371,9 @@ Reason:
 Reason:
 
 - rings, meters, orbit lines, and circular accents become cleaner
+
+Status (2026-11-20): `Arc` is native on all three. `StrokeCircle` is still
+lowered to a `Polyline`.
 
 ### Phase 3
 
@@ -378,6 +384,9 @@ Reason:
 
 - curve quality matters after the simpler stroke/fill language is stable
 
+Status (2026-11-20): not started. Both curves are still lowered to a
+`Polyline`.
+
 ### Phase 4
 
 - `ParticleBatch` semantics
@@ -386,6 +395,10 @@ Reason:
 
 - effects quality should come after the geometry substrate is trustworthy
 - this is where blend modes, additive light, particle lifetime, and motion semantics belong
+
+Status (2026-11-20): the batch is GPU geometry on all three backends, and
+`ui_core::ParticleEmitter` owns lifetime and motion
+([PARTICLE_EFFECTS.md](PARTICLE_EFFECTS.md)). Blend modes are not built.
 
 ## Backend rollout order
 
@@ -405,10 +418,12 @@ Reason:
 
 ## Immediate next steps
 
-1. Decide whether `StrokeCircle` should remain renderer-lowered to `Polyline` or become a native `FrameCommand`.
-2. Promote `QuadraticBezier` if its curve quality is now the next visible weakness.
-3. Promote `CubicBezier` after that.
-4. Revisit `ParticleBatch` semantics once the geometry substrate is stable.
+The March list (decide whether `StrokeCircle` becomes a native command,
+promote the two curves, revisit `ParticleBatch` semantics) still stands,
+and no screen has needed any of it since. The current list of what is
+missing, with a proposed order, is in
+[RENDERER_ROADMAP.md](RENDERER_ROADMAP.md), "Remaining work" and "Proposed
+order".
 
 ## Related notes
 

@@ -7,8 +7,18 @@ scissor still future work (see the revised decision below). Written
 2026-09-07 after gamepad/focus work made scrolling behavior worth looking
 at closely.
 
-`loadngo` has no clipping primitive at any level of its drawing pipeline.
-This document records what that costs, and the design for adding one.
+When this was written, `loadngo` had no clipping primitive at any level of
+its drawing pipeline. This document records what that cost, and the design
+for adding one. The sections below describe that starting point; their file
+and line references are from 2026-09-07.
+
+Checked 2026-11-20 at `dev` `fb2f59bb`: `RenderOp::PushClip`/`PopClip`
+exist and the renderer resolves them while encoding.
+`FrameCommand::PushClip`/`PopClip` exist too, but the encoder never emits
+them and every backend treats one as a no-op.
+**`PaintOp::PushClip`/`PopClip`, which the decision below also calls for,
+were not built**: `ui-core/src/paint.rs` has no clip operation, so the
+widget draw list can clip only a text op to its own `clip_rect`.
 
 ## The gap, as it actually is today
 

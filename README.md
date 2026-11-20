@@ -13,9 +13,9 @@ written in rust for reliability and performance, platform agnostic.
 ## Workspace crates
 - `ui-core`: platform-agnostic UI model layer (widgets, geometry, input, paint ops).
 - `host-core` (`loadngo-host-core`): host/backend contracts (window descriptors, frame/input snapshots, render ops, image decode/registry, texture/font seams).
-- `renderer` (`loadngo-renderer`): renderer-owned frame command encoding, multilingual text contracts, and backend interfaces.
-- `gfx-metal` (`loadngo-gfx-metal`): macOS-first renderer backend landing zone for Metal execution.
-- `gfx-gles` (`loadngo-gfx-gles`): cross-platform OpenGL ES renderer backend.
+- `renderer` (`loadngo-renderer`): frame command encoding, the clip stack, text-texture layout, the backend interface, and the shared software rasterizer.
+- `gfx-metal` (`loadngo-gfx-metal`): Metal renderer backend for macOS and iOS.
+- `gfx-gles` (`loadngo-gfx-gles`): OpenGL ES renderer backend for Linux and Android.
 - `gfx-dx12` (`loadngo-gfx-dx12`): Windows DirectX 12 renderer backend.
 - `host-desktop` (`loadngo-host-desktop`): desktop backend implementation of host/render/input primitives.
 - `gui`: platform-agnostic GUI composition over `ui-core`.
@@ -125,7 +125,7 @@ checkout never changes branch under another session.
 - [`docs/GAME_MENU.md`](docs/GAME_MENU.md): shared title menu, sound settings and achievements screens for games (`loadngo-game-menu`).
 - [`docs/INPUT_PHILOSOPHY.md`](docs/INPUT_PHILOSOPHY.md): the values framing (energy as currency of exchange, healthy engagement) behind input-surface design decisions.
 - [`docs/PROACTOR_ENGINE_ADOPTION.md`](docs/PROACTOR_ENGINE_ADOPTION.md): active proactor-first host-runtime adoption and evidence plan.
-- [`docs/RENDERER_ROADMAP.md`](docs/RENDERER_ROADMAP.md): macOS-first renderer ownership plan and multilingual requirements.
+- [`docs/RENDERER_ROADMAP.md`](docs/RENDERER_ROADMAP.md): the renderer as built (which backend draws each platform), what is still to build, and a proposed order.
 - [`docs/GAME_DEPENDENCIES.md`](docs/GAME_DEPENDENCIES.md): how games pin loadngo by git, local co-development, and the path to crates.io.
 - [`docs/PARTICLE_EFFECTS.md`](docs/PARTICLE_EFFECTS.md): `ParticleEmitter` and how each backend draws `ParticleBatch`.
 - [`docs/SYSTEM_MONITOR.md`](docs/SYSTEM_MONITOR.md): the `system_monitor` desktop widget (CPU, GPU, Neural Engine power, thermal pressure, memory, disk) and installing it on the lab Pis and macOS.
