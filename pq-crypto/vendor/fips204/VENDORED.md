@@ -65,6 +65,27 @@ algorithm, no encoding, no hashing, no random numbers.
   run by hand on 2026-11-24 after each of the two rounds, the cross-check against AWS-LC from commit `53ec22b2`
   (the same keys from 48 seeds; each accepts the other's signatures; both refuse damaged ones).
 
+## Stack
+
+The crate keeps every polynomial on the stack and uses no heap. How much stack an operation needs depends heavily
+on whether the crate is built optimised. Measured on the Mac mini (64-bit ARM) by running each operation on a
+thread with a given stack and searching for the smallest that survives; kilobytes:
+
+| | key generation | sign | verify | private key from bytes | upstream's key round-trip example |
+| --- | --- | --- | --- | --- | --- |
+| ML-DSA-65, unoptimised | 499 | 323 | 291 | 323 | 690 |
+| ML-DSA-65, optimised | 147 | 131 | 99 | 115 | 291 |
+| ML-DSA-87, unoptimised | 738 | 515 | 467 | 451 | 1,010 |
+| ML-DSA-87, optimised | 227 | 195 | 163 | 147 | 419 |
+
+The crate as published needs the same or a little more (its example: 1,026 for ML-DSA-87, unoptimised). A Windows
+main thread has 1,024 kB, so that example (`SerDes::try_from_bytes`, a documentation test) overflowed its stack in
+loadngo's Windows CI the first time the copy's tests ran there (run 45334063481, 2026-11-24); Linux and macOS give
+a main thread 8 MB and passed. The workspace's `Cargo.toml` therefore builds this crate at `opt-level = 3` in
+debug and test builds as well (`[profile.dev.package.fips204]`): with that, a debug build of the example needs
+483 kB, and the copy's own tests run in 8 s where they took 41 s. Debug assertions and overflow checks stay on. A project that takes this crate from outside loadngo's
+workspace and builds it unoptimised gets the first and third rows: give its signing thread 1 MB or more.
+
 ## Taking a newer upstream version
 
 Copy its `src/` over this one, reapply the seven changes above (the diff of this directory against the published

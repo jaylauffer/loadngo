@@ -143,3 +143,10 @@ fips204 = { path = "pq-crypto/vendor/fips204", default-features = false, feature
 zeroize = { version = "1", features = ["alloc"] }
 loadngo-pq-crypto = { path = "pq-crypto" }
 loadngo-anchor = { path = "anchor" }
+
+# The signature code (the fips204 copy) is built optimised in debug and test builds too. Unoptimised, one
+# ML-DSA-87 key round trip needs about 1 MB of stack, which is all a Windows main thread has (its documentation
+# test overflowed there, CI run 45334063481), and ML-DSA-65's key generation 0.5 MB; optimised, 0.48 MB and
+# 0.18 MB, and its own tests run in 8 s where they took 41 s. Measured: pq-crypto/vendor/fips204/VENDORED.md, "Stack".
+[profile.dev.package.fips204]
+opt-level = 3
