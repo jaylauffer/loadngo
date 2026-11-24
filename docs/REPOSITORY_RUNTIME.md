@@ -728,8 +728,8 @@ Jay, on being told what "wiping and copying" meant: "do the block erasing and wo
   this Mac (232 us to 189 timed, then -11.9 % of cycles). AWS-LC is still some two and a half times less again.
 - **Not done:** vector code for the rounding functions and for x86-64; hashing two states at a time; not erasing
   values that are public (a security decision, Jay's); the wrapper's key decoding on every call.
-- **Windows, found by CI on the push** (run 45334063481: both Linux systems and macOS passed, Windows failed one
-  test). The copy's tests had never run on Windows; one of upstream's documentation examples (a key round trip
+- **Windows, found by CI on the push** (run 45334063481: both Linux systems passed and Windows failed one
+  test; its macOS job had passed fmt and clippy and was still testing when the fix was pushed, which cancelled it). The copy's tests had never run on Windows; one of upstream's documentation examples (a key round trip
   for ML-DSA-87) overflowed the stack there. Measured: unoptimised, that example needs 1,026 kB with the crate as
   published and 1,010 kB after this work, and a Windows main thread has 1,024 kB. It is the crate's own stack
   use, not this work's. The workspace now builds the copy optimised in debug and test builds too

@@ -81,7 +81,8 @@ thread with a given stack and searching for the smallest that survives; kilobyte
 The crate as published needs the same or a little more (its example: 1,026 for ML-DSA-87, unoptimised). A Windows
 main thread has 1,024 kB, so that example (`SerDes::try_from_bytes`, a documentation test) overflowed its stack in
 loadngo's Windows CI the first time the copy's tests ran there (run 45334063481, 2026-11-24); Linux and macOS give
-a main thread 8 MB and passed. The workspace's `Cargo.toml` therefore builds this crate at `opt-level = 3` in
+a main thread 8 MB: both of CI's Linux systems passed, and so did the same tests on the Mac mini (that run's own
+macOS job was cancelled by the next push before its tests finished). The workspace's `Cargo.toml` therefore builds this crate at `opt-level = 3` in
 debug and test builds as well (`[profile.dev.package.fips204]`): with that, a debug build of the example needs
 483 kB, and the copy's own tests run in 8 s where they took 41 s. Debug assertions and overflow checks stay on. A project that takes this crate from outside loadngo's
 workspace and builds it unoptimised gets the first and third rows: give its signing thread 1 MB or more.
