@@ -523,7 +523,9 @@ with thermally admitted CAS/proactor reads.
    SSH/network transfer remains open. Any chunk-boundary changes require a new
    profile identifier.
 4. **Post-quantum interoperability:** ML-DSA-65 is now registered as scheme ID `0x03`
-   through pinned `aws-lc-rs = 1.18.1`; `loadngo-pq-auth keygen` defaults to this
+   through pinned `aws-lc-rs = 1.18.1` (replaced on 2026-11-24 by the pure-Rust `fips204`
+   0.5.0: see the last section; what follows in this item was measured with AWS-LC);
+   `loadngo-pq-auth keygen` defaults to this
    standardized scheme. Legacy Dilithium2 and Falcon512 remain registered. The same
    prefixed key/signature serialization carries the distinct ID and standardized raw
    key/signature encodings. Host compilation, strict Clippy, iOS, and Android target
@@ -628,4 +630,32 @@ Claude Code took this work over from Codex at Jay's word, committed it as it was
   tests, 23 ignored). Agnes, the suite 6 times, then the three crates' tests: all pass (173, 3 ignored). macOS as
   above, the suite 5 times: all pass.
 
-Still not run anywhere: Windows, Android after the rebase, x86-64 Linux, and anything against a copy of a real store.
+Still not run anywhere when this was written: Windows, Android after the rebase, x86-64 Linux, and anything against
+a copy of a real store. (CI ran Windows, x86-64 Linux, ARM64 Linux and macOS on the pushed branch the same day.)
+
+## ML-DSA-65 without a C library, 2026-11-24
+
+Jay asked what AWS-LC was doing here, said he would rather not have it in the games, and asked for the pure-Rust
+alternatives; then: "try fips204."
+
+- **Where AWS-LC reached:** never the games. They take `ui-core`, `loadngo-host-core`, `loadngo-host-desktop` and
+  `loadngo-launcher`, whose default builds hold no `data` and no `loadngo-pq-crypto` (`cargo tree`). It reached
+  whatever uses `data` (the repository and archive tools, `loadngo-pq-auth`, `task`, `network`, the local-model
+  tools) and `host-desktop` built with `archive-cas-browser`.
+- **What changed:** `MlDsa65Scheme` generates, signs and verifies with `fips204` 0.5.0 (pinned; MIT or Apache-2.0;
+  no unsafe code; it brings in `sha3`, `rand_core` and `zeroize`). `aws-lc-rs` is out of the workspace. The scheme
+  id, the raw key and signature encodings and the envelope are unchanged, so a key or signature made with either
+  is valid with the other.
+- **How that was checked** (the first of the two commits keeps the test that did it,
+  `pq-crypto/tests/mldsa65_against_aws_lc.rs`, with AWS-LC as a test-only dependency; the second removes both):
+  for 48 seeds the two libraries gave byte-identical public and private keys; each accepted the other's signatures;
+  both refused a changed message and a signature with one bit flipped at four places. Key generation matches the
+  NIST ACVP FIPS 204 vector byte for byte, as it did with AWS-LC. The opt-in OpenSSL test (3.6.5) passes both
+  ways, with OpenSSL now given the seed alone, so that it checks key generation from a seed too.
+- **Speed**, Mac mini, release build, one observation: key generation 98 us, sign 310 us, verify 72 us with
+  `fips204`; 22, 109 and 21 us with AWS-LC. A repository command signs or verifies a handful of heads.
+- **What is not known:** `fips204` has had no independent audit that a search found (nor have RustCrypto's
+  `ml-dsa` or Cryspen's `libcrux-ml-dsa`, both of which had signature-verification bugs reported in 2026; none
+  was found against `fips204`). Its constant-time claim is its own. AWS-LC is the more widely used and reviewed
+  library; the cross-checks above are what stand in for that here, and the OpenSSL test stays for rerunning
+  whenever the pinned version changes.

@@ -82,8 +82,9 @@ ML-DSA-65 (`loadngo-pq-crypto`) inside a `loadngo-anchor` frame of domain
 `loadngo.repository.head`, so it cannot be replayed as any other kind of signature. Every
 claim ever made is also kept in `repositories/<id>/signatures/`.
 
-**Algorithm compatibility:** new keys default to standardized FIPS 204 ML-DSA-65 through
-AWS-LC's stable `aws-lc-rs` API. The repository scheme ID is distinct (`0x03`), and the
+**Algorithm compatibility:** new keys default to standardized FIPS 204 ML-DSA-65, from the
+pure-Rust `fips204` crate (0.5.0, pinned; until 2026-11-24 from AWS-LC, whose keys and
+signatures it matches: see REPOSITORY_RUNTIME.md). The repository scheme ID is distinct (`0x03`), and the
 existing length-prefixed key/signature envelope remains unchanged. Signing uses pure
 ML-DSA with an empty context. Legacy `Dilithium2` (`pqcrypto-dilithium` 0.5.0, pre-final
 round-3 parameters) and `Falcon512` remain available for explicit verification; neither
