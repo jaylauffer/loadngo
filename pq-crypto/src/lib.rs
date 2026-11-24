@@ -6,10 +6,8 @@
 //! entitlement-achievement-blockchain depend on loadngo, never the reverse. They keep
 //! spelling it `qcoin_crypto` through a dependency alias, so no call site changed.
 
-use aws_lc_rs::encoding::AsRawBytes;
-use aws_lc_rs::signature::{
-    KeyPair, PqdsaKeyPair, UnparsedPublicKey, ML_DSA_65, ML_DSA_65_SIGNING,
-};
+use fips204::ml_dsa_65;
+use fips204::traits::{SerDes, Signer, Verifier};
 use serde::{
     de::Error as DeError, ser::Error as SerError, Deserialize, Deserializer, Serialize, Serializer,
 };
@@ -21,7 +19,7 @@ use pqcrypto_falcon::falcon512;
 use pqcrypto_traits::sign::{
     DetachedSignature, PublicKey as PqPublicKeyTrait, SecretKey as PqSecretKeyTrait,
 };
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SignatureSchemeId {
@@ -560,19 +558,17 @@ impl PqSignatureScheme for MlDsa65Scheme {
         SignatureSchemeId::MlDsa65
     }
 
+    /// A new key pair, in the standard's raw encodings: the 1,952-byte public key and the
+    /// 4,032-byte expanded private key (FIPS 204, pkEncode and skEncode).
     fn keygen(&self) -> Result<(PublicKey, PrivateKey), CryptoError> {
-        let key_pair = PqdsaKeyPair::generate(&ML_DSA_65_SIGNING)
-            .map_err(|_| CryptoError::KeyGenerationFailed)?;
-        let public = key_pair.public_key().as_ref().to_vec();
-        let private = key_pair
-            .private_key()
-            .as_raw_bytes()
-            .map_err(|_| CryptoError::InvalidSecretKey)?
-            .as_ref()
-            .to_vec();
+        let (public, private) =
+            ml_dsa_65::try_keygen().map_err(|_| CryptoError::KeyGenerationFailed)?;
+        let mut expanded = private.into_bytes();
+        let private = PrivateKey::new(self.id(), expanded.to_vec());
+        expanded.zeroize();
         Ok((
-            PublicKey::new(self.id(), public)?,
-            PrivateKey::new(self.id(), private)?,
+            PublicKey::new(self.id(), public.into_bytes().to_vec())?,
+            private?,
         ))
     }
 
@@ -580,23 +576,43 @@ impl PqSignatureScheme for MlDsa65Scheme {
         if sk.scheme != self.id() {
             return Err(CryptoError::WrongScheme);
         }
-        let key_pair = PqdsaKeyPair::from_raw_private_key(&ML_DSA_65_SIGNING, &sk.bytes)
+        let mut expanded: [u8; ml_dsa_65::SK_LEN] = sk
+            .bytes
+            .as_slice()
+            .try_into()
             .map_err(|_| CryptoError::InvalidSecretKey)?;
-        let mut bytes = vec![0; ML_DSA_65_SIGNING.signature_len()];
-        let length = key_pair
-            .sign(msg, &mut bytes)
+        let key = ml_dsa_65::PrivateKey::try_from_bytes(expanded);
+        expanded.zeroize();
+        let key = key.map_err(|_| CryptoError::InvalidSecretKey)?;
+        // The pure (not pre-hashed) signature over the message with an empty context, hedged with
+        // fresh randomness: what the repository has always signed with.
+        let signature = key
+            .try_sign(msg, &[])
             .map_err(|_| CryptoError::InvalidSignature)?;
-        bytes.truncate(length);
-        Signature::new(self.id(), bytes)
+        Signature::new(self.id(), signature.to_vec())
     }
 
     fn verify(&self, pk: &PublicKey, msg: &[u8], sig: &Signature) -> Result<(), CryptoError> {
         if pk.scheme != self.id() || sig.scheme != self.id() {
             return Err(CryptoError::WrongScheme);
         }
-        UnparsedPublicKey::new(&ML_DSA_65, &pk.bytes)
-            .verify(msg, &sig.bytes)
-            .map_err(|_| CryptoError::InvalidSignature)
+        let public: [u8; ml_dsa_65::PK_LEN] = pk
+            .bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| CryptoError::InvalidPublicKey)?;
+        let key = ml_dsa_65::PublicKey::try_from_bytes(public)
+            .map_err(|_| CryptoError::InvalidPublicKey)?;
+        let signature: [u8; ml_dsa_65::SIG_LEN] = sig
+            .bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| CryptoError::InvalidSignature)?;
+        if key.verify(msg, &signature, &[]) {
+            Ok(())
+        } else {
+            Err(CryptoError::InvalidSignature)
+        }
     }
 }
 

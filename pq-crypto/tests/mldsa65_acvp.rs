@@ -1,5 +1,5 @@
-use aws_lc_rs::encoding::AsRawBytes;
-use aws_lc_rs::signature::{KeyPair, PqdsaKeyPair, ML_DSA_65_SIGNING};
+use fips204::ml_dsa_65;
+use fips204::traits::{KeyGen, SerDes};
 use loadngo_pq_crypto::{
     MlDsa65Scheme, PqSignatureScheme, PrivateKey, PublicKey, Signature, SignatureSchemeId,
 };
@@ -25,17 +25,10 @@ fn mldsa65_keygen_matches_nist_acvp_fips204_vector() {
     let expected_public_key = decode_hex(&vector.public_key);
     let expected_private_key = decode_hex(&vector.private_key);
 
-    let key_pair =
-        PqdsaKeyPair::from_seed(&ML_DSA_65_SIGNING, &seed).expect("derive ML-DSA-65 keypair");
-    assert_eq!(key_pair.public_key().as_ref(), expected_public_key);
-    assert_eq!(
-        key_pair
-            .private_key()
-            .as_raw_bytes()
-            .expect("encode expanded ML-DSA-65 private key")
-            .as_ref(),
-        expected_private_key
-    );
+    let seed: [u8; 32] = seed.as_slice().try_into().expect("a 32-byte seed");
+    let (public_key, private_key) = ml_dsa_65::KG::keygen_from_seed(&seed);
+    assert_eq!(public_key.into_bytes().as_slice(), expected_public_key);
+    assert_eq!(private_key.into_bytes().as_slice(), expected_private_key);
 }
 
 #[test]
@@ -44,21 +37,19 @@ fn mldsa65_signatures_interoperate_with_openssl() {
     let vector: KeyGenerationVector =
         serde_json::from_str(include_str!("vectors/mldsa65_keygen_acvp.json"))
             .expect("parse checked-in NIST ACVP vector");
-    let seed = decode_hex(&vector.seed);
-    let key_pair =
-        PqdsaKeyPair::from_seed(&ML_DSA_65_SIGNING, &seed).expect("derive ML-DSA-65 keypair");
-    let private_key_bytes = key_pair
-        .private_key()
-        .as_raw_bytes()
-        .expect("encode expanded ML-DSA-65 private key");
+    let seed: [u8; 32] = decode_hex(&vector.seed)
+        .as_slice()
+        .try_into()
+        .expect("a 32-byte seed");
+    let (raw_public_key, raw_private_key) = ml_dsa_65::KG::keygen_from_seed(&seed);
     let private_key = PrivateKey::new(
         SignatureSchemeId::MlDsa65,
-        private_key_bytes.as_ref().to_vec(),
+        raw_private_key.into_bytes().to_vec(),
     )
     .expect("wrap raw ML-DSA-65 private key");
     let public_key = PublicKey::new(
         SignatureSchemeId::MlDsa65,
-        key_pair.public_key().as_ref().to_vec(),
+        raw_public_key.into_bytes().to_vec(),
     )
     .expect("wrap raw ML-DSA-65 public key");
 
@@ -75,24 +66,26 @@ fn mldsa65_signatures_interoperate_with_openssl() {
     let private_der_path = directory.join("private.der");
     let public_pem_path = directory.join("public.pem");
     let message_path = directory.join("message.bin");
-    let aws_signature_path = directory.join("aws-lc.sig");
+    let loadngo_signature_path = directory.join("loadngo.sig");
     let openssl_signature_path = directory.join("openssl.sig");
-    fs::write(
-        &private_der_path,
-        key_pair
-            .to_pkcs8v1()
-            .expect("encode PKCS#8 keypair")
-            .as_ref(),
-    )
-    .expect("write PKCS#8 keypair");
+    // OpenSSL is given the seed alone and derives the key pair itself, so its public key agreeing
+    // with ours checks key generation from a seed as well as the signatures. PKCS#8 v1 with the
+    // seed form of the ML-DSA private key (RFC 9881): PrivateKeyInfo { version 0, id-ml-dsa-65
+    // (2.16.840.1.101.3.4.3.18), OCTET STRING { [0] IMPLICIT seed } }.
+    let mut pkcs8 = vec![
+        0x30, 0x34, 0x02, 0x01, 0x00, 0x30, 0x0b, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03,
+        0x04, 0x03, 0x12, 0x04, 0x22, 0x80, 0x20,
+    ];
+    pkcs8.extend_from_slice(&seed);
+    fs::write(&private_der_path, &pkcs8).expect("write PKCS#8 private key");
 
     let message = b"loadngo ML-DSA-65 OpenSSL interoperability";
     fs::write(&message_path, message).expect("write signature message");
     let scheme = MlDsa65Scheme;
-    let aws_signature = scheme
+    let loadngo_signature = scheme
         .sign(&private_key, message)
         .expect("sign with loadngo ML-DSA wrapper");
-    fs::write(&aws_signature_path, &aws_signature.bytes).expect("write AWS-LC signature");
+    fs::write(&loadngo_signature_path, &loadngo_signature.bytes).expect("write loadngo signature");
 
     run_openssl([
         "pkey",
@@ -114,7 +107,7 @@ fn mldsa65_signatures_interoperate_with_openssl() {
         "-in",
         path_arg(&message_path),
         "-sigfile",
-        path_arg(&aws_signature_path),
+        path_arg(&loadngo_signature_path),
     ]);
 
     run_openssl([

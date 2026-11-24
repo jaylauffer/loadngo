@@ -16,8 +16,9 @@ thiserror.workspace = true
 pqcrypto-dilithium.workspace = true
 pqcrypto-falcon.workspace = true
 pqcrypto-traits.workspace = true
-aws-lc-rs.workspace = true
+fips204.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+aws-lc-rs.workspace = true

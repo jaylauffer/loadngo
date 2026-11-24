@@ -134,7 +134,10 @@ rtrb = "0.3"
 pqcrypto-dilithium = "0.5"
 pqcrypto-falcon = "0.4"
 pqcrypto-traits = "0.3"
-# AWS-LC provides stable FIPS 204 ML-DSA APIs with portable Rust bindings.
+# ML-DSA-65 (FIPS 204) in pure Rust: nothing that signs or verifies links a C cryptography library for it.
+# Pinned: a signature library's version changes on purpose, with pq-crypto's cross-checks rerun.
+fips204 = { version = "=0.5.0", default-features = false, features = ["ml-dsa-65", "default-rng"] }
+# TRIAL ONLY: the implementation fips204 replaced, for pq-crypto/tests/mldsa65_against_aws_lc.rs.
 aws-lc-rs = "=1.18.1"
 zeroize = { version = "1", features = ["alloc"] }
 loadngo-pq-crypto = { path = "pq-crypto" }
