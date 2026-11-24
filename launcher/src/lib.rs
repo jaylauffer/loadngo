@@ -3,12 +3,17 @@
 //! file. `docs/LAUNCHER.md` has the catalog's format and how the launcher
 //! is installed. On a phone it opens links, plays what is built into it and
 //! starts nothing ([`Abilities::PHONE`], [`host::BuiltIn`]).
+//!
+//! On a computer it is also a password vault ([`vault`], on the
+//! `loadngo-vault` crate; `docs/VAULT.md`).
 
 pub mod app;
 pub mod catalog;
 pub mod draw;
+pub mod field;
 pub mod host;
 pub mod process;
+pub mod vault;
 
 pub use app::{Abilities, Edges, Effect, LauncherApp, State};
 pub use host::{launch, BuiltIn};

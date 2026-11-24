@@ -40,6 +40,7 @@ members = [
     "animation",
     "animation-build",
     "launcher",
+    "vault",
 ]
 default-members = [
     "task",
@@ -76,6 +77,7 @@ default-members = [
     "animation",
     "animation-build",
     "launcher",
+    "vault",
 ]
 resolver = "2"
 

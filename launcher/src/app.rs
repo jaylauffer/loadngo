@@ -5,9 +5,14 @@
 //! leaves as [`Effect`]s for the host loop (`host.rs`) to carry out, and what
 //! happened comes back through [`LauncherApp::apply_catalog`],
 //! [`LauncherApp::apply_process`] and [`LauncherApp::opened`].
+//!
+//! The launcher is also a password vault. Its screens are
+//! [`crate::vault::VaultView`], which takes the window over while it is up
+//! and works the same way, through [`Effect::Vault`].
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use loadngo_host_core::{HostKey, InputSnapshot};
 use ui_core::{HorizontalAlign, PaintOp, Point, PointerButton, Rect};
@@ -15,6 +20,7 @@ use ui_core::{HorizontalAlign, PaintOp, Point, PointerButton, Rect};
 use crate::catalog::{Catalog, Entry, Kind, Loaded};
 use crate::draw::{self, Tone};
 use crate::process::{self, Ending, Event, What};
+use crate::vault::{Ask, VaultView};
 
 const PAD: f32 = 16.0;
 const HEADER_HEIGHT: f32 = 56.0;
@@ -50,6 +56,9 @@ pub struct Abilities {
     /// touch anywhere in the height of its row, and nothing is under a
     /// pointer between touches.
     pub touch: bool,
+    /// It keeps the password vault, which needs a keyboard to type a
+    /// master password on and a clipboard to hand a password over by.
+    pub keeps_vault: bool,
 }
 
 impl Abilities {
@@ -58,12 +67,14 @@ impl Abilities {
         starts_programs: true,
         edits_catalog: true,
         touch: false,
+        keeps_vault: true,
     };
     /// A phone or a tablet.
     pub const PHONE: Self = Self {
         starts_programs: false,
         edits_catalog: false,
         touch: true,
+        keeps_vault: false,
     };
 
     /// Whether `entry` can be started or opened here. What is built into
@@ -139,6 +150,8 @@ pub enum Effect {
     Play {
         name: String,
     },
+    /// Something for the password vault: see [`Ask`].
+    Vault(Ask),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,6 +168,7 @@ enum Target {
     Act(usize, Action),
     Reload,
     Edit,
+    Vault,
 }
 
 struct Row {
@@ -211,6 +225,7 @@ struct Layout {
     detail: Rect,
     reload: Rect,
     edit: Rect,
+    vault: Rect,
 }
 
 pub struct LauncherApp {
@@ -245,6 +260,10 @@ pub struct LauncherApp {
     effects: Vec<Effect>,
     /// The entries to start as soon as the list has been read.
     start_when_loaded: Vec<String>,
+    /// The password vault's screens.
+    vault: VaultView,
+    /// The vault's screens have the window, in place of the list.
+    in_vault: bool,
 }
 
 impl LauncherApp {
@@ -274,6 +293,8 @@ impl LauncherApp {
             next_run: 1,
             effects: vec![Effect::LoadCatalog],
             start_when_loaded: Vec::new(),
+            vault: VaultView::new(),
+            in_vault: false,
         }
     }
 
@@ -306,7 +327,43 @@ impl LauncherApp {
 
     /// What the host loop should do now; each effect is handed over once.
     pub fn take_effects(&mut self) -> Vec<Effect> {
+        let asks = self.vault.take_asks();
+        self.effects.extend(asks.into_iter().map(Effect::Vault));
         std::mem::take(&mut self.effects)
+    }
+
+    /// The password vault's screens, for the host loop to answer.
+    pub fn vault(&mut self) -> &mut VaultView {
+        &mut self.vault
+    }
+
+    /// Gives the window to the vault's screens, where this machine keeps a
+    /// vault.
+    pub fn show_vault(&mut self) {
+        if self.abilities.keeps_vault {
+            self.in_vault = true;
+            self.pressed = None;
+            self.drag = None;
+            self.armed = None;
+            self.vault.enter();
+        }
+    }
+
+    /// Whether the vault's screens have the window.
+    pub fn in_vault(&self) -> bool {
+        self.in_vault
+    }
+
+    /// The time now: the vault empties the clipboard of a copied password
+    /// and locks itself by the clock, whichever screen is up.
+    pub fn tick(&mut self, now: Instant) {
+        self.vault.tick(now);
+    }
+
+    /// How long until [`LauncherApp::tick`] has something to do. With
+    /// nothing due the window waits for input alone.
+    pub fn wake_in(&self) -> Option<Duration> {
+        self.vault.wake_in()
     }
 
     /// How many entries are building, starting, running or stopping.
@@ -559,6 +616,16 @@ impl LauncherApp {
             width: BUTTON_WIDTH,
             ..edit
         };
+        // No vault, no button for it.
+        let vault = Rect {
+            x: reload.x - BUTTON_GAP - BUTTON_WIDTH,
+            width: if self.abilities.keeps_vault {
+                BUTTON_WIDTH
+            } else {
+                0.0
+            },
+            ..edit
+        };
         Layout {
             header,
             banner,
@@ -566,6 +633,7 @@ impl LauncherApp {
             detail,
             reload,
             edit,
+            vault,
         }
     }
 
@@ -653,6 +721,9 @@ impl LauncherApp {
         if self.reach(layout.edit, bar).contains(point) {
             return Some(Target::Edit);
         }
+        if self.reach(layout.vault, bar).contains(point) {
+            return Some(Target::Vault);
+        }
         if !layout.list.contains(point) {
             return None;
         }
@@ -677,6 +748,18 @@ impl LauncherApp {
     /// One frame of input for a window of `size`.
     pub fn frame(&mut self, input: &InputSnapshot, size: (f32, f32)) {
         self.size = size;
+        if self.in_vault {
+            self.vault.frame(input, size, self.edges);
+            if self.vault.take_leaving() {
+                self.in_vault = false;
+                // Where the pointer is now is over nothing it pressed.
+                self.pointer = Point {
+                    x: input.mouse_x,
+                    y: input.mouse_y,
+                };
+            }
+            return;
+        }
         let layout = self.layout();
         self.pointer = Point {
             x: input.mouse_x,
@@ -792,6 +875,7 @@ impl LauncherApp {
             }
             Target::Reload => self.effects.push(Effect::LoadCatalog),
             Target::Edit => self.effects.push(Effect::EditCatalog),
+            Target::Vault => self.show_vault(),
         }
     }
 
@@ -887,6 +971,10 @@ impl LauncherApp {
     }
 
     pub fn paint(&self, scene: &mut Vec<PaintOp>) {
+        if self.in_vault {
+            self.vault.paint(scene);
+            return;
+        }
         let layout = self.layout();
         // A finger is over something only while it is down and not dragging
         // the list.
@@ -926,7 +1014,7 @@ impl LauncherApp {
                 Rect {
                     x: edges.left + PAD + 110.0,
                     y: edges.top + 2.0,
-                    width: (layout.reload.x - edges.left - PAD * 2.0 - 110.0).max(0.0),
+                    width: (layout.vault.x - edges.left - PAD * 2.0 - 110.0).max(0.0),
                     height: HEADER_HEIGHT,
                 },
                 format!("{busy} running"),
@@ -949,6 +1037,15 @@ impl LauncherApp {
                 "Edit list",
                 Tone::Plain,
                 hot == Some(Target::Edit),
+            );
+        }
+        if self.abilities.keeps_vault {
+            draw::button(
+                scene,
+                layout.vault,
+                "Vault",
+                Tone::Plain,
+                hot == Some(Target::Vault),
             );
         }
         draw::line(
@@ -1920,6 +2017,69 @@ mod tests {
             app.banner.as_deref(),
             Some("\"Editor\" cannot be started on this device.")
         );
+    }
+
+    fn header_button(app: &LauncherApp, label: &str) -> Option<Rect> {
+        texts(app)
+            .into_iter()
+            .find(|(text, _)| text == label)
+            .map(|(_, rect)| rect)
+    }
+
+    #[test]
+    fn the_vault_button_gives_the_window_to_the_vault_and_list_gives_it_back() {
+        let mut rig = Rig::new();
+        let vault = header_button(&rig.app, "Vault").expect("a Vault button");
+        let reload = header_button(&rig.app, "Reload").unwrap();
+        assert!(vault.right() <= reload.x);
+        let effects = rig.click_at(Point {
+            x: vault.x + vault.width / 2.0,
+            y: vault.y + vault.height / 2.0,
+        });
+        assert!(rig.app.in_vault());
+        assert_eq!(effects, [Effect::Vault(Ask::Look)]);
+        // The host answers: there is none yet.
+        rig.app.vault().found(false);
+        rig.frame(InputSnapshot::default());
+        let shown: Vec<String> = texts(&rig.app).into_iter().map(|(text, _)| text).collect();
+        assert!(shown.contains(&"Make a vault".to_string()), "{shown:?}");
+        assert!(!shown.contains(&"Editor".to_string()), "{shown:?}");
+
+        // A key that works the list does nothing to it from here: nothing
+        // starts behind the vault.
+        assert!(rig.key(HostKey::Enter).is_empty());
+        assert_eq!(rig.app.busy(), 0);
+
+        // List, and the list is back, as it was.
+        let list = header_button(&rig.app, "List").expect("a List button");
+        rig.click_at(Point {
+            x: list.x + list.width / 2.0,
+            y: list.y + list.height / 2.0,
+        });
+        assert!(!rig.app.in_vault());
+        let shown: Vec<String> = texts(&rig.app).into_iter().map(|(text, _)| text).collect();
+        assert!(shown.contains(&"Editor".to_string()), "{shown:?}");
+        // Asked for again, it does not look for the file twice.
+        rig.app.show_vault();
+        assert!(rig.app.take_effects().is_empty());
+        // Escape is the way back too.
+        rig.key(HostKey::Escape);
+        assert!(!rig.app.in_vault());
+    }
+
+    #[test]
+    fn a_phone_keeps_no_vault() {
+        let mut app = phone(CATALOG);
+        assert!(header_button(&app, "Vault").is_none());
+        assert!(header_button(&app, "Reload").is_some());
+        app.show_vault();
+        assert!(!app.in_vault());
+        assert!(app
+            .take_effects()
+            .iter()
+            .all(|effect| !matches!(effect, Effect::Vault(_))));
+        // With nothing due, the window waits for input alone.
+        assert_eq!(app.wake_in(), None);
     }
 
     #[test]

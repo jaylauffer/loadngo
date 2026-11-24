@@ -7,11 +7,13 @@ own launcher for all these things that can be installed as a mac app"). It is
 one binary, `launcher`, on `loadngo-host-desktop`, the same source on macOS,
 Linux and Windows, and on an iPhone, where it opens links and starts nothing
 (see "On an iPhone"). A phone's games are built into a launcher of their own
-and played in its window (see "Games built in").
+and played in its window (see "Games built in"). On a computer it is also a
+password vault: [`VAULT.md`](VAULT.md).
 
 ```
 cargo run -p loadngo-launcher --release
 launcher --start "Code Editor"
+launcher --vault                          # open on the password vault
 scripts/install-launcher.sh --open        # from a checkout: build it and install it
 scripts/install-launcher.sh --release     # install the newest published build
 scripts/install-launcher-ios.sh           # build it for the attached iPhone and install it
@@ -101,6 +103,10 @@ output.
   takes the question back.
 - **Play**, on a game built into the launcher, gives the game the window
   until it is left (see "Games built in").
+- **Vault**, in the header on a computer, gives the window to the password
+  vault; its **List** gives it back. The vault makes passwords, each one a
+  prime number, and keeps them in `passwords.vault` beside the catalog,
+  sealed under a master password. All of it is in [`VAULT.md`](VAULT.md).
 - Up and Down move the selection; Enter starts, opens or plays the selected
   entry. Enter never stops anything.
 - `--start NAME` (more than once if wanted) starts entries as soon as the
@@ -142,8 +148,8 @@ costs one wake, and the window asks for no frame of its own
 - Colour codes and carriage-return progress are taken out of shown lines; a
   line is cut at 400 characters; 200 lines are kept per entry.
 
-`LAUNCHER_STATE_DIR` puts the catalog and `output/` in another folder, for
-test runs.
+`LAUNCHER_STATE_DIR` puts the catalog, `output/` and the vault's file in
+another folder, for test runs.
 
 ## Installing it
 
@@ -539,3 +545,4 @@ SNG Mahjong inside it), on the Mac mini.
 - After the launcher is killed outright, a service it started is not found
   again (see above).
 - No search, no icons per entry, one catalog file per machine.
+- The vault's own list of what is not done is in [`VAULT.md`](VAULT.md).

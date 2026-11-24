@@ -13,13 +13,15 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use loadngo_host_core::{FrameDemand, HostFrame, WindowDescriptor};
 use loadngo_host_desktop::Offloaded;
+use loadngo_vault::{Costs, Error as VaultError, Vault};
 
 use crate::catalog::{self, Entry, Loaded};
 use crate::process::{SearchPath, Supervisor};
+use crate::vault::{self, Ask, Secret, Unlocked};
 use crate::{draw, Abilities, Edges, Effect, LauncherApp};
 
 const APP_ID: &str = "loadngo-launcher";
@@ -35,11 +37,12 @@ const QUIT_PATIENCE: Duration = Duration::from_secs(3);
 const HELP: &str = "\
 launcher - start what is installed on this machine from one window
 
-Usage: launcher [--start NAME]
+Usage: launcher [--start NAME] [--vault]
 
   --start NAME  optional  Start (or open, or play) the entry called NAME as
                           soon as the list has been read, as its button
                           would. May be given more than once.
+  --vault       optional  Open on the password vault in place of the list.
   -h, --help    optional  Print this help.
 
 The window lists the entries of the catalog, a JSON file in the app data
@@ -57,12 +60,19 @@ list; Enter starts and opens, and never stops anything.
 A launcher built with games inside it lists them first. Play gives one the
 window; leaving the game (its Quit) brings the list back.
 
-Set LAUNCHER_STATE_DIR to use another folder for the catalog and the output
-(for test runs).
+Vault (on a computer) is a password vault: it makes passwords, each one a
+prime number, and keeps them in passwords.vault beside the catalog, sealed
+under a master password that is kept nowhere. Copy puts a password on the
+clipboard and takes it off again 43 seconds later; the vault locks itself
+when left alone for 307 seconds. loadngo's docs/VAULT.md has the rest.
+
+Set LAUNCHER_STATE_DIR to use another folder for the catalog, the output and
+the vault (for test runs).
 
 Examples:
   launcher
   launcher --start \"Code Editor\"
+  launcher --vault
 ";
 
 /// What a built-in runs: its whole loop, from its first frame to the frame
@@ -106,6 +116,7 @@ impl BuiltIn {
 /// the window, lists `built_ins` and then the catalog.
 pub fn launch(built_ins: Vec<BuiltIn>) {
     let mut start = Vec::new();
+    let mut on_vault = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -113,6 +124,7 @@ pub fn launch(built_ins: Vec<BuiltIn>) {
                 say(HELP, false);
                 return;
             }
+            "--vault" => on_vault = true,
             "--start" => match args.next() {
                 Some(name) => start.push(name),
                 None => {
@@ -133,6 +145,12 @@ pub fn launch(built_ins: Vec<BuiltIn>) {
         }
     }
     let supervisor = Rc::new(OnceCell::new());
+    #[cfg(unix)]
+    // SAFETY: registers a function that takes nothing and touches only the
+    // mutex above and the clipboard.
+    unsafe {
+        libc::atexit(forget_at_exit);
+    }
     loadngo_host_desktop::launch(
         WindowDescriptor {
             title: "loadngo Launcher".to_string(),
@@ -142,10 +160,13 @@ pub fn launch(built_ins: Vec<BuiltIn>) {
             linux_wm_class: Some(APP_ID),
         },
         None,
-        run(Rc::clone(&supervisor), start, built_ins),
+        run(Rc::clone(&supervisor), start, on_vault, built_ins),
     );
-    // The window has closed. What only the launcher was reading from stops
-    // with it; programs in their own windows carry on.
+    // The window has closed. A copied password does not stay on the
+    // clipboard behind it.
+    forget_on_the_way_out();
+    // What only the launcher was reading from stops with it; programs in
+    // their own windows carry on.
     if let Some(supervisor) = supervisor.get() {
         supervisor.shutdown(QUIT_PATIENCE);
     }
@@ -252,9 +273,156 @@ async fn fresh_frame() {
     loadngo_host_desktop::next_frame(FrameDemand::after(Duration::ZERO)).await;
 }
 
-async fn run(shared: Rc<OnceCell<Supervisor>>, start: Vec<String>, built_ins: Vec<BuiltIn>) {
+/// How wide the host draws `text`, for the vault's fields.
+fn measure(text: &str, font_size: u16) -> f32 {
+    loadngo_host_desktop::measure_text(text, None, font_size, 1.0).width
+}
+
+/// A job's answer, with a job that did not finish told as a failure.
+fn finished<T>(job: Result<Result<T, VaultError>, String>) -> Result<T, VaultError> {
+    job.unwrap_or_else(|why| Err(VaultError::File(why)))
+}
+
+/// Empties the clipboard if `text` is still what it holds: something copied
+/// since is left alone.
+fn forget(text: &Secret) {
+    if let Ok(Some(held)) = loadngo_host_desktop::read_clipboard_text() {
+        let held = zeroize::Zeroizing::new(held);
+        if held.as_str() == text.as_str() {
+            let _ = loadngo_host_desktop::write_clipboard_text("");
+        }
+    }
+}
+
+/// A copied password that has not been taken off the clipboard yet. The
+/// vault's screens do that 43 seconds after the copy; this is for a launcher
+/// that is quit sooner, which would otherwise leave it there for good.
+static COPIED: std::sync::Mutex<Option<Secret>> = std::sync::Mutex::new(None);
+
+fn note_copied(text: Option<Secret>) {
+    if let Ok(mut copied) = COPIED.lock() {
+        *copied = text;
+    }
+}
+
+/// Takes a copied password off the clipboard on the way out. Reached when
+/// the window closes and, on Unix, at `exit` (the Dock's Quit). Not when a
+/// signal or a crash ends the launcher where it stands.
+fn forget_on_the_way_out() {
+    let copied = COPIED.lock().ok().and_then(|mut copied| copied.take());
+    if let Some(text) = copied {
+        forget(&text);
+    }
+}
+
+#[cfg(unix)]
+extern "C" fn forget_at_exit() {
+    forget_on_the_way_out();
+}
+
+/// The jobs under way for the vault, each on another thread.
+#[derive(Default)]
+struct VaultJobs {
+    unlocking: Option<Offloaded<Result<Unlocked, VaultError>>>,
+    writing: Option<Offloaded<Result<Vec<u8>, VaultError>>>,
+    making: Option<Offloaded<Result<Secret, VaultError>>>,
+    copying: Vec<(Secret, Offloaded<Result<(), String>>)>,
+    pasting: Option<Offloaded<Result<Option<String>, String>>>,
+    forgetting: Vec<Offloaded<()>>,
+}
+
+impl VaultJobs {
+    /// Hands what has finished to the vault's screens.
+    fn deliver(&mut self, app: &mut LauncherApp) {
+        if let Some(result) = self.unlocking.as_mut().and_then(Offloaded::try_take) {
+            self.unlocking = None;
+            app.vault().unlocked(finished(result));
+        }
+        if let Some(result) = self.writing.as_mut().and_then(Offloaded::try_take) {
+            self.writing = None;
+            app.vault().written(finished(result));
+        }
+        if let Some(result) = self.making.as_mut().and_then(Offloaded::try_take) {
+            self.making = None;
+            app.vault().made(finished(result));
+        }
+        if let Some(result) = self.pasting.as_mut().and_then(Offloaded::try_take) {
+            self.pasting = None;
+            app.vault()
+                .pasted(result.and_then(|read| read).unwrap_or(None));
+        }
+        let mut waiting = Vec::new();
+        for (text, mut job) in self.copying.drain(..) {
+            match job.try_take() {
+                Some(result) => {
+                    let result = result.and_then(|wrote| wrote);
+                    if result.is_ok() {
+                        note_copied(Some(text.clone()));
+                    }
+                    app.vault().copied(text, result);
+                }
+                None => waiting.push((text, job)),
+            }
+        }
+        self.copying = waiting;
+        self.forgetting.retain_mut(|job| job.try_take().is_none());
+    }
+
+    /// Starts what the vault's screens asked for.
+    fn start(&mut self, ask: Ask, path: &Path, app: &mut LauncherApp) {
+        match ask {
+            Ask::Look => app.vault().found(Vault::exists(path)),
+            Ask::Create { master } => {
+                let path = path.to_path_buf();
+                self.unlocking = Some(loadngo_host_desktop::offload(move || {
+                    vault::create(&path, &master, Costs::STANDARD)
+                }));
+            }
+            Ask::Open { master } => {
+                let path = path.to_path_buf();
+                self.unlocking = Some(loadngo_host_desktop::offload(move || {
+                    vault::unlock(&path, &master)
+                }));
+            }
+            // The screens ask for one write at a time.
+            Ask::Write(sealed) => {
+                self.writing = Some(loadngo_host_desktop::offload(move || sealed.write()));
+            }
+            Ask::Make(recipe) => {
+                self.making = Some(loadngo_host_desktop::offload(move || vault::make(recipe)));
+            }
+            Ask::Copy { text } => {
+                let copy = text.clone();
+                self.copying.push((
+                    text,
+                    loadngo_host_desktop::offload(move || {
+                        loadngo_host_desktop::write_clipboard_text(copy.as_str())
+                    }),
+                ));
+            }
+            Ask::Forget { text } => {
+                note_copied(None);
+                self.forgetting
+                    .push(loadngo_host_desktop::offload(move || forget(&text)));
+            }
+            Ask::Paste => {
+                self.pasting = Some(loadngo_host_desktop::offload(
+                    loadngo_host_desktop::read_clipboard_text,
+                ));
+            }
+        }
+    }
+}
+
+async fn run(
+    shared: Rc<OnceCell<Supervisor>>,
+    start: Vec<String>,
+    on_vault: bool,
+    built_ins: Vec<BuiltIn>,
+) {
     let data = data_dir();
     let catalog_path = data.join("catalog.json");
+    let vault_path = data.join("passwords.vault");
     // Not `logs`: the host keeps its own log there.
     let logs = data.join("output");
     let home = home_dir();
@@ -273,6 +441,11 @@ async fn run(shared: Rc<OnceCell<Supervisor>>, start: Vec<String>, built_ins: Ve
     for name in start {
         app.start_when_loaded(name);
     }
+    app.vault().set_measure(measure);
+    if on_vault {
+        app.show_vault();
+    }
+    let mut vault_jobs = VaultJobs::default();
     let mut loading: Option<Offloaded<Loaded>> = None;
     // Reload was asked while a read was under way: read once more after it.
     let mut load_again = false;
@@ -295,6 +468,9 @@ async fn run(shared: Rc<OnceCell<Supervisor>>, start: Vec<String>, built_ins: Ve
         for event in supervisor.take_events() {
             app.apply_process(event);
         }
+
+        vault_jobs.deliver(&mut app);
+        app.tick(Instant::now());
 
         app.set_edges(edges(&frame));
         app.frame(&frame.input, (frame.surface.width, frame.surface.height));
@@ -329,6 +505,7 @@ async fn run(shared: Rc<OnceCell<Supervisor>>, start: Vec<String>, built_ins: Ve
                         play = built_ins.iter().find(|own| own.entry.name == name);
                     }
                 }
+                Effect::Vault(ask) => vault_jobs.start(ask, &vault_path, &mut app),
             }
         }
         if load_again && loading.is_none() {
@@ -355,7 +532,14 @@ async fn run(shared: Rc<OnceCell<Supervisor>>, start: Vec<String>, built_ins: Ve
         }
 
         // Nothing here moves by itself: input, a finished read or open, and
-        // news of a started program each bring the next frame.
-        loadngo_host_desktop::next_frame(FrameDemand::idle()).await;
+        // news of a started program each bring the next frame. The vault
+        // adds two things due by the clock (a copied password to take off
+        // the clipboard, a vault left alone to lock): then the frame comes
+        // no later than the first of them.
+        let demand = match app.wake_in() {
+            Some(due) => FrameDemand::idle_until(due),
+            None => FrameDemand::idle(),
+        };
+        loadngo_host_desktop::next_frame(demand).await;
     }
 }
