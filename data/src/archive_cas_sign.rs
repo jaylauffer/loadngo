@@ -182,9 +182,8 @@ pub fn read_public_key(path: &Path) -> Result<PublicKey> {
     read_key(path, |b| PublicKey::from_bytes(b).map_err(Into::into))
 }
 
-/// The trusted public key when none is named: the one `*.dilithium2.pub` file in
-/// `~/.loadngo/keys`, where `archive_cas_sign` keys live. `None` when there is no such
-/// file, or more than one (then a key must be named).
+/// The trusted public key when none is named: the one `*.pub` file in
+/// `~/.loadngo/keys`. `None` when there is no such file, or more than one.
 ///
 /// # Errors
 /// When the one key file found cannot be read.
@@ -200,7 +199,11 @@ pub fn default_trusted_key() -> Result<Option<PublicKey>> {
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.ends_with(".dilithium2.pub"))
+                .is_some_and(|name| {
+                    [".ml-dsa-65.pub", ".dilithium2.pub", ".falcon512.pub"]
+                        .iter()
+                        .any(|suffix| name.ends_with(suffix))
+                })
         })
         .collect();
     match keys.as_slice() {

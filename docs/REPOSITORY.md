@@ -21,8 +21,42 @@ root's `objects/` and named by the BLAKE3-256 hash of its bytes:
 | Object | Format | Holds |
 |---|---|---|
 | Tree | `loadngo-repository-tree-v1` | one folder: entries sorted by name, each `file` or `executable` (object hash and size), `symlink` (target) or `directory` (tree hash, with the files and bytes below it) |
+| Tree | `loadngo-repository-tree-v2` | the same directory entries plus `chunked_file` (manifest object, logical whole-file hash and size, executable bit) |
+| Tree | `loadngo-repository-tree-v3` | v2 entries, written by runtime-aware commands using whole-file CAS objects for newly ingested regular files below the CDC minimum (8 KiB) and chunk manifests for larger files; unchanged entries from earlier trees may retain their existing representation |
 | Version | `loadngo-repository-version-v1` | repository id, parents, root tree, author, author time, message, the changes from the first parent (`created`, `changed`, `deleted`, `moved` paths; a folder created or deleted whole is one path) and, for an imported commit, its origin (git commit id, committer, commit time) |
-| File | — | the file's bytes, as Archive CAS stores them (zstd when the root compresses) |
+| File | — | v1/v3 raw entries: the file's bytes as one Archive CAS object; v2/v3 chunked entries: a canonical CDC manifest whose ordered chunk references name immutable Archive CAS objects and whose whole-file BLAKE3 hash and size identify the reconstructed bytes |
+
+New chunked files use the versioned `loadngo-buzhash64-cdc-v2` profile (64-byte
+rolling Buzhash with a correctly rotated outgoing byte; 8/64/128 KiB
+minimum/target/maximum). Canonical manifests still accept the earlier v1 profile.
+Their boundaries remain readable because manifests reference explicit chunk identities.
+Existing v1 and v2 trees remain valid. V2 and v3 trees may hold both raw and
+chunked files, which lets later commits retain unchanged chunk manifests while
+replacing changed files. Runtime-aware import/init/commit use v3 so the raw-file
+cutoff is explicit in the persisted tree format.
+Verification, send planning, receive closure checks, checkout, and repository GC follow
+the manifest and all referenced chunks. Import spools each Git blob through a fixed
+1 MiB buffer, then chunks and stores it through proactor-backed CAS I/O. Import storage
+and `verify` use the command-owned proactor and thermal admission. Checkout tree/manifest
+reads and CAS object restores use the proactor; send payload reads, receive's
+temporary-file-to-CAS ingestion, and `init`/`commit` changed-file ingestion use admitted
+CAS paths. Status/init/commit hash working files through thermally admitted proactor reads,
+processing each bounded buffer on the repository's bounded CPU worker lane.
+Regular files below 8 KiB, including empty files, are stored whole; larger newly
+ingested files use chunk manifests. Runtime-aware writers persist this selection
+under tree v3. CDC boundary detection and hashing also yield to thermal admission
+every 64 KiB.
+New head signing and trusted-head checks on runtime-aware CLI paths use the thermally
+admitted bounded CPU worker. Runtime status traversal and ignore-file reads, checkout
+directory/symlink/mode changes and publication, branch-head publication, and local
+`receive` framed stdin reads use bounded blocking-I/O or worker lanes. Send pipe writes
+and fetch reads also use the bounded I/O lane. Synchronous API fallbacks, CAS range
+metadata checks outside runtime checkout, filesystem preflight checks outside restore,
+non-runtime tree diff, and some version validation remain synchronous. Checkout CAS
+source/output open/close, source metadata checks, destination preflight/sync, and
+publication use the bounded blocking-I/O lane. Incoming payload hashes use the CPU worker, and partial-file writes/sync
+apply thermal admission at bounded steps. See
+[REPOSITORY_RUNTIME.md](REPOSITORY_RUNTIME.md) for the current integration boundary.
 
 A version names its parents and tree by hash, and a tree names what it holds by hash,
 so one hash pins a whole history. A version holds no signature, store path or import
@@ -44,17 +78,24 @@ names (`CON`, `NUL`, `COM1`... with or without an extension) and `<>"|?*` may be
 
 A **head** is `repositories/<id>/heads/<branch>.json`: a claim that branch `<branch>` of
 repository `<id>` is at version `<hash>`, with the signer's identity and time, signed with
-Dilithium2 (`loadngo-pq-crypto`) inside a `loadngo-anchor` frame of domain
+ML-DSA-65 (`loadngo-pq-crypto`) inside a `loadngo-anchor` frame of domain
 `loadngo.repository.head`, so it cannot be replayed as any other kind of signature. Every
 claim ever made is also kept in `repositories/<id>/signatures/`.
 
+**Algorithm compatibility:** new keys default to standardized FIPS 204 ML-DSA-65 through
+AWS-LC's stable `aws-lc-rs` API. The repository scheme ID is distinct (`0x03`), and the
+existing length-prefixed key/signature envelope remains unchanged. Signing uses pure
+ML-DSA with an empty context. Legacy `Dilithium2` (`pqcrypto-dilithium` 0.5.0, pre-final
+round-3 parameters) and `Falcon512` remain available for explicit verification; neither
+is relabeled as ML-DSA.
+
 A version is **trusted** when it is, or is an ancestor of, the version of a head whose
-signature verifies against a trusted key (`--trusted-public-key`, or the one
-`*.dilithium2.pub` in `~/.loadngo/keys`). Every object is hash-checked as it is read, so
-a trusted head vouches for every byte below it. `checkout`, `log`, `commit`, `send` and
+signature verifies against a trusted key (`--trusted-public-key`, or the one `*.pub`
+file in `~/.loadngo/keys`). Every object is hash-checked as it is read, so
+a trusted head vouches for every byte below it. `checkout`, `log`, `commit`, `merge`, `send` and
 `receive` refuse anything not trusted; `verify` re-hashes a branch's whole history.
-`init`, `import` and `commit` also refuse to sign with a key the trusted keys do not
-hold, which would leave the branch where no later command could move it.
+`init`, `import`, `commit` and `merge` also refuse to sign with a key the trusted keys do
+not hold, which would leave the branch where no later command could move it.
 
 What it does not prove yet:
 
@@ -84,8 +125,11 @@ old objects.
 | `checkout --repository R (--branch B \| --version V) --destination <new-folder>` | writes the version, checking every file against its hash, into a temporary sibling renamed into place at the end: a refused checkout leaves nothing |
 | `status [--tree <folder>]` | `created`, `changed` or `deleted` and a path for each difference from the tree's version |
 | `commit [--tree <folder>] --path P... --message M --author A` | records the changes under the named paths as a new signed version; refuses if the branch moved since the tree was based on it |
+| `merge --repository R --branch B --other-branch O --message M --author A [--ours P...] [--theirs P...]` | reports when the source is already contained, otherwise fast-forwards or performs a three-way merge; small UTF-8 files combine non-overlapping line edits automatically, while unresolved conflicts use whole-file or subtree choices; verifies complete closure before signed head publication; existing checkouts remain unchanged |
+| `diff --repository R --from-branch A --to-branch B` | path-level created, changed, deleted, moved, or derived entries between two trusted branch heads; does not print file contents |
 | `verify --repository R --branch B` | the head's signature, then every version, tree (with its totals) and file hash |
 | `send --repository R --branch B (--to <store> \| --to-ssh <host> --remote-store <folder> [--remote-program <path>]) [--all]` | sends what the other store lacks (with `--all`, everything, which repairs its damaged copies); it checks everything and moves its branch forward |
+| `fetch --repository R --branch B (--from <store> \| --from-ssh <host> --remote-store <folder>)` | asks the source to stream the branch update locally or through PQ-constrained SSH; reuses the local branch's verified history when available, and verifies source exit, signature and full object closure before advancing the local branch |
 
 A checkout holds `.loadngo-repo` at its top: the store (absolute path), repository,
 branch and the version the tree is based on.
@@ -149,18 +193,28 @@ disk. Batching the syncs is open below.
 
 ## Not done yet
 
-- **Merging and reconciling.** Versions may have several parents, but nothing makes a
-  merge; `commit` refuses when the branch moved. This is
-  [RECONCILIATION.md](RECONCILIATION.md) step 2 onward.
-- **Fetching.** `send` pushes; nothing pulls yet, and nothing moves an existing checkout
-  to a newer version (check out again).
-- **Deleting a branch**, partial checkouts, and a content `diff` command.
+- **Textual merging and reconciliation.** Automatic line merging is limited to UTF-8
+  files up to 512 KiB and a bounded diff table; binary, larger, overlapping, and
+  file/directory conflicts require explicit whole-file or subtree choices. It does not
+  emit conflict markers or reconcile content proposals. Histories with multiple best
+  common ancestors still require recursive combination. See [RECONCILIATION.md](RECONCILIATION.md)
+  step 2 onward.
+- **Fetch efficiency and working-copy update.** SSH fetch uses the local branch tip as
+  a hint only when its complete closure is intact; otherwise it requests the full history
+  to repair missing or damaged copies. It advances the stored branch, but an existing
+  checkout remains at its recorded version and must be checked out again.
+- **Deleting a branch**, partial checkouts, and a file-content `diff` command.
 - **Symlinks on Windows** (checkout refuses them); Windows executable bits come from the
   version.
 - **Keys and trust:** author and approver signatures, a trust-root store, rotation,
   rollback protection (above).
 - **Fewer syncs:** one sync per batch of objects instead of per object.
-- **Large files:** import holds one git blob in memory at a time; checkout, commit and
-  transfer stream.
+- **Large files:** import spools each Git blob through a fixed 1 MiB buffer. Checkout,
+  commit and transfer use bounded CAS I/O. Runtime import/init/commit send CDC boundary
+  and whole-file hashing to the bounded CPU lane. Git import traversal scheduling and
+  zstd decoding remain synchronous on the command thread; the runtime checkout routes
+  CAS source/output file lifecycle, destination preflight, durability, and publication
+  through the bounded thermally admitted lane. Direct synchronous API fallbacks remain
+  synchronous.
 - **Archive manifests** are still one flat list per version; only repositories have
   directory nodes.

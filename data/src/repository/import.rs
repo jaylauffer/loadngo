@@ -11,17 +11,30 @@
 //! the branch moves only forward. Only the new head is signed; it covers every version
 //! below it.
 
+use super::runtime::RepositoryRuntime;
 use super::{
-    now_unix_secs, Origin, Repository, SignedHead, Signer, Tree, TreeCache, TreeEntry, Trust,
-    Version, VERSION_FORMAT,
+    now_unix_secs, Origin, Repository, Signer, Tree, TreeCache, TreeEntry, Trust, Version,
+    VERSION_FORMAT,
 };
-use crate::archive_cas::ArchiveObject;
+use crate::archive_cas::{chunking::MIN_CHUNK_BYTES, ArchiveObject};
 use crate::cas::CasHash;
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+
+const MAX_IMPORT_CHUNKS: usize = 1_000_000;
+
+#[derive(Clone, Copy)]
+enum ImportedBlob {
+    Whole(ArchiveObject),
+    Chunked {
+        manifest: ArchiveObject,
+        file: ArchiveObject,
+    },
+}
 
 /// What [`import_git`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,11 +63,9 @@ pub fn import_git(
     trust: &Trust,
 ) -> Result<ImportReport> {
     super::validate_id(branch, "branch")?;
-    super::work_tree::refuse_untrusted(
-        &SignedHead::sign(repository.id(), branch, CasHash::digest(b""), signer, 0)?,
-        trust,
-    )?;
-    let target = git_text(
+    super::work_tree::refuse_signer_untrusted(signer, trust)?;
+    let mut runtime = RepositoryRuntime::new()?;
+    let target = git_text_with_runtime(
         git_dir,
         &[
             "rev-parse",
@@ -62,32 +73,47 @@ pub fn import_git(
             "--end-of-options",
             &format!("{git_ref}^{{commit}}"),
         ],
+        &mut runtime,
     )?;
     let mut known: HashMap<String, CasHash> = HashMap::new();
     let mut current = None;
     let mut exclude = Vec::new();
-    if repository.head(branch)?.is_some() {
-        let (head, _) = repository.trusted_head(branch, trust)?;
+    if repository
+        .head_with_runtime(branch, &mut runtime)?
+        .is_some()
+    {
+        let (head, _) = repository.trusted_head_with_runtime(branch, trust, &mut runtime)?;
         current = Some(head);
-        let version = repository.version(head)?;
+        let version = repository.version_with_runtime(head, &mut runtime)?;
         let Some(origin) = version.origin.filter(|origin| origin.system == "git") else {
             bail!(
                 "branch {branch} is at {head}, which was not imported from git; an import would not move it forward"
             );
         };
-        let ancestor = Command::new("git")
-            .arg("-C")
-            .arg(git_dir)
-            .args(["merge-base", "--is-ancestor", &origin.commit, &target])
-            .status()
-            .context("failed to run git merge-base")?;
+        let git_dir = git_dir.to_path_buf();
+        let origin_commit = origin.commit.clone();
+        let target_for_git = target.clone();
+        runtime.admit_optional_work()?;
+        let ancestor = runtime.run_blocking_io(move || {
+            Command::new("git")
+                .arg("-C")
+                .arg(git_dir)
+                .args([
+                    "merge-base",
+                    "--is-ancestor",
+                    &origin_commit,
+                    &target_for_git,
+                ])
+                .status()
+                .context("failed to run git merge-base")
+        })??;
         if !ancestor.success() {
             bail!(
                 "branch {branch} is at git commit {}, which is not an ancestor of {git_ref} ({target})",
                 origin.commit
             );
         }
-        for (hash, version) in repository.ancestry(head)? {
+        for (hash, version) in repository.ancestry_with_runtime(head, &mut runtime)? {
             if let Some(origin) = version.origin.filter(|origin| origin.system == "git") {
                 known.insert(origin.commit, hash);
             }
@@ -96,18 +122,30 @@ pub fn import_git(
     }
     let mut args = vec!["rev-list", "--reverse", "--topo-order", target.as_str()];
     args.extend(exclude.iter().map(String::as_str));
-    let commits: Vec<String> = git_text(git_dir, &args)?
-        .lines()
-        .map(str::to_string)
-        .filter(|commit| !known.contains_key(commit))
-        .collect();
+    let commit_output = git_text_with_runtime(git_dir, &args, &mut runtime)?;
+    let known_for_filter = std::mem::take(&mut known);
+    let task = runtime.try_submit_cpu(move || {
+        let commits: Vec<String> = commit_output
+            .lines()
+            .map(str::to_string)
+            .filter(|commit| !known_for_filter.contains_key(commit))
+            .collect();
+        (commits, known_for_filter)
+    })?;
+    let (commits, known_after_filter) = runtime.wait_cpu(task)?;
+    known = known_after_filter;
+    let cat_file_dir = git_dir.to_path_buf();
+    runtime.admit_optional_work()?;
+    let cat_file = runtime.run_blocking_io(move || CatFile::start(&cat_file_dir))??;
     let mut importer = Importer {
         repository,
-        git: CatFile::start(git_dir)?,
+        git: Some(cat_file),
         blobs: HashMap::new(),
         trees: HashMap::new(),
         cache: TreeCache::default(),
         buffer: Vec::new(),
+        blob_buffer: vec![0_u8; 1 << 20],
+        runtime: &mut runtime,
     };
     let mut head = current;
     for commit in &commits {
@@ -115,16 +153,16 @@ pub fn import_git(
         known.insert(commit.clone(), version);
         head = Some(version);
     }
-    importer.git.finish()?;
+    importer.finish_git()?;
     let head = *known
         .get(&target)
         .or(head.as_ref())
         .ok_or_else(|| anyhow!("{git_ref} has no commits"))?;
     let moved = current != Some(head);
     if moved {
-        let signed = SignedHead::sign(repository.id(), branch, head, signer, now_unix_secs())?;
-        super::work_tree::refuse_untrusted(&signed, trust)?;
-        repository.set_head(&signed, current)?;
+        super::work_tree::refuse_signer_untrusted(signer, trust)?;
+        let signed = runtime.sign_head(repository.id(), branch, head, signer, now_unix_secs())?;
+        repository.set_head_with_runtime(&signed, current, &mut runtime)?;
     }
     Ok(ImportReport {
         imported: commits.len(),
@@ -153,23 +191,95 @@ fn git_text(git_dir: &Path, args: &[&str]) -> Result<String> {
         .context("git printed something that is not UTF-8")
 }
 
+fn git_text_with_runtime(
+    git_dir: &Path,
+    args: &[&str],
+    runtime: &mut RepositoryRuntime,
+) -> Result<String> {
+    let git_dir = git_dir.to_path_buf();
+    let args: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
+    runtime.admit_optional_work()?;
+    runtime.run_blocking_io(move || {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        git_text(&git_dir, &args)
+    })?
+}
+
 struct Importer<'a> {
     repository: &'a Repository,
-    git: CatFile,
-    /// Git blob id to its stored object.
-    blobs: HashMap<[u8; 20], ArchiveObject>,
+    git: Option<CatFile>,
+    /// Git blob id to its stored whole-file object or manifest and logical identity.
+    blobs: HashMap<[u8; 20], ImportedBlob>,
     /// Git tree id to the stored tree and its totals.
     trees: HashMap<[u8; 20], (CasHash, u64, u64)>,
     cache: TreeCache,
     buffer: Vec<u8>,
+    /// Fixed-size pipe copy buffer; blob payloads themselves are spooled to disk.
+    blob_buffer: Vec<u8>,
+    runtime: &'a mut RepositoryRuntime,
 }
 
 impl Importer<'_> {
+    fn with_cat_file<T, F>(&mut self, work: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(CatFile) -> (CatFile, T) + Send + 'static,
+    {
+        self.runtime.admit_optional_work()?;
+        let git = self
+            .git
+            .take()
+            .ok_or_else(|| anyhow!("git cat-file worker is unavailable"))?;
+        let (git, result) = self.runtime.run_blocking_io(move || work(git))?;
+        self.git = Some(git);
+        Ok(result)
+    }
+
+    fn read_git_object(&mut self, id: &str, kind: &str) -> Result<()> {
+        let id = id.to_string();
+        let kind = kind.to_string();
+        let buffer = std::mem::take(&mut self.buffer);
+        let (buffer, result) = self.with_cat_file(move |mut git| {
+            let mut buffer = buffer;
+            let result = git.read(&id, &kind, &mut buffer);
+            (git, (buffer, result))
+        })?;
+        self.buffer = buffer;
+        result
+    }
+
+    fn parse_buffer<T, F>(&mut self, parse: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&[u8]) -> Result<T> + Send + 'static,
+    {
+        let buffer = std::mem::take(&mut self.buffer);
+        let task = self.runtime.try_submit_cpu(move || {
+            let result = parse(&buffer);
+            (buffer, result)
+        })?;
+        let (buffer, result) = self.runtime.wait_cpu(task)?;
+        self.buffer = buffer;
+        result
+    }
+
+    fn finish_git(&mut self) -> Result<()> {
+        self.runtime.admit_optional_work()?;
+        let git = self
+            .git
+            .take()
+            .ok_or_else(|| anyhow!("git cat-file worker is unavailable"))?;
+        self.runtime.run_blocking_io(move || git.finish())?
+    }
+
     fn commit(&mut self, commit: &str, known: &HashMap<String, CasHash>) -> Result<CasHash> {
-        self.git.read(commit, "commit", &mut self.buffer)?;
-        let text = std::str::from_utf8(&self.buffer)
-            .with_context(|| format!("git commit {commit} is not UTF-8"))?;
-        let parsed = parse_commit(text).with_context(|| format!("git commit {commit}"))?;
+        self.read_git_object(commit, "commit")?;
+        let commit_name = commit.to_string();
+        let parsed = self.parse_buffer(move |bytes| {
+            let text = std::str::from_utf8(bytes)
+                .with_context(|| format!("git commit {commit_name} is not UTF-8"))?;
+            parse_commit(text).with_context(|| format!("git commit {commit_name}"))
+        })?;
         let mut parents = Vec::new();
         for parent in &parsed.parents {
             parents.push(*known.get(parent).ok_or_else(|| {
@@ -179,27 +289,38 @@ impl Importer<'_> {
         let (tree, _, _) = self.tree(&parse_id(&parsed.tree)?)?;
         let parent = parents.first().copied();
         let parent_tree = parent
-            .map(|parent| self.repository.version(parent).map(|version| version.tree))
+            .map(|parent| {
+                self.repository
+                    .version_with_runtime(parent, self.runtime)
+                    .map(|version| version.tree)
+            })
             .transpose()?;
-        let changes =
-            self.repository
-                .changes_between(parent, parent_tree, tree, &mut self.cache)?;
-        self.repository.put_version(&Version {
-            format: VERSION_FORMAT.to_string(),
-            repository_id: self.repository.id().to_string(),
-            parents,
+        let changes = self.repository.changes_between_with_runtime(
+            parent,
+            parent_tree,
             tree,
-            author: parsed.author.0,
-            authored_at_unix_secs: parsed.author.1,
-            message: parsed.message,
-            changes,
-            origin: Some(Origin {
-                system: "git".to_string(),
-                commit: commit.to_string(),
-                committer: parsed.committer.0,
-                committed_at_unix_secs: parsed.committer.1,
-            }),
-        })
+            &mut self.cache,
+            self.runtime,
+        )?;
+        self.repository.put_version_with_runtime(
+            &Version {
+                format: VERSION_FORMAT.to_string(),
+                repository_id: self.repository.id().to_string(),
+                parents,
+                tree,
+                author: parsed.author.0,
+                authored_at_unix_secs: parsed.author.1,
+                message: parsed.message,
+                changes,
+                origin: Some(Origin {
+                    system: "git".to_string(),
+                    commit: commit.to_string(),
+                    committer: parsed.committer.0,
+                    committed_at_unix_secs: parsed.committer.1,
+                }),
+            },
+            self.runtime,
+        )
     }
 
     fn tree(&mut self, id: &[u8; 20]) -> Result<(CasHash, u64, u64)> {
@@ -207,24 +328,30 @@ impl Importer<'_> {
             return Ok(*done);
         }
         let hex = hex::encode(id);
-        self.git.read(&hex, "tree", &mut self.buffer)?;
-        let listed = parse_tree(&self.buffer).with_context(|| format!("git tree {hex}"))?;
+        self.read_git_object(&hex, "tree")?;
+        let tree_name = hex.clone();
+        let listed = self.parse_buffer(move |bytes| {
+            parse_tree(bytes).with_context(|| format!("git tree {tree_name}"))
+        })?;
         let mut entries = Vec::with_capacity(listed.len());
         for (mode, name, child) in listed {
             let name = String::from_utf8(name)
                 .map_err(|_| anyhow!("git tree {hex} has a name that is not UTF-8"))?;
             entries.push(match mode.as_str() {
-                "100644" | "100664" => TreeEntry::File {
-                    name,
-                    object: self.blob(&child)?,
-                },
-                "100755" => TreeEntry::Executable {
-                    name,
-                    object: self.blob(&child)?,
+                "100644" | "100664" | "100755" => match self.blob(&child)? {
+                    ImportedBlob::Whole(object) if mode == "100755" => {
+                        TreeEntry::Executable { name, object }
+                    }
+                    ImportedBlob::Whole(object) => TreeEntry::File { name, object },
+                    ImportedBlob::Chunked { manifest, file } => TreeEntry::ChunkedFile {
+                        name,
+                        manifest,
+                        file,
+                        executable: mode == "100755",
+                    },
                 },
                 "120000" => {
-                    self.git
-                        .read(&hex::encode(child), "blob", &mut self.buffer)?;
+                    self.read_git_object(&hex::encode(child), "blob")?;
                     let target = String::from_utf8(self.buffer.clone()).map_err(|_| {
                         anyhow!("symlink {name} in git tree {hex} has a target that is not UTF-8")
                     })?;
@@ -245,22 +372,101 @@ impl Importer<'_> {
                 other => bail!("{name} in git tree {hex} has unknown mode {other}"),
             });
         }
-        let tree = Tree::new(entries).with_context(|| format!("git tree {hex}"))?;
+        let tree = Tree::new_v3(entries).with_context(|| format!("git tree {hex}"))?;
         let (files, bytes) = tree.totals();
-        let hash = self.repository.put_tree(&tree)?;
+        let hash = self.repository.put_tree_with_runtime(&tree, self.runtime)?;
         self.cache.insert(hash, tree);
         self.trees.insert(*id, (hash, files, bytes));
         Ok((hash, files, bytes))
     }
 
-    fn blob(&mut self, id: &[u8; 20]) -> Result<ArchiveObject> {
-        if let Some(object) = self.blobs.get(id) {
-            return Ok(*object);
+    fn blob(&mut self, id: &[u8; 20]) -> Result<ImportedBlob> {
+        if let Some(objects) = self.blobs.get(id) {
+            return Ok(*objects);
         }
-        self.git.read(&hex::encode(id), "blob", &mut self.buffer)?;
-        let object = self.repository.store().add_content(&self.buffer)?.object;
-        self.blobs.insert(*id, object);
-        Ok(object)
+        let store = self.repository.store();
+        let temporary = store.scratch_path("git-import-blob");
+        let ingest_result = (|| -> Result<_> {
+            let object_id = hex::encode(id);
+            let temporary_for_git = temporary.clone();
+            let store_root = store.root().to_path_buf();
+            let floor = crate::disk::floor_from_env();
+            let blob_buffer = std::mem::take(&mut self.blob_buffer);
+            let (blob_buffer, result) = self.with_cat_file(move |mut git| {
+                let mut buffer = blob_buffer;
+                let result = (|| -> Result<u64> {
+                    let mut file = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&temporary_for_git)
+                        .with_context(|| {
+                            format!("failed to create {}", temporary_for_git.display())
+                        })?;
+                    let size =
+                        git.read_to_writer(&object_id, "blob", &mut file, &mut buffer, |size| {
+                            crate::disk::ensure_room(&store_root, size, floor)
+                        })?;
+                    file.sync_all()?;
+                    Ok(size)
+                })();
+                (git, (buffer, result))
+            })?;
+            self.blob_buffer = blob_buffer;
+            let size = result?;
+            if size < MIN_CHUNK_BYTES as u64 {
+                let (proactor, handle, thermal, _) = self.runtime.parts_mut();
+                let result = store.ingest_file_with_proactor_admitted(
+                    proactor,
+                    handle,
+                    &temporary,
+                    |proactor, handle| thermal.admit(proactor, handle).map_err(anyhow::Error::from),
+                )?;
+                Ok(ImportedBlob::Whole(result.object))
+            } else {
+                let manifest = {
+                    let (proactor, handle, thermal, workers) = self.runtime.parts_mut();
+                    store.ingest_chunked_file_with_worker_admitted(
+                        proactor,
+                        handle,
+                        workers,
+                        &temporary,
+                        MAX_IMPORT_CHUNKS,
+                        |proactor, handle| {
+                            thermal.admit(proactor, handle).map_err(anyhow::Error::from)
+                        },
+                    )?
+                };
+                let file = ArchiveObject {
+                    hash: manifest.file_hash,
+                    size: manifest.file_size,
+                };
+                let task = self
+                    .runtime
+                    .try_submit_cpu(move || manifest.to_canonical_json())?;
+                let bytes = self.runtime.wait_cpu(task)??;
+                let manifest_object = {
+                    let (proactor, handle, thermal, _) = self.runtime.parts_mut();
+                    store
+                        .add_content_with_proactor_admitted(
+                            proactor,
+                            handle,
+                            bytes,
+                            |proactor, handle| {
+                                thermal.admit(proactor, handle).map_err(anyhow::Error::from)
+                            },
+                        )?
+                        .object
+                };
+                Ok(ImportedBlob::Chunked {
+                    manifest: manifest_object,
+                    file,
+                })
+            }
+        })();
+        let _ = fs::remove_file(&temporary);
+        let blob = ingest_result?;
+        self.blobs.insert(*id, blob);
+        Ok(blob)
     }
 }
 
@@ -392,10 +598,14 @@ impl CatFile {
         let mut header = String::new();
         self.output.read_line(&mut header)?;
         let mut fields = header.split_whitespace();
-        let (Some(_), Some(found), Some(size)) = (fields.next(), fields.next(), fields.next())
+        let (Some(found_id), Some(found), Some(size)) =
+            (fields.next(), fields.next(), fields.next())
         else {
             bail!("git has no object {id}: {}", header.trim());
         };
+        if found_id != id {
+            bail!("git returned object {found_id} for requested object {id}");
+        }
         if found != kind {
             bail!("git object {id} is a {found}, not a {kind}");
         }
@@ -407,7 +617,57 @@ impl CatFile {
         self.output.read_exact(buffer)?;
         let mut newline = [0_u8; 1];
         self.output.read_exact(&mut newline)?;
+        if newline[0] != b'\n' {
+            bail!("git object {id} has no batch delimiter");
+        }
         Ok(())
+    }
+
+    /// Streams one object to a writer with bounded memory, returning its declared size.
+    fn read_to_writer(
+        &mut self,
+        id: &str,
+        kind: &str,
+        writer: &mut impl Write,
+        buffer: &mut [u8],
+        reserve_space: impl FnOnce(u64) -> Result<()>,
+    ) -> Result<u64> {
+        writeln!(self.input, "{id}")?;
+        self.input.flush()?;
+        let mut header = String::new();
+        self.output.read_line(&mut header)?;
+        let mut fields = header.split_whitespace();
+        let (Some(found_id), Some(found), Some(size)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            bail!("git has no object {id}: {}", header.trim());
+        };
+        if found_id != id {
+            bail!("git returned object {found_id} for requested object {id}");
+        }
+        if found != kind {
+            bail!("git object {id} is a {found}, not a {kind}");
+        }
+        let mut remaining: u64 = size
+            .parse()
+            .with_context(|| format!("git object {id} size"))?;
+        let total = remaining;
+        reserve_space(total).with_context(|| format!("not enough room to spool git blob {id}"))?;
+        while remaining > 0 {
+            let limit = usize::try_from(remaining.min(buffer.len() as u64))?;
+            let count = self.output.read(&mut buffer[..limit])?;
+            if count == 0 {
+                bail!("git object {id} ended before its declared {total} bytes");
+            }
+            writer.write_all(&buffer[..count])?;
+            remaining -= count as u64;
+        }
+        let mut newline = [0_u8; 1];
+        self.output.read_exact(&mut newline)?;
+        if newline[0] != b'\n' {
+            bail!("git object {id} has no batch delimiter");
+        }
+        Ok(total)
     }
 
     fn finish(mut self) -> Result<()> {

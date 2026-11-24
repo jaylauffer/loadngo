@@ -1,0 +1,24 @@
+signature_scheme	ml-dsa-65
+baseline_file_bytes	2097152
+changed_file_bytes	2097153
+changed_file_fraction_of_delta_payload_percent	3.833
+delta_payload_saving_percent	96.167
+delta_stream_framed_bytes	91468
+framed_stream_fraction_of_changed_file_percent	4.362
+baseline_send_objects	48
+baseline_send_payload_bytes	2102805
+delta_send_objects	5
+delta_send_payload_bytes	80386
+baseline_import_seconds	0.934
+incremental_import_seconds	0.214
+initial_send_seconds	1.162
+incremental_send_seconds	0.135
+stream_seconds	0.011
+verify_seconds	0.012
+checkout_seconds	0.050
+byte_compared_files	2
+baseline_version	c6ea61d4a4f7648f7507e05e0c5bfa370fa347d1a49b42bc3ffca145ed032f37
+updated_version	a386002338ef1596ac514ef0223abdedb72d46068565d58c4e6ab59c29a51f27
+verification	Verified main of pq-delta at a386002338ef1596ac514ef0223abdedb72d46068565d58c4e6ab59c29a51f27, signed by benchmark: 2 versions, 4 trees, 3 files (4194338 bytes), every hash checked.
+checkout	Checked out a386002338ef1596ac514ef0223abdedb72d46068565d58c4e6ab59c29a51f27 into /private/tmp/pqgit-delta-bench-20261105/receiver-checkout: 2 files, 2097186 bytes.
+artifacts	/private/tmp/pqgit-delta-bench-20261105

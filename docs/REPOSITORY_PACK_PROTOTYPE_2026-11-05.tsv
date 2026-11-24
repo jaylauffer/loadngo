@@ -1,0 +1,2 @@
+source_profile	objects_packed	pack_bytes	index_bytes	loose_allocated_bytes	pack_and_index_allocated_bytes	allocated_bytes_saved	allocated_percent_saved	pack_write_method	verification	proactor_range_checks	compatibility
+hybrid-v3 tracked-worktree CAS	1489	30118983	71528	33943552	30195712	3747840	11.041	caller-owned proactor with RepositoryRuntime thermal admission	all object BLAKE3 hashes rechecked through bounded proactor reads	249 ranges up to 4096 bytes matched loose CAS bytes	loose source objects remain unchanged; experimental snapshot is not used by CAS lookup or GC

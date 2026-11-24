@@ -2,6 +2,8 @@
 //! `data::repository`; the design is in `docs/REPOSITORY.md`.
 
 use anyhow::{anyhow, bail, Context, Result};
+use data::archive_cas::ArchiveChange;
+use data::cas::CasHash;
 use data::cli::{ArgDoc, Usage};
 use data::repository::transfer::{self, Remote};
 use data::repository::work_tree::{self, Target};
@@ -44,8 +46,11 @@ fn run() -> Result<()> {
         "checkout" => checkout(&flags),
         "status" => status(&flags),
         "commit" => commit(&flags),
+        "merge" => merge(&flags),
+        "diff" => diff(&flags),
         "verify" => verify(&flags),
         "send" => send(&flags),
+        "fetch" => fetch(&flags),
         "receive" => receive(&flags),
         "heads" => heads(&flags),
         other => bail!("unknown command {other:?}\n{}", usage().hint()),
@@ -109,6 +114,27 @@ fn allowed(command: &str) -> &'static [(&'static str, bool)] {
             SIGNING[1],
             SIGNING[2],
         ],
+        "merge" => &[
+            ("--store", false),
+            ("--repository", false),
+            ("--branch", false),
+            ("--other-branch", false),
+            ("--ours", true),
+            ("--theirs", true),
+            ("--message", false),
+            ("--author", false),
+            ("--trusted-public-key", false),
+            SIGNING[0],
+            SIGNING[1],
+            SIGNING[2],
+        ],
+        "diff" => &[
+            ("--store", false),
+            ("--repository", false),
+            ("--from-branch", false),
+            ("--to-branch", false),
+            ("--trusted-public-key", false),
+        ],
         "verify" => &[
             ("--store", false),
             ("--repository", false),
@@ -126,6 +152,19 @@ fn allowed(command: &str) -> &'static [(&'static str, bool)] {
             ("--remote-trusted-public-key", false),
             ("--trusted-public-key", false),
             ("--all", false),
+            ("--stream-stdout", false),
+            ("--known-version", true),
+        ],
+        "fetch" => &[
+            ("--store", false),
+            ("--repository", false),
+            ("--branch", false),
+            ("--from", false),
+            ("--from-ssh", false),
+            ("--remote-store", false),
+            ("--remote-program", false),
+            ("--remote-source-trusted-public-key", false),
+            ("--trusted-public-key", false),
         ],
         "receive" => &[("--store", false), ("--trusted-public-key", false)],
         "heads" => &[("--store", false), ("--repository", false)],
@@ -134,7 +173,7 @@ fn allowed(command: &str) -> &'static [(&'static str, bool)] {
 }
 
 /// Flags that take no value.
-const SWITCHES: &[&str] = &["--all"];
+const SWITCHES: &[&str] = &["--all", "--stream-stdout"];
 
 struct Flags {
     values: BTreeMap<&'static str, Vec<String>>,
@@ -213,7 +252,7 @@ impl Flags {
             (None, None, None) => Signer::from_default_keys()?.ok_or_else(|| {
                 anyhow!(
                     "no signing key: pass --signer-identity, --public-key and --private-key, or \
-                     keep exactly one <identity>.dilithium2.key with its .pub in ~/.loadngo/keys"
+                     keep exactly one recognized <identity>.<scheme>.key with its .pub in ~/.loadngo/keys"
                 )
             }),
             _ => bail!("--signer-identity, --public-key and --private-key go together"),
@@ -231,7 +270,8 @@ impl Flags {
 fn init(flags: &Flags) -> Result<()> {
     let repository = flags.repository(true)?;
     let tree = PathBuf::from(flags.required("--tree")?);
-    let report = work_tree::init(
+    let mut runtime = repository::runtime::RepositoryRuntime::new()?;
+    let report = work_tree::init_with_runtime(
         &repository,
         flags.required("--branch")?,
         &tree,
@@ -239,6 +279,7 @@ fn init(flags: &Flags) -> Result<()> {
         flags.required("--author")?,
         &flags.signer()?,
         &flags.trust()?,
+        &mut runtime,
     )?;
     println!(
         "Recorded {} paths of {} as version {} on {} of {}; the folder is now its checkout.",
@@ -287,12 +328,17 @@ fn import_command(flags: &Flags) -> Result<()> {
 fn log(flags: &Flags) -> Result<()> {
     let repository = flags.repository(false)?;
     let trust = flags.trust()?;
+    let mut runtime = repository::runtime::RepositoryRuntime::new()?;
     let start = match (flags.get("--branch"), flags.get("--version")) {
-        (Some(branch), None) => repository.trusted_head(branch, &trust)?.0,
+        (Some(branch), None) => {
+            repository
+                .trusted_head_with_runtime(branch, &trust, &mut runtime)?
+                .0
+        }
         (None, Some(version)) => {
             let version = version.parse().context("--version is not a version hash")?;
             if repository
-                .trusted_branch_holding(version, &trust)?
+                .trusted_branch_holding_with_runtime(version, &trust, &mut runtime)?
                 .is_none()
             {
                 bail!("version {version} is not in the history of any trusted branch");
@@ -302,7 +348,7 @@ fn log(flags: &Flags) -> Result<()> {
         _ => bail!("name --branch or --version\n{}", usage().hint()),
     };
     let mut out = std::io::stdout().lock();
-    for (hash, version) in repository.first_parent_history(start)? {
+    for (hash, version) in repository.first_parent_history_with_runtime(start, &mut runtime)? {
         let parents = if version.parents.is_empty() {
             "-".to_string()
         } else {
@@ -338,7 +384,14 @@ fn checkout(flags: &Flags) -> Result<()> {
         _ => bail!("name --branch or --version\n{}", usage().hint()),
     };
     let destination = PathBuf::from(flags.required("--destination")?);
-    let report = work_tree::checkout(&repository, &target, &flags.trust()?, &destination)?;
+    let mut runtime = repository::runtime::RepositoryRuntime::new()?;
+    let report = work_tree::checkout_with_runtime(
+        &repository,
+        &target,
+        &flags.trust()?,
+        &destination,
+        &mut runtime,
+    )?;
     println!(
         "Checked out {} into {}: {} files, {} bytes.",
         report.version,
@@ -351,8 +404,9 @@ fn checkout(flags: &Flags) -> Result<()> {
 
 fn status(flags: &Flags) -> Result<()> {
     let tree = flags.tree()?;
+    let mut runtime = repository::runtime::RepositoryRuntime::new()?;
     let mut out = std::io::stdout().lock();
-    for change in work_tree::status(&tree)?.changes {
+    for change in work_tree::status_with_runtime(&tree, &mut runtime)?.changes {
         writeln!(out, "{}\t{}", change.kind(), change.path())?;
     }
     Ok(())
@@ -361,13 +415,15 @@ fn status(flags: &Flags) -> Result<()> {
 fn commit(flags: &Flags) -> Result<()> {
     let tree = flags.tree()?;
     let marker = work_tree::CheckoutMarker::read(&tree)?;
-    let report = work_tree::commit(
+    let mut runtime = repository::runtime::RepositoryRuntime::new()?;
+    let report = work_tree::commit_with_runtime(
         &tree,
         &flags.all("--path"),
         flags.required("--message")?,
         flags.required("--author")?,
         &flags.signer()?,
         &flags.trust()?,
+        &mut runtime,
     )?;
     println!(
         "Version {} on {} of {} (parent {}), signed: {} changes.",
@@ -385,10 +441,102 @@ fn commit(flags: &Flags) -> Result<()> {
     Ok(())
 }
 
+fn merge(flags: &Flags) -> Result<()> {
+    let repository = flags.repository(false)?;
+    let mut runtime = repository::runtime::RepositoryRuntime::new()?;
+    let take_ours = flags.all("--ours");
+    let take_theirs = flags.all("--theirs");
+    let report = work_tree::merge_with_runtime(
+        &repository,
+        flags.required("--branch")?,
+        flags.required("--other-branch")?,
+        &take_ours,
+        &take_theirs,
+        flags.required("--message")?,
+        flags.required("--author")?,
+        &flags.signer()?,
+        &flags.trust()?,
+        &mut runtime,
+    )?;
+    match report.kind {
+        work_tree::MergeKind::AlreadyContained => println!(
+            "{} is already contained in {} at {}.",
+            report.second_parent, report.branch, report.version
+        ),
+        work_tree::MergeKind::FastForward => println!(
+            "Fast-forwarded {} to {} at {} ({} files). Existing checkouts need checkout again.",
+            report.branch, report.second_parent, report.version, report.files
+        ),
+        work_tree::MergeKind::MergeCommit => println!(
+            "Merged {} into {} at {} (base {}, {} files). Existing checkouts need checkout again.",
+            report.second_parent, report.branch, report.version, report.merge_base, report.files
+        ),
+    }
+    Ok(())
+}
+
+fn diff(flags: &Flags) -> Result<()> {
+    let repository = flags.repository(false)?;
+    let trust = flags.trust()?;
+    let mut runtime = repository::runtime::RepositoryRuntime::new()?;
+    let (from, _) = repository.trusted_head_with_runtime(
+        flags.required("--from-branch")?,
+        &trust,
+        &mut runtime,
+    )?;
+    let (to, _) = repository.trusted_head_with_runtime(
+        flags.required("--to-branch")?,
+        &trust,
+        &mut runtime,
+    )?;
+    let from_version = repository.version_with_runtime(from, &mut runtime)?;
+    let to_version = repository.version_with_runtime(to, &mut runtime)?;
+    let mut cache = repository::TreeCache::default();
+    let changes = repository.changes_between_with_runtime(
+        Some(from),
+        Some(from_version.tree),
+        to_version.tree,
+        &mut cache,
+        &mut runtime,
+    )?;
+    let mut out = std::io::stdout().lock();
+    for change in changes {
+        match change {
+            ArchiveChange::Created { paths } => {
+                for path in paths {
+                    writeln!(out, "A\t{path}")?;
+                }
+            }
+            ArchiveChange::Changed { paths } => {
+                for path in paths {
+                    writeln!(out, "M\t{path}")?;
+                }
+            }
+            ArchiveChange::Deleted { paths } => {
+                for path in paths {
+                    writeln!(out, "D\t{path}")?;
+                }
+            }
+            ArchiveChange::Moved { moves } => {
+                for movement in moves {
+                    writeln!(out, "R\t{}\t{}", movement.from, movement.to)?;
+                }
+            }
+            ArchiveChange::Derived { paths } => {
+                for path in paths {
+                    writeln!(out, "derived\t{path}")?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn verify(flags: &Flags) -> Result<()> {
     let repository = flags.repository(false)?;
     let branch = flags.required("--branch")?;
-    let report = repository.verify(branch, &flags.trust()?)?;
+    let mut runtime = repository::runtime::RepositoryRuntime::new()?;
+    let report = repository.verify_with_runtime(branch, &flags.trust()?, &mut runtime)?;
     println!(
         "Verified {branch} of {} at {}, signed by {}: {} versions, {} trees, {} files ({} bytes), every hash checked.",
         repository.id(),
@@ -405,6 +553,36 @@ fn verify(flags: &Flags) -> Result<()> {
 fn send(flags: &Flags) -> Result<()> {
     let repository = flags.repository(false)?;
     let branch = flags.required("--branch")?;
+    if flags.get("--stream-stdout").is_some() {
+        if flags.get("--to").is_some()
+            || flags.get("--to-ssh").is_some()
+            || flags.get("--all").is_some()
+        {
+            bail!("--stream-stdout cannot be combined with --to, --to-ssh, or --all");
+        }
+        let known: Vec<CasHash> = flags
+            .all("--known-version")
+            .iter()
+            .map(|version| {
+                version
+                    .parse()
+                    .context("--known-version is not a version hash")
+            })
+            .collect::<Result<_>>()?;
+        let mut runtime = repository::runtime::RepositoryRuntime::new()?;
+        transfer::send_stream_with_runtime(
+            &repository,
+            branch,
+            &flags.trust()?,
+            &known,
+            std::io::stdout(),
+            &mut runtime,
+        )?;
+        return Ok(());
+    }
+    if !flags.all("--known-version").is_empty() {
+        bail!("--known-version is only used with --stream-stdout");
+    }
     let (remote, remote_store) = match (flags.get("--to"), flags.get("--to-ssh")) {
         (Some(to), None) => (
             Remote::Local(std::env::current_exe()?.into_os_string()),
@@ -422,7 +600,8 @@ fn send(flags: &Flags) -> Result<()> {
         ),
         _ => bail!("name --to <store> or --to-ssh <host>\n{}", usage().hint()),
     };
-    let report = transfer::send(
+    let mut runtime = repository::runtime::RepositoryRuntime::new()?;
+    let report = transfer::send_with_runtime(
         &repository,
         branch,
         &flags.trust()?,
@@ -430,6 +609,7 @@ fn send(flags: &Flags) -> Result<()> {
         &remote_store,
         flags.get("--remote-trusted-public-key"),
         flags.get("--all").is_some(),
+        &mut runtime,
     )?;
     println!(
         "Sent {branch} of {} at {}: {} versions, {} objects, {} bytes.",
@@ -443,9 +623,69 @@ fn send(flags: &Flags) -> Result<()> {
     Ok(())
 }
 
+fn fetch(flags: &Flags) -> Result<()> {
+    let store = flags.store()?;
+    let repository = flags.required("--repository")?;
+    let branch = flags.required("--branch")?;
+    let (remote, source_store) = match (flags.get("--from"), flags.get("--from-ssh")) {
+        (Some(source), None) => {
+            if flags.get("--remote-program").is_some() || flags.get("--remote-store").is_some() {
+                bail!("--remote-program and --remote-store apply only to --from-ssh");
+            }
+            (
+                Remote::Local(std::env::current_exe()?.into_os_string()),
+                source,
+            )
+        }
+        (None, Some(host)) => (
+            Remote::Ssh {
+                host: host.to_string(),
+                program: flags
+                    .get("--remote-program")
+                    .unwrap_or("loadngo-repo")
+                    .to_string(),
+            },
+            flags.required("--remote-store")?,
+        ),
+        _ => bail!(
+            "name --from <store> or --from-ssh <host> --remote-store <folder>\n{}",
+            usage().hint()
+        ),
+    };
+    let mut runtime = repository::runtime::RepositoryRuntime::new()?;
+    let source = transfer::FetchSource {
+        remote: &remote,
+        store: source_store,
+        trusted_public_key: flags.get("--remote-source-trusted-public-key"),
+    };
+    let report = transfer::fetch_with_runtime(
+        &store,
+        repository,
+        branch,
+        &source,
+        &flags.trust()?,
+        &mut runtime,
+    )?;
+    println!(
+        "Fetched {} of {} at {}: {} objects{}.",
+        report.branch,
+        report.repository_id,
+        report.head,
+        report.objects,
+        if report.moved {
+            "; branch advanced"
+        } else {
+            "; already current"
+        }
+    );
+    Ok(())
+}
+
 fn receive(flags: &Flags) -> Result<()> {
     let store = flags.store()?;
-    let report = transfer::receive(&store, &mut std::io::stdin().lock(), &flags.trust()?)?;
+    let mut runtime = repository::runtime::RepositoryRuntime::new()?;
+    let report =
+        transfer::receive_with_runtime(&store, std::io::stdin(), &flags.trust()?, &mut runtime)?;
     if report.moved {
         println!(
             "Received {} objects into {}; {} of {} is at {}, its signature verified.",
@@ -469,9 +709,14 @@ fn receive(flags: &Flags) -> Result<()> {
 }
 
 fn heads(flags: &Flags) -> Result<()> {
+    let mut runtime = repository::runtime::RepositoryRuntime::new()?;
     print!(
         "{}",
-        transfer::list_heads(&flags.store()?, flags.required("--repository")?)?
+        transfer::list_heads_with_runtime(
+            &flags.store()?,
+            flags.required("--repository")?,
+            &mut runtime,
+        )?
     );
     Ok(())
 }
@@ -485,14 +730,19 @@ fn usage() -> Usage {
         ),
         ArgDoc::optional("--repository", "<id>", "repository id, e.g. loadngo (all but status, commit, receive)"),
         ArgDoc::optional("--branch", "<name>", "branch, e.g. dev"),
+        ArgDoc::optional("diff --from-branch", "<name>", "trusted source branch for a path diff"),
+        ArgDoc::optional("diff --to-branch", "<name>", "trusted target branch for a path diff"),
         ArgDoc::optional(
             "--trusted-public-key",
             "<file.pub>",
-            "key whose head signatures are trusted; default the one *.dilithium2.pub in ~/.loadngo/keys",
+            "key whose head signatures are trusted; default the one *.pub in ~/.loadngo/keys",
         ),
         ArgDoc::optional("init --tree", "<folder>", "record a folder as the first version of a new branch"),
         ArgDoc::optional("init/commit --message", "<text>", "what the version is and why"),
         ArgDoc::optional("init/commit --author", "<name>", "who made it"),
+        ArgDoc::optional("merge --other-branch", "<name>", "the trusted source branch to merge into --branch"),
+        ArgDoc::repeated("merge --ours", "<path>", "resolve a conflicting file or subtree using the target branch"),
+        ArgDoc::repeated("merge --theirs", "<path>", "resolve a conflicting file or subtree using the source branch"),
         ArgDoc::optional("import --from-git", "<folder>", "a git checkout or repository to import from"),
         ArgDoc::optional("import --git-ref", "<ref>", "the git ref or commit to import up to; default the branch name"),
         ArgDoc::optional("log/checkout --version", "<hash>", "one version instead of a branch's head"),
@@ -508,13 +758,22 @@ fn usage() -> Usage {
         ArgDoc::optional("send --remote-program", "<path>", "with --to-ssh: loadngo-repo there; default loadngo-repo on its PATH"),
         ArgDoc::optional("send --remote-trusted-public-key", "<file.pub>", "the key the receiver should trust (a path where it runs)"),
         ArgDoc::switch("send --all", "send every object of the history, not only what the receiver lacks: repairs a receiver's damaged copies"),
+        ArgDoc::switch("send --stream-stdout", "write a framed branch update stream to stdout for fetch; no receiver preflight"),
+        ArgDoc::repeated("send --known-version", "<hash>", "with --stream-stdout: history tip already complete at the receiver; hint only, receiver verifies closure"),
+        ArgDoc::optional("fetch --from", "<store>", "source Archive CAS store on this machine"),
+        ArgDoc::optional("fetch --from-ssh", "<user@host>", "source machine; uses only the configured post-quantum SSH key exchanges"),
+        ArgDoc::optional("fetch --remote-store", "<folder>", "with --from-ssh: source Archive CAS store (absolute, or relative to the remote home)"),
+        ArgDoc::optional("fetch --remote-program", "<path>", "remote loadngo-repo path; default loadngo-repo on its PATH"),
+        ArgDoc::optional("fetch --remote-source-trusted-public-key", "<file.pub>", "key the remote sender uses to verify its own branch"),
     ];
     const NOTES: &[&str] = &[
-        "Commands: init, import, log, checkout, status, commit, verify, send, receive (reads a stream on stdin; send runs it), heads (lists a store's heads; send runs it).",
-        "Every version is named by the BLAKE3 hash of its bytes and names its parents and tree by hash; a branch's head is a Dilithium2-signed claim. A version is trusted only in the history of a head signed by a trusted key, and every object is hash-checked as it is read.",
+        "Commands: init, import, log, checkout, status, commit, merge, diff, verify, send, fetch, receive (reads a stream on stdin; send runs it), heads (lists a store's heads; send runs it).",
+        "Every version is named by the BLAKE3 hash of its bytes and names its parents and tree by hash; a branch head is signed with ML-DSA-65 or a supported legacy scheme. A version is trusted only in the history of a head signed by a trusted key, and every object is hash-checked as it is read.",
         "log prints one line per version, newest first, tab-separated: version, git commit (or -), parents (or -), time (UTC), author, subject.",
         "status prints created/changed/deleted and a path, tab-separated. It looks at tracked paths always and untracked ones unless .gitignore rules, a CACHEDIR.TAG build cache or another checkout hide them.",
         "commit records only the paths named with --path, never the whole tree unasked; the branch must still be at the version the tree is based on.",
+        "merge fast-forwards when possible; otherwise it combines non-overlapping edits, including line edits in small UTF-8 files, and records both parents. Resolve remaining conflicts by naming each path with exactly one of --ours or --theirs; directory choices cover conflicts beneath them while preserving other independent edits. Existing checkouts are not updated.",
+        "diff compares two trusted branch heads and prints created, changed, deleted, moved, or derived paths; it does not print file contents.",
         "checkout writes into a temporary sibling and renames it at the end, so a refused or failed checkout leaves nothing at --destination.",
         "receive moves a branch only forward, after the head's signature verifies against its trusted key and every object below it hash-checks.",
     ];
@@ -524,13 +783,17 @@ fn usage() -> Usage {
         "loadngo-repo checkout --repository loadngo --branch dev --destination ~/loadngo-work",
         "loadngo-repo status --tree ~/loadngo-work",
         "loadngo-repo commit --tree ~/loadngo-work --path docs/REPOSITORY.md --message 'Explain trust' --author Claudette",
+        "loadngo-repo merge --repository loadngo --branch dev --other-branch feature --message 'Merge feature' --author Jay",
+        "loadngo-repo diff --repository loadngo --from-branch main --to-branch dev",
         "loadngo-repo verify --repository loadngo --branch dev",
         "loadngo-repo send --repository loadngo --branch dev --to-ssh jay@10.10.10.6 --remote-store .loadngo/store --remote-program pudding/loadngo/target/release/loadngo-repo",
+        "loadngo-repo fetch --repository loadngo --branch dev --from-ssh jay@10.10.10.6 --remote-store .loadngo/store",
+        "loadngo-repo fetch --repository loadngo --branch dev --from /Volumes/Backup/loadngo-store",
     ];
     Usage {
         bin: "loadngo-repo",
         invocation: "cargo run -p data --bin loadngo-repo -- <command>",
-        about: "post-quantum signed version control on the Archive CAS: import a git history, check versions out, record changes, verify, send between machines",
+        about: "post-quantum signed version control on the Archive CAS: import a git history, check versions out, record changes, verify, send, and fetch between machines",
         args: ARGS,
         examples: EXAMPLES,
         notes: NOTES,

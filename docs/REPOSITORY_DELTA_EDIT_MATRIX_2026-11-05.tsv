@@ -1,0 +1,5 @@
+edit_mode	baseline_bytes	changed_bytes	edit_offset	delta_objects	delta_payload_bytes	changed_file_percent	framed_stream_bytes	framed_stream_percent	incremental_import_seconds	incremental_send_seconds	verify_seconds	checkout_seconds	verified_versions	byte_compared_files
+prefix-insert	16777216	16777217	0	5	102341	0.610	113423	0.676	0.271	0.140	0.027	0.076	2	2
+middle-insert	16777216	16777217	8388608	5	46309	0.276	57391	0.342	0.260	0.150	0.027	0.075	2	2
+append	16777216	16777217	16777216	5	40653	0.242	51735	0.308	0.262	0.153	0.027	0.079	2	2
+overwrite	16777216	16777216	8388608	5	46308	0.276	57390	0.342	0.259	0.158	0.026	0.082	2	2

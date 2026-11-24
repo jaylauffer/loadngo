@@ -1,0 +1,11 @@
+scenario	elapsed_ms	thermal_state	governor_state	admission	provider	temperature	throttling
+sampler-only	0	Nominal	Nominal	Baseline	NativePressure	None	None
+sampler-only	10001	Nominal	Nominal	Baseline	NativePressure	None	None
+sampler-only	20000	Nominal	Nominal	Baseline	NativePressure	None	None
+active-16MiB-delta	0	Nominal	Nominal	Baseline	NativePressure	None	None
+active-16MiB-delta	2001	Nominal	Nominal	Baseline	NativePressure	None	None
+active-16MiB-delta	4006	Nominal	Nominal	Baseline	NativePressure	None	None
+active-16MiB-delta	6007	Nominal	Nominal	Baseline	NativePressure	None	None
+active-16MiB-delta	8011	Nominal	Nominal	Baseline	NativePressure	None	None
+active-16MiB-delta	10015	Nominal	Nominal	Baseline	NativePressure	None	None
+active-16MiB-delta	12016	Nominal	Nominal	Baseline	NativePressure	None	None

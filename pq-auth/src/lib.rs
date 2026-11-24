@@ -313,6 +313,7 @@ pub fn parse_scheme(value: &str) -> Result<SignatureSchemeId> {
     match value.trim().to_ascii_lowercase().as_str() {
         "dilithium2" => Ok(SignatureSchemeId::Dilithium2),
         "falcon512" => Ok(SignatureSchemeId::Falcon512),
+        "ml-dsa-65" | "mldsa65" => Ok(SignatureSchemeId::MlDsa65),
         other => bail!("unsupported signature scheme: {other}"),
     }
 }

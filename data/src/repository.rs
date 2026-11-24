@@ -11,9 +11,10 @@
 //!   where it came from. It holds no signature and no import time, so the same history
 //!   gives the same version hashes on every machine.
 //! - A **head** ([`HEAD_FORMAT`]) is a signed claim that a branch of a repository is at
-//!   a version, made with a post-quantum key (Dilithium2, `loadngo-pq-crypto`). A
+//!   a version, made with a Dilithium2 key (`loadngo-pq-crypto`). A
 //!   version is trusted when it is, or is an ancestor of, the version of a head whose
-//!   signature verifies against a trusted key. One signature covers the whole history
+//!   ML-DSA-65 signature verifies against a trusted key. Legacy Dilithium2 heads remain
+//!   verifiable. One signature covers the whole history
 //!   below it, because every version names its parents and its tree by hash and every
 //!   read is checked against its hash.
 //!
@@ -24,6 +25,7 @@
 
 pub mod ignore;
 pub mod import;
+pub mod runtime;
 pub mod transfer;
 pub mod work_tree;
 
@@ -31,13 +33,26 @@ use crate::archive_cas::{ArchiveCasStorage, ArchiveChange, ArchiveMove, ArchiveO
 use crate::cas::CasHash;
 use anyhow::{anyhow, bail, Context, Result};
 use loadngo_pq_crypto::{default_registry, PqSchemeRegistry, PrivateKey, PublicKey, Signature};
+use runtime::RepositoryRuntime;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub const TREE_FORMAT: &str = "loadngo-repository-tree-v1";
+/// Tree format whose chunked file entries reference validated CDC manifests.
+pub const TREE_FORMAT_V2: &str = "loadngo-repository-tree-v2";
+/// Runtime tree format whose new files below the CDC minimum stay whole-file addressed.
+pub const TREE_FORMAT_V3: &str = "loadngo-repository-tree-v3";
+const MAX_CHUNK_MANIFEST_BYTES: usize = 256 * 1024 * 1024;
+const MAX_CHUNK_MANIFEST_CHUNKS: usize = 1_000_000;
+const MAX_TREE_BYTES: usize = 256 * 1024 * 1024;
+const MAX_VERSION_BYTES: usize = 1024 * 1024;
+const MAX_HEAD_BYTES: usize = 64 * 1024;
+const TREE_DIFF_BATCH: usize = 32;
+const METADATA_CPU_OFFLOAD_BYTES: usize = 32 * 1024;
 pub const VERSION_FORMAT: &str = "loadngo-repository-version-v1";
 pub const HEAD_FORMAT: &str = "loadngo-repository-head-v1";
 /// The `loadngo-anchor` domain a head signature is made in, so it cannot be replayed as
@@ -50,6 +65,46 @@ pub const REPOSITORIES_DIR: &str = "repositories";
 /// file that marks a checkout.
 pub const RESERVED_NAMES: &[&str] = &[".git", work_tree::MARKER_FILE];
 
+#[derive(Debug)]
+enum HeadReadError {
+    Io(io::Error),
+    TooLarge,
+}
+
+impl std::fmt::Display for HeadReadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(error) => std::fmt::Display::fmt(error, formatter),
+            Self::TooLarge => write!(formatter, "head exceeds {MAX_HEAD_BYTES} bytes"),
+        }
+    }
+}
+
+impl std::error::Error for HeadReadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::TooLarge => None,
+        }
+    }
+}
+
+fn read_head_bytes(path: &Path) -> std::result::Result<Option<Vec<u8>>, HeadReadError> {
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(HeadReadError::Io(error)),
+    };
+    let mut bytes = Vec::with_capacity(4096);
+    file.take((MAX_HEAD_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(HeadReadError::Io)?;
+    if bytes.len() > MAX_HEAD_BYTES {
+        return Err(HeadReadError::TooLarge);
+    }
+    Ok(Some(bytes))
+}
+
 /// One entry of a [`Tree`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -61,6 +116,15 @@ pub enum TreeEntry {
     Executable {
         name: String,
         object: ArchiveObject,
+    },
+    /// A file whose bytes are reconstructed from the Archive CAS chunks listed in
+    /// `manifest`. `file` records the logical whole-file identity and size; the
+    /// manifest is the storage reference.
+    ChunkedFile {
+        name: String,
+        manifest: ArchiveObject,
+        file: ArchiveObject,
+        executable: bool,
     },
     Symlink {
         name: String,
@@ -82,6 +146,7 @@ impl TreeEntry {
         match self {
             Self::File { name, .. }
             | Self::Executable { name, .. }
+            | Self::ChunkedFile { name, .. }
             | Self::Symlink { name, .. }
             | Self::Directory { name, .. } => name,
         }
@@ -92,6 +157,7 @@ impl TreeEntry {
     pub fn totals(&self) -> (u64, u64) {
         match self {
             Self::File { object, .. } | Self::Executable { object, .. } => (1, object.size),
+            Self::ChunkedFile { file, .. } => (1, file.size),
             Self::Symlink { .. } => (1, 0),
             Self::Directory { files, bytes, .. } => (*files, *bytes),
         }
@@ -103,6 +169,9 @@ impl TreeEntry {
         match self {
             Self::File { object, .. } => (b'f', object.hash.to_hex()),
             Self::Executable { object, .. } => (b'x', object.hash.to_hex()),
+            Self::ChunkedFile {
+                file, executable, ..
+            } => (if *executable { b'x' } else { b'f' }, file.hash.to_hex()),
             Self::Symlink { target, .. } => (b'l', target.clone()),
             Self::Directory { tree, .. } => (b'd', tree.to_hex()),
         }
@@ -123,18 +192,44 @@ impl Tree {
     /// A name that is empty, `.`, `..`, reserved or holds `/` or NUL; a name twice; an
     /// empty or NUL-holding symlink target.
     pub fn new(mut entries: Vec<TreeEntry>) -> Result<Self> {
+        Self::new_with_format(TREE_FORMAT, &mut entries)
+    }
+
+    /// A tree using the chunk-manifest-capable v2 representation.
+    pub fn new_v2(mut entries: Vec<TreeEntry>) -> Result<Self> {
+        Self::new_with_format(TREE_FORMAT_V2, &mut entries)
+    }
+
+    /// A tree using the runtime storage policy: small new files stay whole-file
+    /// addressed, while larger files may reference chunk manifests.
+    pub fn new_v3(mut entries: Vec<TreeEntry>) -> Result<Self> {
+        Self::new_with_format(TREE_FORMAT_V3, &mut entries)
+    }
+
+    fn new_with_format(format: &str, entries: &mut Vec<TreeEntry>) -> Result<Self> {
         entries.sort_by(|a, b| a.name().as_bytes().cmp(b.name().as_bytes()));
         let tree = Self {
-            format: TREE_FORMAT.to_string(),
-            entries,
+            format: format.to_string(),
+            entries: std::mem::take(entries),
         };
         tree.validate()?;
         Ok(tree)
     }
 
     fn validate(&self) -> Result<()> {
-        if self.format != TREE_FORMAT {
+        if self.format != TREE_FORMAT
+            && self.format != TREE_FORMAT_V2
+            && self.format != TREE_FORMAT_V3
+        {
             bail!("unsupported tree format {:?}", self.format);
+        }
+        if self.format == TREE_FORMAT
+            && self
+                .entries
+                .iter()
+                .any(|entry| matches!(entry, TreeEntry::ChunkedFile { .. }))
+        {
+            bail!("chunked files require {TREE_FORMAT_V2} or {TREE_FORMAT_V3}");
         }
         for pair in self.entries.windows(2) {
             if pair[0].name().as_bytes() >= pair[1].name().as_bytes() {
@@ -346,8 +441,8 @@ impl Signer {
         })
     }
 
-    /// The one `<identity>.dilithium2.key` with its `.pub` in `~/.loadngo/keys`, where
-    /// `archive_cas_sign` keys live. `None` when there is no such pair or more than one.
+    /// The one recognized `<identity>.<scheme>.key` with its `.pub` in
+    /// `~/.loadngo/keys`. `None` when there is no such pair or more than one.
     ///
     /// # Errors
     /// When the pair found cannot be read.
@@ -364,8 +459,15 @@ impl Signer {
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                 continue;
             };
-            if let Some(identity) = name.strip_suffix(".dilithium2.key") {
-                let public = dir.join(format!("{identity}.dilithium2.pub"));
+            let identity = [".ml-dsa-65.key", ".dilithium2.key", ".falcon512.key"]
+                .iter()
+                .find_map(|suffix| name.strip_suffix(suffix));
+            if let Some(identity) = identity {
+                let scheme_suffix = name.strip_prefix(identity).unwrap_or("");
+                let public = dir.join(format!(
+                    "{identity}{}.pub",
+                    scheme_suffix.strip_suffix(".key").unwrap_or(scheme_suffix)
+                ));
                 if public.is_file() {
                     pairs.push((identity.to_string(), public, path.clone()));
                 }
@@ -384,6 +486,7 @@ fn keys_dir() -> Option<PathBuf> {
 }
 
 /// The public keys whose head signatures are accepted.
+#[derive(Clone)]
 pub struct Trust {
     keys: Vec<PublicKey>,
 }
@@ -402,7 +505,7 @@ impl Trust {
         )?]))
     }
 
-    /// The one `*.dilithium2.pub` in `~/.loadngo/keys`.
+    /// The one recognized post-quantum public key in `~/.loadngo/keys`.
     ///
     /// # Errors
     /// When there is none, or more than one (then a key must be named).
@@ -411,12 +514,12 @@ impl Trust {
             Some(key) => Ok(Self::new(vec![key])),
             None => bail!(
                 "no trusted key: name one with --trusted-public-key, or keep exactly one \
-                 *.dilithium2.pub in ~/.loadngo/keys"
+                 *.ml-dsa-65.pub, *.dilithium2.pub or *.falcon512.pub in ~/.loadngo/keys"
             ),
         }
     }
 
-    fn trusts(&self, key: &PublicKey) -> Result<bool> {
+    pub fn trusts_key(&self, key: &PublicKey) -> Result<bool> {
         let bytes = key.to_bytes()?;
         for trusted in &self.keys {
             if trusted.to_bytes()? == bytes {
@@ -529,7 +632,7 @@ impl SignedHead {
             &hex::decode(self.public_key_hex.trim()).context("invalid public_key_hex")?,
         )
         .context("invalid public key in the head")?;
-        if !trust.trusts(&public)? {
+        if !trust.trusts_key(&public)? {
             bail!(
                 "branch {} of {} is signed by {:?} with a key that is not trusted",
                 self.branch,
@@ -653,6 +756,25 @@ impl Repository {
         Ok(bytes)
     }
 
+    fn read_object_with_runtime(
+        &self,
+        hash: CasHash,
+        what: &str,
+        max_bytes: usize,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<Vec<u8>> {
+        let (proactor, handle, thermal, _) = runtime.parts_mut();
+        self.store
+            .read_bounded_object_with_proactor_admitted(
+                proactor,
+                handle,
+                hash,
+                max_bytes,
+                |proactor, handle| thermal.admit(proactor, handle).map_err(anyhow::Error::from),
+            )
+            .with_context(|| format!("failed to read {what} {hash} through the proactor"))
+    }
+
     /// Stores a tree; returns its hash.
     ///
     /// # Errors
@@ -663,6 +785,18 @@ impl Repository {
             .add_content(&tree.canonical_bytes()?)?
             .object
             .hash)
+    }
+
+    /// Stores a tree using the command's proactor and thermal admission policy.
+    pub fn put_tree_with_runtime(
+        &self,
+        tree: &Tree,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<CasHash> {
+        let tree = tree.clone();
+        let task = runtime.try_submit_cpu(move || tree.canonical_bytes())?;
+        let bytes = runtime.wait_cpu(task)??;
+        Ok(self.put_content_with_runtime(bytes, runtime)?.hash)
     }
 
     /// A stored tree, checked against its hash and the tree rules.
@@ -677,6 +811,50 @@ impl Repository {
             bail!("tree {hash} is not in canonical form");
         }
         Ok(tree)
+    }
+
+    /// Reads a tree through the repository proactor under a metadata memory ceiling.
+    pub fn tree_with_runtime(
+        &self,
+        hash: CasHash,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<Tree> {
+        let bytes = self.read_object_with_runtime(hash, "tree", MAX_TREE_BYTES, runtime)?;
+        if bytes.len() < METADATA_CPU_OFFLOAD_BYTES {
+            return parse_tree_bytes(hash, bytes);
+        }
+        let task = runtime.try_submit_cpu(move || parse_tree_bytes(hash, bytes))?;
+        runtime.wait_cpu(task)?
+    }
+
+    /// Reads and validates a chunk manifest and its logical file identity.
+    pub fn file_manifest(
+        &self,
+        manifest_object: ArchiveObject,
+        file: ArchiveObject,
+    ) -> Result<crate::archive_cas::chunking::FileManifest> {
+        let bytes = self.read_object(manifest_object.hash, "chunk manifest")?;
+        validate_file_manifest_bytes(manifest_object, file, &bytes)
+    }
+
+    pub fn file_manifest_with_runtime(
+        &self,
+        manifest_object: ArchiveObject,
+        file: ArchiveObject,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<crate::archive_cas::chunking::FileManifest> {
+        let bytes = self.read_object_with_runtime(
+            manifest_object.hash,
+            "chunk manifest",
+            MAX_CHUNK_MANIFEST_BYTES,
+            runtime,
+        )?;
+        if bytes.len() < METADATA_CPU_OFFLOAD_BYTES {
+            return validate_file_manifest_bytes(manifest_object, file, &bytes);
+        }
+        let task = runtime
+            .try_submit_cpu(move || validate_file_manifest_bytes(manifest_object, file, &bytes))?;
+        runtime.wait_cpu(task)?
     }
 
     /// Stores a version; returns its hash.
@@ -696,6 +874,39 @@ impl Repository {
             .add_content(&version.canonical_bytes()?)?
             .object
             .hash)
+    }
+
+    /// Stores a version using the command's proactor and thermal admission policy.
+    pub fn put_version_with_runtime(
+        &self,
+        version: &Version,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<CasHash> {
+        if version.repository_id != self.id {
+            bail!(
+                "version of {:?} cannot be stored in {:?}",
+                version.repository_id,
+                self.id
+            );
+        }
+        let version = version.clone();
+        let task = runtime.try_submit_cpu(move || version.canonical_bytes())?;
+        let bytes = runtime.wait_cpu(task)??;
+        Ok(self.put_content_with_runtime(bytes, runtime)?.hash)
+    }
+
+    fn put_content_with_runtime(
+        &self,
+        bytes: Vec<u8>,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<ArchiveObject> {
+        let (proactor, handle, thermal, _) = runtime.parts_mut();
+        Ok(self
+            .store
+            .add_content_with_proactor_admitted(proactor, handle, bytes, |proactor, handle| {
+                thermal.admit(proactor, handle).map_err(anyhow::Error::from)
+            })?
+            .object)
     }
 
     /// A stored version of this repository, checked against its hash.
@@ -719,6 +930,22 @@ impl Repository {
         Ok(version)
     }
 
+    /// Reads a version through the repository proactor under a metadata memory ceiling.
+    pub fn version_with_runtime(
+        &self,
+        hash: CasHash,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<Version> {
+        let bytes = self.read_object_with_runtime(hash, "version", MAX_VERSION_BYTES, runtime)?;
+        let repository_id = self.id.clone();
+        if bytes.len() < METADATA_CPU_OFFLOAD_BYTES {
+            return parse_version_bytes(hash, &repository_id, bytes);
+        }
+        let task =
+            runtime.try_submit_cpu(move || parse_version_bytes(hash, &repository_id, bytes))?;
+        runtime.wait_cpu(task)?
+    }
+
     /// The head of `branch` as stored, unverified; `None` when the branch has none.
     ///
     /// # Errors
@@ -726,10 +953,16 @@ impl Repository {
     pub fn head(&self, branch: &str) -> Result<Option<SignedHead>> {
         validate_id(branch, "branch")?;
         let path = self.heads_dir().join(format!("{branch}.json"));
-        let bytes = match fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => {
+        let bytes = match read_head_bytes(&path) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => return Ok(None),
+            Err(HeadReadError::TooLarge) => {
+                bail!(
+                    "{} exceeds the {MAX_HEAD_BYTES}-byte head limit",
+                    path.display()
+                )
+            }
+            Err(HeadReadError::Io(error)) => {
                 return Err(error).with_context(|| format!("failed to read {}", path.display()))
             }
         };
@@ -744,6 +977,72 @@ impl Repository {
             );
         }
         Ok(Some(head))
+    }
+
+    /// Reads a branch head on the thermally admitted bounded blocking-I/O lane.
+    pub fn head_with_runtime(
+        &self,
+        branch: &str,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<Option<SignedHead>> {
+        validate_id(branch, "branch")?;
+        runtime.admit_optional_work()?;
+        let root = self
+            .dir
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| anyhow!("repository path has no store root"))?
+            .to_path_buf();
+        let id = self.id.clone();
+        let branch = branch.to_string();
+        runtime.run_blocking_io(move || Repository::open(&root, &id, false)?.head(&branch))?
+    }
+
+    /// Reads a branch head while keeping filesystem failures distinct from an
+    /// invalid or mismatched head document. The outer error is a runtime/I/O
+    /// failure; the inner error describes an invalid candidate to be skipped.
+    fn head_candidate_with_runtime(
+        &self,
+        branch: &str,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<Result<Option<SignedHead>>> {
+        validate_id(branch, "branch")?;
+        runtime.admit_optional_work()?;
+        let path = self.heads_dir().join(format!("{branch}.json"));
+        let parse_path = path.clone();
+        let read_context_path = path.clone();
+        let read_result = runtime.run_blocking_io(move || read_head_bytes(&path))?;
+        let bytes = match read_result {
+            Ok(bytes) => bytes,
+            Err(HeadReadError::TooLarge) => {
+                return Ok(Err(anyhow!(
+                    "{} exceeds the {MAX_HEAD_BYTES}-byte head limit",
+                    parse_path.display()
+                )))
+            }
+            Err(HeadReadError::Io(error)) => {
+                return Err(error)
+                    .with_context(|| format!("failed to read {}", read_context_path.display()))
+            }
+        };
+        let Some(bytes) = bytes else {
+            return Ok(Ok(None));
+        };
+        let head: SignedHead = match serde_json::from_slice(&bytes)
+            .with_context(|| format!("{} is not a head", parse_path.display()))
+        {
+            Ok(head) => head,
+            Err(error) => return Ok(Err(error)),
+        };
+        if head.repository_id != self.id || head.branch != branch {
+            return Ok(Err(anyhow!(
+                "{} names branch {} of {}",
+                parse_path.display(),
+                head.branch,
+                head.repository_id
+            )));
+        }
+        Ok(Ok(Some(head)))
     }
 
     /// Every branch with a head, sorted.
@@ -769,6 +1068,44 @@ impl Repository {
         Ok(branches)
     }
 
+    /// Lists branch heads on the thermally admitted bounded blocking-I/O lane.
+    pub fn branches_with_runtime(&self, runtime: &mut RepositoryRuntime) -> Result<Vec<String>> {
+        runtime.admit_optional_work()?;
+        let root = self
+            .dir
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| anyhow!("repository path has no store root"))?
+            .to_path_buf();
+        let id = self.id.clone();
+        runtime.run_blocking_io(move || Repository::open(&root, &id, false)?.branches())?
+    }
+
+    /// Lists and reads all branch heads in one thermally admitted blocking-I/O task.
+    pub fn heads_with_runtime(
+        &self,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<Vec<(String, SignedHead)>> {
+        runtime.admit_optional_work()?;
+        let root = self
+            .dir
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| anyhow!("repository path has no store root"))?
+            .to_path_buf();
+        let id = self.id.clone();
+        runtime.run_blocking_io(move || {
+            let repository = Repository::open(&root, &id, false)?;
+            let mut heads = Vec::new();
+            for branch in repository.branches()? {
+                if let Some(head) = repository.head(&branch)? {
+                    heads.push((branch, head));
+                }
+            }
+            Ok(heads)
+        })?
+    }
+
     /// The version `branch` is at, once its head's signature verifies against `trust`.
     ///
     /// # Errors
@@ -779,6 +1116,44 @@ impl Repository {
             .ok_or_else(|| anyhow!("{} has no branch {branch}", self.id))?;
         let version = head.verify(trust)?;
         Ok((version, head))
+    }
+
+    /// Verifies a branch head on the command's thermally admitted CPU lane.
+    pub fn trusted_head_with_runtime(
+        &self,
+        branch: &str,
+        trust: &Trust,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<(CasHash, SignedHead)> {
+        let head = self
+            .head_with_runtime(branch, runtime)?
+            .ok_or_else(|| anyhow!("{} has no branch {branch}", self.id))?;
+        let version = runtime.verify_head(&head, trust)?;
+        Ok((version, head))
+    }
+
+    /// Publishes a branch head on the thermally admitted blocking-I/O lane.
+    /// The lock, expected-head comparison, durable signature write, and head
+    /// replacement stay in one worker operation so the compare-and-swap remains
+    /// atomic with respect to other repository writers.
+    pub fn set_head_with_runtime(
+        &self,
+        head: &SignedHead,
+        expected: Option<CasHash>,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<()> {
+        runtime.admit_optional_work()?;
+        let root = self
+            .dir
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| anyhow!("repository path has no store root"))?
+            .to_path_buf();
+        let id = self.id.clone();
+        let head = head.clone();
+        runtime.run_blocking_io(move || {
+            Repository::open(&root, &id, false)?.set_head(&head, expected)
+        })?
     }
 
     /// Moves `branch` to the version `head` names, if the branch is still at `expected`
@@ -838,9 +1213,19 @@ impl Repository {
     /// An unreadable claim.
     pub fn claims(&self) -> Result<Vec<SignedHead>> {
         let mut claims = Vec::new();
+        self.for_each_claim(|claim| {
+            claims.push(claim);
+            Ok(())
+        })?;
+        Ok(claims)
+    }
+
+    /// Visits retained claims one at a time so reachability scans need not keep
+    /// every signature and JSON allocation alive together.
+    fn for_each_claim(&self, mut visit: impl FnMut(SignedHead) -> Result<()>) -> Result<()> {
         let entries = match fs::read_dir(self.signatures_dir()) {
             Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(claims),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error.into()),
         };
         for entry in entries {
@@ -848,13 +1233,30 @@ impl Repository {
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            let bytes = fs::read(&path)?;
-            claims.push(
-                serde_json::from_slice(&bytes)
-                    .with_context(|| format!("{} is not a head claim", path.display()))?,
-            );
+            let bytes = match read_head_bytes(&path) {
+                Ok(Some(bytes)) => bytes,
+                Ok(None) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("head claim {} disappeared", path.display()),
+                    )
+                    .into())
+                }
+                Err(HeadReadError::TooLarge) => {
+                    bail!(
+                        "head claim {} exceeds the {MAX_HEAD_BYTES}-byte limit",
+                        path.display()
+                    )
+                }
+                Err(HeadReadError::Io(error)) => {
+                    return Err(error).with_context(|| format!("failed to read {}", path.display()))
+                }
+            };
+            let claim = serde_json::from_slice(&bytes)
+                .with_context(|| format!("{} is not a head claim", path.display()))?;
+            visit(claim)?;
         }
-        Ok(claims)
+        Ok(())
     }
 
     /// `from` and its first parents, newest first.
@@ -876,12 +1278,55 @@ impl Repository {
         Ok(history)
     }
 
+    /// Reads `from` and its first-parent history through the repository runtime.
+    ///
+    /// # Errors
+    /// A missing or damaged version, or a runtime I/O/admission failure.
+    pub fn first_parent_history_with_runtime(
+        &self,
+        from: CasHash,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<Vec<(CasHash, Version)>> {
+        let mut history = Vec::new();
+        let mut seen = HashSet::new();
+        let mut next = Some(from);
+        while let Some(hash) = next {
+            if !seen.insert(hash) {
+                bail!("version {hash} is its own ancestor");
+            }
+            let version = self.version_with_runtime(hash, runtime)?;
+            next = version.parents.first().copied();
+            history.push((hash, version));
+        }
+        Ok(history)
+    }
+
     /// Every version reachable from `from` through all parents, `from` first.
     ///
     /// # Errors
     /// A missing or damaged version.
     pub fn ancestry(&self, from: CasHash) -> Result<Vec<(CasHash, Version)>> {
         self.ancestry_until(from, |_| false).map(|(all, _)| all)
+    }
+
+    /// Walks all parent histories while reading each version through the proactor.
+    pub fn ancestry_with_runtime(
+        &self,
+        from: CasHash,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<Vec<(CasHash, Version)>> {
+        let mut all = Vec::new();
+        let mut seen = HashSet::new();
+        let mut queue = VecDeque::from([from]);
+        while let Some(hash) = queue.pop_front() {
+            if !seen.insert(hash) {
+                continue;
+            }
+            let version = self.version_with_runtime(hash, runtime)?;
+            queue.extend(version.parents.iter().copied());
+            all.push((hash, version));
+        }
+        Ok(all)
     }
 
     /// As [`Self::ancestry`], stopping early (and saying so) at the first version `stop`
@@ -916,6 +1361,19 @@ impl Repository {
         Ok(self.ancestry_until(descendant, |hash| hash == ancestor)?.1)
     }
 
+    /// Like [`Self::is_ancestor`], reading version ancestry through runtime I/O.
+    pub fn is_ancestor_with_runtime(
+        &self,
+        ancestor: CasHash,
+        descendant: CasHash,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<bool> {
+        Ok(self
+            .ancestry_with_runtime(descendant, runtime)?
+            .iter()
+            .any(|(hash, _)| *hash == ancestor))
+    }
+
     /// The branch whose trusted head has `version` in its history, if any.
     ///
     /// # Errors
@@ -936,6 +1394,32 @@ impl Repository {
         Ok(None)
     }
 
+    /// Like [`Self::trusted_branch_holding`], verifying each candidate head on
+    /// the command's thermally admitted CPU lane and reading ancestry through it.
+    /// Invalid head documents and signatures are skipped; runtime and filesystem
+    /// failures propagate instead of being treated as untrusted heads.
+    pub fn trusted_branch_holding_with_runtime(
+        &self,
+        version: CasHash,
+        trust: &Trust,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<Option<String>> {
+        for branch in self.branches_with_runtime(runtime)? {
+            let head = match self.head_candidate_with_runtime(&branch, runtime)? {
+                Ok(Some(head)) => head,
+                Ok(None) | Err(_) => continue,
+            };
+            let head_version = match runtime.verify_head_candidate(&head, trust)? {
+                Ok(version) => version,
+                Err(_) => continue,
+            };
+            if self.is_ancestor_with_runtime(version, head_version, runtime)? {
+                return Ok(Some(branch));
+            }
+        }
+        Ok(None)
+    }
+
     /// Checks `branch` from its signature down: the head verifies against `trust`; every
     /// version reachable from it, every tree below them (with its totals) and every file
     /// object hash correctly.
@@ -946,16 +1430,64 @@ impl Repository {
         let (head, signed) = self.trusted_head(branch, trust)?;
         let versions = self.ancestry(head)?;
         let mut trees = HashMap::new();
+        let mut objects = BTreeMap::new();
         let mut files = BTreeMap::new();
         for (_, version) in &versions {
-            self.check_tree(version.tree, &mut trees, &mut files)?;
+            self.check_tree(version.tree, &mut trees, &mut objects, &mut files)?;
         }
-        let mut bytes = 0;
-        for (&hash, &size) in &files {
+        let mut bytes = 0_u64;
+        for (&hash, &size) in &objects {
             self.store
                 .verify_object(ArchiveObject { hash, size })
-                .with_context(|| format!("file object {hash} is missing or damaged"))?;
-            bytes += size;
+                .with_context(|| format!("repository object {hash} is missing or damaged"))?;
+        }
+        for &size in files.values() {
+            bytes = bytes
+                .checked_add(size)
+                .ok_or_else(|| anyhow!("repository file byte total exceeds u64"))?;
+        }
+        Ok(VerifyReport {
+            head,
+            signer_identity: signed.signer_identity,
+            versions: versions.len(),
+            trees: trees.len(),
+            files: files.len(),
+            bytes,
+        })
+    }
+
+    /// Like [`Self::verify`], reading repository objects and verifying file payloads
+    /// through the command's proactor and thermal admission policy.
+    pub fn verify_with_runtime(
+        &self,
+        branch: &str,
+        trust: &Trust,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<VerifyReport> {
+        let (head, signed) = self.trusted_head_with_runtime(branch, trust, runtime)?;
+        let versions = self.ancestry_with_runtime(head, runtime)?;
+        let mut trees = HashMap::new();
+        let mut objects = BTreeMap::new();
+        let mut files = BTreeMap::new();
+        for (_, version) in &versions {
+            self.check_tree_with_runtime(
+                version.tree,
+                &mut trees,
+                &mut objects,
+                &mut files,
+                runtime,
+            )?;
+        }
+        for (&hash, &size) in &objects {
+            if !transfer::stored_copy_is_intact_with_runtime(&self.store, hash, size, runtime)? {
+                bail!("repository object {hash} is missing or damaged");
+            }
+        }
+        let mut bytes = 0_u64;
+        for &size in files.values() {
+            bytes = bytes
+                .checked_add(size)
+                .ok_or_else(|| anyhow!("repository file byte total exceeds u64"))?;
         }
         Ok(VerifyReport {
             head,
@@ -973,46 +1505,115 @@ impl Repository {
         &self,
         hash: CasHash,
         seen: &mut HashMap<CasHash, (u64, u64)>,
+        objects: &mut BTreeMap<CasHash, u64>,
         files: &mut BTreeMap<CasHash, u64>,
     ) -> Result<(u64, u64)> {
-        if let Some(totals) = seen.get(&hash) {
+        self.check_tree_iterative(hash, seen, objects, files, None)
+    }
+
+    fn check_tree_with_runtime(
+        &self,
+        hash: CasHash,
+        seen: &mut HashMap<CasHash, (u64, u64)>,
+        objects: &mut BTreeMap<CasHash, u64>,
+        files: &mut BTreeMap<CasHash, u64>,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<(u64, u64)> {
+        self.check_tree_iterative(hash, seen, objects, files, Some(runtime))
+    }
+
+    fn check_tree_iterative(
+        &self,
+        root: CasHash,
+        seen: &mut HashMap<CasHash, (u64, u64)>,
+        objects: &mut BTreeMap<CasHash, u64>,
+        files: &mut BTreeMap<CasHash, u64>,
+        runtime: Option<&mut RepositoryRuntime>,
+    ) -> Result<(u64, u64)> {
+        enum Work {
+            Visit(CasHash),
+            Finish(CasHash, Tree),
+        }
+
+        if let Some(totals) = seen.get(&root) {
             return Ok(*totals);
         }
-        let tree = self.tree(hash)?;
-        for entry in &tree.entries {
-            match entry {
-                TreeEntry::File { object, .. } | TreeEntry::Executable { object, .. } => {
-                    if let Some(size) = files.insert(object.hash, object.size) {
-                        if size != object.size {
-                            bail!(
-                                "file object {} is listed as {size} and as {} bytes",
-                                object.hash,
-                                object.size
-                            );
+        let mut runtime = runtime;
+        let mut scheduled = HashSet::new();
+        let mut stack = vec![Work::Visit(root)];
+        while let Some(work) = stack.pop() {
+            match work {
+                Work::Visit(hash) => {
+                    if seen.contains_key(&hash) || !scheduled.insert(hash) {
+                        continue;
+                    }
+                    let tree = match runtime.as_deref_mut() {
+                        Some(runtime) => self.tree_with_runtime(hash, runtime)?,
+                        None => self.tree(hash)?,
+                    };
+                    let children: Vec<_> = tree
+                        .entries
+                        .iter()
+                        .filter_map(|entry| match entry {
+                            TreeEntry::Directory { tree, .. } => Some(*tree),
+                            _ => None,
+                        })
+                        .collect();
+                    stack.push(Work::Finish(hash, tree));
+                    for child in children.into_iter().rev() {
+                        if !seen.contains_key(&child) && !scheduled.contains(&child) {
+                            stack.push(Work::Visit(child));
                         }
                     }
                 }
-                TreeEntry::Symlink { .. } => {}
-                TreeEntry::Directory {
-                    name,
-                    tree: child,
-                    files: count,
-                    bytes,
-                } => {
-                    let actual = self.check_tree(*child, seen, files)?;
-                    if actual != (*count, *bytes) {
-                        bail!(
-                            "tree {hash} says {name:?} holds {count} files and {bytes} bytes; it holds {} and {}",
-                            actual.0,
-                            actual.1
-                        );
+                Work::Finish(hash, tree) => {
+                    for entry in &tree.entries {
+                        match entry {
+                            TreeEntry::File { object, .. }
+                            | TreeEntry::Executable { object, .. } => {
+                                record_object(objects, *object)?;
+                                record_object(files, *object)?;
+                            }
+                            TreeEntry::ChunkedFile { manifest, file, .. } => {
+                                record_object(objects, *manifest)?;
+                                record_object(files, *file)?;
+                                let manifest_data = match runtime.as_deref_mut() {
+                                    Some(runtime) => {
+                                        self.file_manifest_with_runtime(*manifest, *file, runtime)?
+                                    }
+                                    None => self.file_manifest(*manifest, *file)?,
+                                };
+                                for chunk in manifest_data.chunks {
+                                    record_object(objects, chunk.object)?;
+                                }
+                            }
+                            TreeEntry::Symlink { .. } => {}
+                            TreeEntry::Directory {
+                                name,
+                                tree: child,
+                                files: count,
+                                bytes,
+                            } => {
+                                let actual = seen.get(child).ok_or_else(|| {
+                                    anyhow!("tree {hash} has a cyclic or unresolved child {child}")
+                                })?;
+                                if actual != &(*count, *bytes) {
+                                    bail!(
+                                        "tree {hash} says {name:?} holds {count} files and {bytes} bytes; it holds {} and {}",
+                                        actual.0,
+                                        actual.1
+                                    );
+                                }
+                            }
+                        }
                     }
+                    seen.insert(hash, tree.totals());
                 }
             }
         }
-        let totals = tree.totals();
-        seen.insert(hash, totals);
-        Ok(totals)
+        seen.get(&root)
+            .copied()
+            .ok_or_else(|| anyhow!("tree {root} was not verified"))
     }
 
     /// The changes that make tree `new` from tree `old` (`None`: nothing before), with
@@ -1028,8 +1629,52 @@ impl Repository {
         cache: &mut TreeCache,
     ) -> Result<Vec<ArchiveChange>> {
         let mut diff = TreeDiff::default();
-        self.diff_into(old, Some(new), "", cache, &mut diff)?;
+        self.diff_into(old, Some(new), "", cache, &mut diff, None)?;
         Ok(diff.into_changes(parent))
+    }
+
+    /// Like [`Self::changes_between`], reading uncached trees through the repository runtime.
+    pub fn changes_between_with_runtime(
+        &self,
+        parent: Option<CasHash>,
+        old: Option<CasHash>,
+        new: CasHash,
+        cache: &mut TreeCache,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<Vec<ArchiveChange>> {
+        let mut diff = TreeDiff::default();
+        let mut pending = VecDeque::from([(String::new(), old, Some(new))]);
+        while !pending.is_empty() {
+            let mut batch = Vec::with_capacity(TREE_DIFF_BATCH);
+            while batch.len() < TREE_DIFF_BATCH {
+                let Some((prefix, old_hash, new_hash)) = pending.pop_front() else {
+                    break;
+                };
+                if old_hash == new_hash {
+                    continue;
+                }
+                let old_tree = old_hash
+                    .map(|hash| cache.get_with_runtime(self, hash, Some(runtime)))
+                    .transpose()?;
+                let new_tree = new_hash
+                    .map(|hash| cache.get_with_runtime(self, hash, Some(runtime)))
+                    .transpose()?;
+                batch.push((prefix, old_tree, new_tree));
+            }
+            if batch.is_empty() {
+                continue;
+            }
+            let task = runtime.try_submit_cpu(move || diff_tree_batch(batch))?;
+            let (batch_diff, children) = runtime.wait_cpu(task)?;
+            diff.append(batch_diff);
+            pending.extend(
+                children
+                    .into_iter()
+                    .map(|(prefix, old, new)| (prefix, Some(old), Some(new))),
+            );
+        }
+        let task = runtime.try_submit_cpu(move || diff.into_changes(parent))?;
+        runtime.wait_cpu(task)
     }
 
     fn diff_into(
@@ -1039,13 +1684,18 @@ impl Repository {
         prefix: &str,
         cache: &mut TreeCache,
         diff: &mut TreeDiff,
+        mut runtime: Option<&mut RepositoryRuntime>,
     ) -> Result<()> {
         if old == new {
             return Ok(());
         }
         let empty = Vec::new();
-        let old_tree = old.map(|hash| cache.get(self, hash)).transpose()?;
-        let new_tree = new.map(|hash| cache.get(self, hash)).transpose()?;
+        let old_tree = old
+            .map(|hash| cache.get_with_runtime(self, hash, runtime.as_deref_mut()))
+            .transpose()?;
+        let new_tree = new
+            .map(|hash| cache.get_with_runtime(self, hash, runtime.as_deref_mut()))
+            .transpose()?;
         let old_entries = old_tree.as_ref().map_or(&empty, |tree| &tree.entries);
         let new_entries = new_tree.as_ref().map_or(&empty, |tree| &tree.entries);
         let (mut i, mut j) = (0, 0);
@@ -1081,7 +1731,14 @@ impl Repository {
                                 tree: new_child, ..
                             },
                         ) => {
-                            self.diff_into(Some(*old_child), Some(*new_child), &path, cache, diff)?;
+                            self.diff_into(
+                                Some(*old_child),
+                                Some(*new_child),
+                                &path,
+                                cache,
+                                diff,
+                                runtime.as_deref_mut(),
+                            )?;
                         }
                         (TreeEntry::Directory { .. }, _) | (_, TreeEntry::Directory { .. }) => {
                             diff.deleted.push((path.clone(), a.identity()));
@@ -1101,22 +1758,31 @@ impl Repository {
 /// Trees read once and kept, for diffs over many versions (an import).
 #[derive(Default)]
 pub struct TreeCache {
-    trees: HashMap<CasHash, std::rc::Rc<Tree>>,
+    trees: HashMap<CasHash, Arc<Tree>>,
 }
 
 impl TreeCache {
-    fn get(&mut self, repository: &Repository, hash: CasHash) -> Result<std::rc::Rc<Tree>> {
+    fn get_with_runtime(
+        &mut self,
+        repository: &Repository,
+        hash: CasHash,
+        runtime: Option<&mut RepositoryRuntime>,
+    ) -> Result<Arc<Tree>> {
         if let Some(tree) = self.trees.get(&hash) {
             return Ok(tree.clone());
         }
-        let tree = std::rc::Rc::new(repository.tree(hash)?);
+        let tree = Arc::new(if let Some(runtime) = runtime {
+            repository.tree_with_runtime(hash, runtime)?
+        } else {
+            repository.tree(hash)?
+        });
         self.trees.insert(hash, tree.clone());
         Ok(tree)
     }
 
     /// Keeps a tree just written, so a diff need not read it back.
     pub fn insert(&mut self, hash: CasHash, tree: Tree) {
-        self.trees.insert(hash, std::rc::Rc::new(tree));
+        self.trees.insert(hash, Arc::new(tree));
     }
 }
 
@@ -1125,6 +1791,75 @@ struct TreeDiff {
     created: Vec<(String, (u8, String))>,
     deleted: Vec<(String, (u8, String))>,
     changed: Vec<String>,
+}
+
+type TreeDiffInput = (String, Option<Arc<Tree>>, Option<Arc<Tree>>);
+type TreeDiffChild = (String, CasHash, CasHash);
+
+impl TreeDiff {
+    fn append(&mut self, mut other: Self) {
+        self.created.append(&mut other.created);
+        self.deleted.append(&mut other.deleted);
+        self.changed.append(&mut other.changed);
+    }
+}
+
+fn diff_tree_batch(batch: Vec<TreeDiffInput>) -> (TreeDiff, Vec<TreeDiffChild>) {
+    let mut diff = TreeDiff::default();
+    let mut children = Vec::new();
+    for (prefix, old_tree, new_tree) in batch {
+        let empty = Vec::new();
+        let old_entries = old_tree.as_ref().map_or(&empty, |tree| &tree.entries);
+        let new_entries = new_tree.as_ref().map_or(&empty, |tree| &tree.entries);
+        let (mut i, mut j) = (0, 0);
+        while i < old_entries.len() || j < new_entries.len() {
+            let order = match (old_entries.get(i), new_entries.get(j)) {
+                (Some(a), Some(b)) => a.name().as_bytes().cmp(b.name().as_bytes()),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                _ => std::cmp::Ordering::Greater,
+            };
+            match order {
+                std::cmp::Ordering::Less => {
+                    let entry = &old_entries[i];
+                    diff.deleted
+                        .push((join(&prefix, entry.name()), entry.identity()));
+                    i += 1;
+                }
+                std::cmp::Ordering::Greater => {
+                    let entry = &new_entries[j];
+                    diff.created
+                        .push((join(&prefix, entry.name()), entry.identity()));
+                    j += 1;
+                }
+                std::cmp::Ordering::Equal => {
+                    let (a, b) = (&old_entries[i], &new_entries[j]);
+                    let path = join(&prefix, a.name());
+                    match (a, b) {
+                        _ if a == b => {}
+                        (
+                            TreeEntry::Directory {
+                                tree: old_child, ..
+                            },
+                            TreeEntry::Directory {
+                                tree: new_child, ..
+                            },
+                        ) if old_child != new_child => {
+                            children.push((path, *old_child, *new_child));
+                        }
+                        (TreeEntry::Directory { .. }, TreeEntry::Directory { .. }) => {}
+                        (TreeEntry::Directory { .. }, _) | (_, TreeEntry::Directory { .. }) => {
+                            diff.deleted.push((path.clone(), a.identity()));
+                            diff.created.push((path, b.identity()));
+                        }
+                        _ => diff.changed.push(path),
+                    }
+                    i += 1;
+                    j += 1;
+                }
+            }
+        }
+    }
+    (diff, children)
 }
 
 impl TreeDiff {
@@ -1199,6 +1934,73 @@ fn join(prefix: &str, name: &str) -> String {
     }
 }
 
+fn record_object(objects: &mut BTreeMap<CasHash, u64>, object: ArchiveObject) -> Result<()> {
+    if let Some(size) = objects.insert(object.hash, object.size) {
+        if size != object.size {
+            bail!(
+                "object {} is listed as {size} and as {} bytes",
+                object.hash,
+                object.size
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_file_manifest_bytes(
+    manifest_object: ArchiveObject,
+    file: ArchiveObject,
+    bytes: &[u8],
+) -> Result<crate::archive_cas::chunking::FileManifest> {
+    if u64::try_from(bytes.len())? != manifest_object.size {
+        bail!(
+            "chunk manifest {} has the wrong stored size",
+            manifest_object.hash
+        );
+    }
+    let manifest = crate::archive_cas::chunking::FileManifest::from_canonical_json(
+        bytes,
+        MAX_CHUNK_MANIFEST_BYTES,
+        MAX_CHUNK_MANIFEST_CHUNKS,
+    )?;
+    if manifest.file_hash != file.hash || manifest.file_size != file.size {
+        bail!(
+            "chunk manifest {} describes {} bytes hashing to {}, expected {} bytes hashing to {}",
+            manifest_object.hash,
+            manifest.file_size,
+            manifest.file_hash,
+            file.size,
+            file.hash
+        );
+    }
+    Ok(manifest)
+}
+
+fn parse_tree_bytes(hash: CasHash, bytes: Vec<u8>) -> Result<Tree> {
+    let tree: Tree =
+        serde_json::from_slice(&bytes).with_context(|| format!("tree {hash} is not a tree"))?;
+    if tree.canonical_bytes()? != bytes {
+        bail!("tree {hash} is not in canonical form");
+    }
+    Ok(tree)
+}
+
+fn parse_version_bytes(hash: CasHash, repository_id: &str, bytes: Vec<u8>) -> Result<Version> {
+    let version: Version = serde_json::from_slice(&bytes)
+        .with_context(|| format!("version {hash} is not a version"))?;
+    if version.canonical_bytes()? != bytes {
+        bail!("version {hash} is not in canonical form");
+    }
+    if version.repository_id != repository_id {
+        bail!(
+            "version {hash} belongs to {:?}, not {:?}",
+            version.repository_id,
+            repository_id
+        );
+    }
+    Ok(version)
+}
+
 /// Every object the repositories in `store` need: each version reachable from a head or
 /// from a kept claim, every tree below them and every file object. `archive_cas_gc` and
 /// `archive_cas_purge` keep these.
@@ -1232,38 +2034,38 @@ pub fn live_objects(store: &ArchiveCasStorage) -> Result<BTreeSet<CasHash>> {
         };
         let repository = Repository::open(store.root(), &id, false)
             .with_context(|| format!("repository {id}"))?;
-        let mut starts: Vec<CasHash> = repository
-            .claims()?
-            .iter()
-            .map(|claim| claim.version)
-            .collect();
-        for branch in repository.branches()? {
-            if let Some(head) = repository.head(&branch)? {
-                starts.push(head.version);
-            }
-        }
         let mut trees = HashMap::new();
+        let mut objects = BTreeMap::new();
         let mut files = BTreeMap::new();
         // Per repository: `live` also holds other repositories' objects, and one of
         // those may have the same bytes as a version here.
         let mut walked = HashSet::new();
-        for start in starts {
-            if walked.contains(&start) {
-                continue;
-            }
-            for (hash, version) in repository
-                .ancestry(start)
-                .with_context(|| format!("repository {id}: the history of {start}"))?
-            {
-                walked.insert(hash);
-                live.insert(hash);
-                repository
-                    .check_tree(version.tree, &mut trees, &mut files)
-                    .with_context(|| format!("repository {id}: the tree of version {hash}"))?;
+        {
+            let mut mark_start = |start| -> Result<()> {
+                if walked.contains(&start) {
+                    return Ok(());
+                }
+                for (hash, version) in repository
+                    .ancestry(start)
+                    .with_context(|| format!("repository {id}: the history of {start}"))?
+                {
+                    walked.insert(hash);
+                    live.insert(hash);
+                    repository
+                        .check_tree(version.tree, &mut trees, &mut objects, &mut files)
+                        .with_context(|| format!("repository {id}: the tree of version {hash}"))?;
+                }
+                Ok(())
+            };
+            repository.for_each_claim(|claim| mark_start(claim.version))?;
+            for branch in repository.branches()? {
+                if let Some(head) = repository.head(&branch)? {
+                    mark_start(head.version)?;
+                }
             }
         }
         live.extend(trees.keys().copied());
-        live.extend(files.keys().copied());
+        live.extend(objects.keys().copied());
     }
     Ok(live)
 }
@@ -1406,6 +2208,11 @@ pub fn default_store() -> Result<PathBuf> {
 pub enum Leaf {
     File(ArchiveObject),
     Executable(ArchiveObject),
+    ChunkedFile {
+        manifest: ArchiveObject,
+        file: ArchiveObject,
+        executable: bool,
+    },
     Symlink(String),
 }
 
@@ -1425,6 +2232,65 @@ impl Repository {
                     }
                     TreeEntry::Executable { name, object } => {
                         leaves.insert(join(&prefix, &name), Leaf::Executable(object));
+                    }
+                    TreeEntry::ChunkedFile {
+                        name,
+                        manifest,
+                        file,
+                        executable,
+                    } => {
+                        leaves.insert(
+                            join(&prefix, &name),
+                            Leaf::ChunkedFile {
+                                manifest,
+                                file,
+                                executable,
+                            },
+                        );
+                    }
+                    TreeEntry::Symlink { name, target } => {
+                        leaves.insert(join(&prefix, &name), Leaf::Symlink(target));
+                    }
+                    TreeEntry::Directory { name, tree, .. } => {
+                        stack.push((join(&prefix, &name), tree));
+                    }
+                }
+            }
+        }
+        Ok(leaves)
+    }
+
+    /// Like [`Self::leaves`], reading each tree through bounded runtime I/O.
+    pub fn leaves_with_runtime(
+        &self,
+        hash: CasHash,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<BTreeMap<String, Leaf>> {
+        let mut leaves = BTreeMap::new();
+        let mut stack = vec![(String::new(), hash)];
+        while let Some((prefix, hash)) = stack.pop() {
+            for entry in self.tree_with_runtime(hash, runtime)?.entries {
+                match entry {
+                    TreeEntry::File { name, object } => {
+                        leaves.insert(join(&prefix, &name), Leaf::File(object));
+                    }
+                    TreeEntry::Executable { name, object } => {
+                        leaves.insert(join(&prefix, &name), Leaf::Executable(object));
+                    }
+                    TreeEntry::ChunkedFile {
+                        name,
+                        manifest,
+                        file,
+                        executable,
+                    } => {
+                        leaves.insert(
+                            join(&prefix, &name),
+                            Leaf::ChunkedFile {
+                                manifest,
+                                file,
+                                executable,
+                            },
+                        );
                     }
                     TreeEntry::Symlink { name, target } => {
                         leaves.insert(join(&prefix, &name), Leaf::Symlink(target));
@@ -1448,6 +2314,29 @@ impl Repository {
         leaves: &BTreeMap<String, Leaf>,
         cache: &mut TreeCache,
     ) -> Result<CasHash> {
+        self.put_leaves_internal(leaves, cache, None)
+    }
+
+    /// Like [`Self::put_leaves`], storing each tree through the command runtime.
+    pub fn put_leaves_with_runtime(
+        &self,
+        leaves: &BTreeMap<String, Leaf>,
+        cache: &mut TreeCache,
+        runtime: &mut RepositoryRuntime,
+    ) -> Result<CasHash> {
+        self.put_leaves_internal(leaves, cache, Some(runtime))
+    }
+
+    fn put_leaves_internal(
+        &self,
+        leaves: &BTreeMap<String, Leaf>,
+        cache: &mut TreeCache,
+        mut runtime: Option<&mut RepositoryRuntime>,
+    ) -> Result<CasHash> {
+        let use_v2 = leaves
+            .values()
+            .any(|leaf| matches!(leaf, Leaf::ChunkedFile { .. }));
+        let use_v3 = runtime.is_some();
         #[derive(Default)]
         struct Folder {
             leaves: Vec<(String, Leaf)>,
@@ -1467,17 +2356,30 @@ impl Repository {
             repository: &Repository,
             folder: Folder,
             cache: &mut TreeCache,
+            use_v2: bool,
+            use_v3: bool,
+            runtime: &mut Option<&mut RepositoryRuntime>,
         ) -> Result<(CasHash, u64, u64)> {
             let mut entries = Vec::new();
             for (name, leaf) in folder.leaves {
                 entries.push(match leaf {
                     Leaf::File(object) => TreeEntry::File { name, object },
                     Leaf::Executable(object) => TreeEntry::Executable { name, object },
+                    Leaf::ChunkedFile {
+                        manifest,
+                        file,
+                        executable,
+                    } => TreeEntry::ChunkedFile {
+                        name,
+                        manifest,
+                        file,
+                        executable,
+                    },
                     Leaf::Symlink(target) => TreeEntry::Symlink { name, target },
                 });
             }
             for (name, child) in folder.folders {
-                let (tree, files, bytes) = put(repository, child, cache)?;
+                let (tree, files, bytes) = put(repository, child, cache, use_v2, use_v3, runtime)?;
                 entries.push(TreeEntry::Directory {
                     name,
                     tree,
@@ -1485,12 +2387,22 @@ impl Repository {
                     bytes,
                 });
             }
-            let tree = Tree::new(entries)?;
+            let tree = if use_v3 {
+                Tree::new_v3(entries)?
+            } else if use_v2 {
+                Tree::new_v2(entries)?
+            } else {
+                Tree::new(entries)?
+            };
             let (files, bytes) = tree.totals();
-            let hash = repository.put_tree(&tree)?;
+            let hash = if let Some(runtime) = runtime.as_deref_mut() {
+                repository.put_tree_with_runtime(&tree, runtime)?
+            } else {
+                repository.put_tree(&tree)?
+            };
             cache.insert(hash, tree);
             Ok((hash, files, bytes))
         }
-        Ok(put(self, root, cache)?.0)
+        Ok(put(self, root, cache, use_v2, use_v3, &mut runtime)?.0)
     }
 }

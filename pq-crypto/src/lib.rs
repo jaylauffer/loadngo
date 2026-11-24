@@ -1,11 +1,15 @@
-//! Post-quantum signature primitives: Dilithium2 and Falcon-512 keys, signatures, and a
-//! scheme registry that resolves a `SignatureSchemeId` to an implementation.
+//! Post-quantum signature primitives: standardized ML-DSA-65 plus legacy Dilithium2 and
+//! Falcon-512 keys, signatures, and a scheme registry.
 //!
 //! This code was moved verbatim from `qcoin-crypto` (same BSD-3-Clause owner) so that it
 //! has one home and the dependency runs one way. loadngo owns it; qcoin and the
 //! entitlement-achievement-blockchain depend on loadngo, never the reverse. They keep
 //! spelling it `qcoin_crypto` through a dependency alias, so no call site changed.
 
+use aws_lc_rs::encoding::AsRawBytes;
+use aws_lc_rs::signature::{
+    KeyPair, PqdsaKeyPair, UnparsedPublicKey, ML_DSA_65, ML_DSA_65_SIGNING,
+};
 use serde::{
     de::Error as DeError, ser::Error as SerError, Deserialize, Deserializer, Serialize, Serializer,
 };
@@ -23,11 +27,14 @@ use zeroize::Zeroizing;
 pub enum SignatureSchemeId {
     Dilithium2,
     Falcon512,
+    MlDsa65,
     Unknown(u16),
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CryptoError {
+    #[error("key generation failed")]
+    KeyGenerationFailed,
     #[error("signature scheme mismatch")]
     WrongScheme,
     #[error("invalid public key")]
@@ -43,11 +50,13 @@ pub enum CryptoError {
 impl SignatureSchemeId {
     pub const DILITHIUM2_ID: u16 = 0x01;
     pub const FALCON512_ID: u16 = 0x02;
+    pub const ML_DSA_65_ID: u16 = 0x03;
 
     pub fn from_u16(id: u16) -> Self {
         match id {
             Self::DILITHIUM2_ID => SignatureSchemeId::Dilithium2,
             Self::FALCON512_ID => SignatureSchemeId::Falcon512,
+            Self::ML_DSA_65_ID => SignatureSchemeId::MlDsa65,
             other => SignatureSchemeId::Unknown(other),
         }
     }
@@ -56,6 +65,7 @@ impl SignatureSchemeId {
         match self {
             SignatureSchemeId::Dilithium2 => Self::DILITHIUM2_ID,
             SignatureSchemeId::Falcon512 => Self::FALCON512_ID,
+            SignatureSchemeId::MlDsa65 => Self::ML_DSA_65_ID,
             SignatureSchemeId::Unknown(value) => value,
         }
     }
@@ -66,6 +76,7 @@ impl Display for SignatureSchemeId {
         match self {
             SignatureSchemeId::Dilithium2 => write!(f, "dilithium2"),
             SignatureSchemeId::Falcon512 => write!(f, "falcon512"),
+            SignatureSchemeId::MlDsa65 => write!(f, "ml-dsa-65"),
             SignatureSchemeId::Unknown(value) => write!(f, "unknown-{}", value),
         }
     }
@@ -427,6 +438,7 @@ fn public_key_size(scheme: SignatureSchemeId) -> Option<usize> {
     match scheme {
         SignatureSchemeId::Dilithium2 => Some(dilithium2::public_key_bytes()),
         SignatureSchemeId::Falcon512 => Some(falcon512::public_key_bytes()),
+        SignatureSchemeId::MlDsa65 => Some(1952),
         SignatureSchemeId::Unknown(_) => None,
     }
 }
@@ -435,6 +447,7 @@ fn secret_key_size(scheme: SignatureSchemeId) -> Option<usize> {
     match scheme {
         SignatureSchemeId::Dilithium2 => Some(dilithium2::secret_key_bytes()),
         SignatureSchemeId::Falcon512 => Some(falcon512::secret_key_bytes()),
+        SignatureSchemeId::MlDsa65 => Some(4032),
         SignatureSchemeId::Unknown(_) => None,
     }
 }
@@ -443,6 +456,7 @@ fn signature_size(scheme: SignatureSchemeId) -> Option<usize> {
     match scheme {
         SignatureSchemeId::Dilithium2 => Some(dilithium2::signature_bytes()),
         SignatureSchemeId::Falcon512 => Some(falcon512::signature_bytes()),
+        SignatureSchemeId::MlDsa65 => Some(3309),
         SignatureSchemeId::Unknown(_) => None,
     }
 }
@@ -538,6 +552,54 @@ impl PqSignatureScheme for Dilithium2Scheme {
 
 pub struct Falcon512Scheme;
 
+/// FIPS 204 ML-DSA-65 using AWS-LC's stable pure-mode API.
+pub struct MlDsa65Scheme;
+
+impl PqSignatureScheme for MlDsa65Scheme {
+    fn id(&self) -> SignatureSchemeId {
+        SignatureSchemeId::MlDsa65
+    }
+
+    fn keygen(&self) -> Result<(PublicKey, PrivateKey), CryptoError> {
+        let key_pair = PqdsaKeyPair::generate(&ML_DSA_65_SIGNING)
+            .map_err(|_| CryptoError::KeyGenerationFailed)?;
+        let public = key_pair.public_key().as_ref().to_vec();
+        let private = key_pair
+            .private_key()
+            .as_raw_bytes()
+            .map_err(|_| CryptoError::InvalidSecretKey)?
+            .as_ref()
+            .to_vec();
+        Ok((
+            PublicKey::new(self.id(), public)?,
+            PrivateKey::new(self.id(), private)?,
+        ))
+    }
+
+    fn sign(&self, sk: &PrivateKey, msg: &[u8]) -> Result<Signature, CryptoError> {
+        if sk.scheme != self.id() {
+            return Err(CryptoError::WrongScheme);
+        }
+        let key_pair = PqdsaKeyPair::from_raw_private_key(&ML_DSA_65_SIGNING, &sk.bytes)
+            .map_err(|_| CryptoError::InvalidSecretKey)?;
+        let mut bytes = vec![0; ML_DSA_65_SIGNING.signature_len()];
+        let length = key_pair
+            .sign(msg, &mut bytes)
+            .map_err(|_| CryptoError::InvalidSignature)?;
+        bytes.truncate(length);
+        Signature::new(self.id(), bytes)
+    }
+
+    fn verify(&self, pk: &PublicKey, msg: &[u8], sig: &Signature) -> Result<(), CryptoError> {
+        if pk.scheme != self.id() || sig.scheme != self.id() {
+            return Err(CryptoError::WrongScheme);
+        }
+        UnparsedPublicKey::new(&ML_DSA_65, &pk.bytes)
+            .verify(msg, &sig.bytes)
+            .map_err(|_| CryptoError::InvalidSignature)
+    }
+}
+
 impl PqSignatureScheme for Falcon512Scheme {
     fn id(&self) -> SignatureSchemeId {
         SignatureSchemeId::Falcon512
@@ -582,6 +644,7 @@ pub fn default_registry() -> InMemoryRegistry {
     InMemoryRegistry::new()
         .with_scheme(Box::new(Dilithium2Scheme))
         .with_scheme(Box::new(Falcon512Scheme))
+        .with_scheme(Box::new(MlDsa65Scheme))
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     if let Err(err) = run() {
-        eprintln!("loadngo_pq_auth: {err:#}");
+        eprintln!("loadngo_pq_auth: {err:#}\nPass --help for usage.");
         std::process::exit(1);
     }
 }
@@ -17,8 +17,8 @@ fn main() {
 fn run() -> Result<()> {
     let mut args = env::args().skip(1);
     let Some(command) = args.next() else {
-        print_usage();
-        bail!("missing command");
+        print_usage(None);
+        return Ok(());
     };
 
     match command.as_str() {
@@ -26,7 +26,7 @@ fn run() -> Result<()> {
         "issue" => command_issue(args.collect()),
         "verify" => command_verify(args.collect()),
         "--help" | "-h" | "help" => {
-            print_usage();
+            print_usage(None);
             Ok(())
         }
         other => bail!("unknown command: {other}"),
@@ -34,11 +34,15 @@ fn run() -> Result<()> {
 }
 
 fn command_keygen(args: Vec<String>) -> Result<()> {
+    if wants_help(&args) {
+        print_usage(Some("keygen"));
+        return Ok(());
+    }
     let quiet = has_flag(&args, "--quiet");
     let scheme = parse_flag_value(&args, "--scheme")
         .map(parse_scheme)
         .transpose()?
-        .unwrap_or(loadngo_pq_crypto::SignatureSchemeId::Dilithium2);
+        .unwrap_or(loadngo_pq_crypto::SignatureSchemeId::MlDsa65);
     let public_key_path = required_path(&args, "--public-key")?;
     let private_key_path = required_path(&args, "--private-key")?;
 
@@ -76,6 +80,10 @@ fn command_keygen(args: Vec<String>) -> Result<()> {
 }
 
 fn command_issue(args: Vec<String>) -> Result<()> {
+    if wants_help(&args) {
+        print_usage(Some("issue"));
+        return Ok(());
+    }
     let quiet = has_flag(&args, "--quiet");
     let challenge_path = required_path(&args, "--challenge")?;
     let public_key_path = required_path(&args, "--public-key")?;
@@ -142,6 +150,10 @@ fn command_issue(args: Vec<String>) -> Result<()> {
 }
 
 fn command_verify(args: Vec<String>) -> Result<()> {
+    if wants_help(&args) {
+        print_usage(Some("verify"));
+        return Ok(());
+    }
     let quiet = has_flag(&args, "--quiet");
     let token_path = required_path(&args, "--token")?;
     let token = load_token(&token_path)?;
@@ -243,13 +255,21 @@ fn required_value<'a>(args: &'a [String], flag: &str) -> Result<&'a str> {
     parse_flag_value(args, flag).ok_or_else(|| anyhow!("missing required flag: {flag}"))
 }
 
-fn print_usage() {
-    eprintln!(
-        "Usage:
-  cargo run -p loadngo-pq-auth --bin loadngo_pq_auth -- keygen --scheme <dilithium2|falcon512> --public-key <path> --private-key <path> [--quiet]
-  cargo run -p loadngo-pq-auth --bin loadngo_pq_auth -- issue --challenge <path> --issuer <name> --audience <name> --public-key <path> --private-key <path> --out <token.ron> [--subject <name>] [--scope <scope>]... [--ttl-seconds <seconds>] [--issued-at <unix-seconds>] [--nonce <32-hex>] [--notes <text>] [--quiet]
-  cargo run -p loadngo-pq-auth --bin loadngo_pq_auth -- verify --token <token.ron> [--challenge <path>] [--audience <name>] [--subject <name>] [--require-scope <scope>]... [--trusted-public-key <path>] [--now <unix-seconds>] [--quiet]"
-    );
+fn wants_help(args: &[String]) -> bool {
+    args.is_empty()
+        || args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+}
+
+fn print_usage(command: Option<&str>) {
+    let help = match command {
+        Some("keygen") => "Generate a post-quantum signing keypair for auth tokens.\n\nUsage:\n  loadngo_pq_auth keygen --public-key <path> --private-key <path> [--scheme <name>] [--quiet]\n\nFlags:\n  --public-key <path>    (required) output file for the public key\n  --private-key <path>   (required) output file for the private key\n  --scheme <name>        (optional) ml-dsa-65 (default), dilithium2, or falcon512\n  --quiet                (optional) print one-line result\n\nExample:\n  loadngo_pq_auth keygen --public-key trusted.pub --private-key signer.key",
+        Some("issue") => "Create and sign an auth token for a challenge file.\n\nUsage:\n  loadngo_pq_auth issue --challenge <path> --issuer <name> --audience <name> --public-key <path> --private-key <path> --out <path> [OPTIONS]\n\nFlags:\n  --challenge <path>       (required) file whose SHA-256 is bound into the token\n  --issuer <name>          (required) token issuer\n  --audience <name>        (required) intended token audience\n  --public-key <path>      (required) signing public key\n  --private-key <path>     (required) signing private key\n  --out <path>             (required) token output file\n  --subject <name>         (optional) token subject\n  --scope <scope>          (optional, repeatable) grant a scope\n  --ttl-seconds <seconds>  (optional) token lifetime; default 300\n  --issued-at <seconds>    (optional) issue time in Unix seconds; default current time\n  --nonce <32-hex>         (optional) nonce; default random\n  --notes <text>           (optional) descriptive note\n  --quiet                  (optional) print one-line result\n\nExample:\n  loadngo_pq_auth issue --challenge challenge.bin --issuer build --audience worker --public-key trusted.pub --private-key signer.key --out token.ron --scope compile",
+        Some("verify") => "Verify an auth token's signature, time bounds, and optional policy constraints.\n\nUsage:\n  loadngo_pq_auth verify --token <path> [OPTIONS]\n\nFlags:\n  --token <path>                 (required) token to verify\n  --challenge <path>             (optional) require the token to bind this challenge\n  --audience <name>              (optional) require this audience\n  --subject <name>               (optional) require this subject\n  --require-scope <scope>        (optional, repeatable) require a granted scope\n  --trusted-public-key <path>    (optional) require this signing key\n  --now <seconds>                (optional) verification time in Unix seconds; default current time\n  --quiet                        (optional) print one-line result\n\nExample:\n  loadngo_pq_auth verify --token token.ron --audience worker --require-scope compile --trusted-public-key trusted.pub",
+        _ => "Post-quantum auth token utility: generate keys, issue signed tokens, and verify tokens.\n\nUsage:\n  loadngo_pq_auth <keygen|issue|verify> [OPTIONS]\n\nCommands:\n  keygen   Generate a post-quantum keypair (default scheme: ml-dsa-65)\n  issue    Sign a token bound to a challenge file\n  verify   Verify a token and optional audience, subject, scope, and key policy\n\nRun 'loadngo_pq_auth <command> --help' for flags and a worked example.",
+    };
+    println!("{help}");
 }
 
 #[cfg(test)]

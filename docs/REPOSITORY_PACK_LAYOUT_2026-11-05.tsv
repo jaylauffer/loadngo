@@ -1,0 +1,2 @@
+cas_profile	loose_objects	logical_object_bytes	loose_allocated_bytes	pack_file_bytes	index_entry_bytes	index_file_bytes	packed_allocated_bytes	allocated_bytes_saved	allocated_percent_saved	pack_write_seconds	sequential_byte_compare_seconds	sampled_random_objects	loose_random_read_seconds	pack_random_read_seconds	byte_verification
+hybrid-v3 tracked-worktree store	1489	30118983	33943552	30118983	48	71488	30195712	3747840	11.041	0.036560	0.027887	256	0.004443	0.001521	full sequential byte comparison and 256 sampled object reads matched

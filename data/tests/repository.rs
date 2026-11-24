@@ -5,10 +5,13 @@ use data::archive_cas_purge::{plan_purge, Sweep};
 use data::cas::CasHash;
 use data::repository::transfer::{list_heads, receive};
 use data::repository::work_tree::{self, Change, CheckoutMarker, Target};
-use data::repository::{live_objects, Repository, SignedHead, Signer, Trust};
+use data::repository::{
+    live_objects, Repository, SignedHead, Signer, Tree, TreeEntry, Trust, Version, VERSION_FORMAT,
+};
 use loadngo_pq_crypto::{default_registry, PqSchemeRegistry, SignatureSchemeId};
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 use tempfile::tempdir;
 
 fn signer(identity: &str) -> Signer {
@@ -23,6 +26,146 @@ fn signer(identity: &str) -> Signer {
         public,
         private,
     }
+}
+
+#[test]
+fn runtime_cli_mldsa_send_fetch_verify_and_checkout() {
+    let dir = tempdir().unwrap();
+    let registry = default_registry();
+    let (public, private) = registry
+        .get(&SignatureSchemeId::MlDsa65)
+        .unwrap()
+        .keygen()
+        .unwrap();
+    let public_path = dir.path().join("trusted.pub");
+    let private_path = dir.path().join("signer.key");
+    fs::write(&public_path, hex::encode(public.to_bytes().unwrap())).unwrap();
+    fs::write(&private_path, hex::encode(private.to_bytes().unwrap())).unwrap();
+
+    let source_store = dir.path().join("source");
+    let sent_store = dir.path().join("sent");
+    let fetched_store = dir.path().join("fetched");
+    let work = dir.path().join("work");
+    fs::create_dir_all(work.join("src")).unwrap();
+    fs::write(work.join("README.md"), "runtime CLI repository\n").unwrap();
+    fs::write(work.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+    let cli = env!("CARGO_BIN_EXE_loadngo-repo");
+    let common = ["--repository", "runtime-cli", "--trusted-public-key"];
+    let public_path_arg = public_path.to_str().unwrap();
+    let private_path_arg = private_path.to_str().unwrap();
+    let source_store_arg = source_store.to_str().unwrap();
+    let sent_store_arg = sent_store.to_str().unwrap();
+    let fetched_store_arg = fetched_store.to_str().unwrap();
+    let work_arg = work.to_str().unwrap();
+
+    let output = Command::new(cli)
+        .args(["init", "--store", source_store_arg])
+        .args(common)
+        .arg(public_path_arg)
+        .args([
+            "--branch",
+            "main",
+            "--tree",
+            work_arg,
+            "--message",
+            "initial",
+            "--author",
+            "test",
+            "--signer-identity",
+            "test",
+            "--public-key",
+            public_path_arg,
+            "--private-key",
+            private_path_arg,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = Command::new(cli)
+        .args(["send", "--store", source_store_arg])
+        .args(common)
+        .arg(public_path_arg)
+        .args([
+            "--branch",
+            "main",
+            "--to",
+            sent_store_arg,
+            "--remote-trusted-public-key",
+            public_path_arg,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "send failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = Command::new(cli)
+        .args(["fetch", "--store", fetched_store_arg])
+        .args(common)
+        .arg(public_path_arg)
+        .args([
+            "--branch",
+            "main",
+            "--from",
+            source_store_arg,
+            "--remote-source-trusted-public-key",
+            public_path_arg,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "fetch failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = Command::new(cli)
+        .args(["verify", "--store", fetched_store_arg])
+        .args(common)
+        .arg(public_path_arg)
+        .args(["--branch", "main"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "verify failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let checkout = dir.path().join("checkout");
+    let output = Command::new(cli)
+        .args(["checkout", "--store", fetched_store_arg])
+        .args(common)
+        .arg(public_path_arg)
+        .args([
+            "--branch",
+            "main",
+            "--destination",
+            checkout.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "checkout failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read(checkout.join("README.md")).unwrap(),
+        fs::read(work.join("README.md")).unwrap()
+    );
+    assert_eq!(
+        fs::read(checkout.join("src/main.rs")).unwrap(),
+        fs::read(work.join("src/main.rs")).unwrap()
+    );
 }
 
 fn trust(signer: &Signer) -> Trust {
@@ -189,6 +332,275 @@ fn init_status_commit_and_checkout_round_trip() {
     .unwrap_err()
     .to_string();
     assert!(error.contains("moved since"), "{error}");
+}
+
+#[test]
+fn runtime_repository_round_trip_uses_mldsa_and_chunked_cas() {
+    let dir = tempdir().unwrap();
+    let registry = default_registry();
+    let scheme = registry.get(&SignatureSchemeId::MlDsa65).unwrap();
+    let (public, private) = scheme.keygen().unwrap();
+    let signer = Signer {
+        identity: "runtime-ml-dsa".to_string(),
+        public,
+        private,
+    };
+    let trusted = trust(&signer);
+    let repository = Repository::open(&dir.path().join("store"), "runtime", true).unwrap();
+    let work = dir.path().join("work");
+    fs::create_dir_all(work.join("src")).unwrap();
+    fs::write(work.join("README.md"), "initial\n").unwrap();
+    let large: Vec<_> = (0..192 * 1024).map(|index| (index % 251) as u8).collect();
+    fs::write(work.join("src/large.bin"), &large).unwrap();
+
+    let mut runtime = data::repository::runtime::RepositoryRuntime::new().unwrap();
+    let initial = work_tree::init_with_runtime(
+        &repository,
+        "main",
+        &work,
+        "initial",
+        "tester",
+        &signer,
+        &trusted,
+        &mut runtime,
+    )
+    .unwrap();
+    assert!(work_tree::status_with_runtime(&work, &mut runtime)
+        .unwrap()
+        .changes
+        .is_empty());
+
+    let initial_version = repository.version(initial.version).unwrap();
+    let root = repository.tree(initial_version.tree).unwrap();
+    assert!(root.entries.iter().any(|entry| matches!(
+        entry,
+        data::repository::TreeEntry::Directory { name, .. } if name == "src"
+    )));
+
+    fs::write(work.join("README.md"), "updated\n").unwrap();
+    let committed = work_tree::commit_with_runtime(
+        &work,
+        &["README.md".to_string()],
+        "update",
+        "tester",
+        &signer,
+        &trusted,
+        &mut runtime,
+    )
+    .unwrap();
+    let committed_version = repository.version(committed.version).unwrap();
+    let committed_root = repository.tree(committed_version.tree).unwrap();
+    let source_tree = committed_root
+        .entries
+        .iter()
+        .find_map(|entry| match entry {
+            data::repository::TreeEntry::Directory { name, tree, .. } if name == "src" => {
+                Some(*tree)
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert!(repository
+        .tree(source_tree)
+        .unwrap()
+        .entries
+        .iter()
+        .any(|entry| matches!(
+            entry,
+            data::repository::TreeEntry::ChunkedFile { name, .. } if name == "large.bin"
+        )));
+
+    let checkout = dir.path().join("checkout");
+    work_tree::checkout_with_runtime(
+        &repository,
+        &Target::Branch("main".to_string()),
+        &trusted,
+        &checkout,
+        &mut runtime,
+    )
+    .unwrap();
+    assert_eq!(fs::read(checkout.join("src/large.bin")).unwrap(), large);
+    assert_eq!(
+        repository.head("main").unwrap().unwrap().signature_scheme,
+        "ml-dsa-65"
+    );
+    assert!(work_tree::status_with_runtime(&checkout, &mut runtime)
+        .unwrap()
+        .changes
+        .is_empty());
+    assert_eq!(
+        repository
+            .verify_with_runtime("main", &trusted, &mut runtime)
+            .unwrap()
+            .head,
+        committed.version
+    );
+}
+
+#[test]
+fn runtime_merge_combines_non_overlapping_text_edits() {
+    fn text(first: &str, last: &str) -> String {
+        (0..32)
+            .map(|index| {
+                let marker = if index == 0 {
+                    first
+                } else if index == 31 {
+                    last
+                } else {
+                    "unchanged"
+                };
+                format!("line-{index}: {marker} {}\n", "x".repeat(1024))
+            })
+            .collect()
+    }
+
+    let dir = tempdir().unwrap();
+    let signer = signer("text-merge");
+    let trusted = trust(&signer);
+    let repository = Repository::open(&dir.path().join("store"), "text-merge", true).unwrap();
+    let main_work = dir.path().join("main-work");
+    write(
+        &main_work.join("notes.txt"),
+        &text("base-first", "base-last"),
+    );
+    let mut runtime = data::repository::runtime::RepositoryRuntime::new().unwrap();
+    let base = work_tree::init_with_runtime(
+        &repository,
+        "main",
+        &main_work,
+        "base",
+        "tester",
+        &signer,
+        &trusted,
+        &mut runtime,
+    )
+    .unwrap();
+    let side_head = SignedHead::sign("text-merge", "side", base.version, &signer, 1).unwrap();
+    repository
+        .set_head_with_runtime(&side_head, None, &mut runtime)
+        .unwrap();
+    let side_work = dir.path().join("side-work");
+    work_tree::checkout_with_runtime(
+        &repository,
+        &Target::Branch("side".to_string()),
+        &trusted,
+        &side_work,
+        &mut runtime,
+    )
+    .unwrap();
+
+    write(&main_work.join("notes.txt"), &text("FIRST", "base-last"));
+    work_tree::commit_with_runtime(
+        &main_work,
+        &["notes.txt".to_string()],
+        "main edit",
+        "tester",
+        &signer,
+        &trusted,
+        &mut runtime,
+    )
+    .unwrap();
+    write(&side_work.join("notes.txt"), &text("base-first", "THIRD"));
+    work_tree::commit_with_runtime(
+        &side_work,
+        &["notes.txt".to_string()],
+        "side edit",
+        "tester",
+        &signer,
+        &trusted,
+        &mut runtime,
+    )
+    .unwrap();
+
+    let merged = work_tree::merge_with_runtime(
+        &repository,
+        "main",
+        "side",
+        &[],
+        &[],
+        "merge side",
+        "tester",
+        &signer,
+        &trusted,
+        &mut runtime,
+    )
+    .unwrap();
+    assert_eq!(merged.kind, work_tree::MergeKind::MergeCommit);
+    assert_eq!(repository.version(merged.version).unwrap().parents.len(), 2);
+    let merged_version = repository.version(merged.version).unwrap();
+    assert!(repository
+        .tree(merged_version.tree)
+        .unwrap()
+        .entries
+        .iter()
+        .any(|entry| matches!(
+            entry,
+            TreeEntry::ChunkedFile { name, .. } if name == "notes.txt"
+        )));
+
+    let merged_work = dir.path().join("merged-work");
+    work_tree::checkout_with_runtime(
+        &repository,
+        &Target::Branch("main".to_string()),
+        &trusted,
+        &merged_work,
+        &mut runtime,
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(merged_work.join("notes.txt")).unwrap(),
+        text("FIRST", "THIRD")
+    );
+}
+
+#[test]
+fn runtime_verify_walks_deep_tree_without_recursive_call_stack() {
+    let dir = tempdir().unwrap();
+    let signer = signer("deep-tree");
+    let trusted = trust(&signer);
+    let repository = Repository::open(&dir.path().join("store"), "deep", true).unwrap();
+    let mut runtime = data::repository::runtime::RepositoryRuntime::new().unwrap();
+
+    let mut child = repository
+        .put_tree_with_runtime(&Tree::new(vec![]).unwrap(), &mut runtime)
+        .unwrap();
+    let depth = 2048;
+    for index in 0..depth {
+        let tree = Tree::new(vec![TreeEntry::Directory {
+            name: format!("d{index}"),
+            tree: child,
+            files: 0,
+            bytes: 0,
+        }])
+        .unwrap();
+        child = repository
+            .put_tree_with_runtime(&tree, &mut runtime)
+            .unwrap();
+    }
+    let version = repository
+        .put_version_with_runtime(
+            &Version {
+                format: VERSION_FORMAT.to_string(),
+                repository_id: "deep".to_string(),
+                parents: vec![],
+                tree: child,
+                author: "tester".to_string(),
+                authored_at_unix_secs: 0,
+                message: "deep tree".to_string(),
+                changes: vec![],
+                origin: None,
+            },
+            &mut runtime,
+        )
+        .unwrap();
+    let head = SignedHead::sign("deep", "main", version, &signer, 0).unwrap();
+    repository.set_head(&head, None).unwrap();
+
+    let report = repository
+        .verify_with_runtime("main", &trusted, &mut runtime)
+        .unwrap();
+    assert_eq!(report.trees, depth + 1);
+    assert_eq!(report.files, 0);
 }
 
 #[cfg(unix)]
@@ -426,6 +838,42 @@ fn store_upkeep_keeps_what_repositories_need() {
 }
 
 #[test]
+fn oversized_head_and_signature_claim_files_are_bounded() {
+    let dir = tempdir().unwrap();
+    let key = signer("test-key");
+    let trusted = trust(&key);
+    let root = dir.path().join("store");
+    let repository = Repository::open(&root, "sample", true).unwrap();
+    let work = dir.path().join("work");
+    write(&work.join("a.txt"), "a\n");
+    work_tree::init(
+        &repository,
+        "main",
+        &work,
+        "first",
+        "tester",
+        &key,
+        &trusted,
+    )
+    .unwrap();
+
+    let oversized = vec![b' '; 64 * 1024 + 1];
+    fs::write(
+        root.join("repositories/sample/heads/oversized.json"),
+        &oversized,
+    )
+    .unwrap();
+    assert!(repository.head("oversized").is_err());
+
+    fs::write(
+        root.join("repositories/sample/signatures/oversized.json"),
+        oversized,
+    )
+    .unwrap();
+    assert!(live_objects(repository.store()).is_err());
+}
+
+#[test]
 fn invalid_names_are_refused() {
     use data::repository::{validate_name, Tree, TreeEntry};
     for bad in [
@@ -603,6 +1051,21 @@ mod git {
                     | (data::repository::Leaf::Executable(o), "100755") => {
                         assert_eq!(o.hash, CasHash::digest(&bytes), "{commit}:{path}");
                     }
+                    (
+                        data::repository::Leaf::ChunkedFile {
+                            manifest,
+                            file,
+                            executable,
+                        },
+                        "100644" | "100755",
+                    ) => {
+                        assert_eq!(file.hash, CasHash::digest(&bytes), "{commit}:{path}");
+                        assert_eq!(file.size, bytes.len() as u64, "{commit}:{path}");
+                        assert_eq!(*executable, mode == "100755", "{commit}:{path}");
+                        let decoded = whole.file_manifest(*manifest, *file).unwrap();
+                        assert_eq!(decoded.file_hash, file.hash, "{commit}:{path}");
+                        assert_eq!(decoded.file_size, file.size, "{commit}:{path}");
+                    }
                     (data::repository::Leaf::Symlink(target), "120000") => {
                         let target_bytes = Command::new("git")
                             .arg("-C")
@@ -642,6 +1105,393 @@ mod git {
         );
         assert!(!copy.join("src").exists());
         assert!(whole.verify("main", &trusted).is_ok());
+    }
+
+    #[test]
+    fn runtime_cli_imports_and_resumes_git_history_with_mldsa() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let registry = default_registry();
+        let (public, private) = registry
+            .get(&SignatureSchemeId::MlDsa65)
+            .unwrap()
+            .keygen()
+            .unwrap();
+        let public_path = dir.path().join("trusted.pub");
+        let private_path = dir.path().join("signer.key");
+        fs::write(&public_path, hex::encode(public.to_bytes().unwrap())).unwrap();
+        fs::write(&private_path, hex::encode(private.to_bytes().unwrap())).unwrap();
+
+        let source = dir.path().join("git-source");
+        let commits = sample_history(&source);
+        let whole_store = dir.path().join("whole-store");
+        let resumed_store = dir.path().join("resumed-store");
+        let cli = env!("CARGO_BIN_EXE_loadngo-repo");
+        let public_arg = public_path.to_str().unwrap();
+        let private_arg = private_path.to_str().unwrap();
+        let source_arg = source.to_str().unwrap();
+
+        let import = |store: &Path, git_ref: &str| {
+            Command::new(cli)
+                .args(["import", "--store", store.to_str().unwrap()])
+                .args([
+                    "--repository",
+                    "git-cli",
+                    "--branch",
+                    "main",
+                    "--from-git",
+                    source_arg,
+                    "--git-ref",
+                    git_ref,
+                    "--trusted-public-key",
+                    public_arg,
+                    "--signer-identity",
+                    "cli-test",
+                    "--public-key",
+                    public_arg,
+                    "--private-key",
+                    private_arg,
+                ])
+                .output()
+                .unwrap()
+        };
+        let log = |store: &Path| {
+            Command::new(cli)
+                .args(["log", "--store", store.to_str().unwrap()])
+                .args([
+                    "--repository",
+                    "git-cli",
+                    "--branch",
+                    "main",
+                    "--trusted-public-key",
+                    public_arg,
+                ])
+                .output()
+                .unwrap()
+        };
+
+        let whole = import(&whole_store, "main");
+        assert!(
+            whole.status.success(),
+            "full import failed: {}",
+            String::from_utf8_lossy(&whole.stderr)
+        );
+        assert!(String::from_utf8_lossy(&whole.stdout).contains("Imported 4 commits"));
+
+        let partial = import(&resumed_store, "main~2");
+        assert!(
+            partial.status.success(),
+            "partial import failed: {}",
+            String::from_utf8_lossy(&partial.stderr)
+        );
+        assert!(String::from_utf8_lossy(&partial.stdout).contains("Imported 2 commits"));
+        let resumed = import(&resumed_store, "main");
+        assert!(
+            resumed.status.success(),
+            "resumed import failed: {}",
+            String::from_utf8_lossy(&resumed.stderr)
+        );
+        assert!(String::from_utf8_lossy(&resumed.stdout).contains("Imported 2 commits"));
+
+        let whole_log = log(&whole_store);
+        let resumed_log = log(&resumed_store);
+        assert!(
+            whole_log.status.success(),
+            "full log failed: {}",
+            String::from_utf8_lossy(&whole_log.stderr)
+        );
+        assert!(
+            resumed_log.status.success(),
+            "resumed log failed: {}",
+            String::from_utf8_lossy(&resumed_log.stderr)
+        );
+        assert_eq!(whole_log.stdout, resumed_log.stdout);
+        let logged_commits: Vec<_> = String::from_utf8(whole_log.stdout)
+            .unwrap()
+            .lines()
+            .map(|line| line.split('\t').nth(1).unwrap().to_string())
+            .collect();
+        assert_eq!(logged_commits, commits);
+
+        for store in [&whole_store, &resumed_store] {
+            let output = Command::new(cli)
+                .args(["verify", "--store", store.to_str().unwrap()])
+                .args([
+                    "--repository",
+                    "git-cli",
+                    "--branch",
+                    "main",
+                    "--trusted-public-key",
+                    public_arg,
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "verify failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let checkout = dir.path().join("checkout");
+        let output = Command::new(cli)
+            .args(["checkout", "--store", resumed_store.to_str().unwrap()])
+            .args([
+                "--repository",
+                "git-cli",
+                "--branch",
+                "main",
+                "--destination",
+                checkout.to_str().unwrap(),
+                "--trusted-public-key",
+                public_arg,
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "checkout failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(fs::read(checkout.join("README.md")).unwrap(), b"two\n");
+        assert_eq!(
+            fs::read_link(checkout.join("link")).unwrap(),
+            Path::new("README.md")
+        );
+        assert_ne!(
+            fs::metadata(checkout.join("run.sh"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o111,
+            0
+        );
+    }
+
+    #[test]
+    #[ignore = "set LOADNGO_REPOSITORY_HISTORY_GIT_DIR and LOADNGO_REPOSITORY_HISTORY_GIT_REF for a full-history audit"]
+    fn full_history_snapshots_match_git_without_rewriting_every_worktree() {
+        use std::collections::{BTreeMap, BTreeSet, HashMap};
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::process::Stdio;
+
+        fn git_output(repository: &Path, args: &[&str]) -> Vec<u8> {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(repository)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            output.stdout
+        }
+
+        let source_arg = std::env::var_os("LOADNGO_REPOSITORY_HISTORY_GIT_DIR")
+            .expect("set LOADNGO_REPOSITORY_HISTORY_GIT_DIR");
+        let source = Path::new(&source_arg);
+        let git_ref = std::env::var("LOADNGO_REPOSITORY_HISTORY_GIT_REF")
+            .expect("set LOADNGO_REPOSITORY_HISTORY_GIT_REF");
+        let dir = tempdir().unwrap();
+        let (public, private) = default_registry()
+            .get(&SignatureSchemeId::MlDsa65)
+            .unwrap()
+            .keygen()
+            .unwrap();
+        let key = Signer {
+            identity: "full-history-audit".into(),
+            public,
+            private,
+        };
+        let trusted = trust(&key);
+        let repository = Repository::open(&dir.path().join("store"), "history", true).unwrap();
+        let imported = import_git(&repository, "main", source, &git_ref, &key, &trusted).unwrap();
+        let expected_count =
+            String::from_utf8(git_output(source, &["rev-list", "--count", &git_ref]))
+                .unwrap()
+                .trim()
+                .parse::<usize>()
+                .unwrap();
+        assert_eq!(imported.imported, expected_count);
+
+        let mut runtime = data::repository::runtime::RepositoryRuntime::new().unwrap();
+        let verified = repository
+            .verify_with_runtime("main", &trusted, &mut runtime)
+            .unwrap();
+        let history = repository
+            .ancestry_with_runtime(imported.head, &mut runtime)
+            .unwrap();
+        assert_eq!(verified.versions, expected_count);
+        assert_eq!(history.len(), expected_count);
+
+        let mut snapshots = Vec::with_capacity(history.len());
+        let mut blob_ids = BTreeSet::new();
+        for (_, version) in &history {
+            let origin = version.origin.as_ref().unwrap();
+            assert_eq!(origin.system, "git");
+            let listing = git_output(
+                source,
+                &["ls-tree", "-r", "-z", "--full-tree", &origin.commit],
+            );
+            let mut entries = BTreeMap::new();
+            for record in listing
+                .split(|byte| *byte == 0)
+                .filter(|record| !record.is_empty())
+            {
+                let tab = record.iter().position(|byte| *byte == b'\t').unwrap();
+                let metadata = std::str::from_utf8(&record[..tab]).unwrap();
+                let mut fields = metadata.split_ascii_whitespace();
+                let mode = fields.next().unwrap().to_string();
+                assert_eq!(fields.next().unwrap(), "blob", "{}", origin.commit);
+                let oid = fields.next().unwrap().to_string();
+                let path = String::from_utf8(record[tab + 1..].to_vec()).unwrap();
+                assert!(entries.insert(path, (mode, oid.clone())).is_none());
+                blob_ids.insert(oid);
+            }
+            snapshots.push((origin.commit.clone(), entries));
+        }
+
+        let mut child = Command::new("git")
+            .arg("-C")
+            .arg(source)
+            .args(["cat-file", "--batch"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        let mut output = BufReader::new(child.stdout.take().unwrap());
+        let mut identities = HashMap::with_capacity(blob_ids.len());
+        let mut buffer = [0_u8; 64 * 1024];
+        for oid in blob_ids {
+            writeln!(input, "{oid}").unwrap();
+            input.flush().unwrap();
+            let mut header = String::new();
+            output.read_line(&mut header).unwrap();
+            let fields: Vec<_> = header.split_ascii_whitespace().collect();
+            assert_eq!(fields.len(), 3, "invalid cat-file response: {header:?}");
+            assert_eq!(fields[0], oid);
+            assert_eq!(fields[1], "blob");
+            let mut remaining = fields[2].parse::<u64>().unwrap();
+            let size = remaining;
+            let mut hasher = blake3::Hasher::new();
+            while remaining > 0 {
+                let length = remaining.min(buffer.len() as u64) as usize;
+                output.read_exact(&mut buffer[..length]).unwrap();
+                hasher.update(&buffer[..length]);
+                remaining -= length as u64;
+            }
+            let mut newline = [0_u8; 1];
+            output.read_exact(&mut newline).unwrap();
+            assert_eq!(newline[0], b'\n');
+            identities.insert(
+                oid,
+                (CasHash::from_bytes(*hasher.finalize().as_bytes()), size),
+            );
+        }
+        drop(input);
+        assert!(child.wait().unwrap().success());
+
+        #[cfg(unix)]
+        let trusted_history =
+            work_tree::trusted_history_with_runtime(&repository, "main", &trusted, &mut runtime)
+                .unwrap();
+        #[cfg(unix)]
+        let checkout_root = {
+            let path = dir.path().join("historical-checkouts");
+            fs::create_dir(&path).unwrap();
+            path
+        };
+
+        for ((version_hash, version), (commit, expected)) in history.iter().zip(snapshots) {
+            assert_eq!(version.origin.as_ref().unwrap().commit, commit);
+            let actual = repository
+                .leaves_with_runtime(version.tree, &mut runtime)
+                .unwrap();
+            assert_eq!(actual.len(), expected.len(), "{commit}");
+            for (path, (mode, oid)) in &expected {
+                let leaf = actual.get(path).unwrap_or_else(|| {
+                    panic!("version {version_hash} / {commit} is missing {path}")
+                });
+                let (git_hash, git_size) = identities.get(oid).unwrap();
+                match (mode.as_str(), leaf) {
+                    ("100644", data::repository::Leaf::File(object))
+                    | ("100755", data::repository::Leaf::Executable(object)) => {
+                        assert_eq!((object.hash, object.size), (*git_hash, *git_size), "{path}");
+                    }
+                    (
+                        "100644" | "100755",
+                        data::repository::Leaf::ChunkedFile {
+                            file, executable, ..
+                        },
+                    ) => {
+                        assert_eq!((file.hash, file.size), (*git_hash, *git_size), "{path}");
+                        assert_eq!(*executable, mode == "100755", "{path}");
+                    }
+                    ("120000", data::repository::Leaf::Symlink(target)) => {
+                        assert_eq!(
+                            (CasHash::digest(target.as_bytes()), target.len() as u64),
+                            (*git_hash, *git_size),
+                            "{path}"
+                        );
+                    }
+                    (mode, leaf) => panic!(
+                        "version {version_hash} / {commit}: {path} is {leaf:?}, Git says {mode}"
+                    ),
+                }
+            }
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+
+                let destination = checkout_root.join(version_hash.to_hex());
+                let report = work_tree::checkout_in_trusted_history_with_runtime(
+                    &repository,
+                    &trusted_history,
+                    *version_hash,
+                    &destination,
+                    &mut runtime,
+                )
+                .unwrap_or_else(|error| {
+                    panic!("checkout of version {version_hash} / {commit} failed: {error:#}")
+                });
+                assert_eq!(report.files as usize, expected.len(), "{commit}");
+                for (path, (mode, oid)) in &expected {
+                    let checkout_path = destination.join(Path::new(path));
+                    let (git_hash, git_size) = identities.get(oid).unwrap();
+                    if mode == "120000" {
+                        let target = fs::read_link(&checkout_path).unwrap();
+                        let target = target.to_str().expect("Git symlink target is UTF-8");
+                        assert_eq!(
+                            (CasHash::digest(target.as_bytes()), target.len() as u64),
+                            (*git_hash, *git_size),
+                            "{commit}: {path}"
+                        );
+                    } else {
+                        let bytes = fs::read(&checkout_path).unwrap();
+                        assert_eq!(
+                            (CasHash::digest(&bytes), bytes.len() as u64),
+                            (*git_hash, *git_size),
+                            "{commit}: {path}"
+                        );
+                        let executable =
+                            fs::metadata(&checkout_path).unwrap().permissions().mode() & 0o111 != 0;
+                        assert_eq!(executable, mode == "100755", "{commit}: {path}");
+                    }
+                }
+                fs::remove_dir_all(destination).unwrap();
+            }
+        }
+        eprintln!(
+            "matched {} historical Git snapshots and {} unique Git blobs against verified CAS trees",
+            history.len(),
+            identities.len()
+        );
     }
 }
 

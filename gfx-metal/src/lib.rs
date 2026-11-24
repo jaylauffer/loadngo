@@ -1,4 +1,8 @@
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+// The frame-recording and text-raster helpers are shared with the Apple
+// implementation below; non-Apple builds keep the portable API surface but
+// do not instantiate that rendering pipeline.
+#![cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
+
 use std::{
     cell::RefCell,
     collections::hash_map::DefaultHasher,
@@ -10,10 +14,14 @@ use std::{
     },
 };
 
-use loadngo_host_core::{decode_image_from_path, DecodedImage, TextMetrics};
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use loadngo_host_core::decode_image_from_path;
+use loadngo_host_core::{DecodedImage, TextMetrics};
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use loadngo_renderer::ImageResourceKey;
 use loadngo_renderer::{
-    FrameCommand, FrameResourcePlan, GraphicsBackend, ImageResourceKey, Renderer, RendererConfig,
-    RendererError, TextRequest,
+    FrameCommand, FrameResourcePlan, GraphicsBackend, Renderer, RendererConfig, RendererError,
+    TextRequest,
 };
 use ui_core::geometry::{Color, Point};
 
@@ -3256,6 +3264,21 @@ mod macos {
             // A trailing partial triangle is never drawn.
             assert_eq!(vertex_byte_chunks(7).collect::<Vec<_>>(), vec![0..6]);
         }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+mod macos {
+    use super::{RasterizedText, RendererError, TextRequest};
+
+    pub fn rasterize_text(
+        _request: &TextRequest,
+        _font_source: Option<&str>,
+        _scale: f32,
+    ) -> Result<RasterizedText, RendererError> {
+        Err(RendererError::Text(
+            "native text rasterization is unavailable on this platform".to_string(),
+        ))
     }
 }
 
