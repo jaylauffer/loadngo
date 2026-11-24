@@ -659,3 +659,36 @@ alternatives; then: "try fips204."
   was found against `fips204`). Its constant-time claim is its own. AWS-LC is the more widely used and reviewed
   library; the cross-checks above are what stand in for that here, and the OpenSSL test stays for rerunning
   whenever the pinned version changes.
+
+## ML-DSA-65's arithmetic on vector instructions, 2026-11-24
+
+Jay, after the profiles below: "use the intrinsics our goal is least energy waste."
+
+- **Why the pure-Rust crate was slower** (profiles with `sample`, about 5,000 samples each, Mac mini): the same
+  mathematics and the same outputs, executed differently. AWS-LC runs the transforms and coefficient products in
+  hand-written ARM assembly and hashes two Keccak states at a time; `fips204` did one coefficient at a time, and it
+  spends more on moving arrays and on wiping them. Per signature: polynomial arithmetic 102 us against 21, hashing
+  52 against 34 (the two hash at the same megabytes a second), copying, packing and wiping 64 against 6.
+- **What changed:** the repository now carries its own copy of `fips204` 0.5.0 (`pq-crypto/vendor/fips204`;
+  `VENDORED.md` there lists exactly what was taken and the six things changed). Its forward transform, inverse
+  transform and multiply-and-add step run on NEON intrinsics on 64-bit ARM (`src/neon.rs`), four coefficients at a
+  time, and on upstream's unchanged loops everywhere else. No assembly file and no C: the intrinsics are Rust.
+- **How it is held:** the vector kernels give bit for bit what the plain loops give, on random inputs and at the
+  edge of the plain code's limits (tests in `src/neon.rs`), so the rest of the crate cannot tell which ran. With
+  them in place: upstream's own tests, the NIST ACVP key-generation vector, OpenSSL 3.6.5 both ways, the cross-check
+  against AWS-LC from commit `53ec22b2` (48 seeds, run once and not kept), and the repository's ML-DSA tests.
+- **What it bought**, Mac mini, release build, best of nine windows, three runs within 1 % of each other:
+
+  | microseconds | key generation | sign | verify |
+  | --- | --- | --- | --- |
+  | `fips204` as published | 88 | 232 | 60 |
+  | with the vector kernels | 76 | 189 | 54 |
+  | AWS-LC 1.18.1 | 22 | 63 | 21 |
+
+- **What a signature's 189 us is now:** hashing 28 %, wiping secret arrays 16 %, copying arrays 9 %, the three
+  vector kernels 13 % (they were 28 %), rounding and hints (`low_bits`, `high_bits`, `make_hint`) 12 %, packing and
+  unpacking 6 %, sampling from the hash 4 %. The next savings, largest first, are therefore not in the transforms:
+  the wiping and copying (how the crate passes arrays about), the rounding functions (vector candidates), and
+  hashing two states at a time. None is done.
+- **Not done:** x86-64 has no vector kernels (it runs upstream's loops, as before). The wrapper in
+  `loadngo-pq-crypto` still decodes the key on every call (17 us of a signature, 11 us of a verification).

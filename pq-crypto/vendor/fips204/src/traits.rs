@@ -1,0 +1,549 @@
+//! Public traits for key generation, signing, verification, and serialization.
+
+#[cfg(feature = "default-rng")]
+use rand_core::OsRng;
+use rand_core::{CryptoRng, CryptoRngCore, RngCore};
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
+/// The `KeyGen` trait defines methods for generating public and private key pairs.
+pub trait KeyGen {
+    /// The public key type for this security parameter set (used for verification).
+    type PublicKey;
+
+    /// The private key type for this security parameter set (used for signing).
+    type PrivateKey;
+
+    /// Generates a public and private key pair specific to this security parameter set.
+    /// This function utilizes the **OS default** random number generator. Within one attempt,
+    /// key generation avoids branches on secret data. Sampling `s_1` and `s_2` in FIPS 204
+    /// `ExpandS` (Algorithm 33) may repeat. The OS random number generator and `rho` (stored
+    /// in the public key) are not treated as secret.
+    ///
+    /// # Errors
+    /// Returns an error when the random number generator fails.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use std::error::Error;
+    /// # fn main() -> Result<(), Box<dyn Error>> {
+    /// # #[cfg(all(feature = "ml-dsa-44", feature = "default-rng"))] {
+    /// use fips204::ml_dsa_44; // Could also be ml_dsa_65 or ml_dsa_87.
+    /// use fips204::traits::{KeyGen, SerDes, Signer, Verifier};
+    ///
+    /// let message = [0u8, 1, 2, 3, 4, 5, 6, 7];
+    ///
+    /// // Generate key pair and signature
+    /// let (pk, sk) = ml_dsa_44::KG::try_keygen()?; // Generate both public and secret keys
+    /// let sig = sk.try_sign(&message, &[0])?; // Use the secret key to generate a message signature
+    /// # }
+    /// # Ok(())}
+    /// ```
+    #[cfg(feature = "default-rng")]
+    fn try_keygen() -> Result<(Self::PublicKey, Self::PrivateKey), &'static str> {
+        Self::try_keygen_with_rng(&mut OsRng)
+    }
+
+    /// Generates a public and private key pair specific to this security parameter set.
+    /// This function utilizes the **provided** random number generator. Within one attempt,
+    /// key generation avoids branches on secret data. Sampling `s_1` and `s_2` in FIPS 204
+    /// `ExpandS` (Algorithm 33) may repeat. The provided random number generator and `rho`
+    /// (stored in the public key) are not treated as secret.
+    ///
+    /// # Errors
+    /// Returns an error when the random number generator fails.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use std::error::Error;
+    /// # fn main() -> Result<(), Box<dyn Error>> {
+    /// # #[cfg(feature = "ml-dsa-44")] {
+    /// use fips204::ml_dsa_44; // Could also be ml_dsa_65 or ml_dsa_87.
+    /// use fips204::traits::{KeyGen, SerDes, Signer, Verifier};
+    /// use rand_chacha::rand_core::SeedableRng;
+    ///
+    /// let message = [0u8, 1, 2, 3, 4, 5, 6, 7];
+    /// let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(123);
+    ///
+    /// // Generate key pair and signature
+    /// let (pk, sk) = ml_dsa_44::KG::try_keygen_with_rng(&mut rng)?;  // Generate both public and secret keys
+    /// let sig = sk.try_sign_with_rng(&mut rng, &message, &[0])?;  // Use the secret key to generate a message signature
+    /// # }
+    /// # Ok(())}
+    /// ```
+    fn try_keygen_with_rng(
+        rng: &mut impl CryptoRngCore,
+    ) -> Result<(Self::PublicKey, Self::PrivateKey), &'static str>;
+
+    /// Generates a public and private key pair specific to this security parameter set
+    /// based on a provided seed. <br>
+    /// Within one attempt, key generation avoids branches on secret data. Sampling `s_1` and
+    /// `s_2` in FIPS 204 `ExpandS` (Algorithm 33) may repeat. `rho`, stored in the public key,
+    /// is not treated as secret.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use std::error::Error;
+    /// # fn main() -> Result<(), Box<dyn Error>> {
+    /// # #[cfg(feature = "ml-dsa-44")] {
+    /// use crate::fips204::RngCore;
+    /// use fips204::ml_dsa_44; // Could also be ml_dsa_65 or ml_dsa_87.
+    /// use fips204::traits::{KeyGen, Signer, Verifier};
+    ///
+    /// // Example seed (in production, draw 32 bytes from a CSPRNG)
+    /// let xi = [0u8; 32];
+    /// let message = [0u8, 1, 2, 3, 4, 5, 6, 7];
+    ///
+    /// // Generate key pair from the seed, then form a deterministic signature
+    /// let (pk, sk) = ml_dsa_44::KG::keygen_from_seed(&xi);
+    /// let sig = sk.try_sign_with_seed(&[0u8; 32], &message, &[0])?;
+    ///
+    /// let res = pk.verify(&message, &sig, &[0]);
+    /// assert!(res); // Signature accepted
+    /// # }
+    /// # Ok(())}
+    /// ```
+    #[must_use]
+    fn keygen_from_seed(xi: &[u8; 32]) -> (Self::PublicKey, Self::PrivateKey);
+}
+
+/// The Signer trait is implemented for the `PrivateKey` struct on each of the security parameter sets.
+pub trait Signer {
+    /// The signature is specific to the chosen security parameter set, e.g., ml-dsa-44, ml-dsa-65 or ml-dsa-87
+    type Signature;
+
+    /// The public key that corresponds to the private/secret key
+    type PublicKey;
+
+    /// Attempt to sign the given message, returning a digital signature on success, or an error if
+    /// something went wrong. This function utilizes the **OS default** random number generator.
+    /// Within one attempt, signing avoids branches on secret data. The rejection loop in
+    /// FIPS 204 Algorithm 7, `ML-DSA.Sign_internal`, may repeat, so the number of attempts is
+    /// not constant. The OS random number generator and `rho` (stored in the public key) are
+    /// not treated as secret.
+    ///
+    /// # Errors
+    /// Returns an error when the random number generator fails or the `ctx` is longer than 255 bytes,
+    /// or when signing exceeds the FIPS 204 Appendix C limit of 814 attempts, which only a malformed
+    /// private key reaches; propagates internal errors.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use std::error::Error;
+    /// # fn main() -> Result<(), Box<dyn Error>> {
+    /// # #[cfg(all(feature = "ml-dsa-65", feature = "default-rng"))] {
+    /// use fips204::ml_dsa_65; // Could also be ml_dsa_44 or ml_dsa_87.
+    /// use fips204::traits::{KeyGen, SerDes, Signer, Verifier};
+    ///
+    /// let message = [0u8, 1, 2, 3, 4, 5, 6, 7];
+    ///
+    /// // Generate key pair and signature
+    /// let (pk, sk) = ml_dsa_65::KG::try_keygen()?; // Generate both public and secret keys
+    /// let sig = sk.try_sign(&message, &[0])?; // Use the secret key to generate a message signature
+    /// let v = pk.verify(&message, &sig, &[0]); // Use the public to verify message signature
+    /// assert!(v);
+    /// # }
+    /// # Ok(())}
+    /// ```
+    #[cfg(feature = "default-rng")]
+    fn try_sign(&self, message: &[u8], ctx: &[u8]) -> Result<Self::Signature, &'static str> {
+        self.try_sign_with_rng(&mut OsRng, message, ctx)
+    }
+
+    /// Attempt to sign the given message, returning a digital signature on success, or an error if
+    /// something went wrong. This function utilizes the **provided** random number generator.
+    /// Within one attempt, signing avoids branches on secret data. The rejection loop in
+    /// FIPS 204 Algorithm 7, `ML-DSA.Sign_internal`, may repeat, so the number of attempts is
+    /// not constant. The provided random number generator and `rho` (stored in the public key)
+    /// are not treated as secret.
+    ///
+    /// # Errors
+    /// Returns an error when the random number generator fails or the `ctx` is longer than 255 bytes,
+    /// or when signing exceeds the FIPS 204 Appendix C limit of 814 attempts, which only a malformed
+    /// private key reaches; propagates internal errors.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use std::error::Error;
+    /// # fn main() -> Result<(), Box<dyn Error>> {
+    /// # #[cfg(feature = "ml-dsa-65")] {
+    /// use fips204::ml_dsa_65; // Could also be ml_dsa_44 or ml_dsa_87.
+    /// use fips204::traits::{KeyGen, SerDes, Signer, Verifier};
+    /// use rand_chacha::rand_core::SeedableRng;
+    ///
+    /// let message = [0u8, 1, 2, 3, 4, 5, 6, 7];
+    /// let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(123);
+    ///
+    /// // Generate key pair and signature
+    /// let (pk, sk) = ml_dsa_65::KG::try_keygen_with_rng(&mut rng)?;  // Generate both public and secret keys
+    /// let sig = sk.try_sign_with_rng(&mut rng, &message, &[0])?;  // Use the secret key to generate a message signature
+    /// let v = pk.verify(&message, &sig, &[0]); // Use the public to verify message signature
+    /// assert!(v);
+    /// # }
+    /// # Ok(())}
+    /// ```
+    fn try_sign_with_rng(
+        &self,
+        rng: &mut impl CryptoRngCore,
+        message: &[u8],
+        ctx: &[u8],
+    ) -> Result<Self::Signature, &'static str>;
+
+    /// Attempt to sign the given message, returning a digital signature on success, or an error if
+    /// something went wrong. This function utilizes the **provided seed to support (less common)
+    /// deterministic signatures**. Within one attempt, signing avoids branches on secret data.
+    /// The rejection loop in FIPS 204 Algorithm 7, `ML-DSA.Sign_internal`, may repeat, so the
+    /// number of attempts is not constant. `rho`, stored in the public key, is not treated as secret.
+    ///
+    /// # Errors
+    /// Returns an error when the `ctx` is longer than 255 bytes, or when signing exceeds the
+    /// FIPS 204 Appendix C limit of 814 attempts, which only a malformed private key reaches;
+    /// propagates internal errors.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use std::error::Error;
+    /// # fn main() -> Result<(), Box<dyn Error>> {
+    /// # #[cfg(feature = "ml-dsa-65")] {
+    /// use fips204::ml_dsa_65; // Could also be ml_dsa_44 or ml_dsa_87.
+    /// use fips204::traits::{KeyGen, SerDes, Signer, Verifier};
+    /// use rand_chacha::rand_core::SeedableRng;
+    ///
+    /// let message = [0u8, 1, 2, 3, 4, 5, 6, 7];
+    /// let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(123);
+    ///
+    /// // Generate key pair and signature
+    /// let (pk, sk) = ml_dsa_65::KG::try_keygen_with_rng(&mut rng)?;  // Generate both public and secret keys
+    /// let sig = sk.try_sign_with_seed(&[0u8;32], &message, &[0])?;  // Use the secret key to generate a message signature
+    /// let v = pk.verify(&message, &sig, &[0]); // Use the public to verify message signature
+    /// assert!(v);
+    /// # }
+    /// # Ok(())}
+    /// ```
+    fn try_sign_with_seed(
+        &self,
+        seed: &[u8; 32],
+        message: &[u8],
+        ctx: &[u8],
+    ) -> Result<Self::Signature, &'static str> {
+        self.try_sign_with_rng(&mut DummyRng { data: *seed }, message, ctx)
+    }
+
+    /// Attempt to sign a precomputed digest, returning a HashML-DSA signature on success, or an
+    /// error if something went wrong. `hash` is `PH(M)` and `hash_oid` is the DER encoding of that
+    /// pre-hash, including the tag and length. [`crate::pre_hash`] provides the NIST CSOR encodings,
+    /// and for those `hash` must be the whole digest. This function does not hash `hash` again. It utilizes the **default OS** random number
+    /// generator. Within one attempt, signing avoids branches on secret data. The rejection loop
+    /// in FIPS 204 Algorithm 7, `ML-DSA.Sign_internal`, may repeat, so the number of attempts is
+    /// not constant. The OS random number generator and `rho` (stored in the public key) are
+    /// not treated as secret.
+    ///
+    /// # Errors
+    /// Returns an error when the random number generator fails, the `ctx` is longer than 255 bytes,
+    /// `hash_oid` is not a DER-encoded OID, `hash` is not the output length of a [`crate::pre_hash`]
+    /// OID or is longer than 1024 bytes, or signing exceeds its attempt limit; propagates internal
+    /// errors.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use std::error::Error;
+    /// # fn main() -> Result<(), Box<dyn Error>> {
+    /// # #[cfg(all(feature = "ml-dsa-65", feature = "default-rng"))] {
+    /// use fips204::pre_hash;
+    /// use fips204::ml_dsa_65; // Could also be ml_dsa_44 or ml_dsa_87.
+    /// use fips204::traits::{KeyGen, SerDes, Signer, Verifier};
+    /// use sha2::{Digest, Sha512};
+    ///
+    /// let message = [0u8, 1, 2, 3, 4, 5, 6, 7];
+    /// let digest = Sha512::digest(message); // The caller hashes the message
+    ///
+    /// // Generate key pair and signature
+    /// let (pk, sk) = ml_dsa_65::KG::try_keygen()?; // Generate both public and secret keys
+    /// let sig = sk.try_hash_sign(&digest, &[0], &pre_hash::SHA2_512)?; // Use the secret key to sign the digest
+    /// let v = pk.hash_verify(&digest, &sig, &[0], &pre_hash::SHA2_512); // Use the public key to verify the digest signature
+    /// assert!(v);
+    /// # }
+    /// # Ok(())}
+    /// ```
+    #[cfg(feature = "default-rng")]
+    fn try_hash_sign(
+        &self,
+        hash: &[u8],
+        ctx: &[u8],
+        hash_oid: &[u8],
+    ) -> Result<Self::Signature, &'static str> {
+        self.try_hash_sign_with_rng(&mut OsRng, hash, ctx, hash_oid)
+    }
+
+    /// Attempt to sign a precomputed digest, returning a HashML-DSA signature on success, or an
+    /// error if something went wrong. `hash` is `PH(M)` and `hash_oid` is the DER encoding of that
+    /// pre-hash, including the tag and length. [`crate::pre_hash`] provides the NIST CSOR encodings,
+    /// and for those `hash` must be the whole digest. This function does not hash `hash` again. It utilizes the **provided** random number
+    /// generator. Within one attempt, signing avoids branches on secret data. The rejection loop
+    /// in FIPS 204 Algorithm 7, `ML-DSA.Sign_internal`, may repeat, so the number of attempts is
+    /// not constant. The provided random number generator and `rho` (stored in the public key)
+    /// are not treated as secret.
+    ///
+    /// # Errors
+    /// Returns an error when the random number generator fails, the `ctx` is longer than 255 bytes,
+    /// `hash_oid` is not a DER-encoded OID, `hash` is not the output length of a [`crate::pre_hash`]
+    /// OID or is longer than 1024 bytes, or signing exceeds its attempt limit; propagates internal
+    /// errors.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use std::error::Error;
+    /// # fn main() -> Result<(), Box<dyn Error>> {
+    /// # #[cfg(feature = "ml-dsa-65")] {
+    /// use fips204::pre_hash;
+    /// use fips204::ml_dsa_65; // Could also be ml_dsa_44 or ml_dsa_87.
+    /// use fips204::traits::{KeyGen, SerDes, Signer, Verifier};
+    /// use rand_chacha::rand_core::SeedableRng;
+    /// use sha2::{Digest, Sha512};
+    ///
+    /// let message = [0u8, 1, 2, 3, 4, 5, 6, 7];
+    /// let digest = Sha512::digest(message); // The caller hashes the message
+    /// let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(123);
+    ///
+    /// // Generate key pair and signature
+    /// let (pk, sk) = ml_dsa_65::KG::try_keygen_with_rng(&mut rng)?;  // Generate both public and secret keys
+    /// let sig = sk.try_hash_sign_with_rng(&mut rng, &digest, &[0], &pre_hash::SHA2_512)?;  // Use the secret key to sign the digest
+    /// let v = pk.hash_verify(&digest, &sig, &[0], &pre_hash::SHA2_512); // Use the public key to verify the digest signature
+    /// assert!(v);
+    /// # }
+    /// # Ok(())}
+    /// ```
+    fn try_hash_sign_with_rng(
+        &self,
+        rng: &mut impl CryptoRngCore,
+        hash: &[u8],
+        ctx: &[u8],
+        hash_oid: &[u8],
+    ) -> Result<Self::Signature, &'static str>;
+
+    /// Attempt to sign a precomputed digest, returning a HashML-DSA signature on success, or an
+    /// error if something went wrong. `hash` is `PH(M)` and `hash_oid` is the DER encoding of that
+    /// pre-hash, including the tag and length. [`crate::pre_hash`] provides the NIST CSOR encodings,
+    /// and for those `hash` must be the whole digest. This function does not hash `hash` again. It utilizes the **provided seed to support (less
+    /// common) deterministic signatures**. Within one attempt, signing avoids branches on secret
+    /// data. The rejection loop in FIPS 204 Algorithm 7, `ML-DSA.Sign_internal`, may repeat, so
+    /// the number of attempts is not constant. `rho`, stored in the public key, is not treated
+    /// as secret.
+    ///
+    /// # Errors
+    /// Returns an error when the `ctx` is longer than 255 bytes, `hash_oid` is not a DER-encoded OID,
+    /// `hash` is not the output length of a [`crate::pre_hash`] OID or is longer than 1024 bytes, or
+    /// signing exceeds its attempt limit; propagates internal errors.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use std::error::Error;
+    /// # fn main() -> Result<(), Box<dyn Error>> {
+    /// # #[cfg(feature = "ml-dsa-65")] {
+    /// use fips204::pre_hash;
+    /// use fips204::ml_dsa_65; // Could also be ml_dsa_44 or ml_dsa_87.
+    /// use fips204::traits::{KeyGen, SerDes, Signer, Verifier};
+    /// use rand_chacha::rand_core::SeedableRng;
+    /// use sha2::{Digest, Sha512};
+    ///
+    /// let message = [0u8, 1, 2, 3, 4, 5, 6, 7];
+    /// let digest = Sha512::digest(message); // The caller hashes the message
+    /// let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(123);
+    ///
+    /// // Generate key pair and signature
+    /// let (pk, sk) = ml_dsa_65::KG::try_keygen_with_rng(&mut rng)?;  // Generate both public and secret keys
+    /// let sig = sk.try_hash_sign_with_seed(&[0u8;32], &digest, &[0], &pre_hash::SHA2_512)?;  // Use the secret key to sign the digest
+    /// let v = pk.hash_verify(&digest, &sig, &[0], &pre_hash::SHA2_512); // Use the public key to verify the digest signature
+    /// assert!(v);
+    /// # }
+    /// # Ok(())}
+    /// ```
+    fn try_hash_sign_with_seed(
+        &self,
+        seed: &[u8; 32],
+        hash: &[u8],
+        ctx: &[u8],
+        hash_oid: &[u8],
+    ) -> Result<Self::Signature, &'static str> {
+        self.try_hash_sign_with_rng(&mut DummyRng { data: *seed }, hash, ctx, hash_oid)
+    }
+
+    /// Retrieves the public key associated with this private/secret key
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use std::error::Error;
+    /// # fn main() -> Result<(), Box<dyn Error>> {
+    /// # #[cfg(feature = "ml-dsa-65")] {
+    /// use fips204::ml_dsa_65; // Could also be ml_dsa_44 or ml_dsa_87.
+    /// use fips204::traits::{KeyGen, SerDes, Signer};
+    ///
+    /// let (pk1, sk) = ml_dsa_65::KG::keygen_from_seed(&[0u8; 32]);
+    ///
+    /// // The public key can be derived from the secret key
+    /// let pk2 = sk.get_public_key();
+    /// assert_eq!(pk1.into_bytes(), pk2.into_bytes());
+    /// # }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    fn get_public_key(&self) -> Self::PublicKey;
+}
+
+// This is for the deterministic signing functions
+// It holds a copy of the signing seed rnd, so it wipes itself on drop (FIPS 204 §3.6.3).
+#[derive(Zeroize, ZeroizeOnDrop)]
+struct DummyRng {
+    data: [u8; 32],
+}
+
+impl RngCore for DummyRng {
+    fn next_u32(&mut self) -> u32 {
+        unimplemented!()
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        unimplemented!()
+    }
+
+    fn fill_bytes(&mut self, _out: &mut [u8]) {
+        unimplemented!()
+    }
+
+    fn try_fill_bytes(&mut self, out: &mut [u8]) -> Result<(), rand_core::Error> {
+        out.copy_from_slice(&self.data);
+        Ok(())
+    }
+}
+
+impl CryptoRng for DummyRng {}
+
+/// The Verifier trait is implemented for `PublicKey` on each of the security parameter sets.
+pub trait Verifier {
+    /// The signature is specific to the chosen security parameter set, e.g., ml-dsa-44, ml-dsa-65
+    /// or ml-dsa-87
+    type Signature;
+
+    /// Verifies a digital signature on a message with respect to a `PublicKey`. As this function
+    /// operates on purely public data, it does not provide constant-time assurances.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use std::error::Error;
+    /// # fn main() -> Result<(), Box<dyn Error>> {
+    /// # #[cfg(all(feature = "ml-dsa-65", feature = "default-rng"))] {
+    /// use fips204::ml_dsa_65; // Could also be ml_dsa_44 or ml_dsa_87.
+    /// use fips204::traits::{KeyGen, SerDes, Signer, Verifier};
+    ///
+    /// let message = [0u8, 1, 2, 3, 4, 5, 6, 7];
+    ///
+    /// // Generate key pair and signature
+    /// let (pk, sk) = ml_dsa_65::KG::try_keygen()?; // Generate both public and secret keys
+    /// let sig = sk.try_sign(&message, &[0])?; // Use the secret key to generate a message signature
+    /// let v = pk.verify(&message, &sig, &[0]); // Use the public to verify message signature
+    /// assert!(v);
+    /// # }
+    /// # Ok(())}
+    /// ```
+    #[must_use]
+    fn verify(&self, message: &[u8], signature: &Self::Signature, ctx: &[u8]) -> bool;
+
+    /// Verifies a HashML-DSA signature over a precomputed digest. `hash` is `PH(M)` and `hash_oid`
+    /// is the DER encoding of that pre-hash, including the tag and length; see [`crate::pre_hash`].
+    /// The caller must supply the same digest and OID that were signed. As this function operates on
+    /// purely public data, it does not provide constant-time assurances. Returns `false` when `ctx`
+    /// is longer than 255 bytes, `hash_oid` is not a DER-encoded OID, `hash` is not the output length
+    /// of a [`crate::pre_hash`] OID or is longer than 1024 bytes, or the signature does not verify.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use std::error::Error;
+    /// # fn main() -> Result<(), Box<dyn Error>> {
+    /// # #[cfg(all(feature = "ml-dsa-65", feature = "default-rng"))] {
+    /// use fips204::pre_hash;
+    /// use fips204::ml_dsa_65; // Could also be ml_dsa_44 or ml_dsa_87.
+    /// use fips204::traits::{KeyGen, SerDes, Signer, Verifier};
+    /// use sha2::{Digest, Sha512};
+    ///
+    /// let message = [0u8, 1, 2, 3, 4, 5, 6, 7];
+    /// let digest = Sha512::digest(message); // The caller hashes the message
+    ///
+    /// // Generate key pair and signature
+    /// let (pk, sk) = ml_dsa_65::KG::try_keygen()?; // Generate both public and secret keys
+    /// let sig = sk.try_hash_sign(&digest, &[0], &pre_hash::SHA2_512)?; // Use the secret key to sign the digest
+    /// let v = pk.hash_verify(&digest, &sig, &[0], &pre_hash::SHA2_512); // Use the public key to verify the digest signature
+    /// assert!(v);
+    /// # }
+    /// # Ok(())}
+    /// ```
+    #[must_use]
+    fn hash_verify(
+        &self,
+        hash: &[u8],
+        signature: &Self::Signature,
+        ctx: &[u8],
+        hash_oid: &[u8],
+    ) -> bool;
+}
+
+/// The `SerDes` trait provides for validated serialization and deserialization of fixed- and correctly-size elements.
+///
+/// Note that FIPS 204 (section 3.6.2) specifies only exact length checks for the public key and signature, which the
+/// fixed-size byte arrays enforce. Nonetheless, a `Result()` is returned during all deserialization operations to
+/// preserve the ability to add future checks (and for symmetry across structures). Private key deserialization
+/// also rejects a key whose `s1` or `s2` has a coefficient outside `[−η, η]`, which a malformed key can encode
+/// (FIPS 204 section 7.2).
+pub trait SerDes {
+    /// The fixed-size byte array to be serialized or deserialized
+    type ByteArray;
+
+    /// Produces a byte array of fixed-size specific to the struct being serialized.
+    ///
+    /// Encoding undoes the cached transform. Encode a key once when the bytes are
+    /// needed, and verify from the `PublicKey` rather than serializing it on each verify.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use std::error::Error;
+    /// # fn main() -> Result<(), Box<dyn Error>> {
+    /// # #[cfg(all(feature = "ml-dsa-65", feature = "default-rng"))] {
+    /// use fips204::ml_dsa_65; // Could also be ml_dsa_44 or ml_dsa_87.
+    /// use fips204::traits::{KeyGen, SerDes, Signer, Verifier};
+    ///
+    /// let message = [0u8, 1, 2, 3, 4, 5, 6, 7];
+    ///
+    /// // Generate key pair and signature
+    /// let (pk, sk) = ml_dsa_65::KG::try_keygen()?; // Generate both public and secret keys
+    /// let pk_bytes = pk.into_bytes(); // Serialize the public key
+    /// let sk_bytes = sk.into_bytes(); // Serialize the private key
+    /// # }
+    /// # Ok(())}
+    /// ```
+    fn into_bytes(self) -> Self::ByteArray;
+
+    /// Consumes a byte array of fixed-size specific to the struct being deserialized; performs validation
+    ///
+    /// # Errors
+    /// Returns an error on malformed input.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use std::error::Error;
+    /// # fn main() -> Result<(), Box<dyn Error>> {
+    /// # #[cfg(all(feature = "ml-dsa-87", feature = "default-rng"))] {
+    /// use fips204::ml_dsa_87; // Could also be ml_dsa_44 or ml_dsa_65.
+    /// use fips204::traits::{KeyGen, SerDes, Signer, Verifier};
+    ///
+    /// // Generate key pair and signature
+    /// let (pk, sk) = ml_dsa_87::try_keygen()?; // Generate both public and secret keys
+    /// let pk_bytes = pk.into_bytes(); // Serialize the public key
+    /// let sk_bytes = sk.into_bytes(); // Serialize the private key
+    /// let pk2 = ml_dsa_87::PublicKey::try_from_bytes(pk_bytes)?;
+    /// let sk2 = ml_dsa_87::PrivateKey::try_from_bytes(sk_bytes)?;
+    /// # }
+    /// # Ok(())}
+    /// ```
+    fn try_from_bytes(ba: Self::ByteArray) -> Result<Self, &'static str>
+    where
+        Self: Sized;
+}

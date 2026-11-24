@@ -1,0 +1,35 @@
+# A copy of the `fips204` crate, version 0.5.0 (https://github.com/integritychain/fips204, by Eric Schorn),
+# kept in this repository so that its polynomial arithmetic can use the processor's vector instructions
+# (src/neon.rs). VENDORED.md says what was taken and what was changed. MIT OR Apache-2.0, as upstream.
+[package]
+name = "fips204"
+version = "0.5.0"
+authors = ["Eric Schorn <eschorn@integritychain.com>"]
+description = "FIPS 204: Module-Lattice-Based Digital Signature Standard (loadngo's copy, with vector arithmetic)"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/integritychain/fips204"
+rust-version = "1.85"
+publish = false
+
+[features]
+default = ["default-rng", "ml-dsa-44", "ml-dsa-65", "ml-dsa-87"]
+default-rng = ["rand_core/getrandom"]
+ml-dsa-44 = []
+ml-dsa-65 = []
+ml-dsa-87 = []
+# Test and measurement hooks only; not for use in applications.
+acvp-internal = []
+dudect = []
+
+[dependencies]
+rand_core = { version = "0.6.4", default-features = false }
+sha3 = { version = "0.10.9", default-features = false, features = ["zeroize"] }
+zeroize = { version = "1.6.0", default-features = false, features = ["zeroize_derive"] }
+
+# What the tests inside src/ use (upstream's integration tests and benches are not copied: their
+# vectors are not in the published crate).
+[dev-dependencies]
+rand = "0.8.5"
+rand_chacha = "0.3.1"
+sha2 = { version = "0.10.8", default-features = false }

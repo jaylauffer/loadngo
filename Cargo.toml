@@ -32,6 +32,7 @@ members = [
     "thermal",
     "system-stats",
     "pq-crypto",
+    "pq-crypto/vendor/fips204",
     "anchor",
     "code-editor",
     "terminal",
@@ -68,6 +69,7 @@ default-members = [
     "thermal",
     "system-stats",
     "pq-crypto",
+    "pq-crypto/vendor/fips204",
     "anchor",
     "code-editor",
     "terminal",
@@ -135,8 +137,9 @@ pqcrypto-dilithium = "0.5"
 pqcrypto-falcon = "0.4"
 pqcrypto-traits = "0.3"
 # ML-DSA-65 (FIPS 204) in pure Rust: nothing that signs or verifies links a C cryptography library for it.
-# Pinned: a signature library's version changes on purpose, with pq-crypto's cross-checks rerun.
-fips204 = { version = "=0.5.0", default-features = false, features = ["ml-dsa-65", "default-rng"] }
+# The repository's own copy of fips204 0.5.0 (pq-crypto/vendor/fips204), whose transforms and multiplications use
+# the processor's vector instructions; pq-crypto's cross-checks are rerun whenever it changes.
+fips204 = { path = "pq-crypto/vendor/fips204", default-features = false, features = ["ml-dsa-65", "default-rng"] }
 zeroize = { version = "1", features = ["alloc"] }
 loadngo-pq-crypto = { path = "pq-crypto" }
 loadngo-anchor = { path = "anchor" }
