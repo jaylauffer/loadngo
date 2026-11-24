@@ -136,6 +136,8 @@ mod ntt;
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 mod neon;
 mod types;
+// loadngo: erasing a polynomial with one write (see src/wipe.rs and VENDORED.md).
+mod wipe;
 
 /// All functionality is covered by traits.
 pub mod traits;

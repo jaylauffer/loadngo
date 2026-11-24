@@ -118,15 +118,45 @@ pub struct PublicKey<const K: usize, const L: usize> {
 }
 
 /// Polynomial coefficients in R, with default R0
-#[derive(Clone, Debug, PartialEq, Zeroize, ZeroizeOnDrop)]
+// loadngo: erased on drop as upstream's derive did, with one write for the block (see wipe.rs).
+#[derive(Clone, Debug, PartialEq)]
 #[repr(align(8))]
 pub(crate) struct R(pub(crate) [i32; 256]);
+
+impl Zeroize for R {
+    fn zeroize(&mut self) {
+        crate::wipe::wipe(&mut self.0);
+    }
+}
+
+impl Drop for R {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for R {}
 pub(crate) const R0: R = R([0i32; 256]);
 
 /// Polynomial coefficients in T, with default T0
-#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+// loadngo: erased on drop as upstream's derive did, with one write for the block (see wipe.rs).
+#[derive(Clone)]
 #[repr(align(8))]
 pub(crate) struct T(pub(crate) [i32; 256]);
+
+impl Zeroize for T {
+    fn zeroize(&mut self) {
+        crate::wipe::wipe(&mut self.0);
+    }
+}
+
+impl Drop for T {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for T {}
 pub(crate) const T0: T = T([0i32; 256]);
 
 /// Individual Zq element

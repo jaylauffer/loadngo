@@ -692,3 +692,40 @@ Jay, after the profiles below: "use the intrinsics our goal is least energy wast
   hashing two states at a time. None is done.
 - **Not done:** x86-64 has no vector kernels (it runs upstream's loops, as before). The wrapper in
   `loadngo-pq-crypto` still decodes the key on every call (17 us of a signature, 11 us of a verification).
+
+## ML-DSA-65: erasing in blocks and working in place, 2026-11-24
+
+Jay, on being told what "wiping and copying" meant: "do the block erasing and working in place, then push."
+
+- **What they were.** Every polynomial in `fips204` (256 numbers, 1,024 bytes) erases itself when it goes out of
+  use, secret or not, and `zeroize` erased it one number at a time: a volatile write and a compiler fence for each.
+  A signature created and erased 430 of them (counted), a verification 82, a key generation 145. And the crate
+  built each intermediate vector anew, copied it into the next step and erased it.
+- **Block erasing** (`src/wipe.rs`): the same memory, at the same moment, with one volatile write for the
+  polynomial and one fence: the technique `zeroize` uses for whole values. A test reads a dropped polynomial's
+  memory back and finds zeros, in an optimised build too.
+- **In place** (`to_mont_in_place`, `mat_vec_mul_inv_ntt`, `mul_inv_ntt`, and the three functions of
+  `ml_dsa.rs`): products are formed in the memory their result lives in and transformed back there; the signing
+  loop's `z` and `h` are filled where they stand. The arithmetic, its order and every value are upstream's. A
+  signature now creates and erases 284 polynomials, a verification 65, a key generation 122.
+- **Held by known answers** (`tests/known_answers.rs`, taken before this work): sixteen key pairs and a
+  deterministic signature each, for all three parameter sets, hashed. Unchanged after it, with the vector kernels
+  on ARM and with upstream's loops in an x86-64 build run under Rosetta. Also rerun on the final code: upstream's
+  tests, the NIST vector, OpenSSL both ways, the AWS-LC cross-check of `53ec22b2` (not kept), the repository's
+  ML-DSA tests.
+- **What it bought**, counted, not timed: instructions retired and processor cycles for 4,000 operations with
+  fixed seeds (`/usr/bin/time -l`), the previous commit against this one. Jay's game was running, and these counts
+  do not move with what else the machine is doing, as the timings did.
+
+  | per operation | instructions | cycles |
+  | --- | --- | --- |
+  | sign | 4,734 k to 4,208 k (-11.1 %) | 1,323 k to 1,165 k (-11.9 %) |
+  | verify | 1,343 k to 1,263 k (-6.0 %) | 352 k to 331 k (-6.2 %) |
+  | key generation | 1,796 k to 1,654 k (-7.9 %) | 519 k to 481 k (-7.3 %) |
+
+  Block erasing alone was -5.8 % of a signature's cycles; the profile's "16 % in zeroize" had overstated it.
+- **With the vector kernels before it**, against `fips204` as published, a signature is about 28 % less work on
+  this Mac (232 us to 189 timed, then -11.9 % of cycles). AWS-LC is still some two and a half times less again.
+- **Not done:** vector code for the rounding functions and for x86-64; hashing two states at a time; not erasing
+  values that are public (a security decision, Jay's); the wrapper's key decoding on every call.
+

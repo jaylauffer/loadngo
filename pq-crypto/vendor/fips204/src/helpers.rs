@@ -140,6 +140,15 @@ pub(crate) fn add_vector_ntt<const K: usize>(v_hat: &[R; K], w_hat: &[R; K]) -> 
     core::array::from_fn(|k| R(core::array::from_fn(|n| v_hat[k].0[n] + w_hat[k].0[n])))
 }
 
+/// loadngo: [`to_mont`] in place, for a vector that is not needed in its plain form again.
+pub(crate) fn to_mont_in_place<const L: usize>(vec_a: &mut [T; L]) {
+    for poly in vec_a.iter_mut() {
+        for e in &mut poly.0 {
+            *e = partial_reduce64(i64::from(*e) << 32);
+        }
+    }
+}
+
 #[allow(clippy::cast_possible_truncation)] // as i32
 pub(crate) fn to_mont<const L: usize>(vec_a: &[T; L]) -> [T; L] {
     core::array::from_fn(|l| {

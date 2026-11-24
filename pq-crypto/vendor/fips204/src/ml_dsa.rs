@@ -5,12 +5,12 @@ use crate::hashing::{
     expand_a, expand_mask, expand_s, h256_xof, sample_in_ball, scrub_hash_stack, shake256_wiped,
 };
 use crate::helpers::{
-    add_vector_ntt, center_mod, full_reduce32, infinity_norm, mat_vec_mul, mont_reduce,
-    partial_reduce32, to_mont,
+    add_vector_ntt, center_mod, full_reduce32, infinity_norm, mat_vec_mul, mont_reduce, mul_acc,
+    partial_reduce32, to_mont, to_mont_in_place,
 };
 use crate::high_low::{high_bits, low_bits, make_hint, power2round, use_hint};
-use crate::ntt::{inv_ntt, ntt};
-use crate::types::{PrivateKey, PublicKey, R, T};
+use crate::ntt::{inv_ntt, inv_ntt_poly, mat_vec_mul_inv_ntt, mul_inv_ntt, ntt};
+use crate::types::{PrivateKey, PublicKey, R, R0, T};
 use crate::{D, Q};
 use rand_core::CryptoRngCore;
 use sha3::digest::XofReader;
@@ -95,14 +95,16 @@ pub(crate) fn key_gen_internal<
     // 6: (t_1, t_0) ← Power2Round(t, d)    ▷ Compress t
     let (t_1, t_0): ([R; K], [R; K]) = {
         let cap_a_hat: [[T; L]; K] = expand_a::<CTEST, K, L>(&rho);
-        let s_1_hat: [T; L] = ntt(&s_1);
-        let as1_hat: [T; K] = mat_vec_mul(&cap_a_hat, &s_1_hat);
-        let t_not_reduced: [R; K] = add_vector_ntt(&inv_ntt(&as1_hat), &s_2);
-        let t: [R; K] = core::array::from_fn(|k| {
-            R(core::array::from_fn(|n| {
-                full_reduce32(t_not_reduced[k].0[n])
-            }))
-        });
+        // loadngo: A * s1 is formed in the vector t lives in, transformed back there, and s2 added and reduced
+        // in place: upstream's values, without the four vectors it built and erased on the way.
+        let mut s_1_hat: [T; L] = ntt(&s_1);
+        to_mont_in_place(&mut s_1_hat);
+        let mut t: [R; K] = mat_vec_mul_inv_ntt(&cap_a_hat, &s_1_hat);
+        for (t_k, s_2_k) in t.iter_mut().zip(s_2.iter()) {
+            for (e, s) in t_k.0.iter_mut().zip(s_2_k.0.iter()) {
+                *e = full_reduce32(*e + s);
+            }
+        }
         power2round(&t)
     };
 
@@ -246,8 +248,9 @@ pub(crate) fn sign_internal<
     let mut kappa_ctr = 0u16;
 
     // 9: (z, h) ← ⊥    ▷ we will handle ⊥ inline with 'continue'
-    let mut z: [R; L];
-    let mut h: [R; K];
+    // loadngo: z and h are filled where they stand on each attempt, in place of a new vector moved over the old.
+    let mut z: [R; L] = [R0; L];
+    let mut h: [R; K] = [R0; K];
     let mut c_tilde = [0u8; LAMBDA_DIV4];
     let mut attempts = 0u16;
 
@@ -266,10 +269,11 @@ pub(crate) fn sign_internal<
         let y: [R; L] = expand_mask(gamma1, &rho_prime, kappa_ctr);
 
         // 12: w ← NTT−1(cap_a_hat ◦ NTT(y))
+        // loadngo: A * y is formed in the vector w lives in and transformed back there.
         let w: [R; K] = {
-            let y_hat: [T; L] = ntt(&y);
-            let ay_hat: [T; K] = mat_vec_mul(&cap_a_hat, &y_hat);
-            inv_ntt(&ay_hat)
+            let mut y_hat: [T; L] = ntt(&y);
+            to_mont_in_place(&mut y_hat);
+            mat_vec_mul_inv_ntt(&cap_a_hat, &y_hat)
         };
 
         // 13: w_1 ← HighBits(w)    ▷ Signer’s commitment
@@ -291,31 +295,17 @@ pub(crate) fn sign_internal<
         let c_hat: &T = &ntt(&[c])[0];
 
         // 18: ⟨⟨c_s_1⟩⟩ ← NTT−1(c_hat ◦ s_1_hat)
-        let c_s_1: [R; L] = {
-            let cs1_hat: [T; L] = core::array::from_fn(|l| {
-                T(core::array::from_fn(|n| {
-                    mont_reduce(i64::from(c_hat.0[n]) * i64::from(s_1_hat_mont[l].0[n]))
-                }))
-            });
-            inv_ntt(&cs1_hat)
-        };
+        let c_s_1: [R; L] = mul_inv_ntt(c_hat, s_1_hat_mont); // loadngo: formed and transformed in place
 
         // 19: ⟨⟨c_s_2⟩⟩ ← NTT−1(c_hat ◦ s_2_hat)
-        let c_s_2: [R; K] = {
-            let cs2_hat: [T; K] = core::array::from_fn(|k| {
-                T(core::array::from_fn(|n| {
-                    mont_reduce(i64::from(c_hat.0[n]) * i64::from(s_2_hat_mont[k].0[n]))
-                }))
-            });
-            inv_ntt(&cs2_hat)
-        };
+        let c_s_2: [R; K] = mul_inv_ntt(c_hat, s_2_hat_mont); // loadngo: formed and transformed in place
 
         // 20: z ← y + ⟨⟨c_s_1⟩⟩    ▷ Signer’s response
-        z = core::array::from_fn(|l| {
-            R(core::array::from_fn(|n| {
-                partial_reduce32(y[l].0[n] + c_s_1[l].0[n])
-            }))
-        });
+        for (z_l, (y_l, c_s_1_l)) in z.iter_mut().zip(y.iter().zip(c_s_1.iter())) {
+            for (n, e) in z_l.0.iter_mut().enumerate() {
+                *e = partial_reduce32(y_l.0[n] + c_s_1_l.0[n]);
+            }
+        }
 
         // 21: r0 ← LowBits(w − ⟨⟨c_s_2⟩⟩)
         let r0: [R; K] = core::array::from_fn(|k| {
@@ -338,25 +328,18 @@ pub(crate) fn sign_internal<
         }
 
         // 25: ⟨⟨c_t_0⟩⟩ ← NTT−1(c_hat ◦ t_hat_0)
-        let c_t_0: [R; K] = {
-            let ct0_hat: [T; K] = core::array::from_fn(|k| {
-                T(core::array::from_fn(|n| {
-                    mont_reduce(i64::from(c_hat.0[n]) * i64::from(t_0_hat_mont[k].0[n]))
-                }))
-            });
-            inv_ntt(&ct0_hat)
-        };
+        let c_t_0: [R; K] = mul_inv_ntt(c_hat, t_0_hat_mont); // loadngo: formed and transformed in place
 
         // 26: h ← MakeHint(−⟨⟨c_t_0⟩⟩, w − ⟨⟨c_s_2⟩⟩ + ⟨⟨c_t_0⟩⟩)    ▷ Signer’s hint
-        h = core::array::from_fn(|k| {
-            R(core::array::from_fn(|n| {
-                i32::from(make_hint(
+        for (k, h_k) in h.iter_mut().enumerate() {
+            for (n, e) in h_k.0.iter_mut().enumerate() {
+                *e = i32::from(make_hint(
                     gamma2,
                     Q - c_t_0[k].0[n], // no reduce
                     partial_reduce32(w[k].0[n] - c_s_2[k].0[n] + c_t_0[k].0[n]),
-                ))
-            }))
-        });
+                ));
+            }
+        }
 
         // There is effectively no step 22 due to formatting error in spec
 
@@ -460,16 +443,21 @@ pub(crate) fn verify_internal<
     let wp_approx: [R; K] = {
         // CTEST is always false (as no CT guarantees); from step 5 above
         let cap_a_hat: [[T; L]; K] = expand_a::<CTEST, K, L>(rho);
-        let z_hat: [T; L] = ntt(&z);
-        let az_hat: [T; K] = mat_vec_mul(&cap_a_hat, &z_hat);
-        // NTT(t_1 · 2^d) --> extracted from public key struct
+        // loadngo: A * z - c * t1 is formed in the vector the result lives in and transformed back there.
+        let mut z_hat: [T; L] = ntt(&z);
+        to_mont_in_place(&mut z_hat);
         let c_hat: &T = &ntt(&[c])[0];
-        inv_ntt(&core::array::from_fn(|k| {
-            T(core::array::from_fn(|n| {
-                az_hat[k].0[n]
-                    - mont_reduce(i64::from(c_hat.0[n]) * i64::from(t1_d2_hat_mont[k].0[n]))
-            }))
-        }))
+        let mut wp: [R; K] = [R0; K];
+        for (k, wp_k) in wp.iter_mut().enumerate() {
+            for (a_kj, z_j) in cap_a_hat[k].iter().zip(z_hat.iter()) {
+                mul_acc(&mut wp_k.0, &a_kj.0, &z_j.0);
+            }
+            for (n, e) in wp_k.0.iter_mut().enumerate() {
+                *e -= mont_reduce(i64::from(c_hat.0[n]) * i64::from(t1_d2_hat_mont[k].0[n]));
+            }
+            inv_ntt_poly(&mut wp_k.0);
+        }
+        wp
     };
 
     // 10: w′_1 ← UseHint(h, w′_Approx)    ▷ Reconstruction of signer’s commitment

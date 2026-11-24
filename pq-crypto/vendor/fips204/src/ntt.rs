@@ -5,8 +5,8 @@
 // plain forms, `ntt_poly_scalar` and `inv_ntt_poly_scalar`, are upstream's loops unchanged: they run everywhere
 // else, and they are the reference the vector forms are held to bit for bit.
 
-use crate::helpers::{full_reduce32, mont_reduce, ZETA_TABLE_MONT};
-use crate::types::{R, T};
+use crate::helpers::{full_reduce32, mont_reduce, mul_acc, ZETA_TABLE_MONT};
+use crate::types::{R, R0, T};
 use crate::Q;
 
 /// # Algorithm 41 NTT(w) on page 43.
@@ -196,4 +196,33 @@ pub(crate) fn inv_ntt_poly_scalar(w: &mut [i32; 256]) {
     }
 
     // 24: end for
+}
+
+/// loadngo: `inv_ntt(&mat_vec_mul(a_hat, u_hat))` for a `u_hat_mont` already in Montgomery form
+/// (`helpers::to_mont_in_place`). Each row's sum is formed in the polynomial it is returned in and transformed back
+/// there: the same products, added in the same order, with no vector built and erased in between.
+pub(crate) fn mat_vec_mul_inv_ntt<const K: usize, const L: usize>(
+    a_hat: &[[T; L]; K],
+    u_hat_mont: &[T; L],
+) -> [R; K] {
+    let mut w = [R0; K];
+    for (w_i, a_i) in w.iter_mut().zip(a_hat.iter()) {
+        for (a_ij, u_j) in a_i.iter().zip(u_hat_mont.iter()) {
+            mul_acc(&mut w_i.0, &a_ij.0, &u_j.0);
+        }
+        inv_ntt_poly(&mut w_i.0);
+    }
+    w
+}
+
+/// loadngo: the inverse transform of `c_hat` times each polynomial of `s_hat_mont`, coefficient by coefficient:
+/// `inv_ntt` of upstream's `mont_reduce(c_hat[n] * s_hat_mont[k][n])`, each product formed in the polynomial it
+/// is returned in (added to zero, which changes nothing) and transformed back there.
+pub(crate) fn mul_inv_ntt<const KL: usize>(c_hat: &T, s_hat_mont: &[T; KL]) -> [R; KL] {
+    let mut out = [R0; KL];
+    for (o, s) in out.iter_mut().zip(s_hat_mont.iter()) {
+        mul_acc(&mut o.0, &c_hat.0, &s.0);
+        inv_ntt_poly(&mut o.0);
+    }
+    out
 }
