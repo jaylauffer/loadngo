@@ -326,6 +326,7 @@ pub enum HostKey {
     N,
     PageUp,
     PageDown,
+    L,
 }
 
 impl HostKey {
@@ -362,6 +363,7 @@ impl HostKey {
             HostKey::O => Key::Character('o'),
             HostKey::Q => Key::Character('q'),
             HostKey::N => Key::Character('n'),
+            HostKey::L => Key::Character('l'),
             HostKey::Z => Key::Character('z'),
             HostKey::F3 | HostKey::PageUp | HostKey::PageDown => return None,
         })
