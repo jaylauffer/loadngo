@@ -270,7 +270,11 @@ resources to completion; they do not yet expose an asynchronous operation API.
    without a queue bound. The
    data crate now exposes `archive_cas::worker::ArchiveCasWorkerPool`: fixed
    workers, a bounded queue, and a total outstanding limit that includes results
-   not yet taken and wakeups not yet dispatched. Results post a completion to the
+   not yet taken. Until 2026-11-24 it also included wakeups not yet dispatched;
+   a caller whose result was ready when it first looked never dispatched one,
+   and its next submission was refused as saturated (three repository tests on
+   a Pi 5 and one on a Pi 4, never on macOS). A job now gives up its share as
+   its result becomes visible. Results post a completion to the
    supplied proactor. Runtime paths use it for metadata serialization, new-head
    signing and verification, working-file hashes, tree comparisons, and incoming
    receive-payload hashes. Blocking stream reads and receive partial-file writes
@@ -598,3 +602,30 @@ verification, first-parent order, per-version tree/blob parity and runtime-API c
 of every historical version pass; literal per-version CLI invocations and SSH transfer
 CLI scenarios remain open), and target-hardware thermal measurements.
 Compilation alone does not prove asynchronous behavior or thermal safety.
+
+## Validation after the handover, 2026-11-24
+
+Claude Code took this work over from Codex at Jay's word, committed it as it was left on 2026-11-05, rebased it onto
+`dev` (`0199a606`) without a conflict, and ran it on three machines. Nothing here is a general performance claim.
+
+- **macOS (Mac mini):** `cargo fmt --check`; the `data`, `loadngo-pq-crypto` and `loadngo-pq-auth` tests; strict
+  Clippy 1.100 over the workspace with CI's macOS excludes; the iOS compile check. All pass, before and after the fix
+  below.
+- **Linux ARM64, Dolores (Raspberry Pi 5, Rust 1.99), CI's Linux steps:** format and strict Clippy passed, and the
+  workspace's tests passed except three of the repository suite's 20: `could not submit bounded repository blocking
+  I/O: Archive CAS worker lane is saturated`. Repeated alone, the suite passed twice, failed once (two tests, one of
+  them different), and passed with `--test-threads=1`: a timing fault, which the 2026-11-05 Linux run above did not
+  meet.
+- **Linux ARM64, Agnes (Raspberry Pi 4, no AES or PMULL instructions, Rust 1.99):** the three crates' tests passed,
+  the ML-DSA-65 tests among them, except one repository test with the same message.
+- **The fault:** a worker job's share of the pool's limit was held until its wakeup had been dispatched by the
+  caller's proactor and the worker thread had dropped its own reference after posting it. A caller whose result was
+  ready when it first looked returned without running the proactor; two such results in a row left the
+  one-worker, one-queued blocking-I/O lane full, and the next submission was refused. `archive_cas/worker.rs` now gives
+  the share up as the result becomes visible, under the result's lock; the wakeup carries none. Two unit tests hold
+  it, one of which fails on the old code on every run.
+- **After the fix:** Dolores, the repository suite 10 times in a row, then CI's Linux steps: all pass (1,262 workspace
+  tests, 23 ignored). Agnes, the suite 6 times, then the three crates' tests: all pass (173, 3 ignored). macOS as
+  above, the suite 5 times: all pass.
+
+Still not run anywhere: Windows, Android after the rebase, x86-64 Linux, and anything against a copy of a real store.

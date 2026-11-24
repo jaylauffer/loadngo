@@ -2,7 +2,10 @@
 //!
 //! The caller applies thermal admission before [`ArchiveCasWorkerPool::try_submit`]
 //! and drives the supplied proactor until a task result is ready. Completed task
-//! results count against the same outstanding limit until taken or dropped.
+//! results count against the same outstanding limit until taken or dropped. A
+//! job's own share is given up as its result becomes visible, so a caller that
+//! has taken a result can submit again at once; the wakeup posted to the
+//! proactor holds no capacity.
 
 use loadngo_proactor::{CompletionPort, ProactorHandle};
 use std::any::Any;
@@ -48,8 +51,9 @@ impl fmt::Display for WorkerPanic {
 impl std::error::Error for WorkerPanic {}
 
 /// A completed worker result. Taking or dropping this handle releases its
-/// share of the pool's outstanding-work reservation. Capacity is released only
-/// after the result is taken or dropped and its wakeup completion runs.
+/// share of the pool's outstanding-work reservation. A job that has not
+/// finished keeps its own share until it has, so dropping the handle early
+/// does not let more work in than the pool allows.
 pub struct WorkerTask<T> {
     result: Arc<Mutex<Option<Result<T, WorkerPanic>>>>,
     permit: Option<Arc<Permit>>,
@@ -193,10 +197,22 @@ impl ArchiveCasWorkerPool {
         let job: Job = Box::new(move || {
             let outcome = catch_unwind(AssertUnwindSafe(work))
                 .map_err(|panic| WorkerPanic(panic_message(panic)));
-            *result.lock().unwrap_or_else(PoisonError::into_inner) = Some(outcome);
-            let wakeup_permit = Arc::clone(&permit);
-            let _ = handle.enqueue_work(move |_| drop(wakeup_permit));
-            drop(permit);
+            {
+                // The result becomes visible and the job gives up its share of the limit under
+                // one lock, so a caller that takes the result finds the capacity free. Until
+                // 2026-11-24 the share was held until the wakeup below had been dispatched and
+                // this thread had dropped its own reference after posting it. A caller whose
+                // result was ready when it first looked never ran its proactor, and on Linux
+                // posting the wakeup runs the caller before this thread drops: the caller's
+                // next submission was refused as saturated (three repository tests on a Pi 5,
+                // one on a Pi 4; none on macOS).
+                let mut slot = result.lock().unwrap_or_else(PoisonError::into_inner);
+                *slot = Some(outcome);
+                drop(permit);
+            }
+            // Wakes the caller's event loop. It carries no capacity: at most one is pending for
+            // each finished job, and every wait on a result dispatches them.
+            let _ = handle.enqueue_work(|_| {});
         });
         let Some(sender) = &self.sender else {
             drop(task);
@@ -240,5 +256,118 @@ fn panic_message(panic: Box<dyn Any + Send>) -> String {
         (*message).to_string()
     } else {
         "non-string panic payload".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use loadngo_proactor::new_platform_proactor;
+    use std::time::{Duration, Instant};
+
+    /// Waits for a result without ever running the proactor: the caller that finds its result
+    /// ready when it first looks.
+    fn take_without_dispatching<T>(task: &mut WorkerTask<T>) -> T {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(result) = task.try_take() {
+                return result.expect("the job panicked");
+            }
+            assert!(Instant::now() < deadline, "the job never finished");
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn a_taken_result_frees_its_capacity_before_its_wakeup_is_dispatched() {
+        let proactor = new_platform_proactor().expect("proactor");
+        let handle = proactor.handle();
+        // The repository's blocking-I/O lane: one worker, one queued, two outstanding at most.
+        let pool = ArchiveCasWorkerPool::new(1, 1).expect("pool");
+        for round in 0..64 {
+            let mut task = pool
+                .try_submit(&handle, move || round)
+                .unwrap_or_else(|error| panic!("submission {round} was refused: {error}"));
+            assert_eq!(take_without_dispatching(&mut task), round);
+            assert!(
+                !pool.is_saturated(),
+                "round {round} left the lane saturated"
+            );
+        }
+        drop(proactor);
+    }
+
+    /// Waits until `count` tasks hold a share of the limit (a task holds one from its submission
+    /// until its job has stored the result and the result has been taken or dropped).
+    fn settle(pool: &ArchiveCasWorkerPool, count: usize) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while pool.outstanding.load(Ordering::Acquire) != count {
+            assert!(
+                Instant::now() < deadline,
+                "the lane never settled at {count}"
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    /// A job that says when the worker has taken it up (the one-job queue is free again then).
+    fn announced<T: Send + 'static>(
+        value: T,
+    ) -> (impl FnOnce() -> T + Send + 'static, mpsc::Receiver<()>) {
+        let (started, seen) = mpsc::channel();
+        (
+            move || {
+                started.send(()).ok();
+                value
+            },
+            seen,
+        )
+    }
+
+    #[test]
+    fn work_still_running_or_untaken_counts_against_the_limit() {
+        let proactor = new_platform_proactor().expect("proactor");
+        let handle = proactor.handle();
+        let pool = ArchiveCasWorkerPool::new(1, 1).expect("pool");
+        // Two results left untaken fill the lane; a third submission is refused.
+        let (job, taken_up) = announced(1);
+        let mut first = pool.try_submit(&handle, job).expect("first");
+        taken_up.recv().expect("the first job ran");
+        let (job, taken_up) = announced(2);
+        let mut second = pool.try_submit(&handle, job).expect("second");
+        assert!(pool.is_saturated());
+        assert_eq!(
+            pool.try_submit(&handle, || 3).err(),
+            Some(WorkerSubmitError::Saturated)
+        );
+        // Taking one makes room for exactly one more.
+        assert_eq!(take_without_dispatching(&mut first), 1);
+        taken_up.recv().expect("the second job ran");
+        let mut third = pool.try_submit(&handle, || 3).expect("third");
+        assert!(pool.is_saturated());
+        assert_eq!(take_without_dispatching(&mut second), 2);
+        assert_eq!(take_without_dispatching(&mut third), 3);
+        settle(&pool, 0);
+        // A handle dropped while its job still runs keeps the share until the job ends.
+        let (started, running) = mpsc::channel::<()>();
+        let (release, held) = mpsc::channel::<()>();
+        let abandoned = pool
+            .try_submit(&handle, move || {
+                started.send(()).ok();
+                held.recv().ok()
+            })
+            .expect("a job that waits");
+        running.recv().expect("the job started");
+        drop(abandoned);
+        assert_eq!(pool.outstanding.load(Ordering::Acquire), 1);
+        let mut queued = pool.try_submit(&handle, || ()).expect("one behind it");
+        assert_eq!(
+            pool.try_submit(&handle, || ()).err(),
+            Some(WorkerSubmitError::Saturated)
+        );
+        release.send(()).expect("the job is waiting");
+        take_without_dispatching(&mut queued);
+        settle(&pool, 0);
+        drop(proactor);
     }
 }
